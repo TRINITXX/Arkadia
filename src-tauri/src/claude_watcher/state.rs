@@ -12,10 +12,9 @@ pub enum AgentState {
 
 const WAITING_TO_IDLE: Duration = Duration::from_secs(1800);
 const STREAMING_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const TOOL_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 const CONTINUING_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
 
-const INTERACTIVE_TOOLS: &[&str] = &["AskUserQuestion"];
+const INTERACTIVE_TOOLS: &[&str] = &["AskUserQuestion", "ExitPlanMode"];
 
 #[derive(Debug, Clone)]
 pub struct StateMachine {
@@ -62,13 +61,6 @@ impl StateMachine {
         match (&self.current, &self.last_entry) {
             (AgentState::Busy { .. }, Some(Entry::AssistantPartial))
                 if elapsed > STREAMING_BUSY_TIMEOUT =>
-            {
-                self.current = AgentState::Waiting {
-                    session_id: self.session_id.clone(),
-                };
-            }
-            (AgentState::Busy { .. }, Some(Entry::ToolUse { .. }))
-                if elapsed > TOOL_BUSY_TIMEOUT =>
             {
                 self.current = AgentState::Waiting {
                     session_id: self.session_id.clone(),
@@ -186,7 +178,22 @@ mod tests {
     }
 
     #[test]
-    fn tool_use_falls_to_waiting_after_30s() {
+    fn exit_plan_mode_tool_triggers_waiting() {
+        let mut sm = StateMachine::new("sess1".into(), t0());
+        sm.observe(Entry::AssistantContinuing, t0());
+        let s = sm.observe(
+            Entry::ToolUse {
+                name: "ExitPlanMode".into(),
+            },
+            t0(),
+        );
+        assert!(matches!(s, AgentState::Waiting { .. }));
+    }
+
+    #[test]
+    fn tool_use_stays_busy_indefinitely() {
+        // Long-running tools (cargo build, npm install, etc.) must keep
+        // the badge busy until tool_result arrives.
         let start = t0();
         let mut sm = StateMachine::new("sess1".into(), start);
         sm.observe(
@@ -195,8 +202,8 @@ mod tests {
             },
             start,
         );
-        let s = sm.tick(start + Duration::from_secs(31));
-        assert!(matches!(s, AgentState::Waiting { .. }));
+        let s = sm.tick(start + Duration::from_secs(600));
+        assert!(matches!(s, AgentState::Busy { .. }));
     }
 
     #[test]

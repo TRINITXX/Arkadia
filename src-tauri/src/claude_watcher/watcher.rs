@@ -40,7 +40,7 @@ pub fn run_watcher(
             break;
         }
         match rx.recv_timeout(tick_interval) {
-            Ok(Ok(event)) => handle_event(event, &mut offsets, &mut machines, &updates),
+            Ok(Ok(event)) => handle_event(event, &root, &mut offsets, &mut machines, &updates),
             Ok(Err(e)) => eprintln!("[claude_watcher] notify error: {e}"),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -55,6 +55,7 @@ pub fn run_watcher(
 
 fn handle_event(
     event: Event,
+    root: &Path,
     offsets: &mut HashMap<PathBuf, u64>,
     machines: &mut HashMap<String, (StateMachine, String)>,
     updates: &Sender<StateUpdate>,
@@ -68,6 +69,16 @@ fn handle_event(
     }
     for path in event.paths {
         if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+            continue;
+        }
+        // Skip sub-agent jsonl: only files directly under <root>/<encoded-cwd>/
+        // count (depth = 2). Sub-agents are at <root>/<cwd>/<parent>/<sub>.jsonl.
+        let depth = path
+            .strip_prefix(root)
+            .ok()
+            .map(|p| p.components().count())
+            .unwrap_or(0);
+        if depth != 2 {
             continue;
         }
         if matches!(event.kind, EventKind::Remove(_)) {
@@ -222,6 +233,35 @@ mod tests {
         );
         let update = urx.recv_timeout(Duration::from_secs(4)).expect("update");
         assert!(matches!(update.state, AgentState::Waiting { .. }));
+
+        drop(handle);
+    }
+
+    #[test]
+    fn skips_sub_agent_jsonl_in_subdirectory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let (utx, urx) = channel();
+        let (_stx, srx) = channel();
+        let root_clone = root.clone();
+        let handle = thread::spawn(move || run_watcher(root_clone, utx, srx).ok());
+
+        thread::sleep(Duration::from_millis(200));
+
+        // Sub-agent path: <root>/<cwd>/<parent-session>/<sub-session>.jsonl
+        let sub_dir = root.join("C--tmp-test").join("parent-uuid");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let sub_path = sub_dir.join("sub-uuid.jsonl");
+        let mut f = std::fs::File::create(&sub_path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"user","cwd":"/tmp/test","message":{{"role":"user","content":"hi"}}}}"#
+        )
+        .unwrap();
+
+        // Should not receive any update for the sub-agent file
+        let res = urx.recv_timeout(Duration::from_secs(2));
+        assert!(res.is_err(), "expected no update, got {:?}", res);
 
         drop(handle);
     }
