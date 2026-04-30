@@ -248,7 +248,7 @@ export function App() {
   useEffect(() => {
     if (!loaded || sessionRestored) return;
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const session = await invoke<SessionFile | null>("session_load");
         if (cancelled) return;
@@ -635,7 +635,7 @@ export function App() {
         },
       );
     }
-    setup();
+    void setup();
 
     return () => {
       active = false;

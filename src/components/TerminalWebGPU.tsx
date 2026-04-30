@@ -500,7 +500,7 @@ export function TerminalWebGPU({
   useEffect(() => {
     let cancelled = false;
 
-    (async () => {
+    void (async () => {
       await ensureWasmReady();
       if (cancelled) return;
       const canvas = canvasRef.current;
@@ -596,7 +596,7 @@ export function TerminalWebGPU({
         ?.trim()
         .replace(/^["']|["']$/g, "") ?? "";
     if (!primary) return;
-    (async () => {
+    void (async () => {
       try {
         const raw = await invoke<number[] | Uint8Array>("get_font_data", {
           family: primary,
