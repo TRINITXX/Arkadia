@@ -33,6 +33,9 @@ pub fn run() {
             let registry = registry.clone();
             move |app| {
                 let app_handle = app.handle().clone();
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.maximize();
+                }
                 let claude_root = dirs::home_dir()
                     .unwrap_or_else(|| PathBuf::from("."))
                     .join(".claude")

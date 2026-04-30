@@ -19,6 +19,30 @@ import type {
   TerminalPalette,
 } from "@/types";
 
+const fontBytesCache = new Map<string, Promise<Uint8Array | null>>();
+
+function loadFontBytes(family: string): Promise<Uint8Array | null> {
+  const primary =
+    family
+      .split(",")[0]
+      ?.trim()
+      .replace(/^["']|["']$/g, "") ?? "";
+  if (!primary) return Promise.resolve(null);
+  let promise = fontBytesCache.get(primary);
+  if (!promise) {
+    promise = invoke<number[] | Uint8Array>("get_font_data", {
+      family: primary,
+    })
+      .then((raw) => (raw instanceof Uint8Array ? raw : new Uint8Array(raw)))
+      .catch((e) => {
+        console.warn(`[arkadia] '${primary}' not found on system:`, e);
+        return null;
+      });
+    fontBytesCache.set(primary, promise);
+  }
+  return promise;
+}
+
 interface HoverRange {
   match: ClickableMatch;
   row: number;
@@ -511,6 +535,18 @@ export function TerminalWebGPU({
           renderer.resize(pw, ph);
         }
         renderer.set_cell_size(cell.width * dpr, cell.height * dpr);
+        const fontBytes = await loadFontBytes(font.family);
+        if (cancelled) {
+          renderer.free();
+          return;
+        }
+        if (fontBytes) {
+          const ok = renderer.set_primary_font(fontBytes);
+          if (ok) {
+            const cell2 = measureCellSize(font.family, font.size);
+            renderer.set_cell_size(cell2.width * dpr, cell2.height * dpr);
+          }
+        }
         redraw();
         setRendererVersion((v) => v + 1);
       } catch (e) {

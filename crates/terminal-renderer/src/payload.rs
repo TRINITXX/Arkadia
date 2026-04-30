@@ -16,6 +16,7 @@ fn default_cell_width() -> u8 {
 }
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)] // wire format: some fields are declared for completeness even if unused
 pub struct CellRun {
     pub text: String,
     pub fg: CellColor,
@@ -41,6 +42,7 @@ pub struct CellRun {
 }
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)] // wire format: some fields are declared for completeness even if unused
 pub struct RenderPayload {
     pub session_id: String,
     pub cols: u16,

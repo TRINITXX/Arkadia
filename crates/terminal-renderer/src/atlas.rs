@@ -149,10 +149,6 @@ impl Atlas {
         self.cell_h
     }
 
-    pub fn ascent(&self) -> f32 {
-        self.ascent
-    }
-
     pub fn font(&self) -> FontRef<'static> {
         // Primary (Cascadia) drives the metrics — line height, ascent, etc.
         self.fonts[0]
@@ -214,10 +210,6 @@ impl Atlas {
         self.slots.clear();
         self.cursor_x = ATLAS_PADDING;
         self.cursor_y = ATLAS_PADDING;
-    }
-
-    pub fn lookup(&self, key: &GlyphKey) -> Option<GlyphEntry> {
-        self.slots.get(key).copied()
     }
 
     /// Rasterizes `ch` at `size_px` and uploads it to an RGBA slot sized
