@@ -102,3 +102,92 @@ mod tests {
         assert_eq!(s, back);
     }
 }
+
+use std::path::{Path, PathBuf};
+
+pub fn save_atomic(file: &Path, session: &SessionFile) -> std::io::Result<()> {
+    let tmp = tmp_path(file);
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(session)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, file)?;
+    Ok(())
+}
+
+pub fn load_with_recovery(file: &Path) -> Option<SessionFile> {
+    let tmp = tmp_path(file);
+    if tmp.exists() && !file.exists() {
+        let _ = std::fs::rename(&tmp, file);
+    }
+    let content = std::fs::read_to_string(file).ok()?;
+    let s: SessionFile = serde_json::from_str(&content).ok()?;
+    if s.version != SESSION_VERSION {
+        return None;
+    }
+    Some(s)
+}
+
+pub fn clear(file: &Path) {
+    let _ = std::fs::remove_file(file);
+    let _ = std::fs::remove_file(tmp_path(file));
+}
+
+fn tmp_path(file: &Path) -> PathBuf {
+    let mut s = file.as_os_str().to_owned();
+    s.push(".tmp");
+    PathBuf::from(s)
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+
+    fn empty_session() -> SessionFile {
+        SessionFile {
+            version: SESSION_VERSION,
+            saved_at: "2026-04-30T00:00:00Z".into(),
+            active_project_id: None,
+            projects: vec![],
+        }
+    }
+
+    #[test]
+    fn save_then_load_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        save_atomic(&path, &empty_session()).unwrap();
+        let loaded = load_with_recovery(&path).unwrap();
+        assert_eq!(loaded.version, SESSION_VERSION);
+    }
+
+    #[test]
+    fn promotes_tmp_when_main_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let tmp = tmp_path(&path);
+        std::fs::write(&tmp, serde_json::to_string(&empty_session()).unwrap()).unwrap();
+        assert!(!path.exists());
+        let loaded = load_with_recovery(&path).unwrap();
+        assert_eq!(loaded.version, SESSION_VERSION);
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn returns_none_for_old_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        std::fs::write(&path, r#"{"version":0,"saved_at":"x","active_project_id":null,"projects":[]}"#).unwrap();
+        assert!(load_with_recovery(&path).is_none());
+    }
+
+    #[test]
+    fn returns_none_for_corrupt_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        std::fs::write(&path, "not json").unwrap();
+        assert!(load_with_recovery(&path).is_none());
+    }
+}
