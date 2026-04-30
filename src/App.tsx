@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { arrayMove } from "@dnd-kit/sortable";
 import { TabBar } from "@/components/TabBar";
 import { Sidepanel } from "@/components/Sidepanel";
@@ -648,10 +649,13 @@ export function App() {
     };
   }, []);
 
-  // ─── Session auto-save (30s + on unload) ───────────────────────
+  // ─── Session auto-save (debounced + close + 30s safety net) ────
 
   useEffect(() => {
     if (!loaded || !sessionRestored) return;
+
+    // Build the current SessionFile from React state. Inlined as a closure
+    // so it always sees the latest values via the dep array.
     const buildSession = (): SessionFile => {
       const agentResumes: Record<string, AgentResume> = {};
       for (const [paneId, st] of Object.entries(paneAgentStates)) {
@@ -681,16 +685,40 @@ export function App() {
         })),
       };
     };
-    const interval = setInterval(() => {
-      void invoke("session_save", { session: buildSession() }).catch(() => {});
-    }, 30_000);
-    const onBeforeUnload = () => {
-      void invoke("session_save", { session: buildSession() });
+
+    const doSave = async () => {
+      try {
+        await invoke("session_save", { session: buildSession() });
+      } catch (e) {
+        console.warn("session_save failed", e);
+      }
     };
-    window.addEventListener("beforeunload", onBeforeUnload);
+
+    // 1) Debounced save on state change.
+    const debounce = window.setTimeout(() => {
+      void doSave();
+    }, 1500);
+
+    // 2) Periodic safety-net save (long-running sessions where nothing changed).
+    const interval = window.setInterval(() => {
+      void doSave();
+    }, 30_000);
+
+    // 3) Save on Tauri window close. The handler is async; await ensures the
+    //    file is fully written before the window proceeds with shutdown.
+    let unlistenClose: (() => void) | undefined;
+    void getCurrentWindow()
+      .onCloseRequested(async () => {
+        await doSave();
+      })
+      .then((un) => {
+        unlistenClose = un;
+      });
+
     return () => {
-      clearInterval(interval);
-      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.clearTimeout(debounce);
+      window.clearInterval(interval);
+      unlistenClose?.();
     };
   }, [
     loaded,
