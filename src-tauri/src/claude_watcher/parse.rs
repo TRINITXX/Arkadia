@@ -23,32 +23,77 @@ struct RawEntry {
     kind: Option<String>,
     cwd: Option<String>,
     message: Option<RawMessage>,
-    name: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct RawMessage {
     stop_reason: Option<serde_json::Value>,
+    content: Option<serde_json::Value>,
+}
+
+/// Find the first `tool_use` block inside `message.content[]` and return its `name`.
+/// Returns None when the content is absent, a plain string, or has no tool_use block.
+fn first_tool_use_name(content: &serde_json::Value) -> Option<String> {
+    let arr = content.as_array()?;
+    for item in arr {
+        if item.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+            return item
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map(String::from);
+        }
+    }
+    None
+}
+
+/// Returns true if any block in `content[]` is a `tool_result`.
+fn has_tool_result(content: &serde_json::Value) -> bool {
+    content
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .any(|item| item.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
+        })
+        .unwrap_or(false)
 }
 
 pub fn parse_line(line: &str) -> Option<ParsedLine> {
     let raw: RawEntry = serde_json::from_str(line).ok()?;
     let entry = match raw.kind.as_deref() {
-        Some("user") => Entry::User,
-        Some("assistant") => {
-            let stop_reason = raw.message.as_ref().and_then(|m| m.stop_reason.as_ref());
-            match stop_reason {
-                Some(serde_json::Value::Null) | None => Entry::AssistantPartial,
-                Some(serde_json::Value::String(s)) if s == "tool_use" => {
-                    Entry::AssistantContinuing
-                }
-                Some(_) => Entry::AssistantComplete,
+        Some("user") => {
+            // user messages can carry a tool_result block (resolved by Claude Code itself)
+            let is_tool_result = raw
+                .message
+                .as_ref()
+                .and_then(|m| m.content.as_ref())
+                .map(has_tool_result)
+                .unwrap_or(false);
+            if is_tool_result {
+                Entry::ToolResult
+            } else {
+                Entry::User
             }
         }
-        Some("tool_use") => Entry::ToolUse {
-            name: raw.name.unwrap_or_default(),
-        },
-        Some("tool_result") => Entry::ToolResult,
+        Some("assistant") => {
+            // assistant messages with a tool_use in content are the real tool invocations
+            let tool_name = raw
+                .message
+                .as_ref()
+                .and_then(|m| m.content.as_ref())
+                .and_then(first_tool_use_name);
+            if let Some(name) = tool_name {
+                Entry::ToolUse { name }
+            } else {
+                let stop_reason = raw.message.as_ref().and_then(|m| m.stop_reason.as_ref());
+                match stop_reason {
+                    Some(serde_json::Value::Null) | None => Entry::AssistantPartial,
+                    Some(serde_json::Value::String(s)) if s == "tool_use" => {
+                        Entry::AssistantContinuing
+                    }
+                    Some(_) => Entry::AssistantComplete,
+                }
+            }
+        }
         _ => Entry::Other,
     };
     Some(ParsedLine { entry, cwd: raw.cwd })
@@ -74,6 +119,8 @@ mod tests {
 
     #[test]
     fn parses_assistant_tool_use_stop_as_continuing() {
+        // assistant message with stop_reason "tool_use" but content has no tool_use block
+        // (rare edge case: a continuation marker before the actual tool block).
         let line = r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":""}}"#;
         assert_eq!(parse_line(line).unwrap().entry, Entry::AssistantContinuing);
     }
@@ -91,17 +138,26 @@ mod tests {
     }
 
     #[test]
-    fn parses_tool_use_with_name() {
-        let line = r#"{"type":"tool_use","name":"Edit","id":"abc"}"#;
+    fn parses_assistant_with_nested_tool_use() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"AskUserQuestion","input":{}}],"stop_reason":"tool_use"}}"#;
         match parse_line(line).unwrap().entry {
-            Entry::ToolUse { name } => assert_eq!(name, "Edit"),
+            Entry::ToolUse { name } => assert_eq!(name, "AskUserQuestion"),
             other => panic!("expected ToolUse, got {:?}", other),
         }
     }
 
     #[test]
-    fn parses_tool_result() {
-        let line = r#"{"type":"tool_result","tool_use_id":"abc"}"#;
+    fn parses_assistant_with_text_then_tool_use() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"reading…"},{"type":"tool_use","name":"Read","input":{}}],"stop_reason":"tool_use"}}"#;
+        match parse_line(line).unwrap().entry {
+            Entry::ToolUse { name } => assert_eq!(name, "Read"),
+            other => panic!("expected ToolUse, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_user_with_tool_result_block() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"ok"}]}}"#;
         assert_eq!(parse_line(line).unwrap().entry, Entry::ToolResult);
     }
 
