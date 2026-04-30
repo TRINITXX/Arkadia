@@ -1,0 +1,143 @@
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { shortenPath } from "@/store";
+import type { Project } from "@/types";
+
+interface SidepanelProps {
+  projects: Project[];
+  activeProjectId: string | null;
+  onActivate: (id: string) => void;
+  onAdd: () => void;
+  onContextMenu: (project: Project, x: number, y: number) => void;
+  onReorder: (oldIndex: number, newIndex: number) => void;
+}
+
+export function Sidepanel({
+  projects,
+  activeProjectId,
+  onActivate,
+  onAdd,
+  onContextMenu,
+  onReorder,
+}: SidepanelProps) {
+  const sortedProjects = [...projects].sort((a, b) => a.order - b.order);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 },
+    }),
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = sortedProjects.findIndex((p) => p.id === active.id);
+    const newIndex = sortedProjects.findIndex((p) => p.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    onReorder(oldIndex, newIndex);
+  };
+
+  return (
+    <aside className="flex h-full w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950">
+      <div className="flex-1 overflow-y-auto py-2">
+        {sortedProjects.length === 0 ? (
+          <div className="px-3 py-2 text-xs text-zinc-500">
+            no project yet — click + to add one
+          </div>
+        ) : (
+          <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+            <SortableContext
+              items={sortedProjects.map((p) => p.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              {sortedProjects.map((p) => (
+                <SortableProjectRow
+                  key={p.id}
+                  project={p}
+                  active={p.id === activeProjectId}
+                  onActivate={onActivate}
+                  onContextMenu={onContextMenu}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
+        )}
+      </div>
+      <button
+        onClick={onAdd}
+        className="m-2 rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+      >
+        + New project
+      </button>
+    </aside>
+  );
+}
+
+interface SortableProjectRowProps {
+  project: Project;
+  active: boolean;
+  onActivate: (id: string) => void;
+  onContextMenu: (project: Project, x: number, y: number) => void;
+}
+
+function SortableProjectRow({
+  project,
+  active,
+  onActivate,
+  onContextMenu,
+}: SortableProjectRowProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: project.id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      onClick={() => onActivate(project.id)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(project, e.clientX, e.clientY);
+      }}
+      className={`group mx-1.5 mb-0.5 flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 ${
+        active ? "bg-zinc-800 text-zinc-100" : "text-zinc-300 hover:bg-zinc-900"
+      }`}
+      title={project.path}
+    >
+      <span
+        className="mt-1.5 size-2.5 shrink-0 rounded-full"
+        style={{ backgroundColor: project.color }}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm">{project.name}</div>
+        <div className="truncate font-mono text-[10px] text-zinc-500">
+          {shortenPath(project.path)}
+        </div>
+      </div>
+    </div>
+  );
+}

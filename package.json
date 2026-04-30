@@ -1,0 +1,38 @@
+{
+  "name": "arkadia",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm run build:renderer:dev && vite",
+    "build": "pnpm run build:renderer && tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "build:renderer": "wasm-pack build crates/terminal-renderer --target web --release",
+    "build:renderer:dev": "wasm-pack build crates/terminal-renderer --target web --dev"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-shell": "^2.3.5",
+    "@tauri-apps/plugin-store": "^2.4.2",
+    "lucide-react": "^1.12.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4",
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4",
+    "typescript": "^5.6.3",
+    "vite": "^6",
+    "wasm-pack": "^0.14.0"
+  }
+}

@@ -1,0 +1,24 @@
+# Frontend
+node_modules/
+dist/
+.vite/
+
+# Rust / Cargo
+target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tauri generated
+src-tauri/gen/
+src-tauri/target/
+
+# Local env
+.env
+.env.local
