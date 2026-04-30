@@ -234,6 +234,7 @@ pub fn spawn_terminal(
     state: State<'_, SessionMap>,
     registry: State<'_, Arc<AgentRegistry>>,
     app: AppHandle,
+    init_command: Option<String>,
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
 
@@ -346,6 +347,18 @@ pub fn spawn_terminal(
             }
         }
     });
+
+    if let Some(cmd) = init_command {
+        let writer_for_init = writer.clone();
+        thread::spawn(move || {
+            // Wait for the prompt to appear (PowerShell init takes ~600-800ms typically)
+            thread::sleep(Duration::from_millis(800));
+            // Write the command + carriage return into the PTY's stdin
+            let mut w = writer_for_init.lock();
+            let _ = w.write_all(format!("{cmd}\r").as_bytes());
+            let _ = w.flush();
+        });
+    }
 
     state.sessions.lock().insert(
         session_id.clone(),
