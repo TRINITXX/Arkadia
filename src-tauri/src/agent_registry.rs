@@ -81,6 +81,7 @@ impl AgentRegistry {
         }
     }
 
+    #[allow(dead_code)]
     pub fn pane_session_id(&self, pane_id: Uuid) -> Option<String> {
         let g = self.inner.lock();
         let cwd = g.pane_cwd.get(&pane_id)?;
