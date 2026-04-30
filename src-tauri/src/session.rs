@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 pub const SESSION_VERSION: u32 = 1;
 
@@ -7,22 +6,22 @@ pub const SESSION_VERSION: u32 = 1;
 pub struct SessionFile {
     pub version: u32,
     pub saved_at: String,
-    pub active_project_id: Option<Uuid>,
+    pub active_project_id: Option<String>,
     pub projects: Vec<ProjectSession>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectSession {
-    pub project_id: Uuid,
-    pub active_tab_id: Option<Uuid>,
+    pub project_id: String,
+    pub active_tab_id: Option<String>,
     pub tabs: Vec<TabSession>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TabSession {
-    pub tab_id: Uuid,
+    pub tab_id: String,
     pub title: String,
-    pub active_pane_id: Uuid,
+    pub active_pane_id: String,
     pub pane_tree: PaneTreeSerialized,
 }
 
@@ -30,7 +29,7 @@ pub struct TabSession {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PaneTreeSerialized {
     Leaf {
-        pane_id: Uuid,
+        pane_id: String,
         cwd: String,
         profile_id: String,
         agent_resume: Option<AgentResume>,
@@ -66,19 +65,19 @@ mod tests {
         let s = SessionFile {
             version: SESSION_VERSION,
             saved_at: "2026-04-30T12:00:00Z".into(),
-            active_project_id: Some(Uuid::new_v4()),
+            active_project_id: Some("proj-1".into()),
             projects: vec![ProjectSession {
-                project_id: Uuid::new_v4(),
-                active_tab_id: Some(Uuid::new_v4()),
+                project_id: "proj-1".into(),
+                active_tab_id: Some("tab-1".into()),
                 tabs: vec![TabSession {
-                    tab_id: Uuid::new_v4(),
+                    tab_id: "tab-1".into(),
                     title: "main".into(),
-                    active_pane_id: Uuid::new_v4(),
+                    active_pane_id: "pane-uuid-a".into(),
                     pane_tree: PaneTreeSerialized::Split {
                         orientation: Orientation::Horizontal,
                         ratio: 0.5,
                         left: Box::new(PaneTreeSerialized::Leaf {
-                            pane_id: Uuid::new_v4(),
+                            pane_id: "pane-uuid-a".into(),
                             cwd: "C:\\Users\\test".into(),
                             profile_id: "pwsh".into(),
                             agent_resume: Some(AgentResume {
@@ -88,7 +87,7 @@ mod tests {
                             }),
                         }),
                         right: Box::new(PaneTreeSerialized::Leaf {
-                            pane_id: Uuid::new_v4(),
+                            pane_id: "pane-uuid-b".into(),
                             cwd: "C:\\Users\\test".into(),
                             profile_id: "pwsh".into(),
                             agent_resume: None,
