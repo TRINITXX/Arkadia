@@ -2,7 +2,7 @@
 
 Application terminal Windows native, Rust + Tauri 2 + WebGPU.
 
-Plan complet : `C:\Users\TRINITX\.claude\plans\je-veux-creer-une-precious-biscuit.md`
+
 
 ## Stack
 
