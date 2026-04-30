@@ -11,6 +11,7 @@ use std::sync::Arc;
 use agent_registry::AgentRegistry;
 use claude_watcher::watcher::run_watcher;
 use fonts::get_font_data;
+use session::{clear as session_clear_fn, load_with_recovery, save_atomic, SessionFile};
 use tauri::{AppHandle, Emitter, Manager};
 use terminal::{
     close_terminal, resize_terminal, scroll_terminal, search_terminal, send_input,
@@ -75,6 +76,9 @@ pub fn run() {
             get_font_data,
             agent_state_for_pane,
             agent_state_for_project,
+            session_load,
+            session_save,
+            session_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -106,4 +110,26 @@ fn agent_state_for_project(
         .filter_map(|s| uuid::Uuid::parse_str(&s).ok())
         .collect();
     registry.project_state(&uuids)
+}
+
+fn session_path(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("session.json")
+}
+
+#[tauri::command]
+fn session_load(app: AppHandle) -> Option<SessionFile> {
+    load_with_recovery(&session_path(&app))
+}
+
+#[tauri::command]
+fn session_save(app: AppHandle, session: SessionFile) -> Result<(), String> {
+    save_atomic(&session_path(&app), &session).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn session_clear(app: AppHandle) {
+    session_clear_fn(&session_path(&app));
 }
