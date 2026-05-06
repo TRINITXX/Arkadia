@@ -32,6 +32,9 @@ pub struct CellRun {
     pub inverse: bool,
     #[serde(default)]
     pub strikethrough: bool,
+    /// SGR 2 (faint/dim). Renders fg blended 50% toward bg in the shader.
+    #[serde(default)]
+    pub dim: bool,
     /// OSC 8 hyperlink target. Optional.
     #[serde(default)]
     pub hyperlink: Option<String>,

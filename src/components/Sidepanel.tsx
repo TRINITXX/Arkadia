@@ -1,15 +1,18 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
-  closestCorners,
+  closestCenter,
   DndContext,
   DragOverlay,
   PointerSensor,
+  pointerWithin,
   useDraggable,
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
+  type Modifier,
 } from "@dnd-kit/core";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { shortenPath } from "@/store";
@@ -31,13 +34,49 @@ interface SidepanelProps {
     targetWorkspaceId: string | null,
     insertBeforeProjectId: string | null,
   ) => void;
+  onPlaceProjectInRoot: (projectId: string, rootOrder: number) => void;
   onReorderWorkspaces: (oldIndex: number, newIndex: number) => void;
+  onPlaceWorkspaceInRoot: (workspaceId: string, rootOrder: number) => void;
   onToggleWorkspaceCollapsed: (id: string) => void;
   tabs: Tab[];
   paneAgentStates: Record<string, AgentStateValue>;
 }
 
 const UNGROUPED_ID = "__ungrouped__";
+
+// Drop target is decided by the pointer position, not by the drag preview's
+// rectangle. Falls back to closestCenter for pointer-in-gutter situations.
+const collisionDetection: CollisionDetection = (args) => {
+  const pointerHits = pointerWithin(args);
+  if (pointerHits.length > 0) return pointerHits;
+  return closestCenter(args);
+};
+
+// Snap the drag preview so its center sits under the cursor, regardless of
+// where the user grabbed the original element.
+const snapCenterToCursor: Modifier = ({
+  activatorEvent,
+  draggingNodeRect,
+  transform,
+}) => {
+  if (!draggingNodeRect || !activatorEvent) return transform;
+  const ev = activatorEvent as PointerEvent | MouseEvent | TouchEvent;
+  const clientX =
+    "clientX" in ev
+      ? ev.clientX
+      : ((ev as TouchEvent).touches?.[0]?.clientX ?? 0);
+  const clientY =
+    "clientY" in ev
+      ? ev.clientY
+      : ((ev as TouchEvent).touches?.[0]?.clientY ?? 0);
+  const offsetX = clientX - draggingNodeRect.left;
+  const offsetY = clientY - draggingNodeRect.top;
+  return {
+    ...transform,
+    x: transform.x + offsetX - draggingNodeRect.width / 2,
+    y: transform.y + offsetY - draggingNodeRect.height / 2,
+  };
+};
 
 interface ProjectDragData {
   type: "project";
@@ -61,8 +100,27 @@ interface ProjectDropData {
   workspaceId: string | null;
 }
 
+interface ProjectGapDropData {
+  type: "project-gap";
+  workspaceId: string | null;
+  insertBeforeProjectId: string | null;
+}
+
+interface WorkspaceGapDropData {
+  type: "workspace-gap";
+  insertBeforeWorkspaceId: string | null;
+  /** Target rootOrder to assign when an item is dropped here. */
+  targetOrder: number;
+}
+
 type DragData = ProjectDragData | WorkspaceDragData;
-type DropData = WorkspaceDropData | ProjectDropData | DragData;
+type DragKind = DragData["type"];
+type DropData =
+  | WorkspaceDropData
+  | ProjectDropData
+  | ProjectGapDropData
+  | WorkspaceGapDropData
+  | DragData;
 
 function projectAgentState(
   projectId: string,
@@ -99,6 +157,10 @@ function workspaceAgentState(
   return aggregate(states);
 }
 
+type RootEntry =
+  | { kind: "workspace"; id: string; order: number; workspace: Workspace }
+  | { kind: "loose-project"; id: string; order: number; project: Project };
+
 export function Sidepanel({
   projects,
   workspaces,
@@ -109,7 +171,9 @@ export function Sidepanel({
   onProjectContextMenu,
   onWorkspaceContextMenu,
   onMoveProject,
+  onPlaceProjectInRoot,
   onReorderWorkspaces,
+  onPlaceWorkspaceInRoot,
   onToggleWorkspaceCollapsed,
   tabs,
   paneAgentStates,
@@ -133,6 +197,42 @@ export function Sidepanel({
     return map;
   }, [projects]);
 
+  // Merged root list: workspaces and standalone (loose) ungrouped projects,
+  // sorted by their shared order axis. Ungrouped projects without a rootOrder
+  // stay in the legacy bottom group instead.
+  const rootEntries = useMemo<RootEntry[]>(() => {
+    const entries: RootEntry[] = [];
+    for (const w of workspaces) {
+      entries.push({
+        kind: "workspace",
+        id: w.id,
+        order: w.order,
+        workspace: w,
+      });
+    }
+    for (const p of projects) {
+      if ((p.workspaceId ?? null) !== null) continue;
+      if (typeof p.rootOrder !== "number") continue;
+      entries.push({
+        kind: "loose-project",
+        id: p.id,
+        order: p.rootOrder,
+        project: p,
+      });
+    }
+    entries.sort((a, b) => a.order - b.order);
+    return entries;
+  }, [workspaces, projects]);
+
+  const fallbackUngroupedProjects = useMemo(
+    () =>
+      projects.filter(
+        (p) =>
+          (p.workspaceId ?? null) === null && typeof p.rootOrder !== "number",
+      ),
+    [projects],
+  );
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
@@ -150,19 +250,36 @@ export function Sidepanel({
     const overData = over.data.current as DropData | undefined;
     if (!activeData || !overData) return;
 
-    if (activeData.type === "workspace" && overData.type === "workspace") {
-      const oldIndex = sortedWorkspaces.findIndex(
-        (w) => w.id === activeData.workspaceId,
-      );
-      const newIndex = sortedWorkspaces.findIndex(
-        (w) => w.id === overData.workspaceId,
-      );
-      if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
-      onReorderWorkspaces(oldIndex, newIndex);
-      return;
+    if (activeData.type === "workspace") {
+      if (overData.type === "workspace-gap") {
+        // Drop the workspace at an absolute root position. Works whether the
+        // gap is between two workspaces, between a workspace and a loose
+        // project, or at the start/end of the root list.
+        onPlaceWorkspaceInRoot(activeData.workspaceId, overData.targetOrder);
+        return;
+      }
+      if (overData.type === "workspace") {
+        const oldIndex = sortedWorkspaces.findIndex(
+          (w) => w.id === activeData.workspaceId,
+        );
+        const newIndex = sortedWorkspaces.findIndex(
+          (w) => w.id === overData.workspaceId,
+        );
+        if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
+        onReorderWorkspaces(oldIndex, newIndex);
+        return;
+      }
     }
 
     if (activeData.type === "project") {
+      if (overData.type === "project-gap") {
+        onMoveProject(
+          activeData.projectId,
+          overData.workspaceId,
+          overData.insertBeforeProjectId,
+        );
+        return;
+      }
       if (overData.type === "project-drop") {
         // Drop before this project (within its workspace).
         onMoveProject(
@@ -177,14 +294,24 @@ export function Sidepanel({
         onMoveProject(activeData.projectId, overData.workspaceId, null);
         return;
       }
+      if (overData.type === "workspace-gap") {
+        // Drop the project as a standalone item between root entries.
+        onPlaceProjectInRoot(activeData.projectId, overData.targetOrder);
+        return;
+      }
     }
   };
+
+  const activeDragKind: DragKind | null = activeDrag?.type ?? null;
 
   const renderGroup = (
     workspaceId: string | null,
     workspace: Workspace | null,
   ) => {
-    const projectsInGroup = projectsByWorkspace.get(workspaceId) ?? [];
+    const projectsInGroup =
+      workspaceId === null
+        ? fallbackUngroupedProjects
+        : (projectsByWorkspace.get(workspaceId) ?? []);
     const isCollapsed = workspace?.collapsed ?? false;
     const groupAgent = workspaceAgentState(
       workspaceId,
@@ -200,6 +327,7 @@ export function Sidepanel({
         projects={projectsInGroup}
         collapsed={isCollapsed}
         agentState={groupAgent}
+        activeDragKind={activeDragKind}
         onToggleCollapsed={
           workspace ? () => onToggleWorkspaceCollapsed(workspace.id) : undefined
         }
@@ -213,7 +341,29 @@ export function Sidepanel({
     );
   };
 
-  const ungroupedHasProjects = (projectsByWorkspace.get(null) ?? []).length > 0;
+  const renderLooseProject = (project: Project) => (
+    <div className="mb-2">
+      <DraggableProjectRow
+        project={project}
+        active={project.id === activeProjectId}
+        onActivate={onActivate}
+        onContextMenu={onProjectContextMenu}
+        agentState={projectAgentState(project.id, tabs, paneAgentStates)}
+      />
+    </div>
+  );
+
+  const ungroupedHasProjects = fallbackUngroupedProjects.length > 0;
+
+  // Compute target rootOrder for each gap: midpoint between neighbors.
+  const gapTargetOrder = (i: number): number => {
+    const prev = i > 0 ? rootEntries[i - 1].order : null;
+    const next = i < rootEntries.length ? rootEntries[i].order : null;
+    if (prev === null && next === null) return 0;
+    if (prev === null) return (next as number) - 1;
+    if (next === null) return prev + 1;
+    return (prev + next) / 2;
+  };
 
   return (
     <aside className="flex h-full w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950">
@@ -225,13 +375,34 @@ export function Sidepanel({
         ) : (
           <DndContext
             sensors={sensors}
-            collisionDetection={closestCorners}
+            collisionDetection={collisionDetection}
+            modifiers={[snapCenterToCursor]}
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
             onDragCancel={() => setActiveDrag(null)}
           >
-            {sortedWorkspaces.map((w) => renderGroup(w.id, w))}
-            {(ungroupedHasProjects || sortedWorkspaces.length === 0) &&
+            {rootEntries.map((entry, i) => (
+              <Fragment key={entry.id}>
+                <RootGap
+                  insertBeforeId={entry.id}
+                  targetOrder={gapTargetOrder(i)}
+                  activeDragKind={activeDragKind}
+                />
+                {entry.kind === "workspace"
+                  ? renderGroup(entry.workspace.id, entry.workspace)
+                  : renderLooseProject(entry.project)}
+              </Fragment>
+            ))}
+            {rootEntries.length > 0 && (
+              <RootGap
+                insertBeforeId={null}
+                targetOrder={gapTargetOrder(rootEntries.length)}
+                activeDragKind={activeDragKind}
+              />
+            )}
+            {(ungroupedHasProjects ||
+              rootEntries.length === 0 ||
+              activeDragKind === "project") &&
               renderGroup(null, null)}
             <DragOverlay>
               {activeDrag?.type === "project" ? (
@@ -273,6 +444,7 @@ interface WorkspaceSectionProps {
   projects: Project[];
   collapsed: boolean;
   agentState: AgentStateValue;
+  activeDragKind: DragKind | null;
   onToggleCollapsed?: () => void;
   onWorkspaceContextMenu: (workspace: Workspace, x: number, y: number) => void;
   onProjectContextMenu: (project: Project, x: number, y: number) => void;
@@ -288,6 +460,7 @@ function WorkspaceSection({
   projects,
   collapsed,
   agentState,
+  activeDragKind,
   onToggleCollapsed,
   onWorkspaceContextMenu,
   onProjectContextMenu,
@@ -315,15 +488,26 @@ function WorkspaceSection({
           bordered={isGrouped}
         >
           {projects.map((p) => (
-            <DraggableProjectRow
-              key={p.id}
-              project={p}
-              active={p.id === activeProjectId}
-              onActivate={onActivate}
-              onContextMenu={onProjectContextMenu}
-              agentState={projectAgentState(p.id, tabs, paneAgentStates)}
-            />
+            <Fragment key={p.id}>
+              <ProjectGap
+                workspaceId={workspaceId}
+                insertBeforeProjectId={p.id}
+                activeDragKind={activeDragKind}
+              />
+              <DraggableProjectRow
+                project={p}
+                active={p.id === activeProjectId}
+                onActivate={onActivate}
+                onContextMenu={onProjectContextMenu}
+                agentState={projectAgentState(p.id, tabs, paneAgentStates)}
+              />
+            </Fragment>
           ))}
+          <ProjectGap
+            workspaceId={workspaceId}
+            insertBeforeProjectId={null}
+            activeDragKind={activeDragKind}
+          />
         </DroppableGroup>
       )}
     </div>
@@ -523,6 +707,72 @@ function DraggableProjectRow({
         <AgentBadge state={agentState} size={8} inline />
       </span>
     </div>
+  );
+}
+
+interface ProjectGapProps {
+  workspaceId: string | null;
+  insertBeforeProjectId: string | null;
+  activeDragKind: DragKind | null;
+}
+
+function ProjectGap({
+  workspaceId,
+  insertBeforeProjectId,
+  activeDragKind,
+}: ProjectGapProps) {
+  const dropData: ProjectGapDropData = {
+    type: "project-gap",
+    workspaceId,
+    insertBeforeProjectId,
+  };
+  const id = `proj-gap:${workspaceId ?? "_"}:${insertBeforeProjectId ?? "_end"}`;
+  const { setNodeRef, isOver } = useDroppable({
+    id,
+    data: dropData,
+    disabled: activeDragKind !== "project",
+  });
+  const armed = activeDragKind === "project";
+  return (
+    <div
+      ref={setNodeRef}
+      className={`mx-1.5 transition-colors ${
+        armed ? "h-1.5" : "h-0"
+      } ${isOver ? "rounded bg-blue-500/70" : ""}`}
+    />
+  );
+}
+
+interface RootGapProps {
+  insertBeforeId: string | null;
+  targetOrder: number;
+  activeDragKind: DragKind | null;
+}
+
+function RootGap({
+  insertBeforeId,
+  targetOrder,
+  activeDragKind,
+}: RootGapProps) {
+  const dropData: WorkspaceGapDropData = {
+    type: "workspace-gap",
+    insertBeforeWorkspaceId: insertBeforeId,
+    targetOrder,
+  };
+  const id = `root-gap:${insertBeforeId ?? "_end"}`;
+  const { setNodeRef, isOver } = useDroppable({
+    id,
+    data: dropData,
+    disabled: activeDragKind === null,
+  });
+  const armed = activeDragKind !== null;
+  return (
+    <div
+      ref={setNodeRef}
+      className={`mx-1.5 transition-colors ${
+        armed ? "h-2" : "h-0"
+      } ${isOver ? "rounded bg-blue-500/70" : ""}`}
+    />
   );
 }
 

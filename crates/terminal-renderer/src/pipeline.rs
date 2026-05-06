@@ -39,6 +39,9 @@ pub const FLAG_UL_DASHED: u32 = 1 << 7;
 /// Glyph stores premultiplied RGBA (color emoji). When set the fragment
 /// shader composites the sample over `bg` instead of `mix(bg, fg, alpha)`.
 pub const FLAG_COLOR_GLYPH: u32 = 1 << 8;
+/// SGR 2 (faint/dim): fg is blended 50% toward bg before the coverage mix.
+/// Skipped on color glyphs (same rule as bold).
+pub const FLAG_DIM: u32 = 1 << 9;
 
 impl CellInstance {
     pub const SIZE: u64 = std::mem::size_of::<Self>() as u64;
@@ -50,7 +53,11 @@ pub struct Uniforms {
     pub cell_size: [f32; 2],
     pub viewport: [f32; 2],
     pub atlas_size: [f32; 2],
-    pub _pad: [f32; 2],
+    /// 1.0 → fragment shader encodes its linear output to sRGB (used when the
+    /// canvas surface is NOT an `*Srgb` format, which is the WebGPU default).
+    /// 0.0 → leave the conversion to the GPU surface (true sRGB target).
+    pub srgb_at_output: f32,
+    pub _pad: f32,
 }
 
 const INITIAL_INSTANCE_CAPACITY: u64 = 4096;
@@ -110,7 +117,8 @@ impl Pipeline {
                 cell_size: [10.0, 18.0],
                 viewport: [1.0, 1.0],
                 atlas_size: [1024.0, 1024.0],
-                _pad: [0.0, 0.0],
+                srgb_at_output: 0.0,
+                _pad: 0.0,
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });

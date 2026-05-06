@@ -4,6 +4,7 @@ import {
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_PALETTE_ID,
   DEFAULT_TERMINAL_FONT,
+  MAX_FOLDER_DEPTH,
   type ActionButton,
   type CustomPalette,
   type EditorProtocol,
@@ -26,6 +27,7 @@ const KEY_PALETTE_ID = "paletteId";
 const KEY_USE_WEBGPU = "useWebGPU";
 const KEY_CUSTOM_PALETTE = "customPalette";
 const KEY_EDITOR_PROTOCOL = "editorProtocol";
+const KEY_RESUME_ON_RESTORE = "resumeOnRestore";
 
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 28;
@@ -55,6 +57,7 @@ export interface PersistedState {
   useWebGPU: boolean;
   customPalette: CustomPalette;
   editorProtocol: EditorProtocol;
+  resumeOnRestore: boolean;
 }
 
 const DEFAULT_STATE: PersistedState = {
@@ -67,6 +70,7 @@ const DEFAULT_STATE: PersistedState = {
   useWebGPU: false,
   customPalette: DEFAULT_CUSTOM_PALETTE,
   editorProtocol: DEFAULT_EDITOR_PROTOCOL,
+  resumeOnRestore: true,
 };
 
 let storePromise: Promise<Store> | null = null;
@@ -168,17 +172,20 @@ function normalizeWorkspace(w: unknown): Workspace | null {
   };
 }
 
-function normalizeButton(b: unknown): ToolbarButton {
+function normalizeButton(b: unknown, depth = 0): ToolbarButton {
   const x = (b ?? {}) as Record<string, unknown>;
   if (x.kind === "folder") {
+    const rawChildren = Array.isArray(x.children) ? x.children : [];
+    const children: ToolbarButton[] =
+      depth + 1 >= MAX_FOLDER_DEPTH
+        ? rawChildren.map(normalizeAction)
+        : rawChildren.map((c) => normalizeButton(c, depth + 1));
     return {
       id: typeof x.id === "string" ? x.id : newButtonId(),
       kind: "folder",
       label: typeof x.label === "string" ? x.label : "",
       icon: typeof x.icon === "string" ? x.icon : "folder",
-      children: Array.isArray(x.children)
-        ? x.children.map(normalizeAction)
-        : [],
+      children,
       order: typeof x.order === "number" ? x.order : 0,
     };
   }
@@ -199,13 +206,14 @@ async function tryMigrateFromLocalStorage(
       workspaces: [],
       activeProjectId: parsed.activeProjectId ?? null,
       toolbarButtons: Array.isArray(parsed.toolbarButtons)
-        ? parsed.toolbarButtons.map(normalizeButton)
+        ? parsed.toolbarButtons.map((b) => normalizeButton(b))
         : [],
       font: DEFAULT_TERMINAL_FONT,
       paletteId: DEFAULT_PALETTE_ID,
       useWebGPU: false,
       customPalette: DEFAULT_CUSTOM_PALETTE,
       editorProtocol: DEFAULT_EDITOR_PROTOCOL,
+      resumeOnRestore: true,
     };
     await store.set(KEY_PROJECTS, state.projects);
     await store.set(KEY_WORKSPACES, state.workspaces);
@@ -216,6 +224,7 @@ async function tryMigrateFromLocalStorage(
     await store.set(KEY_USE_WEBGPU, state.useWebGPU);
     await store.set(KEY_CUSTOM_PALETTE, state.customPalette);
     await store.set(KEY_EDITOR_PROTOCOL, state.editorProtocol);
+    await store.set(KEY_RESUME_ON_RESTORE, state.resumeOnRestore);
     await store.save();
     localStorage.removeItem(LEGACY_LOCAL_STORAGE_KEY);
     return state;
@@ -244,6 +253,7 @@ export async function loadState(): Promise<PersistedState> {
   const rawUseWebGPU = await store.get<unknown>(KEY_USE_WEBGPU);
   const rawCustomPalette = await store.get<unknown>(KEY_CUSTOM_PALETTE);
   const rawEditorProtocol = await store.get<unknown>(KEY_EDITOR_PROTOCOL);
+  const rawResumeOnRestore = await store.get<unknown>(KEY_RESUME_ON_RESTORE);
 
   return {
     projects: Array.isArray(rawProjects)
@@ -254,7 +264,7 @@ export async function loadState(): Promise<PersistedState> {
       : DEFAULT_STATE.workspaces,
     activeProjectId,
     toolbarButtons: Array.isArray(rawButtons)
-      ? rawButtons.map(normalizeButton)
+      ? rawButtons.map((b) => normalizeButton(b))
       : DEFAULT_STATE.toolbarButtons,
     font: normalizeFont(rawFont),
     paletteId: normalizePaletteId(rawPaletteId),
@@ -264,6 +274,10 @@ export async function loadState(): Promise<PersistedState> {
         : DEFAULT_STATE.useWebGPU,
     customPalette: normalizeCustomPalette(rawCustomPalette),
     editorProtocol: normalizeEditorProtocol(rawEditorProtocol),
+    resumeOnRestore:
+      typeof rawResumeOnRestore === "boolean"
+        ? rawResumeOnRestore
+        : DEFAULT_STATE.resumeOnRestore,
   };
 }
 
@@ -278,6 +292,7 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_USE_WEBGPU, state.useWebGPU);
   await store.set(KEY_CUSTOM_PALETTE, state.customPalette);
   await store.set(KEY_EDITOR_PROTOCOL, state.editorProtocol);
+  await store.set(KEY_RESUME_ON_RESTORE, state.resumeOnRestore);
   await store.save();
 }
 

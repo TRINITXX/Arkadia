@@ -135,6 +135,7 @@ pub struct TerminalState {
     parser: Parser,
     mouse_protocol: MouseProtocol,
     mouse_encoding: MouseEncoding,
+    bracketed_paste: bool,
 }
 
 impl TerminalState {
@@ -157,6 +158,7 @@ impl TerminalState {
             parser: Parser::new(),
             mouse_protocol: MouseProtocol::None,
             mouse_encoding: MouseEncoding::Default,
+            bracketed_paste: false,
         }
     }
 
@@ -206,6 +208,10 @@ impl TerminalState {
 
     pub fn mouse_encoding(&self) -> MouseEncoding {
         self.mouse_encoding
+    }
+
+    pub fn bracketed_paste(&self) -> bool {
+        self.bracketed_paste
     }
 
     /// Case-insensitive substring search across scrollback (oldest first)
@@ -324,8 +330,17 @@ impl TerminalState {
         }
         let width = char_cell_width(c);
         if width == 0 {
-            // Combining marks / nonprint. V1.8 skips them; full grapheme
-            // clustering would attach them to the previous cell's text.
+            if c == '\u{FE0F}' {
+                // VS16 (emoji presentation selector): upgrade the previous
+                // cell to width 2 so the grid matches what callers that count
+                // "emoji = 2 cells" (Markdown table formatters, Claude Code)
+                // expect. No-op when the prev cell is already wide / empty /
+                // a continuation, or when there's no room for the partner.
+                self.upgrade_prev_to_emoji_width();
+            }
+            // Other combining marks / nonprint: skip. V1.8 doesn't attach
+            // them to the previous cell's text (full grapheme clustering
+            // would).
             return;
         }
 
@@ -366,6 +381,46 @@ impl TerminalState {
             }
         }
         self.cursor_col += width as u16;
+    }
+
+    /// VS16 fixup: turn the cell at `cursor_col - 1` into the main of a
+    /// width-2 grapheme by writing a continuation in the next column and
+    /// advancing the cursor by one. Used when text-presentation-default
+    /// emoji (✓ ✻ ☐ …) are followed by U+FE0F to force emoji rendering.
+    fn upgrade_prev_to_emoji_width(&mut self) {
+        if self.cursor_col == 0 {
+            return;
+        }
+        let prev_col = (self.cursor_col - 1) as usize;
+        let cols = self.cols as usize;
+        if prev_col + 1 >= cols {
+            return;
+        }
+        let row = self.cursor_row as usize;
+        let attrs = self.current_attrs.clone();
+        let blank = blank_cell_with_bg(&attrs);
+        let screen = self.active_screen_mut();
+        let Some(line) = screen.get_mut(row) else {
+            return;
+        };
+        let prev_width = match line.get(prev_col) {
+            Some(c) => c.width,
+            None => return,
+        };
+        // Only upgrade a "normal" width-1 cell. Already-wide or continuation
+        // cells are left alone (we'd corrupt the grid).
+        if prev_width != 1 {
+            return;
+        }
+        cleanup_overwrite(line, prev_col + 1, &blank);
+        if let Some(cell) = line.get_mut(prev_col) {
+            cell.width = 2;
+        }
+        if let Some(cell) = line.get_mut(prev_col + 1) {
+            *cell = TerminalCell::continuation();
+            cell.attrs = attrs;
+        }
+        self.cursor_col += 1;
     }
 
     fn handle_control(&mut self, code: ControlCode) {
@@ -756,6 +811,7 @@ impl TerminalState {
                     MouseEncoding::Default
                 };
             }
+            DecPrivateModeCode::BracketedPaste => self.bracketed_paste = on,
             _ => {}
         }
     }
@@ -954,14 +1010,46 @@ fn resize_screen(screen: &mut Vec<Vec<TerminalCell>>, rows: u16, cols: u16) {
 
 /// Returns 0/1/2 for the visible column count of `c`. Combining marks and
 /// nonprintable code points return 0; East Asian wide and emoji return 2;
-/// everything else returns 1. East Asian Ambiguous is treated as 1 (default
-/// `unicode-width`); WezTerm has a setting for forcing it to 2.
+/// everything else returns 1.
+///
+/// `unicode-width` follows UAX#11 strictly: a few emoji that are
+/// "Neutral"/"Narrow" by East Asian Width (e.g. 🗑 U+1F5D1 WASTEBASKET) get
+/// width 1 even though every modern terminal and every Markdown renderer
+/// allocates 2 cells for them. We override the value for ranges that are
+/// emoji-presentation-default in Unicode (`Emoji_Presentation=Yes`), so the
+/// grid stays in sync with what apps like Claude Code, fish, gitui, etc.
+/// expect when they pre-compute column counts for tables.
 fn char_cell_width(c: char) -> u8 {
-    match c.width().unwrap_or(0) {
-        0 => 0,
-        1 => 1,
-        _ => 2,
+    let w = c.width().unwrap_or(0);
+    if w == 0 {
+        return 0;
     }
+    if is_emoji_presentation_default(c) {
+        return 2;
+    }
+    if w >= 2 {
+        2
+    } else {
+        1
+    }
+}
+
+/// Subset of Unicode `Emoji_Presentation=Yes` (i.e. renders as emoji by
+/// default, width 2). Covers the SMP ranges that hold every emoji a Claude
+/// Code todo-table or commit-message output is realistically going to use.
+/// Not exhaustive — code points outside these ranges keep their `unicode-
+/// width` value (text-presentation default; force emoji form via VS16).
+fn is_emoji_presentation_default(c: char) -> bool {
+    let cp = c as u32;
+    matches!(
+        cp,
+        0x1F000..=0x1F02F |   // Mahjong tiles
+        0x1F0A0..=0x1F0FF |   // Playing cards
+        0x1F300..=0x1F6FF |   // Misc Symbols/Pictographs, Emoticons, Transport, Map
+        0x1F900..=0x1F9FF |   // Supplemental Symbols/Pictographs
+        0x1FA00..=0x1FAFF |   // Symbols and Pictographs Extended-A
+        0x1F1E6..=0x1F1FF     // Regional Indicators (flag halves)
+    )
 }
 
 /// When we're about to overwrite a cell that participates in a wide pair,

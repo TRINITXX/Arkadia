@@ -1,17 +1,14 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { newButtonId } from "@/store";
 import { customAsPalette, PALETTES } from "@/lib/palettes";
 import type {
-  ActionButton,
   CustomPalette,
   EditorProtocol,
-  FolderButton,
   PaletteId,
   TerminalFont,
   ToolbarButton,
 } from "@/types";
-import { IconPicker } from "@/components/IconPicker";
+import { ToolbarSettings } from "@/components/ToolbarSettings";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -28,6 +25,8 @@ interface SettingsDialogProps {
   onChangeCustomPalette: (next: CustomPalette) => void;
   editorProtocol: EditorProtocol;
   onChangeEditorProtocol: (next: EditorProtocol) => void;
+  resumeOnRestore: boolean;
+  onChangeResumeOnRestore: (next: boolean) => void;
 }
 
 type Tab = "toolbar" | "general" | "sessions";
@@ -47,6 +46,8 @@ export function SettingsDialog({
   onChangeCustomPalette,
   editorProtocol,
   onChangeEditorProtocol,
+  resumeOnRestore,
+  onChangeResumeOnRestore,
 }: SettingsDialogProps) {
   const [tab, setTab] = useState<Tab>("toolbar");
 
@@ -95,7 +96,13 @@ export function SettingsDialog({
             </SettingsNavItem>
           </nav>
 
-          <div className="flex-1 overflow-y-auto p-5">
+          <div
+            className={`flex-1 p-5 ${
+              tab === "toolbar"
+                ? "flex flex-col overflow-hidden"
+                : "overflow-y-auto"
+            }`}
+          >
             {tab === "toolbar" && (
               <ToolbarSettings
                 buttons={buttons}
@@ -116,7 +123,12 @@ export function SettingsDialog({
                 onChangeEditorProtocol={onChangeEditorProtocol}
               />
             )}
-            {tab === "sessions" && <SessionsSettings />}
+            {tab === "sessions" && (
+              <SessionsSettings
+                resumeOnRestore={resumeOnRestore}
+                onChangeResumeOnRestore={onChangeResumeOnRestore}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -145,364 +157,6 @@ function SettingsNavItem({
     >
       {children}
     </button>
-  );
-}
-
-interface ToolbarSettingsProps {
-  buttons: ToolbarButton[];
-  onChangeButtons: (next: ToolbarButton[]) => void;
-}
-
-function ToolbarSettings({ buttons, onChangeButtons }: ToolbarSettingsProps) {
-  const sorted = [...buttons].sort((a, b) => a.order - b.order);
-
-  const addAction = () => {
-    const next: ActionButton = {
-      id: newButtonId(),
-      kind: "action",
-      label: "",
-      icon: "play",
-      command: "",
-      order: buttons.length,
-    };
-    onChangeButtons([...buttons, next]);
-  };
-
-  const addFolder = () => {
-    const next: FolderButton = {
-      id: newButtonId(),
-      kind: "folder",
-      label: "Folder",
-      icon: "folder",
-      children: [],
-      order: buttons.length,
-    };
-    onChangeButtons([...buttons, next]);
-  };
-
-  const updateButton = (id: string, patch: Partial<ToolbarButton>) => {
-    onChangeButtons(
-      buttons.map((b) =>
-        b.id === id ? ({ ...b, ...patch } as ToolbarButton) : b,
-      ),
-    );
-  };
-
-  const removeButton = (id: string) => {
-    onChangeButtons(
-      buttons
-        .filter((b) => b.id !== id)
-        .map((b, idx) => ({ ...b, order: idx })),
-    );
-  };
-
-  const moveButton = (id: string, dir: -1 | 1) => {
-    const arr = [...buttons].sort((a, b) => a.order - b.order);
-    const idx = arr.findIndex((b) => b.id === id);
-    const newIdx = idx + dir;
-    if (newIdx < 0 || newIdx >= arr.length) return;
-    [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
-    onChangeButtons(arr.map((b, i) => ({ ...b, order: i })));
-  };
-
-  const updateFolderChildren = (id: string, children: ActionButton[]) => {
-    onChangeButtons(
-      buttons.map((b) =>
-        b.id === id && b.kind === "folder" ? { ...b, children } : b,
-      ),
-    );
-  };
-
-  return (
-    <div>
-      <div className="mb-4 flex items-baseline justify-between">
-        <div>
-          <h3 className="text-sm font-semibold tracking-tight">
-            Toolbar buttons
-          </h3>
-          <p className="text-xs text-zinc-500">
-            Each action opens a new tab in the active project and runs its
-            command + Enter. A folder opens a popover containing more actions.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={addAction}
-            className="rounded border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-            type="button"
-          >
-            + Action
-          </button>
-          <button
-            onClick={addFolder}
-            className="rounded border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-            type="button"
-          >
-            + Folder
-          </button>
-        </div>
-      </div>
-
-      {sorted.length === 0 ? (
-        <div className="rounded border border-dashed border-zinc-800 p-6 text-center text-xs text-zinc-500">
-          no button yet
-        </div>
-      ) : (
-        <ul className="space-y-2">
-          {sorted.map((b, idx) => (
-            <li
-              key={b.id}
-              className="rounded border border-zinc-800 bg-zinc-900/60 p-3"
-            >
-              {b.kind === "action" ? (
-                <ActionEditor
-                  button={b}
-                  isFirst={idx === 0}
-                  isLast={idx === sorted.length - 1}
-                  onUpdate={(patch) => updateButton(b.id, patch)}
-                  onRemove={() => removeButton(b.id)}
-                  onMove={(dir) => moveButton(b.id, dir)}
-                />
-              ) : (
-                <FolderEditor
-                  button={b}
-                  isFirst={idx === 0}
-                  isLast={idx === sorted.length - 1}
-                  onUpdate={(patch) => updateButton(b.id, patch)}
-                  onRemove={() => removeButton(b.id)}
-                  onMove={(dir) => moveButton(b.id, dir)}
-                  onChangeChildren={(children) =>
-                    updateFolderChildren(b.id, children)
-                  }
-                />
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-interface MoveProps {
-  isFirst: boolean;
-  isLast: boolean;
-  onMove: (dir: -1 | 1) => void;
-  onRemove: () => void;
-}
-
-function MoveButtons({ isFirst, isLast, onMove, onRemove }: MoveProps) {
-  return (
-    <>
-      <button
-        onClick={() => onMove(-1)}
-        disabled={isFirst}
-        className="rounded border border-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-30"
-        title="Move up"
-        type="button"
-      >
-        ↑
-      </button>
-      <button
-        onClick={() => onMove(1)}
-        disabled={isLast}
-        className="rounded border border-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-30"
-        title="Move down"
-        type="button"
-      >
-        ↓
-      </button>
-      <button
-        onClick={onRemove}
-        className="rounded border border-zinc-800 px-2 py-1 text-xs text-red-400 hover:bg-red-950/30 hover:text-red-300"
-        type="button"
-      >
-        Delete
-      </button>
-    </>
-  );
-}
-
-interface ActionEditorProps extends MoveProps {
-  button: ActionButton;
-  onUpdate: (patch: Partial<ActionButton>) => void;
-}
-
-function ActionEditor({
-  button,
-  onUpdate,
-  onRemove,
-  onMove,
-  isFirst,
-  isLast,
-}: ActionEditorProps) {
-  return (
-    <div>
-      <div className="mb-2 flex items-center gap-2">
-        <span className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
-          action
-        </span>
-        <IconPicker
-          value={button.icon}
-          onChange={(icon) => onUpdate({ icon })}
-        />
-        <input
-          value={button.label}
-          onChange={(e) => onUpdate({ label: e.target.value })}
-          placeholder="label (optional)"
-          className="flex-1 rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-sm outline-none focus:border-zinc-600"
-        />
-        <MoveButtons
-          isFirst={isFirst}
-          isLast={isLast}
-          onMove={onMove}
-          onRemove={onRemove}
-        />
-      </div>
-      <textarea
-        value={button.command}
-        onChange={(e) => onUpdate({ command: e.target.value })}
-        placeholder="powershell command (e.g. npm run dev)"
-        rows={2}
-        className="w-full resize-y rounded border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono text-xs outline-none focus:border-zinc-600"
-      />
-    </div>
-  );
-}
-
-interface FolderEditorProps extends MoveProps {
-  button: FolderButton;
-  onUpdate: (patch: Partial<FolderButton>) => void;
-  onChangeChildren: (children: ActionButton[]) => void;
-}
-
-function FolderEditor({
-  button,
-  onUpdate,
-  onRemove,
-  onMove,
-  isFirst,
-  isLast,
-  onChangeChildren,
-}: FolderEditorProps) {
-  const sortedChildren = [...button.children].sort((a, b) => a.order - b.order);
-
-  const addChild = () => {
-    const next: ActionButton = {
-      id: newButtonId(),
-      kind: "action",
-      label: "",
-      icon: "play",
-      command: "",
-      order: button.children.length,
-    };
-    onChangeChildren([...button.children, next]);
-  };
-
-  const updateChild = (id: string, patch: Partial<ActionButton>) => {
-    onChangeChildren(
-      button.children.map((c) => (c.id === id ? { ...c, ...patch } : c)),
-    );
-  };
-
-  const removeChild = (id: string) => {
-    onChangeChildren(
-      button.children
-        .filter((c) => c.id !== id)
-        .map((c, idx) => ({ ...c, order: idx })),
-    );
-  };
-
-  const moveChild = (id: string, dir: -1 | 1) => {
-    const arr = [...button.children].sort((a, b) => a.order - b.order);
-    const idx = arr.findIndex((c) => c.id === id);
-    const newIdx = idx + dir;
-    if (newIdx < 0 || newIdx >= arr.length) return;
-    [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
-    onChangeChildren(arr.map((c, i) => ({ ...c, order: i })));
-  };
-
-  return (
-    <div>
-      <div className="mb-2 flex items-center gap-2">
-        <span className="rounded bg-amber-900/40 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
-          folder
-        </span>
-        <IconPicker
-          value={button.icon}
-          onChange={(icon) => onUpdate({ icon })}
-        />
-        <input
-          value={button.label}
-          onChange={(e) => onUpdate({ label: e.target.value })}
-          placeholder="label (optional)"
-          className="flex-1 rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-sm outline-none focus:border-zinc-600"
-        />
-        <MoveButtons
-          isFirst={isFirst}
-          isLast={isLast}
-          onMove={onMove}
-          onRemove={onRemove}
-        />
-      </div>
-
-      <div className="ml-2 border-l-2 border-zinc-800 pl-3">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-[11px] uppercase tracking-wide text-zinc-500">
-            Children ({sortedChildren.length})
-          </span>
-          <button
-            onClick={addChild}
-            className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-[10px] text-zinc-200 hover:bg-zinc-800"
-            type="button"
-          >
-            + Action
-          </button>
-        </div>
-        {sortedChildren.length === 0 ? (
-          <div className="py-2 text-[11px] text-zinc-600">empty</div>
-        ) : (
-          <ul className="space-y-2">
-            {sortedChildren.map((c, idx) => (
-              <li
-                key={c.id}
-                className="rounded border border-zinc-800 bg-zinc-950 p-2"
-              >
-                <div className="mb-1.5 flex items-center gap-2">
-                  <IconPicker
-                    value={c.icon}
-                    onChange={(icon) => updateChild(c.id, { icon })}
-                  />
-                  <input
-                    value={c.label}
-                    onChange={(e) =>
-                      updateChild(c.id, { label: e.target.value })
-                    }
-                    placeholder="label (optional)"
-                    className="flex-1 rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-xs outline-none focus:border-zinc-600"
-                  />
-                  <MoveButtons
-                    isFirst={idx === 0}
-                    isLast={idx === sortedChildren.length - 1}
-                    onMove={(dir) => moveChild(c.id, dir)}
-                    onRemove={() => removeChild(c.id)}
-                  />
-                </div>
-                <textarea
-                  value={c.command}
-                  onChange={(e) =>
-                    updateChild(c.id, { command: e.target.value })
-                  }
-                  placeholder="powershell command"
-                  rows={1}
-                  className="w-full resize-y rounded border border-zinc-800 bg-zinc-900 px-2 py-1 font-mono text-[11px] outline-none focus:border-zinc-600"
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -882,7 +536,13 @@ function GeneralSettings({
   );
 }
 
-function SessionsSettings() {
+function SessionsSettings({
+  resumeOnRestore,
+  onChangeResumeOnRestore,
+}: {
+  resumeOnRestore: boolean;
+  onChangeResumeOnRestore: (next: boolean) => void;
+}) {
   const [status, setStatus] = useState<"idle" | "clearing" | "cleared">("idle");
 
   const onClear = async () => {
@@ -902,13 +562,39 @@ function SessionsSettings() {
 
       <section>
         <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+          Comportement au démarrage
+        </h4>
+        <label className="flex items-start gap-3 rounded border border-zinc-800 bg-zinc-900/40 p-3">
+          <input
+            type="checkbox"
+            checked={resumeOnRestore}
+            onChange={(e) => onChangeResumeOnRestore(e.target.checked)}
+            className="mt-0.5 h-4 w-4 accent-zinc-300"
+          />
+          <span>
+            <span className="block text-sm text-zinc-200">
+              Reprendre les sessions Claude Code (`ccd --resume`)
+            </span>
+            <span className="mt-0.5 block text-[11px] text-zinc-500">
+              Quand activé, chaque pane Claude Code détecté en idle/waiting au
+              moment de la sauvegarde rejouera `ccd --resume &lt;session_id&gt;`
+              au prochain lancement. Désactivez pour démarrer chaque pane sur un
+              shell vierge.
+            </span>
+          </span>
+        </label>
+      </section>
+
+      <section>
+        <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
           Persistance
         </h4>
         <p className="mb-3 text-[11px] text-zinc-500">
           La session courante (projets, onglets, splits, cwd) est sauvegardée
           automatiquement toutes les 30 secondes et restaurée au démarrage. Pour
           les panes Claude Code détectés en idle/waiting, la commande `ccd
-          --resume &lt;session_id&gt;` est rejouée à la restauration.
+          --resume &lt;session_id&gt;` est rejouée à la restauration si l'option
+          ci-dessus est active.
         </p>
         <button
           onClick={onClear}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { arrayMove } from "@dnd-kit/sortable";
 import { TabBar } from "@/components/TabBar";
 import { Sidepanel } from "@/components/Sidepanel";
@@ -127,6 +128,7 @@ export function App() {
   const [editorProtocol, setEditorProtocol] = useState<EditorProtocol>(
     DEFAULT_EDITOR_PROTOCOL,
   );
+  const [resumeOnRestore, setResumeOnRestore] = useState<boolean>(true);
   const palette = useMemo(
     () => resolveActivePalette(paletteId, customPalette),
     [paletteId, customPalette],
@@ -202,6 +204,7 @@ export function App() {
         setUseWebGPU(state.useWebGPU);
         setCustomPalette(state.customPalette);
         setEditorProtocol(state.editorProtocol);
+        setResumeOnRestore(state.resumeOnRestore);
         setLoaded(true);
       })
       .catch((e) => {
@@ -227,6 +230,7 @@ export function App() {
         useWebGPU,
         customPalette,
         editorProtocol,
+        resumeOnRestore,
       });
     }, 500);
     return () => clearTimeout(t);
@@ -241,6 +245,7 @@ export function App() {
     useWebGPU,
     customPalette,
     editorProtocol,
+    resumeOnRestore,
   ]);
 
   // ─── Session restore on boot ────────────────────────────────────
@@ -259,9 +264,10 @@ export function App() {
             // Map old pane_id → new pane_id (spawn returns a fresh UUID).
             const idMap: Record<string, string> = {};
             for (const leaf of leaves) {
-              const initCmd = leaf.agent_resume
-                ? `${leaf.agent_resume.command} ${leaf.agent_resume.session_id}`
-                : null;
+              const initCmd =
+                leaf.agent_resume && resumeOnRestore
+                  ? `${leaf.agent_resume.command} ${leaf.agent_resume.session_id}`
+                  : null;
               const cwd = leaf.cwd || ".";
               try {
                 const newPaneId = await invoke<string>("spawn_terminal", {
@@ -389,36 +395,33 @@ export function App() {
 
   // ─── Closing ───────────────────────────────────────────────────
 
-  const closeTab = useCallback(async (tabId: string) => {
-    let removed: Tab | undefined;
-    let projId: string | null = null;
-    let nextActiveForProj: string | undefined;
+  const closeTab = useCallback(
+    async (tabId: string) => {
+      const target = tabs.find((t) => t.id === tabId);
+      if (!target) return;
+      const projId = target.projectId;
 
-    setTabs((prev) => {
-      const idx = prev.findIndex((t) => t.id === tabId);
-      if (idx === -1) return prev;
-      removed = prev[idx];
-      projId = removed.projectId;
-      const next = prev.filter((t) => t.id !== tabId);
-      const remainingInProj = next.filter((t) => t.projectId === projId);
-      if (remainingInProj.length > 0) {
-        const newIdx = Math.min(idx, remainingInProj.length - 1);
-        nextActiveForProj = remainingInProj[newIdx].id;
+      const inProj = tabs.filter((t) => t.projectId === projId);
+      const idxInProj = inProj.findIndex((t) => t.id === tabId);
+      const remainingInProj = inProj.filter((t) => t.id !== tabId);
+      const nextActiveForProj =
+        remainingInProj.length > 0
+          ? remainingInProj[Math.max(0, idxInProj - 1)].id
+          : undefined;
+      const wasActive = activeTabIdByProject[projId] === tabId;
+
+      setTabs((prev) => prev.filter((t) => t.id !== tabId));
+
+      if (wasActive) {
+        setActiveTabIdByProject((prev) => {
+          const copy = { ...prev };
+          if (nextActiveForProj) copy[projId] = nextActiveForProj;
+          else delete copy[projId];
+          return copy;
+        });
       }
-      return next;
-    });
 
-    if (projId) {
-      setActiveTabIdByProject((prev) => {
-        const copy = { ...prev };
-        if (nextActiveForProj) copy[projId!] = nextActiveForProj;
-        else delete copy[projId!];
-        return copy;
-      });
-    }
-
-    if (removed) {
-      const paneIds = collectPaneIds(removed.tree);
+      const paneIds = collectPaneIds(target.tree);
       for (const pid of paneIds) {
         paneToTab.current.delete(pid);
         try {
@@ -427,8 +430,9 @@ export function App() {
           /* ignore */
         }
       }
-    }
-  }, []);
+    },
+    [tabs, activeTabIdByProject],
+  );
 
   const closePane = useCallback(
     async (tabId: string, paneId: string) => {
@@ -677,6 +681,46 @@ export function App() {
     };
   }, []);
 
+  // OS file drag & drop: insert quoted paths into the pane under the cursor.
+  useEffect(() => {
+    let unlistenFn: UnlistenFn | undefined;
+    let cancelled = false;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== "drop") return;
+        const { paths, position } = event.payload;
+        if (!paths || paths.length === 0) return;
+        // PhysicalPosition → CSS pixels for getBoundingClientRect comparison.
+        const dpr = window.devicePixelRatio || 1;
+        const x = position.x / dpr;
+        const y = position.y / dpr;
+        const targets =
+          document.querySelectorAll<HTMLElement>("[data-pane-id]");
+        let targetPaneId: string | null = null;
+        for (const el of Array.from(targets)) {
+          const r = el.getBoundingClientRect();
+          if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+            targetPaneId = el.dataset.paneId ?? null;
+            break;
+          }
+        }
+        if (!targetPaneId) return;
+        const quoted = paths.map((p) => `"${p}"`).join(" ");
+        const bytes = Array.from(new TextEncoder().encode(quoted));
+        void invoke("send_input", { sessionId: targetPaneId, bytes });
+      })
+      .then((fn) => {
+        // StrictMode mounts the effect twice in dev: if cleanup ran before the
+        // promise resolved, unlisten immediately to avoid a duplicate listener.
+        if (cancelled) fn();
+        else unlistenFn = fn;
+      });
+    return () => {
+      cancelled = true;
+      unlistenFn?.();
+    };
+  }, []);
+
   // ─── Session auto-save (debounced + close + 30s safety net) ────
 
   // Build the current SessionFile from React state. Memoised so the close
@@ -891,6 +935,8 @@ export function App() {
       const updatedMoving: Project = {
         ...moving,
         workspaceId: targetWorkspaceId,
+        // When entering a workspace, drop any standalone root placement.
+        rootOrder: undefined,
       };
       const newTarget = [
         ...inTarget.slice(0, insertIdx),
@@ -913,6 +959,46 @@ export function App() {
       });
       return [...untouched, ...newSource, ...newTarget];
     });
+  };
+
+  // Place a project as a standalone item amongst the root-level workspaces.
+  // It becomes ungrouped and its `rootOrder` decides where it sits in the merged
+  // root list (compared against `Workspace.order`).
+  const onPlaceProjectInRoot = (projectId: string, rootOrder: number) => {
+    setProjects((prev) => {
+      const moving = prev.find((p) => p.id === projectId);
+      if (!moving) return prev;
+      const sourceWs = moving.workspaceId ?? null;
+      const others = prev.filter((p) => p.id !== projectId);
+      const updatedMoving: Project = {
+        ...moving,
+        workspaceId: null,
+        order: 0,
+        rootOrder,
+      };
+      // Renormalize the source group's order if the project is leaving a workspace.
+      const newSource =
+        sourceWs === null
+          ? []
+          : others
+              .filter((p) => (p.workspaceId ?? null) === sourceWs)
+              .sort((a, b) => a.order - b.order)
+              .map((p, idx) => ({ ...p, order: idx }));
+      const untouched = others.filter((p) => {
+        const ws = p.workspaceId ?? null;
+        return ws !== sourceWs && ws !== null;
+      });
+      const ungrouped = others.filter((p) => (p.workspaceId ?? null) === null);
+      return [...untouched, ...newSource, ...ungrouped, updatedMoving];
+    });
+  };
+
+  // Move a workspace to an arbitrary position in the merged root list (used when
+  // dropping a workspace into a root gap that's adjacent to a standalone project).
+  const onPlaceWorkspaceInRoot = (workspaceId: string, rootOrder: number) => {
+    setWorkspaces((prev) =>
+      prev.map((w) => (w.id === workspaceId ? { ...w, order: rootOrder } : w)),
+    );
   };
 
   const onReorderTabs = (oldIndex: number, newIndex: number) => {
@@ -973,7 +1059,9 @@ export function App() {
           setWorkspaceMenu({ workspace, x, y })
         }
         onMoveProject={onMoveProject}
+        onPlaceProjectInRoot={onPlaceProjectInRoot}
         onReorderWorkspaces={onReorderWorkspaces}
+        onPlaceWorkspaceInRoot={onPlaceWorkspaceInRoot}
         onToggleWorkspaceCollapsed={onToggleWorkspaceCollapsed}
         tabs={tabs}
         paneAgentStates={paneAgentStates}
@@ -1175,6 +1263,8 @@ export function App() {
         onChangeCustomPalette={setCustomPalette}
         editorProtocol={editorProtocol}
         onChangeEditorProtocol={setEditorProtocol}
+        resumeOnRestore={resumeOnRestore}
+        onChangeResumeOnRestore={setResumeOnRestore}
       />
     </div>
   );

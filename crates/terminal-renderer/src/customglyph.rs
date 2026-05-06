@@ -23,7 +23,68 @@ pub fn rasterize(ch: char, cell_w: u32, cell_h: u32) -> Option<Vec<u8>> {
     if (0x2500..=0x257F).contains(&cp) {
         return rasterize_box(ch, cell_w, cell_h);
     }
+    if cp == 0x23F5 {
+        return Some(rasterize_right_triangle(cell_w, cell_h));
+    }
+    // Claude Code spinner dingbats: cycle through ✻ / ✷ / ✶ depending on the
+    // animation phase. Cascadia / Maple Mono NF either lack the glyph or ship
+    // an empty slot, so we draw them ourselves to match WezTerm's output.
+    match cp {
+        0x273B => return Some(rasterize_n_pointed_star(cell_w, cell_h, 8)),
+        0x2737 => return Some(rasterize_n_pointed_star(cell_w, cell_h, 8)),
+        0x2736 => return Some(rasterize_n_pointed_star(cell_w, cell_h, 6)),
+        _ => {}
+    }
+    // Geometric Squares — Claude Code uses these for todo-list checkboxes
+    // (■ in_progress, □/☐/⬜ pending). Falling back to the system font often
+    // renders a full block █, so we draw them ourselves at WezTerm proportions.
+    match cp {
+        // Filled squares (medium / large / small).
+        0x25A0 | 0x25FC => return Some(rasterize_filled_square(cell_w, cell_h, 0.70)),
+        0x25FE => return Some(rasterize_filled_square(cell_w, cell_h, 0.55)),
+        0x2B1B => return Some(rasterize_filled_square(cell_w, cell_h, 0.85)),
+        // Hollow (outline) squares — same sizes as their filled counterparts.
+        0x25A1 | 0x25FB | 0x2610 => {
+            return Some(rasterize_hollow_square(cell_w, cell_h, 0.70))
+        }
+        0x25FD => return Some(rasterize_hollow_square(cell_w, cell_h, 0.55)),
+        0x2B1C => return Some(rasterize_hollow_square(cell_w, cell_h, 0.85)),
+        // Concentric: outline + small filled center (▣).
+        0x25A3 => return Some(rasterize_concentric_square(cell_w, cell_h, 0.70, 0.35)),
+        _ => {}
+    }
     None
+}
+
+/// `⏵` BLACK MEDIUM RIGHT-POINTING TRIANGLE (U+23F5). Used by Claude Code as
+/// the bypass-permissions mode prefix; absent from most monospace fonts
+/// (incl. Cascadia Code, Maple Mono NF, Symbols Nerd Font) so we draw it
+/// ourselves. Filled isosceles triangle with ~20% horizontal padding and
+/// ~10% vertical padding.
+fn rasterize_right_triangle(cell_w: u32, cell_h: u32) -> Vec<u8> {
+    let mut buf = vec![0u8; (cell_w * cell_h) as usize];
+    let x0 = (cell_w * 2) / 10;
+    let x1 = (cell_w * 8 + 9) / 10;
+    let y_top0 = (cell_h * 1) / 10;
+    let y_bot0 = (cell_h * 9 + 9) / 10;
+    let y_center = cell_h / 2;
+    let dx = (x1.saturating_sub(x0)).max(1) as f32;
+    let half_top = (y_center.saturating_sub(y_top0)) as f32;
+    let half_bot = (y_bot0.saturating_sub(y_center)) as f32;
+    for x in x0..x1 {
+        let t = (x - x0) as f32 / dx;
+        let above = (half_top * (1.0 - t)).round() as u32;
+        let below = (half_bot * (1.0 - t)).round() as u32;
+        let top = y_center.saturating_sub(above);
+        let bot = (y_center + below).min(cell_h.saturating_sub(1));
+        for y in top..=bot {
+            let idx = (y * cell_w + x) as usize;
+            if idx < buf.len() {
+                buf[idx] = 0xFF;
+            }
+        }
+    }
+    buf
 }
 
 // ─── Block Elements (U+2580..=U+259F) ─────────────────────────────────────
@@ -341,6 +402,116 @@ fn v_line(buf: &mut [u8], w: u32, h: u32, x_center: u32, y0: u32, y1: u32, thick
     let x0 = x_center.saturating_sub(half_left);
     let x1 = (x_center + half_right).min(w);
     fill(buf, w, x0, y0, x1, y1.min(h), 0xFF);
+}
+
+/// N-pointed star centered in the cell. `branches` must be even (we draw
+/// `branches / 2` segments through the center, each contributing two opposite
+/// points). The first segment is horizontal so 8 → ✻ (HV + diagonals),
+/// 6 → ✶ (H + 2 diagonals at ±60°). Anti-aliased by perpendicular distance.
+fn rasterize_n_pointed_star(cell_w: u32, cell_h: u32, branches: u32) -> Vec<u8> {
+    let mut buf = vec![0u8; (cell_w * cell_h) as usize];
+    let cx = cell_w as f32 / 2.0;
+    let cy = cell_h as f32 / 2.0;
+    let radius = (cell_w.min(cell_h) as f32) * 0.42;
+    let half_thick = (cell_h as f32 / 18.0).max(0.7);
+    let segments = (branches.max(2) / 2) as usize;
+
+    for yi in 0..cell_h {
+        for xi in 0..cell_w {
+            let px = xi as f32 + 0.5 - cx;
+            let py = yi as f32 + 0.5 - cy;
+            let pr = (px * px + py * py).sqrt();
+            if pr > radius + half_thick {
+                continue;
+            }
+            // Distance to the nearest segment through the center.
+            let mut min_perp = f32::INFINITY;
+            for k in 0..segments {
+                let theta = std::f32::consts::PI * (k as f32) / (segments as f32);
+                let (sin_t, cos_t) = (theta.sin(), theta.cos());
+                // perp distance from (px,py) to the line dir=(cos,sin).
+                let perp = (px * sin_t - py * cos_t).abs();
+                if perp < min_perp {
+                    min_perp = perp;
+                }
+            }
+            if min_perp > half_thick {
+                continue;
+            }
+            // Soft cutoff at the radius so the tips fade smoothly.
+            let radial_atten = if pr <= radius {
+                1.0
+            } else {
+                (1.0 - (pr - radius) / half_thick).clamp(0.0, 1.0)
+            };
+            let alpha_f = (1.0 - min_perp / half_thick).clamp(0.0, 1.0) * radial_atten;
+            let alpha = (alpha_f * 255.0).round() as u8;
+            let idx = (yi * cell_w + xi) as usize;
+            if buf[idx] < alpha {
+                buf[idx] = alpha;
+            }
+        }
+    }
+    buf
+}
+
+/// Filled square centered in the cell. `fill_ratio` is the side length as a
+/// fraction of `min(cell_w, cell_h)` — e.g. 0.70 for medium, 0.85 for large,
+/// 0.55 for small. Gives a clean, crisp solid square at any cell size.
+fn rasterize_filled_square(cell_w: u32, cell_h: u32, fill_ratio: f32) -> Vec<u8> {
+    let mut buf = vec![0u8; (cell_w * cell_h) as usize];
+    let side = (cell_h.min(cell_w) as f32 * fill_ratio).round() as u32;
+    if side == 0 {
+        return buf;
+    }
+    let x0 = cell_w.saturating_sub(side) / 2;
+    let y0 = cell_h.saturating_sub(side) / 2;
+    let x1 = (x0 + side).min(cell_w);
+    let y1 = (y0 + side).min(cell_h);
+    fill(&mut buf, cell_w, x0, y0, x1, y1, 0xFF);
+    buf
+}
+
+/// Outline square centered in the cell. Stroke thickness scales with cell
+/// height (1 px at h=14, 2 px above) so the box reads cleanly across DPRs.
+fn rasterize_hollow_square(cell_w: u32, cell_h: u32, fill_ratio: f32) -> Vec<u8> {
+    let mut buf = vec![0u8; (cell_w * cell_h) as usize];
+    let side = (cell_h.min(cell_w) as f32 * fill_ratio).round() as u32;
+    if side < 2 {
+        return buf;
+    }
+    let stroke = ((cell_h as f32) / 14.0).max(1.0).round() as u32;
+    let x0 = cell_w.saturating_sub(side) / 2;
+    let y0 = cell_h.saturating_sub(side) / 2;
+    let x1 = (x0 + side).min(cell_w);
+    let y1 = (y0 + side).min(cell_h);
+    // Top + bottom edges
+    fill(&mut buf, cell_w, x0, y0, x1, (y0 + stroke).min(y1), 0xFF);
+    fill(&mut buf, cell_w, x0, y1.saturating_sub(stroke), x1, y1, 0xFF);
+    // Left + right edges
+    fill(&mut buf, cell_w, x0, y0, (x0 + stroke).min(x1), y1, 0xFF);
+    fill(&mut buf, cell_w, x1.saturating_sub(stroke), y0, x1, y1, 0xFF);
+    buf
+}
+
+/// Outline square + smaller filled square at the center (▣).
+fn rasterize_concentric_square(
+    cell_w: u32,
+    cell_h: u32,
+    outer: f32,
+    inner: f32,
+) -> Vec<u8> {
+    let mut buf = rasterize_hollow_square(cell_w, cell_h, outer);
+    let inner_side = (cell_h.min(cell_w) as f32 * inner).round() as u32;
+    if inner_side == 0 {
+        return buf;
+    }
+    let x0 = cell_w.saturating_sub(inner_side) / 2;
+    let y0 = cell_h.saturating_sub(inner_side) / 2;
+    let x1 = (x0 + inner_side).min(cell_w);
+    let y1 = (y0 + inner_side).min(cell_h);
+    fill(&mut buf, cell_w, x0, y0, x1, y1, 0xFF);
+    buf
 }
 
 /// Quarter-circle arc, `thick`-px stroke, in the quadrant indicated by

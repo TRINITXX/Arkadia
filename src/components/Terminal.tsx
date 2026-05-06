@@ -10,13 +10,34 @@ import type {
 } from "@/types";
 
 function keyEventToBytes(e: React.KeyboardEvent): Uint8Array | null {
+  if (e.ctrlKey && !e.altKey && !e.metaKey) {
+    switch (e.key) {
+      case "ArrowLeft":
+        return new TextEncoder().encode("\x1b[1;5D");
+      case "ArrowRight":
+        return new TextEncoder().encode("\x1b[1;5C");
+      case "ArrowUp":
+        return new TextEncoder().encode("\x1b[1;5A");
+      case "ArrowDown":
+        return new TextEncoder().encode("\x1b[1;5B");
+      // Ctrl+Backspace → Ctrl+W (backward-kill-word). PSReadLine, bash readline,
+      // zsh, Claude Code all interpret 0x17 as "delete previous word".
+      case "Backspace":
+        return new Uint8Array([0x17]);
+      // Ctrl+Delete → Alt+D (kill-word forward) in readline conventions.
+      case "Delete":
+        return new TextEncoder().encode("\x1bd");
+    }
+  }
   switch (e.key) {
     case "Enter":
-      return new TextEncoder().encode("\r");
+      // Shift+Enter sends ESC+CR (a.k.a. Alt-Enter) — Claude Code and most
+      // readline-style apps interpret this as "newline without submit".
+      return new TextEncoder().encode(e.shiftKey ? "\x1b\r" : "\r");
     case "Backspace":
       return new Uint8Array([0x7f]);
     case "Tab":
-      return new TextEncoder().encode("\t");
+      return new TextEncoder().encode(e.shiftKey ? "\x1b[Z" : "\t");
     case "Escape":
       return new TextEncoder().encode("\x1b");
     case "ArrowUp":
@@ -111,6 +132,7 @@ function runStyle(run: CellRun, palette: TerminalPalette): React.CSSProperties {
     backgroundColor: bg !== palette.bg ? bg : undefined,
     fontWeight: run.bold ? 600 : undefined,
     fontStyle: run.italic ? "italic" : undefined,
+    opacity: run.dim ? 0.55 : undefined,
     textDecoration: decorations.length > 0 ? decorations.join(" ") : undefined,
     cursor: run.hyperlink ? "pointer" : undefined,
   };

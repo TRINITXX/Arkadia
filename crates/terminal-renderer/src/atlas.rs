@@ -9,9 +9,10 @@
 //! Color glyphs (Noto Color Emoji COLRv1) store premultiplied RGBA (the shader
 //! composites them over `bg` directly, ignoring `fg`).
 //!
-//! Multi-font fallback: the `fonts` chain is consulted in order — Cascadia
-//! (latin + powerline + box drawing) → Noto Sans Mono CJK SC (CJK) → Noto
-//! Color Emoji (color emoji). The first font that has a glyph wins.
+//! Multi-font fallback: the `fonts` chain is consulted in order — primary
+//! (latin + box drawing; user-swappable) → Noto Sans Mono CJK SC (CJK) →
+//! Symbols Nerd Font Mono (Powerline + dev icons; PUA U+E000–U+F8FF) →
+//! Twemoji (color emoji). The first font that has a glyph wins.
 //!
 //! Slot dimensions track the renderer's cell size; whenever `set_cell_size`
 //! changes, the atlas is cleared and re-warmed at the new size.
@@ -27,6 +28,11 @@ const ATLAS_SIZE: u32 = 1024;
 const ATLAS_PADDING: u32 = 1;
 const FONT_DATA_PRIMARY: &[u8] = include_bytes!("../assets/CascadiaCode.ttf");
 const FONT_DATA_CJK: &[u8] = include_bytes!("../assets/NotoSansMonoCJKsc-Regular.otf");
+// Symbols Nerd Font Mono — covers Powerline (U+E0A0–E0D7), dev icons,
+// FontAwesome, Material Design Icons, Octicons across the PUA range
+// U+E000–U+F8FF. Used as fallback so glyphs render even when the user's
+// primary font is not a Nerd Font variant.
+const FONT_DATA_NERD: &[u8] = include_bytes!("../assets/SymbolsNerdFontMono-Regular.ttf");
 // Twemoji-Mozilla (COLRv0). swash 0.2 only supports COLRv0; the Noto Color
 // Emoji COLRv1 build leaves Source::ColorOutline empty and emojis disappear.
 const FONT_DATA_EMOJI: &[u8] = include_bytes!("../assets/TwemojiMozilla.ttf");
@@ -34,7 +40,7 @@ const FONT_DATA_EMOJI: &[u8] = include_bytes!("../assets/TwemojiMozilla.ttf");
 /// Index in `Atlas::fonts` of the color emoji font. Glyphs from this font are
 /// rendered through swash's color-bitmap / color-outline path and flagged as
 /// color in the atlas.
-const FONT_INDEX_EMOJI: usize = 2;
+const FONT_INDEX_EMOJI: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GlyphKey {
@@ -76,8 +82,9 @@ pub struct Atlas {
     cursor_x: u32,
     cursor_y: u32,
     slots: HashMap<GlyphKey, GlyphEntry>,
-    /// Fallback chain: [primary (Cascadia), CJK (Noto Sans Mono CJK SC),
-    /// emoji (Noto Color Emoji COLRv1)]. First font with a glyph for `ch` wins.
+    /// Fallback chain: [primary (Cascadia by default, user-swappable),
+    /// CJK (Noto Sans Mono CJK SC), Nerd (Symbols Nerd Font Mono),
+    /// emoji (Twemoji)]. First font with a glyph for `ch` wins.
     fonts: Vec<FontRef<'static>>,
     scale_context: ScaleContext,
 }
@@ -114,9 +121,11 @@ impl Atlas {
             .expect("CascadiaCode.ttf must be valid");
         let cjk = FontRef::from_index(FONT_DATA_CJK, 0)
             .expect("NotoSansMonoCJKsc-Regular.otf must be valid");
+        let nerd = FontRef::from_index(FONT_DATA_NERD, 0)
+            .expect("SymbolsNerdFontMono-Regular.ttf must be valid");
         let emoji = FontRef::from_index(FONT_DATA_EMOJI, 0)
             .expect("TwemojiMozilla.ttf must be valid");
-        let fonts = vec![primary, cjk, emoji];
+        let fonts = vec![primary, cjk, nerd, emoji];
 
         Self {
             texture,
@@ -231,11 +240,14 @@ impl Atlas {
         let (font_idx, glyph_id) = self.pick_font(ch)?;
         let font = self.fonts[font_idx];
 
+        // `hint(false)` matches WezTerm's "Light" load target — slightly
+        // softer outlines but visibly thinner stems on Maple Mono NF / Cascadia
+        // at 14 px, closer to the FreeType output the user compares against.
         let mut scaler = self
             .scale_context
             .builder(font)
             .size(size_px as f32)
-            .hint(true)
+            .hint(false)
             .build();
 
         // Color emoji font: try color paths first, fall through to a mono
@@ -414,9 +426,10 @@ impl Atlas {
     }
 
     /// Rasterizes ASCII (32–126), Latin-1 supplement (160–255), box-drawing
-    /// (U+2500–U+257F), block elements (U+2580–U+259F) and Powerline
-    /// (U+E0A0–U+E0B7) for `size_px` upfront, so the first frame doesn't stall.
-    /// Block elements go through `crate::customglyph` rather than swash.
+    /// (U+2500–U+257F), block elements (U+2580–U+259F) and Powerline +
+    /// extra symbols (U+E0A0–U+E0D7) for `size_px` upfront, so the first
+    /// frame doesn't stall. Block elements go through `crate::customglyph`
+    /// rather than swash.
     pub fn warmup(&mut self, queue: &wgpu::Queue, size_px: u16) {
         for code in 32u32..=126 {
             self.preload_one(queue, code, size_px);
@@ -430,7 +443,7 @@ impl Atlas {
         for code in 0x2580u32..=0x259F {
             self.preload_one(queue, code, size_px);
         }
-        for code in 0xE0A0u32..=0xE0B7 {
+        for code in 0xE0A0u32..=0xE0D7 {
             self.preload_one(queue, code, size_px);
         }
     }

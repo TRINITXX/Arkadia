@@ -16,8 +16,8 @@ use web_sys::HtmlCanvasElement;
 use atlas::Atlas;
 use payload::{CellColor, RenderPayload, TerminalPalette};
 use pipeline::{
-    CellInstance, Pipeline, Uniforms, FLAG_BOLD, FLAG_COLOR_GLYPH, FLAG_ITALIC, FLAG_STRIKE,
-    FLAG_UL_CURLY, FLAG_UL_DASHED, FLAG_UL_DOTTED, FLAG_UL_DOUBLE, FLAG_UNDERLINE,
+    CellInstance, Pipeline, Uniforms, FLAG_BOLD, FLAG_COLOR_GLYPH, FLAG_DIM, FLAG_ITALIC,
+    FLAG_STRIKE, FLAG_UL_CURLY, FLAG_UL_DASHED, FLAG_UL_DOTTED, FLAG_UL_DOUBLE, FLAG_UNDERLINE,
 };
 
 const DEFAULT_FONT_SIZE_PX: u16 = 14;
@@ -28,13 +28,6 @@ pub fn _start() {
     console_error_panic_hook::set_once();
 }
 
-const DEFAULT_CLEAR: wgpu::Color = wgpu::Color {
-    r: 0.039,
-    g: 0.039,
-    b: 0.039,
-    a: 1.0,
-};
-
 #[wasm_bindgen]
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
@@ -42,6 +35,12 @@ pub struct Renderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     clear: wgpu::Color,
+    /// `true` when the surface format is an `*Srgb` variant: wgpu auto-encodes
+    /// linear shader output to sRGB. On the WebGPU canvas this is almost always
+    /// `false` — the only formats exposed are `bgra8unorm` / `rgba8unorm` — so
+    /// we encode in the fragment shader instead, and the clear color is stored
+    /// pre-encoded (sRGB) for a true visual match with `palette_bg`.
+    surface_is_srgb: bool,
     atlas: Atlas,
     pipeline: Pipeline,
     font_size_px: u16,
@@ -171,22 +170,30 @@ impl Renderer {
 
         let pipeline = Pipeline::new(&device, format, &atlas);
 
+        let surface_is_srgb = format.is_srgb();
+        let palette_bg_srgb = [0.039f32, 0.039, 0.039, 1.0];
+        let palette_bg = linearize_rgba(palette_bg_srgb);
+        let palette_fg = linearize_rgba([0.98, 0.98, 0.98, 1.0]);
+        let selection_color = linearize_rgba([0.30, 0.40, 0.55, 1.0]);
+        let clear = clear_color_for_surface(palette_bg_srgb, palette_bg, surface_is_srgb);
+
         Ok(Renderer {
             surface,
             device,
             queue,
             config,
-            clear: DEFAULT_CLEAR,
+            clear,
+            surface_is_srgb,
             atlas,
             pipeline,
             font_size_px: DEFAULT_FONT_SIZE_PX,
             cell_size_px: [default_cell_w as f32, default_cell_h as f32],
-            palette_bg: [0.039, 0.039, 0.039, 1.0],
-            palette_fg: [0.98, 0.98, 0.98, 1.0],
+            palette_bg,
+            palette_fg,
             palette_ansi: default_ansi_palette(),
             instances: Vec::with_capacity(4096),
             selection: None,
-            selection_color: [0.30, 0.40, 0.55, 1.0],
+            selection_color,
             last_payload: None,
             focused: true,
         })
@@ -211,7 +218,11 @@ impl Renderer {
     /// atlas is cleared, the new ascent is computed, and the atlas is re-warmed
     /// at the current font size. Returns false if `bytes` is not a valid font.
     pub fn set_primary_font(&mut self, bytes: Vec<u8>) -> bool {
+        let n_bytes = bytes.len();
         if !self.atlas.replace_primary_font(bytes) {
+            web_sys::console::warn_1(
+                &format!("[arkadia] set_primary_font: invalid font bytes ({} bytes)", n_bytes).into(),
+            );
             return false;
         }
         let cw = self.atlas.cell_w();
@@ -219,6 +230,15 @@ impl Renderer {
         let ascent = ascent_for_font(&self.atlas, self.font_size_px);
         self.atlas.set_cell_size(cw, ch, ascent);
         self.atlas.warmup(&self.queue, self.font_size_px);
+        web_sys::console::log_1(
+            &format!(
+                "[arkadia] primary font swapped ({} bytes), atlas re-warmed: {} glyphs at {}px",
+                n_bytes,
+                self.atlas.slots_len(),
+                self.font_size_px,
+            )
+            .into(),
+        );
         self.rebuild_with_last_payload();
         true
     }
@@ -246,23 +266,28 @@ impl Renderer {
         self.write_uniforms();
     }
 
+    /// `r,g,b` are sRGB-encoded in 0..1 (the same space the JS palette uses).
+    /// Stored in whatever space matches the surface so the clear value displays
+    /// at the same luminance as the shader-rendered cells.
     pub fn set_clear(&mut self, r: f64, g: f64, b: f64, a: f64) {
-        self.clear = wgpu::Color { r, g, b, a };
+        let srgb = [r as f32, g as f32, b as f32, a as f32];
+        let lin = linearize_rgba(srgb);
+        self.clear = clear_color_for_surface(srgb, lin, self.surface_is_srgb);
     }
 
-    /// JS palette format: `{ bg: [r,g,b,a], fg: [r,g,b,a], ansi: [[r,g,b,a]; 16] }`
+    /// JS palette format: `{ bg: [r,g,b,a], fg: [r,g,b,a], ansi: [[r,g,b,a]; 16] }`.
+    /// Components are sRGB-encoded (hex / 255). We linearize on receive — the
+    /// shader runs in linear space; the clear color is stored to match the
+    /// surface format (sRGB if the GPU re-encodes, sRGB-encoded otherwise).
     pub fn set_palette(&mut self, palette: JsValue) -> Result<(), JsValue> {
         let p: TerminalPalette = from_value(palette)
             .map_err(|e| JsValue::from_str(&format!("palette parse: {e}")))?;
-        self.palette_bg = p.bg;
-        self.palette_fg = p.fg;
-        self.palette_ansi = p.ansi;
-        self.clear = wgpu::Color {
-            r: p.bg[0] as f64,
-            g: p.bg[1] as f64,
-            b: p.bg[2] as f64,
-            a: p.bg[3] as f64,
-        };
+        self.palette_bg = linearize_rgba(p.bg);
+        self.palette_fg = linearize_rgba(p.fg);
+        for (dst, src) in self.palette_ansi.iter_mut().zip(p.ansi.iter()) {
+            *dst = linearize_rgba(*src);
+        }
+        self.clear = clear_color_for_surface(p.bg, self.palette_bg, self.surface_is_srgb);
         Ok(())
     }
 
@@ -429,6 +454,9 @@ impl Renderer {
                     if run.strikethrough {
                         flags |= FLAG_STRIKE;
                     }
+                    if run.dim {
+                        flags |= FLAG_DIM;
+                    }
                     if entry.is_color {
                         flags |= FLAG_COLOR_GLYPH;
                     }
@@ -452,7 +480,8 @@ impl Renderer {
             cell_size: self.cell_size_px,
             viewport: [self.config.width as f32, self.config.height as f32],
             atlas_size: [ATLAS_SIZE_F, ATLAS_SIZE_F],
-            _pad: [0.0, 0.0],
+            srgb_at_output: if self.surface_is_srgb { 0.0 } else { 1.0 },
+            _pad: 0.0,
         };
         self.pipeline.update_uniforms(&self.queue, &uniforms);
     }
@@ -549,7 +578,44 @@ fn parse_hex_rgb(s: &str) -> Option<[f32; 4]> {
     let r = u8::from_str_radix(&s[0..2], 16).ok()? as f32 / 255.0;
     let g = u8::from_str_radix(&s[2..4], 16).ok()? as f32 / 255.0;
     let b = u8::from_str_radix(&s[4..6], 16).ok()? as f32 / 255.0;
-    Some([r, g, b, 1.0])
+    Some(linearize_rgba([r, g, b, 1.0]))
+}
+
+/// Converts a single sRGB-encoded component (0..1) to linear-light space.
+/// The wgpu surface is `is_srgb()`, so the GPU expects linear values from the
+/// shader. Linearizing at the CPU boundary keeps the per-pixel `mix(bg, fg, α)`
+/// gamma-correct — the same anti-alias shape WezTerm produces.
+#[inline]
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[inline]
+fn linearize_rgba(c: [f32; 4]) -> [f32; 4] {
+    [
+        srgb_to_linear(c[0]),
+        srgb_to_linear(c[1]),
+        srgb_to_linear(c[2]),
+        c[3],
+    ]
+}
+
+/// `wgpu::Color` for `LoadOp::Clear`: wgpu writes this value into the surface
+/// without transforming it. To get the same visual luminance as the shader's
+/// rendered fragments, we feed it linear if the surface is sRGB (GPU encodes),
+/// else sRGB-encoded (so the raw bytes already represent the right color).
+fn clear_color_for_surface(srgb: [f32; 4], lin: [f32; 4], surface_is_srgb: bool) -> wgpu::Color {
+    let c = if surface_is_srgb { lin } else { srgb };
+    wgpu::Color {
+        r: c[0] as f64,
+        g: c[1] as f64,
+        b: c[2] as f64,
+        a: c[3] as f64,
+    }
 }
 
 fn default_ansi_palette() -> [[f32; 4]; 16] {
@@ -573,12 +639,12 @@ fn default_ansi_palette() -> [[f32; 4]; 16] {
     ];
     let mut out = [[0.0; 4]; 16];
     for (i, c) in raw.iter().enumerate() {
-        out[i] = [
+        out[i] = linearize_rgba([
             c[0] as f32 / 255.0,
             c[1] as f32 / 255.0,
             c[2] as f32 / 255.0,
             1.0,
-        ];
+        ]);
     }
     out
 }

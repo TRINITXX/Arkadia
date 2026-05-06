@@ -74,6 +74,8 @@ pub struct CellRun {
     pub underline_style: u8,
     pub strikethrough: bool,
     pub inverse: bool,
+    /// SGR 2 (faint/dim). Renderer blends fg 50% toward bg.
+    pub dim: bool,
     /// OSC 8 hyperlink target. `None` for non-hyperlink cells.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hyperlink: Option<String>,
@@ -102,6 +104,9 @@ pub struct RenderPayload {
     pub mouse_protocol: u8,
     /// True iff the running app enabled SGR encoding (mode 1006). Else legacy X10.
     pub mouse_sgr: bool,
+    /// True iff the running app enabled bracketed paste (DEC mode 2004).
+    /// The frontend wraps clipboard content with `\x1b[200~` … `\x1b[201~` when set.
+    pub bracketed_paste: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -267,6 +272,38 @@ pub fn spawn_terminal(
     cmd.cwd(&cwd);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    // Identify ourselves as WezTerm-compatible: many TUIs (incl. Claude Code's
+    // status line) gate Nerd Font / Powerline glyphs on these env vars.
+    // Arkadia's renderer embeds Symbols Nerd Font as a fallback, so claiming
+    // Nerd Font capability is accurate. Values mirror a real WezTerm session
+    // (env-var set captured 2026-05 from the user's WezTerm install).
+    cmd.env("TERM_PROGRAM", "WezTerm");
+    cmd.env("TERM_PROGRAM_VERSION", "20260117-154428-05343b38");
+    cmd.env("WEZTERM_PANE", "0");
+    cmd.env(
+        "WEZTERM_EXECUTABLE",
+        "C:\\Users\\TRINITX\\Documents\\Wezterm\\wezterm-gui.exe",
+    );
+    cmd.env(
+        "WEZTERM_EXECUTABLE_DIR",
+        "C:\\Users\\TRINITX\\Documents\\Wezterm",
+    );
+    cmd.env(
+        "WEZTERM_CONFIG_DIR",
+        "C:\\Users\\TRINITX\\Documents\\Wezterm",
+    );
+    cmd.env(
+        "WEZTERM_CONFIG_FILE",
+        "C:\\Users\\TRINITX\\Documents\\Wezterm\\wezterm.lua",
+    );
+    cmd.env(
+        "WEZTERM_UNIX_SOCKET",
+        "C:\\Users\\TRINITX\\.local/share/wezterm\\gui-sock-22340",
+    );
+    cmd.env(
+        "WSLENV",
+        "TERM:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION",
+    );
     let child = pair
         .slave
         .spawn_command(cmd)
@@ -298,14 +335,27 @@ pub fn spawn_terminal(
     let reader_app = app.clone();
     let reader_registry: Arc<AgentRegistry> = (*registry).clone();
     let reader_pane_uuid = Uuid::parse_str(&session_id).unwrap_or_else(|_| Uuid::nil());
+    // Optional PTY byte dump for debugging Nerd Font / Powerline rendering.
+    // Set ARKADIA_PTY_DUMP=<path> to enable. Each chunk is appended verbatim.
+    let dump_path = std::env::var("ARKADIA_PTY_DUMP").ok();
     thread::spawn(move || {
         let mut buf = [0u8; 8192];
         let mut osc_parser = OscParser::new();
+        let mut dump_file = dump_path.as_ref().and_then(|p| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+                .ok()
+        });
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
                     let chunk = &buf[..n];
+                    if let Some(f) = dump_file.as_mut() {
+                        let _ = f.write_all(chunk);
+                    }
                     handle_terminal_queries(chunk, &reader_term, &reader_writer);
                     reader_term.lock().advance_bytes(chunk);
                     let parsed = osc_parser.feed(chunk);
@@ -484,6 +534,7 @@ struct RunParts<'a> {
     underline_style: u8,
     strikethrough: bool,
     inverse: bool,
+    dim: bool,
     hyperlink: Option<&'a String>,
     cell_width: u8,
 }
@@ -504,6 +555,7 @@ fn cell_to_run_parts(cell: &TerminalCell) -> RunParts<'_> {
         underline_style: attrs.underline,
         strikethrough: attrs.strikethrough,
         inverse: attrs.reverse,
+        dim: attrs.dim,
         hyperlink: attrs.hyperlink.as_ref(),
         cell_width: cell.width.max(1),
     }
@@ -553,6 +605,7 @@ fn emit_render(
                         && run.underline_style == parts.underline_style
                         && run.strikethrough == parts.strikethrough
                         && run.inverse == parts.inverse
+                        && run.dim == parts.dim
                         && run.hyperlink.as_deref() == parts.hyperlink.map(|s| s.as_str())
                         && run.cell_width == parts.cell_width =>
                 {
@@ -571,6 +624,7 @@ fn emit_render(
                         underline_style: parts.underline_style,
                         strikethrough: parts.strikethrough,
                         inverse: parts.inverse,
+                        dim: parts.dim,
                         hyperlink: parts.hyperlink.cloned(),
                         cell_width: parts.cell_width,
                     });
@@ -592,6 +646,7 @@ fn emit_render(
         MouseProtocol::AnyEvent => 3,
     };
     let mouse_sgr = matches!(term.mouse_encoding(), MouseEncoding::Sgr);
+    let bracketed_paste = term.bracketed_paste();
     let payload = RenderPayload {
         session_id: session_id.to_string(),
         cols,
@@ -605,6 +660,7 @@ fn emit_render(
         scroll_max,
         mouse_protocol,
         mouse_sgr,
+        bracketed_paste,
     };
     let _ = app.emit("terminal-render", payload);
 }

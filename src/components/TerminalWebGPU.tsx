@@ -293,13 +293,34 @@ function mouseModifiers(e: {
 }
 
 function keyEventToBytes(e: React.KeyboardEvent): Uint8Array | null {
+  if (e.ctrlKey && !e.altKey && !e.metaKey) {
+    switch (e.key) {
+      case "ArrowLeft":
+        return new TextEncoder().encode("\x1b[1;5D");
+      case "ArrowRight":
+        return new TextEncoder().encode("\x1b[1;5C");
+      case "ArrowUp":
+        return new TextEncoder().encode("\x1b[1;5A");
+      case "ArrowDown":
+        return new TextEncoder().encode("\x1b[1;5B");
+      // Ctrl+Backspace → Ctrl+W (backward-kill-word). PSReadLine, bash readline,
+      // zsh, Claude Code all interpret 0x17 as "delete previous word".
+      case "Backspace":
+        return new Uint8Array([0x17]);
+      // Ctrl+Delete → Alt+D (kill-word forward) in readline conventions.
+      case "Delete":
+        return new TextEncoder().encode("\x1bd");
+    }
+  }
   switch (e.key) {
     case "Enter":
-      return new TextEncoder().encode("\r");
+      // Shift+Enter sends ESC+CR (a.k.a. Alt-Enter) — Claude Code and most
+      // readline-style apps interpret this as "newline without submit".
+      return new TextEncoder().encode(e.shiftKey ? "\x1b\r" : "\r");
     case "Backspace":
       return new Uint8Array([0x7f]);
     case "Tab":
-      return new TextEncoder().encode("\t");
+      return new TextEncoder().encode(e.shiftKey ? "\x1b[Z" : "\t");
     case "Escape":
       return new TextEncoder().encode("\x1b");
     case "ArrowUp":
@@ -661,7 +682,13 @@ export function TerminalWebGPU({
         r.set_cell_size(cell.width * dpr, cell.height * dpr);
         redraw();
       }
-      const cols = Math.max(20, Math.floor(cssWidth / cell.width));
+      // Reserve room for ScrollbarOverlay (6 px overlay + 2 px right margin +
+      // a little safety) so the last column never falls under the scrollbar.
+      const SCROLLBAR_RESERVE_PX = 10;
+      const cols = Math.max(
+        20,
+        Math.floor((cssWidth - SCROLLBAR_RESERVE_PX) / cell.width),
+      );
       const rows = Math.max(5, Math.floor(cssHeight / cell.height));
       if (cols === lastCols && rows === lastRows) return;
       lastCols = cols;
@@ -708,12 +735,20 @@ export function TerminalWebGPU({
     }
 
     // Ctrl+V: read clipboard and inject into the PTY as input bytes.
+    // Wraps the payload with bracketed-paste markers (DEC mode 2004) when the
+    // running app has activated them — without this, multi-line pastes get
+    // executed line by line because each \n is treated as Enter.
     if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "v") {
       e.preventDefault();
       try {
         const text = await readClipboard();
         if (text && text.length > 0) {
-          const bytes = Array.from(new TextEncoder().encode(text));
+          const useBracketed = screenRef.current?.bracketed_paste ?? false;
+          const normalized = text.replace(/\r\n/g, "\r").replace(/\n/g, "\r");
+          const payload = useBracketed
+            ? `\x1b[200~${normalized}\x1b[201~`
+            : normalized;
+          const bytes = Array.from(new TextEncoder().encode(payload));
           await invoke("send_input", { sessionId: pane.id, bytes });
         }
       } catch (err) {
@@ -1104,6 +1139,7 @@ export function TerminalWebGPU({
     <div
       ref={outerRef}
       tabIndex={0}
+      data-pane-id={pane.id}
       onFocus={() => {
         focusedRef.current = true;
         rendererRef.current?.set_focused(true);

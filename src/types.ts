@@ -20,6 +20,8 @@ export interface CellRun {
   inverse: boolean;
   /** Optional — backend may omit on older versions. */
   strikethrough?: boolean;
+  /** SGR 2 (faint/dim). Optional for backward compat with older payloads. */
+  dim?: boolean;
   /** OSC 8 hyperlink target. */
   hyperlink?: string;
   /**
@@ -53,6 +55,8 @@ export interface RenderPayload {
   mouse_protocol: MouseProtocol;
   /** True iff the running app enabled SGR encoding (mode 1006). */
   mouse_sgr: boolean;
+  /** True iff the running app enabled bracketed paste (DEC mode 2004). */
+  bracketed_paste: boolean;
 }
 
 export interface ClosedPayload {
@@ -83,6 +87,13 @@ export interface Project {
   order: number;
   /** null/undefined = ungrouped (rendered in the implicit "Ungrouped" section). */
   workspaceId?: string | null;
+  /**
+   * When ungrouped and placed somewhere amongst the root-level workspaces
+   * (e.g. dragged into a gap between two workspaces), this carries the
+   * project's position in the merged root list. Compared against
+   * `Workspace.order`. Undefined → falls back to the bottom "Ungrouped" group.
+   */
+  rootOrder?: number;
 }
 
 export interface Workspace {
@@ -138,11 +149,14 @@ export interface FolderButton {
   kind: "folder";
   label: string;
   icon: string;
-  children: ActionButton[];
+  children: ToolbarButton[];
   order: number;
 }
 
 export type ToolbarButton = ActionButton | FolderButton;
+
+/** Root depth = 0. A folder at depth `MAX_FOLDER_DEPTH - 1` cannot contain folders. */
+export const MAX_FOLDER_DEPTH = 3;
 
 export interface TerminalFont {
   family: string;
@@ -150,7 +164,7 @@ export interface TerminalFont {
 }
 
 export const DEFAULT_TERMINAL_FONT: TerminalFont = {
-  family: "Cascadia Code, Consolas, Courier New, monospace",
+  family: "Maple Mono NF, Cascadia Code, Consolas, Courier New, monospace",
   size: 14,
 };
 

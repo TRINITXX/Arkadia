@@ -19,12 +19,16 @@ const FLAG_UL_CURLY: u32 = 32u;
 const FLAG_UL_DOTTED: u32 = 64u;
 const FLAG_UL_DASHED: u32 = 128u;
 const FLAG_COLOR_GLYPH: u32 = 256u;
+const FLAG_DIM: u32 = 512u;
 
 struct Uniforms {
     cell_size: vec2<f32>,
     viewport: vec2<f32>,
     atlas_size: vec2<f32>,
-    _pad: vec2<f32>,
+    /// 1.0 = encode linear→sRGB at fragment output (canvas is not an *Srgb
+    /// surface, which is the WebGPU canvas default); 0.0 = let the GPU do it.
+    srgb_at_output: f32,
+    _pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -127,9 +131,22 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let bold_on = select(0.0, 1.0, ((in.flags & FLAG_BOLD) != 0u) && !is_color);
     coverage = mix(coverage, max(coverage, bold_cov), bold_on);
 
-    // Mono path : `mix(bg, fg, alpha)`.
+    // Mono path : `mix(bg, fg, alpha)`. Dim (SGR 2) blends fg 50% toward bg
+    // before the coverage mix — same look as WezTerm. Skipped on color glyphs.
+    let dim_on = select(0.0, 1.0, ((in.flags & FLAG_DIM) != 0u) && !is_color);
+    let fg_eff = mix(in.fg.rgb, mix(in.fg.rgb, in.bg.rgb, 0.5), dim_on);
+    // Stem-darkening: a linear coverage mix in physical luminance over-brightens
+    // partial-coverage AA pixels once sRGB encode is applied at output, which
+    // makes regular text look bolder than the rasterized bitmap. We skip the
+    // darkening on FLAG_BOLD cells — otherwise the synthetic 1-px shift is
+    // counter-thinned by the same exponent and bold becomes visually
+    // indistinguishable from regular. Mono only — color glyphs keep their
+    // natural premultiplied alpha.
+    let is_bold = (in.flags & FLAG_BOLD) != 0u;
+    let darken_exp = select(1.8, 1.0, is_bold);
+    let perceptual_coverage = select(coverage, pow(coverage, darken_exp), !is_color);
+    let mono_rgb = mix(in.bg.rgb, fg_eff, perceptual_coverage);
     // Color path : premultiplied "over" composition `src + bg*(1-src.a)`.
-    let mono_rgb = mix(in.bg.rgb, in.fg.rgb, coverage);
     let color_rgb = sample.rgb + in.bg.rgb * (1.0 - sample.a);
     let color_factor = select(0.0, 1.0, is_color);
     var rgb = mix(mono_rgb, color_rgb, color_factor);
@@ -194,5 +211,18 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         + dashed_in * is_dashed;
     rgb = mix(rgb, in.fg.rgb, in_underline * underline_on);
 
-    return vec4<f32>(rgb, 1.0);
+    // The browser WebGPU canvas usually exposes only non-sRGB formats
+    // (`bgra8unorm` / `rgba8unorm`), so encode linear → sRGB ourselves when the
+    // surface won't do it. Identity branch for true sRGB targets.
+    let need_encode = u.srgb_at_output > 0.5;
+    let encoded = linear_to_srgb(rgb);
+    let final_rgb = select(rgb, encoded, need_encode);
+    return vec4<f32>(final_rgb, 1.0);
+}
+
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let cutoff = vec3<f32>(0.0031308);
+    let lower = c * 12.92;
+    let upper = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(upper, lower, c <= cutoff);
 }
