@@ -6,13 +6,6 @@ import type { CellRun, RenderPayload } from "@/types";
 const URL_RE = /https?:\/\/[^\s)>"'\]]+/g;
 const TRAILING_PUNCT = /[.,;:!?'"]+$/;
 
-// Path detection: requires either a Windows drive prefix (`C:\` / `C:/`) or
-// at least one slash in the path. Must end with an extension (`.ext`) to
-// avoid matching plain identifiers. Optional `:line(:col)?` suffix.
-const PATH_RE =
-  /(?:[a-zA-Z]:[\\/]|(?:[\w.-]+[\\/])+)[\w.-]*\.[\w]{1,10}(?::\d+(?::\d+)?)?/g;
-const PATH_TAIL_RE = /^(.*?)(?::(\d+)(?::(\d+))?)?$/;
-
 export interface UrlMatch {
   kind: "url";
   url: string;
@@ -24,9 +17,8 @@ export interface UrlMatch {
 
 export interface PathMatch {
   kind: "path";
-  path: string;
-  line?: number;
-  col?: number;
+  /** Absolute path, already resolved (against the pane cwd) by the backend. */
+  absPath: string;
   startCol: number;
   endCol: number;
   row: number;
@@ -48,7 +40,7 @@ export type ClickableMatch = UrlMatch | PathMatch | HyperlinkMatch;
  * each char. Continuation cells are skipped by the backend so each char
  * here corresponds to one rendered grapheme.
  */
-function buildRowMapping(line: CellRun[]): {
+export function buildRowMapping(line: CellRun[]): {
   text: string;
   charToCol: number[];
   charWidth: number[];
@@ -68,6 +60,32 @@ function buildRowMapping(line: CellRun[]): {
     }
   }
   return { text, charToCol, charWidth };
+}
+
+/** Cell column → char index in the row's plaintext, or null if outside any cell. */
+export function colToCharIndex(
+  charToCol: number[],
+  charWidth: number[],
+  col: number,
+): number | null {
+  for (let i = 0; i < charToCol.length; i++) {
+    if (col >= charToCol[i] && col < charToCol[i] + charWidth[i]) return i;
+  }
+  return null;
+}
+
+/** Char range [start, end) in the plaintext → cell columns (endCol exclusive). */
+export function charRangeToCols(
+  charToCol: number[],
+  charWidth: number[],
+  start: number,
+  end: number,
+): { startCol: number; endCol: number } | null {
+  if (start < 0 || end <= start || end > charToCol.length) return null;
+  return {
+    startCol: charToCol[start],
+    endCol: charToCol[end - 1] + charWidth[end - 1],
+  };
 }
 
 /**
@@ -96,44 +114,6 @@ export function findUrlAt(
     if (col >= startCol && col < endCol) {
       return { kind: "url", url: cleaned, startCol, endCol, row };
     }
-  }
-  return null;
-}
-
-/** Path:line:col detection. Resolution to absolute is done by the caller. */
-export function findPathAt(
-  screen: RenderPayload,
-  col: number,
-  row: number,
-): PathMatch | null {
-  const line = screen.lines[row];
-  if (!line) return null;
-  const { text, charToCol, charWidth } = buildRowMapping(line);
-  PATH_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = PATH_RE.exec(text)) !== null) {
-    const raw = match[0].replace(TRAILING_PUNCT, "");
-    if (raw.length === 0) continue;
-    const startCharIdx = match.index;
-    const lastCharIdx = startCharIdx + raw.length - 1;
-    if (lastCharIdx >= charToCol.length) continue;
-    const startCol = charToCol[startCharIdx];
-    const endCol = charToCol[lastCharIdx] + charWidth[lastCharIdx];
-    if (col < startCol || col >= endCol) continue;
-    const tail = PATH_TAIL_RE.exec(raw);
-    if (!tail) continue;
-    const path = tail[1];
-    const lineNo = tail[2] ? parseInt(tail[2], 10) : undefined;
-    const colNo = tail[3] ? parseInt(tail[3], 10) : undefined;
-    return {
-      kind: "path",
-      path,
-      line: lineNo,
-      col: colNo,
-      startCol,
-      endCol,
-      row,
-    };
   }
   return null;
 }
@@ -167,19 +147,17 @@ export function findHyperlinkAt(
 }
 
 /**
- * Best-match resolution: OSC 8 cell-tagged hyperlinks win, then URL regex,
- * then path:line:col regex. Returns null if nothing clickable at this cell.
+ * Synchronous click detection: OSC 8 hyperlinks win, then URL regex. File paths
+ * are resolved separately and asynchronously by the backend `resolve_path_at`
+ * command — they need filesystem validation to handle spaces, so they are not
+ * matched here.
  */
 export function findClickableAt(
   screen: RenderPayload,
   col: number,
   row: number,
-): ClickableMatch | null {
-  return (
-    findHyperlinkAt(screen, col, row) ??
-    findUrlAt(screen, col, row) ??
-    findPathAt(screen, col, row)
-  );
+): UrlMatch | HyperlinkMatch | null {
+  return findHyperlinkAt(screen, col, row) ?? findUrlAt(screen, col, row);
 }
 
 // Re-export to ease unit testing.

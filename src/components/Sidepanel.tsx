@@ -367,7 +367,7 @@ export function Sidepanel({
 
   return (
     <aside className="flex h-full w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950">
-      <div className="flex-1 overflow-y-auto py-2">
+      <div className="scrollbar-none flex-1 overflow-y-auto py-2">
         {projects.length === 0 && workspaces.length === 0 ? (
           <div className="px-3 py-2 text-xs text-zinc-500">
             no project yet — click + to add one

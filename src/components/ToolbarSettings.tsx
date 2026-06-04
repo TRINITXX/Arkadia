@@ -18,6 +18,7 @@ import {
   GripVertical,
   Trash2,
 } from "lucide-react";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { newButtonId } from "@/store";
 import { getIcon } from "@/icons";
 import { IconPicker } from "@/components/IconPicker";
@@ -602,10 +603,11 @@ function FolderEditorPane({
   onDelete: () => void;
 }) {
   const total = countDescendants(button);
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (button.children.length > 0) {
-      const ok = window.confirm(
+      const ok = await ask(
         `Delete folder "${button.label || "folder"}" and ${total} item(s) inside?`,
+        { title: "Delete folder", kind: "warning" },
       );
       if (!ok) return;
     }

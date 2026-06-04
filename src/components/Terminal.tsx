@@ -249,6 +249,17 @@ export function Terminal({
     }
   }, [isActive]);
 
+  // Belt-and-suspenders: ask the backend to (re)emit the current screen so a
+  // fresh-mounted pane that missed the very first `terminal-render` event
+  // still ends up rendering its initial prompt.
+  useEffect(() => {
+    if (pane.screen) return;
+    void invoke("request_render", { sessionId: pane.id }).catch(() => {
+      /* session may not exist yet (race during spawn) — backend kick covers it */
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pane.id]);
+
   // Auto-resize PTY to match the visual size of the pane.
   // ResizeObserver.contentRect excludes padding/border (content-box).
   // Re-runs when font changes: cell size differs → recompute cols/rows.
@@ -339,6 +350,7 @@ export function Terminal({
     <div
       ref={ref}
       tabIndex={0}
+      data-pane-id={pane.id}
       onFocus={() => {
         setFocused(true);
         if (!isActive) onActivate();

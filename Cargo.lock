@@ -76,6 +76,7 @@ dependencies = [
  "dirs 5.0.1",
  "font-kit",
  "notify",
+ "open",
  "parking_lot",
  "portable-pty",
  "serde",

@@ -8,7 +8,14 @@ import {
 import { Renderer } from "@renderer/terminal_renderer.js";
 import { ensureWasmReady, paletteToWasm } from "@/lib/wasmRenderer";
 import { measureCellSize } from "@/lib/cellSize";
-import { findClickableAt, type ClickableMatch } from "@/lib/urlDetect";
+import {
+  findClickableAt,
+  buildRowMapping,
+  colToCharIndex,
+  charRangeToCols,
+  type ClickableMatch,
+  type PathMatch,
+} from "@/lib/urlDetect";
 import type {
   CellRun,
   EditorProtocol,
@@ -18,6 +25,15 @@ import type {
   TerminalFont,
   TerminalPalette,
 } from "@/types";
+
+/** Backend result of the `resolve_path_at` command. */
+interface ResolvedPath {
+  start: number;
+  end: number;
+  abs_path: string;
+  line: number | null;
+  col: number | null;
+}
 
 const fontBytesCache = new Map<string, Promise<Uint8Array | null>>();
 
@@ -156,58 +172,16 @@ function applySearchHighlight(
 }
 
 /**
- * Builds the editor-specific URL for opening a file path with optional line
- * and column anchors. VSCode, Cursor and Fleet all use the
- * `<scheme>://file/<path>:line:col` convention; IntelliJ IDEA uses query
- * parameters.
+ * Returns a shallow-cloned screen with the cells covering `hover` highlighted:
+ * a background fill + contrasting foreground + underline. A 1px underline alone
+ * is imperceptible over busy TUI output (e.g. Claude Code), so we fill the cell
+ * background — the same mechanism the search highlight uses. Splits the affected
+ * runs at the link boundaries.
  */
-function buildEditorUrl(
-  protocol: EditorProtocol,
-  absPath: string,
-  line?: number,
-  col?: number,
-): string {
-  const fwdPath = absPath.replace(/\\/g, "/");
-  if (protocol === "idea") {
-    const params = new URLSearchParams();
-    params.set("file", fwdPath);
-    if (line !== undefined) params.set("line", String(line));
-    if (col !== undefined) params.set("column", String(col));
-    return `idea://open?${params.toString()}`;
-  }
-  let url = `${protocol}://file/${fwdPath}`;
-  if (line !== undefined) {
-    url += `:${line}`;
-    if (col !== undefined) url += `:${col}`;
-  }
-  return url;
-}
+const HOVER_BG = "#2563eb"; // blue-600
+const HOVER_FG = "#ffffff";
 
-/** Resolves a path against `cwd` (for relative paths) and emits an editor
- *  URL with optional line/col anchors. Returns plain http(s) for URL/hyperlink. */
-function clickableToOpenTarget(
-  match: ClickableMatch,
-  cwd: string | null,
-  protocol: EditorProtocol,
-): string {
-  if (match.kind === "url" || match.kind === "hyperlink") return match.url;
-  // path
-  let abs = match.path;
-  // Heuristic: a relative path doesn't start with `[A-Za-z]:` or `/` or `\`.
-  const isAbs =
-    /^[a-zA-Z]:[\\/]/.test(abs) || abs.startsWith("/") || abs.startsWith("\\");
-  if (!isAbs && cwd) {
-    const sep = cwd.includes("\\") ? "\\" : "/";
-    abs = cwd.replace(/[\\/]+$/, "") + sep + abs;
-  }
-  return buildEditorUrl(protocol, abs, match.line, match.col);
-}
-
-/**
- * Returns a shallow-cloned screen with the cells covering `hover` flagged
- * `underline: true`. Splits the affected runs at the URL boundaries.
- */
-function applyHoverUnderline(
+function applyHoverHighlight(
   screen: RenderPayload,
   hover: HoverRange | null,
 ): RenderPayload {
@@ -240,6 +214,8 @@ function applyHoverUnderline(
         ...run,
         text: chars.slice(localStartChars, localEndChars).join(""),
         underline_style: 1,
+        bg: { kind: "rgb", value: HOVER_BG },
+        fg: { kind: "rgb", value: HOVER_FG },
       });
       if (localEndChars < chars.length) {
         newRuns.push({ ...run, text: chars.slice(localEndChars).join("") });
@@ -402,7 +378,6 @@ export function TerminalWebGPU({
   isActive,
   font,
   palette,
-  editorProtocol,
   onActivate,
   onContextMenu,
 }: Props) {
@@ -427,6 +402,13 @@ export function TerminalWebGPU({
   useEffect(() => {
     screenRef.current = pane.screen;
   }, [pane.screen]);
+
+  // Live cwd kept in a ref so the (deps: []) hover effect reads the current
+  // value when resolving relative paths, not the null captured at mount.
+  const cwdRef = useRef(pane.cwd);
+  useEffect(() => {
+    cwdRef.current = pane.cwd;
+  }, [pane.cwd]);
 
   // Mouse-selection state. cellRef is the CSS-pixel cell size so we can
   // convert mouse coords → grid cells without a fresh measurement.
@@ -467,7 +449,7 @@ export function TerminalWebGPU({
       "#fde047", // yellow for non-current hits
       "#fb923c", // orange for the current hit
     );
-    modified = applyHoverUnderline(modified, hoveredUrlRef.current);
+    modified = applyHoverHighlight(modified, hoveredUrlRef.current);
     r.draw(modified);
   };
 
@@ -520,6 +502,15 @@ export function TerminalWebGPU({
   // ─── 1. Init / teardown — once per pane ─────────────────────────
   useEffect(() => {
     let cancelled = false;
+
+    // Belt-and-suspenders: ask the backend to (re)emit the current screen.
+    // Handles the case where the very first `terminal-render` event was emitted
+    // before React had inserted this pane in its state, leaving the screen null.
+    if (!pane.screen) {
+      void invoke("request_render", { sessionId: pane.id }).catch(() => {
+        /* session may not exist yet (race during spawn) — backend kick covers it */
+      });
+    }
 
     void (async () => {
       await ensureWasmReady();
@@ -867,8 +858,14 @@ export function TerminalWebGPU({
           redraw();
         }
         try {
-          const target = clickableToOpenTarget(match, pane.cwd, editorProtocol);
-          await openExternal(target);
+          if (match.kind === "path") {
+            // Open with the OS default app; absPath was already resolved +
+            // filesystem-validated by the backend `resolve_path_at`.
+            await invoke("open_path", { path: match.absPath });
+          } else {
+            // url | hyperlink → OS browser via the shell scope (http/https).
+            await openExternal(match.url);
+          }
         } catch (err) {
           console.error("[arkadia] open clickable failed:", err);
         }
@@ -895,13 +892,35 @@ export function TerminalWebGPU({
   }, [pane.id]);
 
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    // Mouse-mode passthrough: forward press to the PTY and skip local
-    // drag-select / click-to-open. Shift bypasses (selection convention).
-    if (mouseModeActive(pane.screen) && !e.shiftKey && e.button <= 2) {
+    const { col, row } = cellAt(e.clientX, e.clientY);
+    // A plain left-click landing directly on a detected link opens it — even
+    // while an app captures the mouse — so paths/URLs are clickable with no
+    // modifier. Shift and non-left buttons never open (selection / app behaviour).
+    const screen = pane.screen;
+    const snapped = screen ? snapToWideMain(screen, col, row) : col;
+    const openable = e.button === 0 && !e.shiftKey && !!screen;
+    // Hyperlinks/URLs are detected synchronously; file paths come from the hover
+    // state (resolved asynchronously by the backend) when the click is in range.
+    const hov = hoveredUrlRef.current;
+    const hoveredPath: PathMatch | null =
+      openable &&
+      hov &&
+      hov.match.kind === "path" &&
+      hov.row === row &&
+      snapped >= hov.startCol &&
+      snapped < hov.endCol
+        ? hov.match
+        : null;
+    const linkHit: ClickableMatch | null = openable
+      ? (findClickableAt(screen!, snapped, row) ?? hoveredPath)
+      : null;
+
+    // Mouse-mode passthrough: forward the press to the PTY and skip the local
+    // drag-select / click-to-open — UNLESS it lands on a link. Shift bypasses.
+    if (mouseModeActive(screen) && !e.shiftKey && e.button <= 2 && !linkHit) {
       e.preventDefault();
       if (!isActive) onActivate();
       outerRef.current?.focus();
-      const { col, row } = cellAt(e.clientX, e.clientY);
       mouseEventActiveRef.current = { button: e.button };
       lastMouseCellRef.current = { col, row };
       void invoke("send_mouse_event", {
@@ -921,10 +940,8 @@ export function TerminalWebGPU({
 
     if (!isActive) onActivate();
     outerRef.current?.focus();
-    const { col, row } = cellAt(e.clientX, e.clientY);
-    // If we're hovering a clickable target, remember it. mouseup will open it
-    // iff there was no drag — drag cancels the click and starts a selection.
-    pendingClickRef.current = hoveredUrlRef.current?.match ?? null;
+    // Remember the link under the press; mouseup opens it iff there was no drag.
+    pendingClickRef.current = linkHit;
     // Don't draw a selection yet — we wait for the first real move so a
     // pure click stays click-shaped. mousemove will commit the selection.
     dragStartRef.current = { col, row };
@@ -1059,6 +1076,8 @@ export function TerminalWebGPU({
 
     const setHover = (next: HoverRange | null) => {
       const cur = hoveredUrlRef.current;
+      const key = (m: ClickableMatch) =>
+        m.kind === "path" ? m.absPath : m.url;
       const same =
         cur === next ||
         (!!cur &&
@@ -1067,65 +1086,139 @@ export function TerminalWebGPU({
           cur.startCol === next.startCol &&
           cur.endCol === next.endCol &&
           cur.match.kind === next.match.kind &&
-          ("url" in cur.match
-            ? "url" in next.match && cur.match.url === next.match.url
-            : "path" in cur.match
-              ? "path" in next.match && cur.match.path === next.match.path
-              : true));
+          key(cur.match) === key(next.match));
       if (same) return;
       hoveredUrlRef.current = next;
       redraw();
     };
 
-    const onMove = (e: MouseEvent) => {
-      const wrapper = wrapperRef.current;
-      const screen = screenRef.current;
-      // Mouse mode active: the running app paints its own cursors; we suppress
-      // the URL/path hover affordances entirely.
-      if (!wrapper || !screen || mouseModeActive(screen)) {
-        if (cursorIsPointer) {
-          outer.style.cursor = "";
-          cursorIsPointer = false;
-        }
-        setHover(null);
-        return;
-      }
-      const rect = wrapper.getBoundingClientRect();
-      if (
-        e.clientX < rect.left ||
-        e.clientX > rect.right ||
-        e.clientY < rect.top ||
-        e.clientY > rect.bottom
-      ) {
-        if (cursorIsPointer) {
-          outer.style.cursor = "";
-          cursorIsPointer = false;
-        }
-        setHover(null);
-        return;
-      }
-      const cw = cellRef.current.w;
-      const ch = cellRef.current.h;
-      if (cw <= 0 || ch <= 0) return;
-      const rawCol = Math.floor((e.clientX - rect.left) / cw);
-      const row = Math.floor((e.clientY - rect.top) / ch);
-      const col = snapToWideMain(screen, rawCol, row);
-      const match = findClickableAt(screen, col, row);
-      const next: HoverRange | null = match
-        ? {
-            match,
-            row: match.row,
-            startCol: match.startCol,
-            endCol: match.endCol,
-          }
-        : null;
-      setHover(next);
+    const applyMatch = (match: ClickableMatch | null) => {
+      setHover(
+        match
+          ? {
+              match,
+              row: match.row,
+              startCol: match.startCol,
+              endCol: match.endCol,
+            }
+          : null,
+      );
       const wantPointer = !!match;
       if (wantPointer !== cursorIsPointer) {
         outer.style.cursor = wantPointer ? "pointer" : "";
         cursorIsPointer = wantPointer;
       }
     };
+    const clearAffordance = () => applyMatch(null);
+
+    // Last evaluated cell (avoid redundant work / IPC while the cursor sits in
+    // one cell); `probeSeq` discards stale async path resolutions.
+    let lastCell = "";
+    let probeSeq = 0;
+
+    // Hyperlinks/URLs are detected synchronously. File paths need filesystem
+    // validation (to handle spaces) so they go through the backend
+    // `resolve_path_at` command asynchronously. Affordance applies with no
+    // modifier, even while an app captures the mouse.
+    const computeHover = (clientX: number, clientY: number) => {
+      const wrapper = wrapperRef.current;
+      const screen = screenRef.current;
+      if (!wrapper || !screen) {
+        lastCell = "";
+        clearAffordance();
+        return;
+      }
+      const rect = wrapper.getBoundingClientRect();
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
+        lastCell = "";
+        clearAffordance();
+        return;
+      }
+      const cw = cellRef.current.w;
+      const ch = cellRef.current.h;
+      if (cw <= 0 || ch <= 0) return;
+      const rawCol = Math.floor((clientX - rect.left) / cw);
+      const row = Math.floor((clientY - rect.top) / ch);
+      const col = snapToWideMain(screen, rawCol, row);
+
+      // Still within the currently-highlighted path → keep it (no re-probe
+      // while sweeping across a multi-cell path).
+      const cur = hoveredUrlRef.current;
+      if (
+        cur &&
+        cur.match.kind === "path" &&
+        cur.row === row &&
+        col >= cur.startCol &&
+        col < cur.endCol
+      ) {
+        return;
+      }
+
+      const cellKey = `${row}:${col}`;
+      if (cellKey === lastCell) return;
+      lastCell = cellKey;
+
+      // Sync: hyperlink / URL.
+      const sync = findClickableAt(screen, col, row);
+      if (sync) {
+        applyMatch(sync);
+        return;
+      }
+
+      // Async: file path via the backend (filesystem-validated, space-aware).
+      const line = screen.lines[row];
+      if (!line) {
+        clearAffordance();
+        return;
+      }
+      const { text, charToCol, charWidth } = buildRowMapping(line);
+      const charIdx = colToCharIndex(charToCol, charWidth, col);
+      // Skip the IPC when there's no path separator on the row.
+      if (charIdx == null || !/[\\/]/.test(text)) {
+        clearAffordance();
+        return;
+      }
+      const seq = ++probeSeq;
+      void invoke<ResolvedPath | null>("resolve_path_at", {
+        line: text,
+        cwd: cwdRef.current,
+        click: charIdx,
+      })
+        .then((res) => {
+          if (seq !== probeSeq) return; // superseded by a newer move
+          const liveLine = screenRef.current?.lines[row];
+          if (!liveLine || buildRowMapping(liveLine).text !== text) return; // row changed
+          if (!res) {
+            clearAffordance();
+            return;
+          }
+          const cols = charRangeToCols(
+            charToCol,
+            charWidth,
+            res.start,
+            res.end,
+          );
+          if (!cols) {
+            clearAffordance();
+            return;
+          }
+          applyMatch({
+            kind: "path",
+            absPath: res.abs_path,
+            startCol: cols.startCol,
+            endCol: cols.endCol,
+            row,
+          });
+        })
+        .catch(() => {});
+    };
+
+    const onMove = (e: MouseEvent) => computeHover(e.clientX, e.clientY);
 
     window.addEventListener("mousemove", onMove);
     return () => {

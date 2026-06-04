@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { arrayMove } from "@dnd-kit/sortable";
 import { TabBar } from "@/components/TabBar";
 import { Sidepanel } from "@/components/Sidepanel";
@@ -23,6 +25,7 @@ import {
   splitTreeAt,
   updateTreeRatio,
 } from "@/lib/paneTree";
+import { measureCellSize } from "@/lib/cellSize";
 import { DEFAULT_CUSTOM_PALETTE, resolveActivePalette } from "@/lib/palettes";
 import type { AgentEventPayload, AgentStateValue } from "@/lib/agentState";
 import {
@@ -163,6 +166,12 @@ export function App() {
   // paneId (= backend session_id) → tabId for fast routing of render/closed events.
   const paneToTab = useRef<Map<string, string>>(new Map());
 
+  // Wrapper around the visible PaneTreeView. We measure it before spawning a
+  // PTY so PowerShell starts at the right size — otherwise it boots at 120×30
+  // and the first render lands on the wrong grid (visible only after the
+  // ResizeObserver fires ~50ms later).
+  const paneHostRef = useRef<HTMLDivElement>(null);
+
   // Holds the latest buildSession closure so the close handler (registered once)
   // always sees up-to-date state without retriggering on every state change.
   const buildSessionRef = useRef<() => SessionFile>(() => ({
@@ -187,6 +196,61 @@ export function App() {
   const activeTabId = activeProjectId
     ? (activeTabIdByProject[activeProjectId] ?? null)
     : null;
+  const activePaneIdOfActiveTab = useMemo(() => {
+    if (!activeTabId) return null;
+    return tabs.find((t) => t.id === activeTabId)?.activePaneId ?? null;
+  }, [tabs, activeTabId]);
+
+  // Focus the active pane when tabs/panes switch so the user can type
+  // immediately. The Terminal/TerminalWebGPU components only focus on their
+  // own `isActive` change, which doesn't fire on tab switches (panes in the
+  // newly-revealed tab kept their `isActive` flag from before).
+  // requestAnimationFrame defers the focus until after the visibility
+  // transition (display:hidden → visible) settles.
+  useEffect(() => {
+    if (!activePaneIdOfActiveTab) return;
+    const raf = requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(
+        `[data-pane-id="${activePaneIdOfActiveTab}"]`,
+      );
+      el?.focus();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [activeTabId, activePaneIdOfActiveTab]);
+
+  // Refocus the active pane when the OS window regains focus (alt-tab,
+  // taskbar click), so the user can type into Claude Code (or whatever is
+  // running in the terminal) without having to click the pane first.
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+
+    getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (!focused) return;
+        const active = document.activeElement;
+        if (active && active !== document.body && active.tagName !== "HTML") {
+          if (active.hasAttribute("data-pane-id")) return;
+          if (active.closest('[role="dialog"], [data-radix-portal]')) return;
+        }
+        requestAnimationFrame(() => {
+          if (!activePaneIdOfActiveTab) return;
+          const el = document.querySelector<HTMLElement>(
+            `[data-pane-id="${activePaneIdOfActiveTab}"]`,
+          );
+          el?.focus();
+        });
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [activePaneIdOfActiveTab]);
 
   // ─── Persistence ────────────────────────────────────────────────
 
@@ -269,11 +333,12 @@ export function App() {
                   ? `${leaf.agent_resume.command} ${leaf.agent_resume.session_id}`
                   : null;
               const cwd = leaf.cwd || ".";
+              const { cols, rows } = measureSpawnSize();
               try {
                 const newPaneId = await invoke<string>("spawn_terminal", {
                   cwd,
-                  cols: COLS,
-                  rows: ROWS,
+                  cols,
+                  rows,
                   initCommand: initCmd,
                 });
                 idMap[leaf.pane_id] = newPaneId;
@@ -351,19 +416,44 @@ export function App() {
 
   // ─── Pane / tab spawning ────────────────────────────────────────
 
-  const spawnPane = useCallback(async (cwd: string): Promise<string | null> => {
-    try {
-      const sessionId = await invoke<string>("spawn_terminal", {
-        cwd,
-        cols: COLS,
-        rows: ROWS,
-      });
-      return sessionId;
-    } catch (e) {
-      setError(String(e));
-      return null;
-    }
-  }, []);
+  // Measures the wrapper that will host the new pane, so the PTY boots at the
+  // real grid size. Falls back to COLS/ROWS when no host is laid out yet (e.g.
+  // session restore runs before any project is selected).
+  const measureSpawnSize = useCallback((): { cols: number; rows: number } => {
+    const el = paneHostRef.current;
+    if (!el) return { cols: COLS, rows: ROWS };
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return { cols: COLS, rows: ROWS };
+    const cell = measureCellSize(font.family, font.size);
+    const PADDING_TOTAL = 24; // mirrors Terminal/TerminalWebGPU p-3
+    const cols = Math.max(
+      20,
+      Math.floor((rect.width - PADDING_TOTAL) / cell.width),
+    );
+    const rows = Math.max(
+      5,
+      Math.floor((rect.height - PADDING_TOTAL) / cell.height),
+    );
+    return { cols, rows };
+  }, [font.family, font.size]);
+
+  const spawnPane = useCallback(
+    async (cwd: string): Promise<string | null> => {
+      const { cols, rows } = measureSpawnSize();
+      try {
+        const sessionId = await invoke<string>("spawn_terminal", {
+          cwd,
+          cols,
+          rows,
+        });
+        return sessionId;
+      } catch (e) {
+        setError(String(e));
+        return null;
+      }
+    },
+    [measureSpawnSize],
+  );
 
   const spawnTabFor = useCallback(
     async (
@@ -1100,7 +1190,7 @@ export function App() {
           </div>
         )}
 
-        <div className="flex flex-1 overflow-hidden">
+        <div ref={paneHostRef} className="flex flex-1 overflow-hidden">
           {!activeProject && (
             <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
               {projects.length === 0
@@ -1151,11 +1241,13 @@ export function App() {
           currentWorkspaceId={projectMenu.project.workspaceId}
           onRename={() => setRenameTarget(projectMenu.project)}
           onChangeColor={() => setColorTarget(projectMenu.project)}
-          onDelete={() => {
+          onDelete={async () => {
             const proj = projectMenu.project;
-            if (confirm(`Delete project "${proj.name}"?`)) {
-              onDeleteProject(proj.id);
-            }
+            const ok = await ask(`Delete project "${proj.name}"?`, {
+              title: "Delete project",
+              kind: "warning",
+            });
+            if (ok) onDeleteProject(proj.id);
           }}
           onMoveToWorkspace={(workspaceId) =>
             onMoveProject(projectMenu.project.id, workspaceId, null)
@@ -1174,15 +1266,13 @@ export function App() {
               workspace: workspaceMenu.workspace,
             })
           }
-          onDelete={() => {
+          onDelete={async () => {
             const ws = workspaceMenu.workspace;
-            if (
-              confirm(
-                `Delete workspace "${ws.name}"? Its projects will become ungrouped.`,
-              )
-            ) {
-              onDeleteWorkspace(ws.id);
-            }
+            const ok = await ask(
+              `Delete workspace "${ws.name}"? Its projects will become ungrouped.`,
+              { title: "Delete workspace", kind: "warning" },
+            );
+            if (ok) onDeleteWorkspace(ws.id);
           }}
           onClose={() => setWorkspaceMenu(null)}
         />

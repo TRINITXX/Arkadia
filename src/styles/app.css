@@ -34,3 +34,13 @@ body,
 .agent-badge-busy {
   animation: agent-badge-pulse 1.4s ease-out infinite;
 }
+
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}

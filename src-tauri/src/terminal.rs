@@ -407,6 +407,19 @@ pub fn spawn_terminal(
         }
     });
 
+    // Guarantee a snapshot reaches the frontend even if the very first emit
+    // from the flush thread fires before React has inserted the pane into its
+    // state (race between `setTabs` and the first `terminal-render` event).
+    // 200ms is enough to capture pwsh's banner/prompt.
+    let kick_term = term.clone();
+    let kick_scroll = scroll_offset.clone();
+    let kick_app = app.clone();
+    let kick_session_id = session_id.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(200));
+        emit_render(&kick_app, &kick_session_id, &kick_term, &kick_scroll);
+    });
+
     if let Some(cmd) = init_command {
         let writer_for_init = writer.clone();
         thread::spawn(move || {
@@ -696,6 +709,7 @@ pub fn resize_terminal(
     cols: u16,
     rows: u16,
     state: State<'_, SessionMap>,
+    app: AppHandle,
 ) -> Result<(), String> {
     let cols = cols.clamp(1, MAX_TERM_DIM);
     let rows = rows.clamp(1, MAX_TERM_DIM);
@@ -713,6 +727,23 @@ pub fn resize_terminal(
         })
         .map_err(|e| format!("resize: {e}"))?;
     session.term.lock().set_size(rows, cols);
+    // Force a fresh snapshot so the frontend can render the resized grid even
+    // if the inferior is idle and won't write anything in response to SIGWINCH.
+    emit_render(&app, &session_id, &session.term, &session.scroll_offset);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn request_render(
+    session_id: String,
+    state: State<'_, SessionMap>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let sessions = state.sessions.lock();
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("unknown session {session_id}"))?;
+    emit_render(&app, &session_id, &session.term, &session.scroll_offset);
     Ok(())
 }
 

@@ -241,6 +241,22 @@ function SortableTab({
       <span className="relative inline-block truncate font-medium">
         {title}
       </span>
+      <button
+        type="button"
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose(tab.id);
+        }}
+        aria-label="Close tab"
+        title="Close tab"
+        className={`ml-auto flex size-4 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-700 hover:text-zinc-100 ${
+          active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+        }`}
+      >
+        <X size={12} strokeWidth={2} />
+      </button>
     </div>
   );
 }
