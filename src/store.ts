@@ -27,7 +27,6 @@ const KEY_PALETTE_ID = "paletteId";
 const KEY_USE_WEBGPU = "useWebGPU";
 const KEY_CUSTOM_PALETTE = "customPalette";
 const KEY_EDITOR_PROTOCOL = "editorProtocol";
-const KEY_RESUME_ON_RESTORE = "resumeOnRestore";
 
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 28;
@@ -57,7 +56,6 @@ export interface PersistedState {
   useWebGPU: boolean;
   customPalette: CustomPalette;
   editorProtocol: EditorProtocol;
-  resumeOnRestore: boolean;
 }
 
 const DEFAULT_STATE: PersistedState = {
@@ -70,7 +68,6 @@ const DEFAULT_STATE: PersistedState = {
   useWebGPU: false,
   customPalette: DEFAULT_CUSTOM_PALETTE,
   editorProtocol: DEFAULT_EDITOR_PROTOCOL,
-  resumeOnRestore: true,
 };
 
 let storePromise: Promise<Store> | null = null;
@@ -213,7 +210,6 @@ async function tryMigrateFromLocalStorage(
       useWebGPU: false,
       customPalette: DEFAULT_CUSTOM_PALETTE,
       editorProtocol: DEFAULT_EDITOR_PROTOCOL,
-      resumeOnRestore: true,
     };
     await store.set(KEY_PROJECTS, state.projects);
     await store.set(KEY_WORKSPACES, state.workspaces);
@@ -224,7 +220,6 @@ async function tryMigrateFromLocalStorage(
     await store.set(KEY_USE_WEBGPU, state.useWebGPU);
     await store.set(KEY_CUSTOM_PALETTE, state.customPalette);
     await store.set(KEY_EDITOR_PROTOCOL, state.editorProtocol);
-    await store.set(KEY_RESUME_ON_RESTORE, state.resumeOnRestore);
     await store.save();
     localStorage.removeItem(LEGACY_LOCAL_STORAGE_KEY);
     return state;
@@ -253,7 +248,6 @@ export async function loadState(): Promise<PersistedState> {
   const rawUseWebGPU = await store.get<unknown>(KEY_USE_WEBGPU);
   const rawCustomPalette = await store.get<unknown>(KEY_CUSTOM_PALETTE);
   const rawEditorProtocol = await store.get<unknown>(KEY_EDITOR_PROTOCOL);
-  const rawResumeOnRestore = await store.get<unknown>(KEY_RESUME_ON_RESTORE);
 
   return {
     projects: Array.isArray(rawProjects)
@@ -274,10 +268,6 @@ export async function loadState(): Promise<PersistedState> {
         : DEFAULT_STATE.useWebGPU,
     customPalette: normalizeCustomPalette(rawCustomPalette),
     editorProtocol: normalizeEditorProtocol(rawEditorProtocol),
-    resumeOnRestore:
-      typeof rawResumeOnRestore === "boolean"
-        ? rawResumeOnRestore
-        : DEFAULT_STATE.resumeOnRestore,
   };
 }
 
@@ -292,7 +282,6 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_USE_WEBGPU, state.useWebGPU);
   await store.set(KEY_CUSTOM_PALETTE, state.customPalette);
   await store.set(KEY_EDITOR_PROTOCOL, state.editorProtocol);
-  await store.set(KEY_RESUME_ON_RESTORE, state.resumeOnRestore);
   await store.save();
 }
 

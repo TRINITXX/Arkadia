@@ -18,6 +18,8 @@ interface PaneTreeViewProps {
   useWebGPU: boolean;
   editorProtocol: EditorProtocol;
   onActivate: (paneId: string) => void;
+  /** Fired when the user produces real input (keystroke/paste) in a pane. */
+  onUserInput?: () => void;
   onContextMenu: (paneId: string, x: number, y: number) => void;
   onSetRatio: (path: number[], ratio: number) => void;
   path?: number[];
@@ -32,6 +34,7 @@ export function PaneTreeView({
   useWebGPU,
   editorProtocol,
   onActivate,
+  onUserInput,
   onContextMenu,
   onSetRatio,
   path = [],
@@ -48,6 +51,7 @@ export function PaneTreeView({
         palette={palette}
         editorProtocol={editorProtocol}
         onActivate={() => onActivate(pane.id)}
+        onUserInput={onUserInput}
         onContextMenu={(x, y) => onContextMenu(pane.id, x, y)}
       />
     ) : (
@@ -57,6 +61,7 @@ export function PaneTreeView({
         font={font}
         palette={palette}
         onActivate={() => onActivate(pane.id)}
+        onUserInput={onUserInput}
         onContextMenu={(x, y) => onContextMenu(pane.id, x, y)}
       />
     );
@@ -95,6 +100,7 @@ export function PaneTreeView({
           useWebGPU={useWebGPU}
           editorProtocol={editorProtocol}
           onActivate={onActivate}
+          onUserInput={onUserInput}
           onContextMenu={onContextMenu}
           onSetRatio={onSetRatio}
           path={[...path, 0]}
@@ -117,6 +123,7 @@ export function PaneTreeView({
           useWebGPU={useWebGPU}
           editorProtocol={editorProtocol}
           onActivate={onActivate}
+          onUserInput={onUserInput}
           onContextMenu={onContextMenu}
           onSetRatio={onSetRatio}
           path={[...path, 1]}

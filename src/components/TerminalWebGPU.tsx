@@ -370,6 +370,8 @@ interface Props {
   palette: TerminalPalette;
   editorProtocol: EditorProtocol;
   onActivate: () => void;
+  /** Fired when the user produces real input (keystroke/paste) in this pane. */
+  onUserInput?: () => void;
   onContextMenu: (x: number, y: number) => void;
 }
 
@@ -379,6 +381,7 @@ export function TerminalWebGPU({
   font,
   palette,
   onActivate,
+  onUserInput,
   onContextMenu,
 }: Props) {
   const outerRef = useRef<HTMLDivElement>(null);
@@ -740,6 +743,7 @@ export function TerminalWebGPU({
             ? `\x1b[200~${normalized}\x1b[201~`
             : normalized;
           const bytes = Array.from(new TextEncoder().encode(payload));
+          onUserInput?.();
           await invoke("send_input", { sessionId: pane.id, bytes });
         }
       } catch (err) {
@@ -773,6 +777,7 @@ export function TerminalWebGPU({
     const bytes = keyEventToBytes(e);
     if (bytes) {
       e.preventDefault();
+      onUserInput?.();
       await invoke("send_input", {
         sessionId: pane.id,
         bytes: Array.from(bytes),

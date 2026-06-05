@@ -40,6 +40,9 @@ interface SidepanelProps {
   onToggleWorkspaceCollapsed: (id: string) => void;
   tabs: Tab[];
   paneAgentStates: Record<string, AgentStateValue>;
+  /** Projects considered "active" (received input this session + still have a
+   *  tab open). Shown flat under the "Active" tab, hidden from "Inactive". */
+  activeProjectIds: ReadonlySet<string>;
 }
 
 const UNGROUPED_ID = "__ungrouped__";
@@ -177,8 +180,24 @@ export function Sidepanel({
   onToggleWorkspaceCollapsed,
   tabs,
   paneAgentStates,
+  activeProjectIds,
 }: SidepanelProps) {
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null);
+  const [view, setView] = useState<"active" | "inactive">("inactive");
+
+  // "Active" tab: flat list of active projects, sorted by name.
+  const activeProjects = useMemo(
+    () =>
+      projects
+        .filter((p) => activeProjectIds.has(p.id))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [projects, activeProjectIds],
+  );
+  // "Inactive" tab shows the usual tree minus active projects (workspaces kept).
+  const inactiveProjects = useMemo(
+    () => projects.filter((p) => !activeProjectIds.has(p.id)),
+    [projects, activeProjectIds],
+  );
 
   const sortedWorkspaces = useMemo(
     () => [...workspaces].sort((a, b) => a.order - b.order),
@@ -188,14 +207,14 @@ export function Sidepanel({
   // Group projects by workspaceId (null = ungrouped). Each group is sorted by order.
   const projectsByWorkspace = useMemo(() => {
     const map = new Map<string | null, Project[]>();
-    for (const p of projects) {
+    for (const p of inactiveProjects) {
       const ws = p.workspaceId ?? null;
       if (!map.has(ws)) map.set(ws, []);
       map.get(ws)!.push(p);
     }
     for (const arr of map.values()) arr.sort((a, b) => a.order - b.order);
     return map;
-  }, [projects]);
+  }, [inactiveProjects]);
 
   // Merged root list: workspaces and standalone (loose) ungrouped projects,
   // sorted by their shared order axis. Ungrouped projects without a rootOrder
@@ -210,7 +229,7 @@ export function Sidepanel({
         workspace: w,
       });
     }
-    for (const p of projects) {
+    for (const p of inactiveProjects) {
       if ((p.workspaceId ?? null) !== null) continue;
       if (typeof p.rootOrder !== "number") continue;
       entries.push({
@@ -222,15 +241,15 @@ export function Sidepanel({
     }
     entries.sort((a, b) => a.order - b.order);
     return entries;
-  }, [workspaces, projects]);
+  }, [workspaces, inactiveProjects]);
 
   const fallbackUngroupedProjects = useMemo(
     () =>
-      projects.filter(
+      inactiveProjects.filter(
         (p) =>
           (p.workspaceId ?? null) === null && typeof p.rootOrder !== "number",
       ),
-    [projects],
+    [inactiveProjects],
   );
 
   const sensors = useSensors(
@@ -367,59 +386,110 @@ export function Sidepanel({
 
   return (
     <aside className="flex h-full w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950">
-      <div className="scrollbar-none flex-1 overflow-y-auto py-2">
-        {projects.length === 0 && workspaces.length === 0 ? (
-          <div className="px-3 py-2 text-xs text-zinc-500">
-            no project yet — click + to add one
-          </div>
-        ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={collisionDetection}
-            modifiers={[snapCenterToCursor]}
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
-            onDragCancel={() => setActiveDrag(null)}
-          >
-            {rootEntries.map((entry, i) => (
-              <Fragment key={entry.id}>
+      <div className="flex shrink-0 border-b border-zinc-800">
+        <button
+          type="button"
+          onClick={() => setView("active")}
+          className={`flex-1 px-2 py-2 text-xs ${
+            view === "active"
+              ? "bg-zinc-800 text-zinc-100"
+              : "text-zinc-400 hover:bg-zinc-900"
+          }`}
+        >
+          Active{activeProjects.length > 0 ? ` · ${activeProjects.length}` : ""}
+        </button>
+        <button
+          type="button"
+          onClick={() => setView("inactive")}
+          className={`flex-1 border-l border-zinc-800 px-2 py-2 text-xs ${
+            view === "inactive"
+              ? "bg-zinc-800 text-zinc-100"
+              : "text-zinc-400 hover:bg-zinc-900"
+          }`}
+        >
+          Inactive
+        </button>
+      </div>
+      {view === "active" ? (
+        <div className="scrollbar-none flex-1 overflow-y-auto py-2">
+          {activeProjects.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-zinc-500">
+              no active project — type in a terminal to mark it active
+            </div>
+          ) : (
+            activeProjects.map((project) => (
+              <StaticProjectRow
+                key={project.id}
+                project={project}
+                active={project.id === activeProjectId}
+                onActivate={onActivate}
+                onContextMenu={onProjectContextMenu}
+                agentState={projectAgentState(
+                  project.id,
+                  tabs,
+                  paneAgentStates,
+                )}
+              />
+            ))
+          )}
+        </div>
+      ) : (
+        <div className="scrollbar-none flex-1 overflow-y-auto py-2">
+          {projects.length === 0 && workspaces.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-zinc-500">
+              no project yet — click + to add one
+            </div>
+          ) : (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={collisionDetection}
+              modifiers={[snapCenterToCursor]}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              onDragCancel={() => setActiveDrag(null)}
+            >
+              {rootEntries.map((entry, i) => (
+                <Fragment key={entry.id}>
+                  <RootGap
+                    insertBeforeId={entry.id}
+                    targetOrder={gapTargetOrder(i)}
+                    activeDragKind={activeDragKind}
+                  />
+                  {entry.kind === "workspace"
+                    ? renderGroup(entry.workspace.id, entry.workspace)
+                    : renderLooseProject(entry.project)}
+                </Fragment>
+              ))}
+              {rootEntries.length > 0 && (
                 <RootGap
-                  insertBeforeId={entry.id}
-                  targetOrder={gapTargetOrder(i)}
+                  insertBeforeId={null}
+                  targetOrder={gapTargetOrder(rootEntries.length)}
                   activeDragKind={activeDragKind}
                 />
-                {entry.kind === "workspace"
-                  ? renderGroup(entry.workspace.id, entry.workspace)
-                  : renderLooseProject(entry.project)}
-              </Fragment>
-            ))}
-            {rootEntries.length > 0 && (
-              <RootGap
-                insertBeforeId={null}
-                targetOrder={gapTargetOrder(rootEntries.length)}
-                activeDragKind={activeDragKind}
-              />
-            )}
-            {(ungroupedHasProjects ||
-              rootEntries.length === 0 ||
-              activeDragKind === "project") &&
-              renderGroup(null, null)}
-            <DragOverlay>
-              {activeDrag?.type === "project" ? (
-                <DragProjectPreview
-                  project={projects.find((p) => p.id === activeDrag.projectId)}
-                />
-              ) : activeDrag?.type === "workspace" ? (
-                <DragWorkspacePreview
-                  workspace={workspaces.find(
-                    (w) => w.id === activeDrag.workspaceId,
-                  )}
-                />
-              ) : null}
-            </DragOverlay>
-          </DndContext>
-        )}
-      </div>
+              )}
+              {(ungroupedHasProjects ||
+                rootEntries.length === 0 ||
+                activeDragKind === "project") &&
+                renderGroup(null, null)}
+              <DragOverlay>
+                {activeDrag?.type === "project" ? (
+                  <DragProjectPreview
+                    project={projects.find(
+                      (p) => p.id === activeDrag.projectId,
+                    )}
+                  />
+                ) : activeDrag?.type === "workspace" ? (
+                  <DragWorkspacePreview
+                    workspace={workspaces.find(
+                      (w) => w.id === activeDrag.workspaceId,
+                    )}
+                  />
+                ) : null}
+              </DragOverlay>
+            </DndContext>
+          )}
+        </div>
+      )}
       <div className="flex flex-col gap-1 p-2">
         <button
           onClick={onAdd}
@@ -697,6 +767,21 @@ function DraggableProjectRow({
       }`}
       title={project.path}
     >
+      <ProjectRowContent project={project} agentState={agentState} />
+    </div>
+  );
+}
+
+/** Inner content shared by the draggable (Inactive) and static (Active) rows. */
+function ProjectRowContent({
+  project,
+  agentState,
+}: {
+  project: Project;
+  agentState: AgentStateValue;
+}) {
+  return (
+    <>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm">{project.name}</div>
         <div className="truncate font-mono text-[10px] text-zinc-500">
@@ -706,6 +791,32 @@ function DraggableProjectRow({
       <span className="shrink-0 self-center">
         <AgentBadge state={agentState} size={8} inline />
       </span>
+    </>
+  );
+}
+
+/** Non-draggable project row used in the flat "Active" list. */
+function StaticProjectRow({
+  project,
+  active,
+  onActivate,
+  onContextMenu,
+  agentState,
+}: DraggableProjectRowProps) {
+  return (
+    <div
+      style={{ borderLeftColor: project.color }}
+      onClick={() => onActivate(project.id)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(project, e.clientX, e.clientY);
+      }}
+      className={`group mx-1.5 mb-0.5 flex cursor-pointer items-start gap-2 rounded border-l-[3px] py-1.5 pl-2 pr-2 ${
+        active ? "bg-zinc-800 text-zinc-100" : "text-zinc-300 hover:bg-zinc-900"
+      }`}
+      title={project.path}
+    >
+      <ProjectRowContent project={project} agentState={agentState} />
     </div>
   );
 }

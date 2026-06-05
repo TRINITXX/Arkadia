@@ -40,7 +40,6 @@ import {
   type EditorProtocol,
   type PaletteId,
   type PaneState,
-  type PaneTree,
   type Project,
   type RenderPayload,
   type SplitDirection,
@@ -49,12 +48,6 @@ import {
   type ToolbarButton,
   type Workspace,
 } from "@/types";
-import type {
-  AgentResume,
-  PaneTreeSerialized,
-  SessionFile,
-  TabSession,
-} from "@/lib/sessionTypes";
 
 const COLS = 120;
 const ROWS = 30;
@@ -64,37 +57,6 @@ let tabCounter = 0;
 function newTabId() {
   tabCounter += 1;
   return `tab-${tabCounter}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function serializeTree(
-  tree: PaneTree,
-  panes: Record<string, PaneState>,
-  agentResumes: Record<string, AgentResume>,
-): PaneTreeSerialized {
-  if (tree.kind === "leaf") {
-    const pane = panes[tree.paneId];
-    return {
-      kind: "leaf",
-      pane_id: tree.paneId,
-      cwd: pane?.cwd ?? "",
-      profile_id: "powershell-7",
-      agent_resume: agentResumes[tree.paneId] ?? null,
-    };
-  }
-  return {
-    kind: "split",
-    orientation: tree.direction,
-    ratio: tree.ratio,
-    left: serializeTree(tree.first, panes, agentResumes),
-    right: serializeTree(tree.second, panes, agentResumes),
-  };
-}
-
-function collectLeaves(
-  tree: PaneTreeSerialized,
-): Array<Extract<PaneTreeSerialized, { kind: "leaf" }>> {
-  if (tree.kind === "leaf") return [tree];
-  return [...collectLeaves(tree.left), ...collectLeaves(tree.right)];
 }
 
 interface ProjectMenuState {
@@ -131,7 +93,6 @@ export function App() {
   const [editorProtocol, setEditorProtocol] = useState<EditorProtocol>(
     DEFAULT_EDITOR_PROTOCOL,
   );
-  const [resumeOnRestore, setResumeOnRestore] = useState<boolean>(true);
   const palette = useMemo(
     () => resolveActivePalette(paletteId, customPalette),
     [paletteId, customPalette],
@@ -161,7 +122,12 @@ export function App() {
   const [workspaceDialog, setWorkspaceDialog] = useState<
     { mode: "create" } | { mode: "rename"; workspace: Workspace } | null
   >(null);
-  const [sessionRestored, setSessionRestored] = useState(false);
+  /** projectIds that have received real keyboard/paste input this app session.
+   *  In-memory only (resets each launch). Drives the sidebar "Active" tab.
+   *  Cleared for a project when its last tab closes (see closeTab). */
+  const [activeInputProjectIds, setActiveInputProjectIds] = useState<
+    Set<string>
+  >(() => new Set());
 
   // paneId (= backend session_id) → tabId for fast routing of render/closed events.
   const paneToTab = useRef<Map<string, string>>(new Map());
@@ -172,18 +138,36 @@ export function App() {
   // ResizeObserver fires ~50ms later).
   const paneHostRef = useRef<HTMLDivElement>(null);
 
-  // Holds the latest buildSession closure so the close handler (registered once)
-  // always sees up-to-date state without retriggering on every state change.
-  const buildSessionRef = useRef<() => SessionFile>(() => ({
-    version: 1,
-    saved_at: new Date().toISOString(),
-    active_project_id: null,
-    projects: [],
-  }));
-
   const activeProject = useMemo(
     () => projects.find((p) => p.id === activeProjectId) ?? null,
     [projects, activeProjectId],
+  );
+
+  // Mark a project as having received real user input this session. Called from
+  // the terminal keydown/paste handlers via PaneTreeView's onUserInput.
+  const markProjectInput = useCallback((projectId: string) => {
+    setActiveInputProjectIds((prev) => {
+      if (prev.has(projectId)) return prev;
+      const next = new Set(prev);
+      next.add(projectId);
+      return next;
+    });
+  }, []);
+
+  // Projects shown under the sidebar "Active" tab: received input this session
+  // AND still have at least one open tab.
+  const activeProjectIds = useMemo(
+    () =>
+      new Set(
+        projects
+          .filter(
+            (p) =>
+              activeInputProjectIds.has(p.id) &&
+              tabs.some((t) => t.projectId === p.id),
+          )
+          .map((p) => p.id),
+      ),
+    [projects, activeInputProjectIds, tabs],
   );
 
   const visibleTabs = useMemo(
@@ -268,7 +252,6 @@ export function App() {
         setUseWebGPU(state.useWebGPU);
         setCustomPalette(state.customPalette);
         setEditorProtocol(state.editorProtocol);
-        setResumeOnRestore(state.resumeOnRestore);
         setLoaded(true);
       })
       .catch((e) => {
@@ -294,7 +277,6 @@ export function App() {
         useWebGPU,
         customPalette,
         editorProtocol,
-        resumeOnRestore,
       });
     }, 500);
     return () => clearTimeout(t);
@@ -309,116 +291,13 @@ export function App() {
     useWebGPU,
     customPalette,
     editorProtocol,
-    resumeOnRestore,
   ]);
-
-  // ─── Session restore on boot ────────────────────────────────────
-
-  useEffect(() => {
-    if (!loaded || sessionRestored) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const session = await invoke<SessionFile | null>("session_load");
-        if (cancelled) return;
-        if (!session || session.version !== 1) return;
-        for (const ps of session.projects) {
-          for (const ts of ps.tabs) {
-            const leaves = collectLeaves(ts.pane_tree);
-            // Map old pane_id → new pane_id (spawn returns a fresh UUID).
-            const idMap: Record<string, string> = {};
-            for (const leaf of leaves) {
-              const initCmd =
-                leaf.agent_resume && resumeOnRestore
-                  ? `${leaf.agent_resume.command} ${leaf.agent_resume.session_id}`
-                  : null;
-              const cwd = leaf.cwd || ".";
-              const { cols, rows } = measureSpawnSize();
-              try {
-                const newPaneId = await invoke<string>("spawn_terminal", {
-                  cwd,
-                  cols,
-                  rows,
-                  initCommand: initCmd,
-                });
-                idMap[leaf.pane_id] = newPaneId;
-              } catch {
-                /* skip on error */
-              }
-            }
-            // Rebuild the PaneTree using new IDs, dropping leaves that failed
-            // to spawn (collapse splits with a single surviving child).
-            const remap = (t: PaneTreeSerialized): PaneTree | null => {
-              if (t.kind === "leaf") {
-                const newId = idMap[t.pane_id];
-                return newId ? { kind: "leaf", paneId: newId } : null;
-              }
-              const a = remap(t.left);
-              const b = remap(t.right);
-              if (!a) return b;
-              if (!b) return a;
-              return {
-                kind: "split",
-                direction: t.orientation,
-                ratio: t.ratio,
-                first: a,
-                second: b,
-              };
-            };
-            const tree = remap(ts.pane_tree);
-            if (!tree) continue;
-            const remappedLeaves = leaves
-              .map((l) => idMap[l.pane_id])
-              .filter((id): id is string => Boolean(id));
-            const activePaneId = idMap[ts.active_pane_id] ?? remappedLeaves[0];
-            if (!activePaneId) continue;
-            const panes: Record<string, PaneState> = {};
-            for (const leaf of leaves) {
-              const newId = idMap[leaf.pane_id];
-              if (!newId) continue;
-              panes[newId] = {
-                id: newId,
-                title: ts.title,
-                cwd: leaf.cwd || null,
-                screen: null,
-              };
-              paneToTab.current.set(newId, ts.tab_id);
-            }
-            const tab: Tab = {
-              id: ts.tab_id,
-              projectId: ps.project_id,
-              tree,
-              activePaneId,
-              panes,
-            };
-            if (cancelled) return;
-            setTabs((prev) => [...prev, tab]);
-          }
-          if (ps.active_tab_id) {
-            setActiveTabIdByProject((prev) => ({
-              ...prev,
-              [ps.project_id]: ps.active_tab_id!,
-            }));
-          }
-        }
-        if (session.active_project_id) {
-          setActiveProjectId(session.active_project_id);
-        }
-      } finally {
-        if (!cancelled) setSessionRestored(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded]);
 
   // ─── Pane / tab spawning ────────────────────────────────────────
 
   // Measures the wrapper that will host the new pane, so the PTY boots at the
   // real grid size. Falls back to COLS/ROWS when no host is laid out yet (e.g.
-  // session restore runs before any project is selected).
+  // a tab is spawned before any project pane host is mounted).
   const measureSpawnSize = useCallback((): { cols: number; rows: number } => {
     const el = paneHostRef.current;
     if (!el) return { cols: COLS, rows: ROWS };
@@ -508,6 +387,17 @@ export function App() {
           if (nextActiveForProj) copy[projId] = nextActiveForProj;
           else delete copy[projId];
           return copy;
+        });
+      }
+
+      // Closing the project's last tab drops it from the "Active" set, so a
+      // reopened-but-untouched project starts out Inactive again.
+      if (remainingInProj.length === 0) {
+        setActiveInputProjectIds((prev) => {
+          if (!prev.has(projId)) return prev;
+          const next = new Set(prev);
+          next.delete(projId);
+          return next;
         });
       }
 
@@ -744,7 +634,7 @@ export function App() {
   // ─── Auto-spawn first tab when activating an empty project ────
 
   useEffect(() => {
-    if (!sessionRestored) return;
+    if (!loaded) return;
     if (!activeProject) return;
     const hasTab = tabs.some((t) => t.projectId === activeProject.id);
     if (!hasTab) {
@@ -758,7 +648,7 @@ export function App() {
         }));
       }
     }
-  }, [sessionRestored, activeProject, tabs, activeTabIdByProject, spawnTabFor]);
+  }, [loaded, activeProject, tabs, activeTabIdByProject, spawnTabFor]);
 
   // Cleanup all sessions on unmount (HMR / app close)
   useEffect(() => {
@@ -810,80 +700,6 @@ export function App() {
       unlistenFn?.();
     };
   }, []);
-
-  // ─── Session auto-save (debounced + close + 30s safety net) ────
-
-  // Build the current SessionFile from React state. Memoised so the close
-  // handler can read the latest version through buildSessionRef.
-  const buildSession = useCallback((): SessionFile => {
-    const agentResumes: Record<string, AgentResume> = {};
-    for (const [paneId, st] of Object.entries(paneAgentStates)) {
-      if (st.kind === "idle" || st.kind === "waiting") {
-        agentResumes[paneId] = {
-          kind: "claude-code",
-          session_id: st.session_id,
-          command: "ccd --resume",
-        };
-      }
-    }
-    return {
-      version: 1,
-      saved_at: new Date().toISOString(),
-      active_project_id: activeProjectId,
-      projects: projects.map((p) => ({
-        project_id: p.id,
-        active_tab_id: activeTabIdByProject[p.id] ?? null,
-        tabs: tabs
-          .filter((t) => t.projectId === p.id)
-          .map<TabSession>((t) => ({
-            tab_id: t.id,
-            title: t.panes[t.activePaneId]?.title ?? "",
-            active_pane_id: t.activePaneId,
-            pane_tree: serializeTree(t.tree, t.panes, agentResumes),
-          })),
-      })),
-    };
-  }, [projects, tabs, activeProjectId, activeTabIdByProject, paneAgentStates]);
-
-  useEffect(() => {
-    buildSessionRef.current = buildSession;
-  }, [buildSession]);
-
-  // Effect A: debounced save + 30s safety net. Reruns on state change but
-  // does NOT touch onCloseRequested.
-  useEffect(() => {
-    if (!loaded || !sessionRestored) return;
-    const doSave = async () => {
-      try {
-        await invoke("session_save", { session: buildSessionRef.current() });
-      } catch (e) {
-        console.warn("session_save failed", e);
-      }
-    };
-    const debounce = window.setTimeout(() => {
-      void doSave();
-    }, 1500);
-    const interval = window.setInterval(() => {
-      void doSave();
-    }, 30_000);
-    return () => {
-      window.clearTimeout(debounce);
-      window.clearInterval(interval);
-    };
-  }, [
-    loaded,
-    sessionRestored,
-    projects,
-    tabs,
-    activeProjectId,
-    activeTabIdByProject,
-    paneAgentStates,
-  ]);
-
-  // No onCloseRequested handler: it caused the window to hang when invoke
-  // ran during runtime teardown. The debounced save (Effect A, 1.5s) keeps
-  // the on-disk state fresh enough; trading the last ~1.5s of changes for
-  // a reliable close is the right tradeoff.
 
   // Ctrl+T new tab
   useEffect(() => {
@@ -1155,6 +971,7 @@ export function App() {
         onToggleWorkspaceCollapsed={onToggleWorkspaceCollapsed}
         tabs={tabs}
         paneAgentStates={paneAgentStates}
+        activeProjectIds={activeProjectIds}
       />
 
       <div className="flex flex-1 flex-col overflow-hidden">
@@ -1215,6 +1032,7 @@ export function App() {
                   useWebGPU={useWebGPU}
                   editorProtocol={editorProtocol}
                   onActivate={(paneId) => focusPane(tab.id, paneId)}
+                  onUserInput={() => markProjectInput(tab.projectId)}
                   onContextMenu={(paneId, x, y) =>
                     setPaneMenu({ tabId: tab.id, paneId, x, y })
                   }
@@ -1353,8 +1171,6 @@ export function App() {
         onChangeCustomPalette={setCustomPalette}
         editorProtocol={editorProtocol}
         onChangeEditorProtocol={setEditorProtocol}
-        resumeOnRestore={resumeOnRestore}
-        onChangeResumeOnRestore={setResumeOnRestore}
       />
     </div>
   );

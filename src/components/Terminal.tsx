@@ -229,6 +229,8 @@ interface TerminalProps {
   font: TerminalFont;
   palette: TerminalPalette;
   onActivate: () => void;
+  /** Fired when the user produces real input (keystroke) in this pane. */
+  onUserInput?: () => void;
   onContextMenu: (x: number, y: number) => void;
 }
 
@@ -238,6 +240,7 @@ export function Terminal({
   font,
   palette,
   onActivate,
+  onUserInput,
   onContextMenu,
 }: TerminalProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -339,6 +342,7 @@ export function Terminal({
     const bytes = keyEventToBytes(e);
     if (bytes) {
       e.preventDefault();
+      onUserInput?.();
       await invoke("send_input", {
         sessionId: pane.id,
         bytes: Array.from(bytes),

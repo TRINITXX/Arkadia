@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { customAsPalette, PALETTES } from "@/lib/palettes";
 import type {
   CustomPalette,
@@ -25,11 +24,9 @@ interface SettingsDialogProps {
   onChangeCustomPalette: (next: CustomPalette) => void;
   editorProtocol: EditorProtocol;
   onChangeEditorProtocol: (next: EditorProtocol) => void;
-  resumeOnRestore: boolean;
-  onChangeResumeOnRestore: (next: boolean) => void;
 }
 
-type Tab = "toolbar" | "general" | "sessions";
+type Tab = "toolbar" | "general";
 
 export function SettingsDialog({
   open,
@@ -46,8 +43,6 @@ export function SettingsDialog({
   onChangeCustomPalette,
   editorProtocol,
   onChangeEditorProtocol,
-  resumeOnRestore,
-  onChangeResumeOnRestore,
 }: SettingsDialogProps) {
   const [tab, setTab] = useState<Tab>("toolbar");
 
@@ -88,12 +83,6 @@ export function SettingsDialog({
             >
               General
             </SettingsNavItem>
-            <SettingsNavItem
-              active={tab === "sessions"}
-              onClick={() => setTab("sessions")}
-            >
-              Sessions
-            </SettingsNavItem>
           </nav>
 
           <div
@@ -121,12 +110,6 @@ export function SettingsDialog({
                 onChangeCustomPalette={onChangeCustomPalette}
                 editorProtocol={editorProtocol}
                 onChangeEditorProtocol={onChangeEditorProtocol}
-              />
-            )}
-            {tab === "sessions" && (
-              <SessionsSettings
-                resumeOnRestore={resumeOnRestore}
-                onChangeResumeOnRestore={onChangeResumeOnRestore}
               />
             )}
           </div>
@@ -531,83 +514,6 @@ function GeneralSettings({
             );
           })}
         </div>
-      </section>
-    </div>
-  );
-}
-
-function SessionsSettings({
-  resumeOnRestore,
-  onChangeResumeOnRestore,
-}: {
-  resumeOnRestore: boolean;
-  onChangeResumeOnRestore: (next: boolean) => void;
-}) {
-  const [status, setStatus] = useState<"idle" | "clearing" | "cleared">("idle");
-
-  const onClear = async () => {
-    setStatus("clearing");
-    try {
-      await invoke("session_clear");
-      setStatus("cleared");
-      setTimeout(() => setStatus("idle"), 2000);
-    } catch {
-      setStatus("idle");
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      <h3 className="text-sm font-semibold tracking-tight">Sessions</h3>
-
-      <section>
-        <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
-          Comportement au démarrage
-        </h4>
-        <label className="flex items-start gap-3 rounded border border-zinc-800 bg-zinc-900/40 p-3">
-          <input
-            type="checkbox"
-            checked={resumeOnRestore}
-            onChange={(e) => onChangeResumeOnRestore(e.target.checked)}
-            className="mt-0.5 h-4 w-4 accent-zinc-300"
-          />
-          <span>
-            <span className="block text-sm text-zinc-200">
-              Reprendre les sessions Claude Code (`ccd --resume`)
-            </span>
-            <span className="mt-0.5 block text-[11px] text-zinc-500">
-              Quand activé, chaque pane Claude Code détecté en idle/waiting au
-              moment de la sauvegarde rejouera `ccd --resume &lt;session_id&gt;`
-              au prochain lancement. Désactivez pour démarrer chaque pane sur un
-              shell vierge.
-            </span>
-          </span>
-        </label>
-      </section>
-
-      <section>
-        <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
-          Persistance
-        </h4>
-        <p className="mb-3 text-[11px] text-zinc-500">
-          La session courante (projets, onglets, splits, cwd) est sauvegardée
-          automatiquement toutes les 30 secondes et restaurée au démarrage. Pour
-          les panes Claude Code détectés en idle/waiting, la commande `ccd
-          --resume &lt;session_id&gt;` est rejouée à la restauration si l'option
-          ci-dessus est active.
-        </p>
-        <button
-          onClick={onClear}
-          disabled={status === "clearing"}
-          className="rounded border border-red-900/60 bg-red-950/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-950/70 disabled:opacity-50"
-          type="button"
-        >
-          {status === "clearing"
-            ? "Effacement…"
-            : status === "cleared"
-              ? "Session effacée"
-              : "Effacer la session sauvegardée"}
-        </button>
       </section>
     </div>
   );
