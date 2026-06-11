@@ -204,6 +204,18 @@ export function App() {
     return () => cancelAnimationFrame(raf);
   }, [activeTabId, activePaneIdOfActiveTab]);
 
+  // Hand the keyboard back to the terminal (e.g. after validating a notepad
+  // prompt). rAF defers until the layout settles after the panel unmounts.
+  const focusActivePane = useCallback(() => {
+    if (!activePaneIdOfActiveTab) return;
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(
+        `[data-pane-id="${activePaneIdOfActiveTab}"]`,
+      );
+      el?.focus();
+    });
+  }, [activePaneIdOfActiveTab]);
+
   // Refocus the active pane when the OS window regains focus (alt-tab,
   // taskbar click), so the user can type into Claude Code (or whatever is
   // running in the terminal) without having to click the pane first.
@@ -1054,6 +1066,10 @@ export function App() {
           projectId={activeProject?.id ?? null}
           projectName={activeProject?.name ?? null}
           onClose={() => setNotepadOpen(false)}
+          onValidated={() => {
+            setNotepadOpen(false);
+            focusActivePane();
+          }}
         />
       )}
 

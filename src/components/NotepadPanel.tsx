@@ -45,12 +45,16 @@ interface NotepadPanelProps {
   projectId: string | null;
   projectName: string | null;
   onClose: () => void;
+  /** Called after a keyboard validation (full-select copy/cut) — the app
+   *  closes the panel and hands focus back to the terminal. */
+  onValidated?: () => void;
 }
 
 export function NotepadPanel({
   projectId,
   projectName,
   onClose,
+  onValidated,
 }: NotepadPanelProps) {
   const [width, setWidth] = useState(PANEL_WIDTH_DEFAULT);
   const [editorHeight, setEditorHeight] = useState<number>(defaultEditorHeight);
@@ -87,6 +91,12 @@ export function NotepadPanel({
       if (h !== null) setEditorHeight(clampEditorHeight(h));
     });
   }, []);
+
+  // Focus the editor as soon as it's usable — on panel open and when the
+  // active project changes.
+  useEffect(() => {
+    if (loaded) textareaRef.current?.focus();
+  }, [loaded]);
 
   // Per-project state: (re)load when the active project changes.
   useEffect(() => {
@@ -188,6 +198,7 @@ export function NotepadPanel({
     e.preventDefault();
     e.clipboardData.setData("text/plain", text);
     archiveDraft(text);
+    onValidated?.();
   };
 
   // Pasting an image (e.g. a PrintScreen capture) saves it to disk via the
