@@ -8,10 +8,13 @@ Status: approved
 When a pane runs Claude Code, let the user (a) visually distinguish conversation
 messages while scrolling, and (b) jump between them with toolbar buttons.
 
-- **User messages** — blocks whose head line starts with `❯` at column 0.
-- **Claude messages** — blocks whose head line starts with `●` at column 0
-  rendered in the **default/white** foreground. Colored `●` (tool calls, todos)
-  are ignored.
+- **User messages** — blocks whose head line starts with `>` or `❯` at
+  column 0 (Claude Code renders past user messages as a dim `> text`; `❯` is
+  the input prompt, accepted too).
+- **Claude messages** — blocks whose head line starts with `⏺` (U+23FA, the
+  glyph current Claude Code uses) or `●` (U+25CF fallback) at column 0,
+  rendered in the **default/white-ish** foreground (truecolor ≥ 0.7 per
+  channel). Colored bullets (tool calls, todos) are ignored.
 
 ## Features
 

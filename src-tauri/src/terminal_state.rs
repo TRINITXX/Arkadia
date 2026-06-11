@@ -1091,16 +1091,18 @@ pub struct MessageMarker {
     pub kind: u8,
 }
 
-/// True when `fg` renders as the default/white foreground — the color Claude
-/// Code uses for the `●` bullet of assistant text. Tool/todo bullets are
-/// colored and must not match.
+/// True when `fg` renders as the default/white-ish foreground — the color
+/// Claude Code uses for the bullet of assistant text. Tool/todo bullets are
+/// colored (green/orange/red…) and must not match. The truecolor threshold is
+/// deliberately loose (≥ 0.7 per channel ≈ #b3b3b3) so themed near-whites
+/// pass while saturated colors and dim greys (~0.5–0.6) don't.
 fn is_default_or_white_fg(fg: &ColorAttribute) -> bool {
     match fg {
         ColorAttribute::Default => true,
         ColorAttribute::PaletteIndex(7) | ColorAttribute::PaletteIndex(15) => true,
         ColorAttribute::TrueColorWithDefaultFallback(c)
         | ColorAttribute::TrueColorWithPaletteFallback(c, _) => {
-            c.0 >= 0.85 && c.1 >= 0.85 && c.2 >= 0.85
+            c.0 >= 0.7 && c.1 >= 0.7 && c.2 >= 0.7
         }
         _ => false,
     }
@@ -1120,10 +1122,15 @@ fn block_head_kind(line: &[TerminalCell]) -> Option<MessageKind> {
         return None;
     }
     let kind = match ch {
-        // `❯` heads a user message only when followed by content on the same
-        // line — a bare `❯` is the (empty) live input prompt.
-        "❯" if !line_is_blank(&line[1..]) => MessageKind::User,
-        "●" if is_default_or_white_fg(&head.attrs.fg) => MessageKind::Claude,
+        // Claude Code renders past user messages as `> text` (dim chevron);
+        // `❯` is the live input prompt (some themes use it in the transcript
+        // too). Both head a user message only when followed by content on the
+        // same line — a bare marker is the (empty) prompt.
+        ">" | "❯" if !line_is_blank(&line[1..]) => MessageKind::User,
+        // Assistant text bullet: `⏺` (U+23FA) in current Claude Code, `●`
+        // (U+25CF) accepted as a fallback. Colored bullets (tool calls,
+        // todos) don't match the white check.
+        "⏺" | "●" if is_default_or_white_fg(&head.attrs.fg) => MessageKind::Claude,
         _ => MessageKind::None,
     };
     Some(kind)
@@ -1643,6 +1650,35 @@ three");
         assert_eq!(markers.len(), 2);
         assert_eq!((markers[0].total_row, markers[0].kind), (0, 1));
         assert_eq!((markers[1].total_row, markers[1].kind), (4, 2));
+    }
+
+    #[test]
+    fn message_markers_claude_code_transcript_glyphs() {
+        let mut t = TerminalState::new(10, 60);
+        // Real Claude Code transcript shapes: dim `>` user line, white `⏺`
+        // assistant line, colored `⏺` tool call, `⎿` result.
+        t.advance_bytes(
+            "\x1b[2m> fix the bug please\x1b[0m\r\n\r\n⏺ Looking at it.\r\n\r\n\x1b[32m⏺\x1b[0m Bash(cargo test)\r\n  ⎿ ok\r\n"
+                .as_bytes(),
+        );
+        let markers = t.message_markers();
+        assert_eq!(markers.len(), 2);
+        assert_eq!((markers[0].total_row, markers[0].kind), (0, 1));
+        assert_eq!((markers[1].total_row, markers[1].kind), (2, 2));
+    }
+
+    #[test]
+    fn near_white_truecolor_bullet_is_claude() {
+        let mut t = TerminalState::new(4, 40);
+        // 38;2;230;230;230 ≈ #e6e6e6 — themed near-white must pass.
+        t.advance_bytes("\x1b[38;2;230;230;230m⏺\x1b[0m answer\r\n".as_bytes());
+        let markers = t.message_markers();
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].kind, 2);
+        // A mid-grey (#808080) must not.
+        let mut t2 = TerminalState::new(4, 40);
+        t2.advance_bytes("\x1b[38;2;128;128;128m⏺\x1b[0m note\r\n".as_bytes());
+        assert!(t2.message_markers().is_empty());
     }
 
     #[test]
