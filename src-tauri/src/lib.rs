@@ -229,15 +229,21 @@ fn resolve_path_at(line: String, cwd: Option<String>, click: usize) -> Option<Re
 
     // 2. Start candidates: window start + after each single space up to click.
     //    End candidates: window end + each single space after click.
+    //    Brackets/quotes also split — they often hug a path (`Read(C:\…\x.rs)`)
+    //    — but only as *candidates*, never hard bounds, because they can be
+    //    part of the path itself (`C:\Program Files (x86)\…`). Longest-first
+    //    trial keeps such paths winning when they exist on disk.
+    const OPENERS: [char; 4] = ['(', '[', '{', '\''];
+    const CLOSERS: [char; 4] = [')', ']', '}', '\''];
     let mut starts = vec![win_start];
     for i in win_start..click {
-        if chars[i] == ' ' {
+        if chars[i] == ' ' || OPENERS.contains(&chars[i]) {
             starts.push(i + 1);
         }
     }
     let mut ends = vec![win_end];
     for i in (click + 1)..win_end {
-        if chars[i] == ' ' {
+        if chars[i] == ' ' || CLOSERS.contains(&chars[i]) {
             ends.push(i);
         }
     }
@@ -358,6 +364,51 @@ mod tests {
         let line = "run ./tool.exe now".to_string();
         let click = click_at(&line, "tool.exe", 1);
         assert!(resolve_path_at(line, Some(cwd), click).is_none());
+    }
+
+    #[test]
+    fn resolves_path_hugged_by_parens() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("terminal.rs");
+        fs::write(&file, "x").unwrap();
+        let abs = file.to_string_lossy().to_string();
+        // Claude Code tool-call rendering: `Read(C:\…\terminal.rs)`.
+        let line = format!("Read({abs})");
+        let click = click_at(&line, "terminal.rs", 3);
+        let r = resolve_path_at(line.clone(), None, click).expect("should resolve");
+        assert_eq!(r.abs_path, abs);
+        let chars: Vec<char> = line.chars().collect();
+        let extent: String = chars[r.start..r.end].iter().collect();
+        assert_eq!(extent, abs); // parens excluded from the highlight
+    }
+
+    #[test]
+    fn resolves_path_containing_parens() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("Program Files (x86)").join("App");
+        fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("readme.txt");
+        fs::write(&file, "x").unwrap();
+        let abs = file.to_string_lossy().to_string();
+        let line = format!("see {abs} now");
+        let click = click_at(&line, "readme.txt", 2);
+        let r = resolve_path_at(line, None, click).expect("should resolve");
+        assert_eq!(r.abs_path, abs);
+    }
+
+    #[test]
+    fn resolves_parenthesized_path_with_line_col() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_string_lossy().to_string();
+        let nested = dir.path().join("src");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("App.tsx"), "x").unwrap();
+        let line = "error at (src/App.tsx:42:5)".to_string();
+        let click = click_at(&line, "App.tsx", 1);
+        let r = resolve_path_at(line, Some(cwd), click).expect("should resolve");
+        assert_eq!(r.line, Some(42));
+        assert_eq!(r.col, Some(5));
+        assert!(r.abs_path.ends_with("App.tsx"));
     }
 
     #[test]
