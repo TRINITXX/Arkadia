@@ -416,8 +416,21 @@ export function TerminalWebGPU({
   // Mouse-selection state. cellRef is the CSS-pixel cell size so we can
   // convert mouse coords → grid cells without a fresh measurement.
   const cellRef = useRef<{ w: number; h: number }>({ w: 1, h: 1 });
+  // Drag anchor in *total* row coordinates (0 = oldest scrollback line) so
+  // the selection stays glued to content while the viewport scrolls.
   const dragStartRef = useRef<{ col: number; row: number } | null>(null);
   const dragMovedRef = useRef(false);
+  // Current selection endpoints (total rows), mirroring the renderer's
+  // Selection — needed to fetch the selected text from the backend on copy.
+  const selectionRef = useRef<{
+    startCol: number;
+    startRow: number;
+    endCol: number;
+    endRow: number;
+  } | null>(null);
+  // Last mouse position of an in-progress drag, to re-anchor the selection
+  // end when the viewport scrolls under a stationary cursor.
+  const lastDragPosRef = useRef<{ x: number; y: number } | null>(null);
   const hoveredUrlRef = useRef<HoverRange | null>(null);
   const pendingClickRef = useRef<ClickableMatch | null>(null);
   // When the running TUI has mouse tracking on and the user presses a button
@@ -500,6 +513,23 @@ export function TerminalWebGPU({
       Math.floor((clientY - rect.top) / cellRef.current.h),
     );
     return { col, row };
+  };
+
+  // First visible row in total coordinates (same convention as SearchHit).
+  const visibleStartRow = () => {
+    const s = screenRef.current;
+    return s ? s.scroll_max - s.scroll_offset : 0;
+  };
+
+  // cellAt clamped to the grid — selection coordinates must not run past the
+  // last row/col when the pointer leaves the wrapper during a drag.
+  const selectionCellAt = (clientX: number, clientY: number) => {
+    const { col, row } = cellAt(clientX, clientY);
+    const s = screenRef.current;
+    return {
+      col: Math.min(col, (s?.cols ?? 1) - 1),
+      row: Math.min(row, (s?.rows ?? 1) - 1),
+    };
   };
 
   // ─── 1. Init / teardown — once per pane ─────────────────────────
@@ -685,6 +715,10 @@ export function TerminalWebGPU({
       );
       const rows = Math.max(5, Math.floor(cssHeight / cell.height));
       if (cols === lastCols && rows === lastRows) return;
+      // The grid is changing: viewport columns no longer line up with the
+      // selected content — drop the selection rather than show a stale shape.
+      rendererRef.current?.clear_selection();
+      selectionRef.current = null;
       lastCols = cols;
       lastRows = rows;
       if (timer) clearTimeout(timer);
@@ -753,26 +787,37 @@ export function TerminalWebGPU({
     }
 
     // Ctrl+C: copy if a selection is active, otherwise fall through to SIGINT.
+    // The selected text lives in the backend (scrollback + screen) — the
+    // renderer only knows the visible payload.
     if (
       r &&
       e.ctrlKey &&
       !e.altKey &&
       !e.metaKey &&
       e.key.toLowerCase() === "c" &&
-      r.has_selection()
+      r.has_selection() &&
+      selectionRef.current
     ) {
-      const text = r.selection_text();
-      if (text.length > 0) {
-        e.preventDefault();
-        try {
+      e.preventDefault();
+      const sel = selectionRef.current;
+      try {
+        const text = await invoke<string>("get_text_range", {
+          sessionId: pane.id,
+          startCol: sel.startCol,
+          startRow: sel.startRow,
+          endCol: sel.endCol,
+          endRow: sel.endRow,
+        });
+        if (text.length > 0) {
           await writeClipboard(text);
-        } catch (err) {
-          console.error("[arkadia] clipboard write failed:", err);
         }
-        r.clear_selection();
-        redraw();
-        return;
+      } catch (err) {
+        console.error("[arkadia] clipboard write failed:", err);
       }
+      r.clear_selection();
+      selectionRef.current = null;
+      redraw();
+      return;
     }
     const bytes = keyEventToBytes(e);
     if (bytes) {
@@ -818,8 +863,10 @@ export function TerminalWebGPU({
       const start = dragStartRef.current;
       const r = rendererRef.current;
       if (!start || !r) return;
-      const { col, row } = cellAt(e.clientX, e.clientY);
-      if (col === start.col && row === start.row) return;
+      lastDragPosRef.current = { x: e.clientX, y: e.clientY };
+      const { col, row } = selectionCellAt(e.clientX, e.clientY);
+      const totalRow = visibleStartRow() + row;
+      if (col === start.col && totalRow === start.row) return;
       // First real move: commit the start of the selection.
       if (!dragMovedRef.current) {
         dragMovedRef.current = true;
@@ -828,8 +875,15 @@ export function TerminalWebGPU({
         // Clear any prior selection from a previous drag now that we know
         // this gesture is actually a drag.
         r.clear_selection();
+        selectionRef.current = null;
       }
-      r.set_selection(start.col, start.row, col, row);
+      selectionRef.current = {
+        startCol: start.col,
+        startRow: start.row,
+        endCol: col,
+        endRow: totalRow,
+      };
+      r.set_selection(start.col, start.row, col, totalRow);
     };
     const onUp = async (e: MouseEvent) => {
       // Mouse-mode passthrough: emit release for the press-button we recorded.
@@ -852,6 +906,7 @@ export function TerminalWebGPU({
 
       const start = dragStartRef.current;
       dragStartRef.current = null;
+      lastDragPosRef.current = null;
       const r = rendererRef.current;
 
       // Click-without-drag on a clickable target (URL, OSC 8, path) → open.
@@ -860,6 +915,7 @@ export function TerminalWebGPU({
         pendingClickRef.current = null;
         if (r) {
           r.clear_selection();
+          selectionRef.current = null;
           redraw();
         }
         try {
@@ -883,6 +939,7 @@ export function TerminalWebGPU({
       // Plain click (no movement) → drop any existing selection.
       if (!dragMovedRef.current) {
         r.clear_selection();
+        selectionRef.current = null;
         redraw();
       }
       dragMovedRef.current = false;
@@ -949,7 +1006,7 @@ export function TerminalWebGPU({
     pendingClickRef.current = linkHit;
     // Don't draw a selection yet — we wait for the first real move so a
     // pure click stays click-shaped. mousemove will commit the selection.
-    dragStartRef.current = { col, row };
+    dragStartRef.current = { col, row: visibleStartRow() + row };
     dragMovedRef.current = false;
   };
 

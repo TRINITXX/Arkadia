@@ -55,6 +55,10 @@ pub struct Renderer {
     focused: bool,
 }
 
+/// Selection endpoints. Columns are viewport columns; rows are *total* rows:
+/// 0 = oldest scrollback line, `scroll_max - scroll_offset` = first visible
+/// row. Anchoring to content (not the viewport) keeps the highlight glued to
+/// the text while the user scrolls.
 #[derive(Clone, Copy)]
 struct Selection {
     start_col: u32,
@@ -221,7 +225,11 @@ impl Renderer {
         let n_bytes = bytes.len();
         if !self.atlas.replace_primary_font(bytes) {
             web_sys::console::warn_1(
-                &format!("[arkadia] set_primary_font: invalid font bytes ({} bytes)", n_bytes).into(),
+                &format!(
+                    "[arkadia] set_primary_font: invalid font bytes ({} bytes)",
+                    n_bytes
+                )
+                .into(),
             );
             return false;
         }
@@ -280,8 +288,8 @@ impl Renderer {
     /// shader runs in linear space; the clear color is stored to match the
     /// surface format (sRGB if the GPU re-encodes, sRGB-encoded otherwise).
     pub fn set_palette(&mut self, palette: JsValue) -> Result<(), JsValue> {
-        let p: TerminalPalette = from_value(palette)
-            .map_err(|e| JsValue::from_str(&format!("palette parse: {e}")))?;
+        let p: TerminalPalette =
+            from_value(palette).map_err(|e| JsValue::from_str(&format!("palette parse: {e}")))?;
         self.palette_bg = linearize_rgba(p.bg);
         self.palette_fg = linearize_rgba(p.fg);
         for (dst, src) in self.palette_ansi.iter_mut().zip(p.ansi.iter()) {
@@ -293,20 +301,16 @@ impl Renderer {
 
     /// Receives a `RenderPayload` JSON object (Tauri event shape).
     pub fn draw(&mut self, payload: JsValue) -> Result<(), JsValue> {
-        let payload: RenderPayload = from_value(payload)
-            .map_err(|e| JsValue::from_str(&format!("payload parse: {e}")))?;
+        let payload: RenderPayload =
+            from_value(payload).map_err(|e| JsValue::from_str(&format!("payload parse: {e}")))?;
         self.build_instances(&payload);
         self.last_payload = Some(payload);
         self.render()
     }
 
-    pub fn set_selection(
-        &mut self,
-        start_col: u32,
-        start_row: u32,
-        end_col: u32,
-        end_row: u32,
-    ) {
+    /// Sets the selection. Rows are *total* rows (0 = oldest scrollback
+    /// line), columns are viewport columns. Endpoints may be in any order.
+    pub fn set_selection(&mut self, start_col: u32, start_row: u32, end_col: u32, end_row: u32) {
         self.selection = Some(Selection {
             start_col,
             start_row,
@@ -328,37 +332,6 @@ impl Renderer {
         self.selection.is_some()
     }
 
-    pub fn selection_text(&self) -> String {
-        let (Some(sel), Some(payload)) = (self.selection, self.last_payload.as_ref()) else {
-            return String::new();
-        };
-        let (_sc, sr, _ec, er) = sel.normalized();
-        let mut out = String::new();
-        for (row_idx, runs) in payload.lines.iter().enumerate() {
-            let row = row_idx as u32;
-            if row < sr || row > er {
-                continue;
-            }
-            let mut col: u32 = 0;
-            let mut row_text = String::new();
-            for run in runs {
-                let cell_width = run.cell_width.max(1) as u32;
-                for ch in run.text.chars() {
-                    if sel.contains(col, row) {
-                        row_text.push(ch);
-                    }
-                    col += cell_width;
-                }
-            }
-            let trimmed = row_text.trim_end();
-            out.push_str(trimmed);
-            if row < er {
-                out.push('\n');
-            }
-        }
-        out
-    }
-
     fn rebuild_with_last_payload(&mut self) {
         let Some(payload) = self.last_payload.take() else {
             return;
@@ -370,6 +343,9 @@ impl Renderer {
 
     fn build_instances(&mut self, payload: &RenderPayload) {
         self.instances.clear();
+        // First visible row in total coordinates — converts the viewport row
+        // of each drawn cell into the Selection's total-row space.
+        let visible_start = payload.scroll_max.saturating_sub(payload.scroll_offset);
         for (row_idx, runs) in payload.lines.iter().enumerate() {
             let mut col: u32 = 0;
             for run in runs {
@@ -401,11 +377,9 @@ impl Renderer {
                     // glyphs; wide chars (CJK / emoji) bypass and go through swash
                     // at full 2-cell width.
                     let entry = if cell_width == 1 {
-                        if let Some(pixels) = customglyph::rasterize(
-                            ch,
-                            self.atlas.cell_w(),
-                            self.atlas.cell_h(),
-                        ) {
+                        if let Some(pixels) =
+                            customglyph::rasterize(ch, self.atlas.cell_w(), self.atlas.cell_h())
+                        {
                             self.atlas
                                 .insert_custom(&self.queue, ch, self.font_size_px, &pixels)
                         } else {
@@ -427,7 +401,7 @@ impl Renderer {
                         && col == payload.cursor_col as u32;
                     let in_selection = self
                         .selection
-                        .map(|s| s.contains(col, row_idx as u32))
+                        .map(|s| s.contains(col, visible_start + row_idx as u32))
                         .unwrap_or(false);
                     let (final_fg, final_bg) = if in_selection {
                         (fg, self.selection_color)
