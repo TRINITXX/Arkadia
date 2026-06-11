@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ChevronDown,
   ChevronRight,
+  NotebookPen,
   Settings as SettingsIcon,
 } from "lucide-react";
 import type { ActionButton, FolderButton, ToolbarButton } from "@/types";
@@ -13,6 +14,8 @@ interface ToolbarProps {
   onRunAction: (button: ActionButton) => void;
   onOpenSettings: () => void;
   disabled?: boolean;
+  notepadOpen: boolean;
+  onToggleNotepad: () => void;
 }
 
 export function Toolbar({
@@ -20,6 +23,8 @@ export function Toolbar({
   onRunAction,
   onOpenSettings,
   disabled = false,
+  notepadOpen,
+  onToggleNotepad,
 }: ToolbarProps) {
   return (
     <div className="flex h-9 items-center gap-1 border-b border-zinc-800 bg-zinc-950 px-2">
@@ -49,6 +54,17 @@ export function Toolbar({
             ),
           )}
       </div>
+      <button
+        onClick={onToggleNotepad}
+        className={`ml-1 flex size-7 items-center justify-center rounded hover:bg-zinc-900 hover:text-zinc-100 ${
+          notepadOpen ? "bg-zinc-900 text-zinc-100" : "text-zinc-400"
+        }`}
+        title="Notepad"
+        aria-label="Notepad"
+        type="button"
+      >
+        <NotebookPen size={14} />
+      </button>
       <button
         onClick={onOpenSettings}
         className="ml-1 flex size-7 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"

@@ -15,6 +15,7 @@ import { PaneContextMenu } from "@/components/PaneContextMenu";
 import { RenameDialog } from "@/components/RenameDialog";
 import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
+import { NotepadPanel } from "@/components/NotepadPanel";
 import { loadState, saveState, newProjectId, newWorkspaceId } from "@/store";
 import { WorkspaceContextMenu } from "@/components/WorkspaceContextMenu";
 import { WorkspaceDialog } from "@/components/WorkspaceDialog";
@@ -112,6 +113,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [notepadOpen, setNotepadOpen] = useState(false);
   const [projectMenu, setProjectMenu] = useState<ProjectMenuState | null>(null);
   const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuState | null>(
     null,
@@ -991,6 +993,8 @@ export function App() {
           onRunAction={runToolbarAction}
           onOpenSettings={() => setSettingsOpen(true)}
           disabled={!activeProject}
+          notepadOpen={notepadOpen}
+          onToggleNotepad={() => setNotepadOpen((v) => !v)}
         />
 
         {error && (
@@ -1044,6 +1048,14 @@ export function App() {
             ))}
         </div>
       </div>
+
+      {notepadOpen && (
+        <NotepadPanel
+          projectId={activeProject?.id ?? null}
+          projectName={activeProject?.name ?? null}
+          onClose={() => setNotepadOpen(false)}
+        />
+      )}
 
       <AddProjectDialog
         open={addOpen}
