@@ -7,11 +7,13 @@ import { Store } from "@tauri-apps/plugin-store";
  */
 const STORE_FILE = "notepad.json";
 const KEY_PANEL_WIDTH = "panelWidth";
+const KEY_EDITOR_HEIGHT = "editorHeight";
 
 export const HISTORY_CAP = 100;
 export const PANEL_WIDTH_MIN = 240;
 export const PANEL_WIDTH_MAX = 600;
 export const PANEL_WIDTH_DEFAULT = 320;
+export const EDITOR_HEIGHT_MIN = 120;
 
 export interface NotepadEntry {
   id: string;
@@ -97,5 +99,24 @@ export async function loadPanelWidth(): Promise<number> {
 export async function savePanelWidth(width: number): Promise<void> {
   const store = await getStore();
   await store.set(KEY_PANEL_WIDTH, clampPanelWidth(width));
+  await store.save();
+}
+
+/** Persisted editor height in px, or null when unset/invalid — the panel
+ *  then defaults to half the window height. The upper bound depends on the
+ *  live window size, so the caller clamps it. */
+export async function loadEditorHeight(): Promise<number | null> {
+  const store = await getStore();
+  const raw = await store.get<unknown>(KEY_EDITOR_HEIGHT);
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  return Math.max(EDITOR_HEIGHT_MIN, Math.round(raw));
+}
+
+export async function saveEditorHeight(height: number): Promise<void> {
+  const store = await getStore();
+  await store.set(
+    KEY_EDITOR_HEIGHT,
+    Math.max(EDITOR_HEIGHT_MIN, Math.round(height)),
+  );
   await store.save();
 }

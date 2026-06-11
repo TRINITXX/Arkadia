@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { writeText as writeClipboard } from "@tauri-apps/plugin-clipboard-manager";
 import { Check, Copy, Pencil, Trash2, X } from "lucide-react";
 import {
+  EDITOR_HEIGHT_MIN,
   HISTORY_CAP,
   PANEL_WIDTH_DEFAULT,
   clampPanelWidth,
+  loadEditorHeight,
   loadPanelWidth,
   loadProjectNotepad,
   newEntryId,
+  saveEditorHeight,
   savePanelWidth,
   saveProjectNotepad,
   type NotepadEntry,
@@ -18,6 +22,23 @@ const COPIED_FLASH_MS = 1200;
 
 function nowMs(): number {
   return Date.now();
+}
+
+function defaultEditorHeight(): number {
+  return Math.round(window.innerHeight / 2);
+}
+
+function clampEditorHeight(h: number): number {
+  // Leave room for the header, the Copy button and a slice of history.
+  return Math.max(EDITOR_HEIGHT_MIN, Math.min(window.innerHeight - 160, h));
+}
+
+function deferCaret(ta: HTMLTextAreaElement, pos: number): void {
+  // Restore the caret after React re-renders the controlled textarea.
+  requestAnimationFrame(() => {
+    ta.focus();
+    ta.setSelectionRange(pos, pos);
+  });
 }
 
 interface NotepadPanelProps {
@@ -32,6 +53,7 @@ export function NotepadPanel({
   onClose,
 }: NotepadPanelProps) {
   const [width, setWidth] = useState(PANEL_WIDTH_DEFAULT);
+  const [editorHeight, setEditorHeight] = useState<number>(defaultEditorHeight);
   const [draft, setDraft] = useState("");
   const [history, setHistory] = useState<NotepadEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -43,6 +65,7 @@ export function NotepadPanel({
   // project-switch flush read current values without re-subscribing.
   const historyRef = useRef(history);
   const widthRef = useRef(width);
+  const editorHeightRef = useRef(editorHeight);
   const draftRef = useRef(draft);
   useEffect(() => {
     historyRef.current = history;
@@ -51,12 +74,18 @@ export function NotepadPanel({
     widthRef.current = width;
   }, [width]);
   useEffect(() => {
+    editorHeightRef.current = editorHeight;
+  }, [editorHeight]);
+  useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
 
-  // Panel width: load once.
+  // Panel width + editor height: load once.
   useEffect(() => {
     void loadPanelWidth().then(setWidth);
+    void loadEditorHeight().then((h) => {
+      if (h !== null) setEditorHeight(clampEditorHeight(h));
+    });
   }, []);
 
   // Per-project state: (re)load when the active project changes.
@@ -115,16 +144,9 @@ export function NotepadPanel({
     );
   };
 
-  const copyDraft = async () => {
+  // Archives `text` at the head of the project history and clears the editor.
+  const archiveDraft = (text: string) => {
     if (!projectId || !loaded) return;
-    const text = draft.trimEnd();
-    if (text.trim().length === 0) return;
-    try {
-      await writeClipboard(text);
-    } catch (err) {
-      console.error("[arkadia] notepad clipboard write failed:", err);
-      return;
-    }
     const entry: NotepadEntry = {
       id: newEntryId(),
       text,
@@ -136,7 +158,64 @@ export function NotepadPanel({
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     persist(projectId, "", next);
     flashCopied(entry.id);
+  };
+
+  const copyDraft = async () => {
+    if (!projectId || !loaded) return;
+    const text = draft.trimEnd();
+    if (text.trim().length === 0) return;
+    try {
+      await writeClipboard(text);
+    } catch (err) {
+      console.error("[arkadia] notepad clipboard write failed:", err);
+      return;
+    }
+    archiveDraft(text);
     textareaRef.current?.focus();
+  };
+
+  // Ctrl+A then Ctrl+C / Ctrl+X: copying or cutting the WHOLE draft validates
+  // it — the native event already puts the text on the clipboard, we archive
+  // it and clear the editor. Partial copies stay plain copies.
+  const onEditorCopyOrCut = () => {
+    const ta = textareaRef.current;
+    if (!ta || !projectId || !loaded) return;
+    if (ta.selectionStart !== 0 || ta.selectionEnd !== ta.value.length) return;
+    const text = ta.value.trimEnd();
+    if (text.trim().length === 0) return;
+    archiveDraft(text);
+  };
+
+  // Pasting an image (e.g. a PrintScreen capture) saves it to disk via the
+  // backend and inserts the file path at the caret, ready for a prompt.
+  // Text pastes are left to the native handler.
+  const onEditorPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const item = Array.from(e.clipboardData.items).find((it) =>
+      it.type.startsWith("image/"),
+    );
+    if (!item) return;
+    e.preventDefault();
+    const file = item.getAsFile();
+    if (!file) return;
+    const ext = item.type.split("/")[1] ?? "png";
+    void (async () => {
+      try {
+        const buf = await file.arrayBuffer();
+        const path = await invoke<string>("save_screenshot", {
+          bytes: Array.from(new Uint8Array(buf)),
+          ext,
+        });
+        const ta = textareaRef.current;
+        if (!ta) return;
+        const start = ta.selectionStart;
+        const next =
+          ta.value.slice(0, start) + path + ta.value.slice(ta.selectionEnd);
+        onDraftChange(next);
+        deferCaret(ta, start + path.length);
+      } catch (err) {
+        console.error("[arkadia] screenshot paste failed:", err);
+      }
+    })();
   };
 
   const copyEntry = async (entry: NotepadEntry) => {
@@ -181,6 +260,23 @@ export function NotepadPanel({
     window.addEventListener("mouseup", onUp);
   };
 
+  // Editor height resize: drag the divider between the editor and history.
+  const onEditorResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = editorHeightRef.current;
+    const onMove = (ev: MouseEvent) => {
+      setEditorHeight(clampEditorHeight(startHeight + (ev.clientY - startY)));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      void saveEditorHeight(editorHeightRef.current);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   return (
     <div
       style={{ width }}
@@ -216,21 +312,19 @@ export function NotepadPanel({
         </div>
       ) : (
         <>
-          <div className="flex shrink-0 flex-col gap-2 border-b border-zinc-800 p-2">
+          <div className="flex shrink-0 flex-col gap-2 p-2">
             <textarea
               ref={textareaRef}
               value={draft}
               onChange={(e) => onDraftChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.ctrlKey && e.key === "Enter") {
-                  e.preventDefault();
-                  void copyDraft();
-                }
-              }}
+              onCopy={onEditorCopyOrCut}
+              onCut={onEditorCopyOrCut}
+              onPaste={onEditorPaste}
               placeholder="write a prompt…"
               spellCheck={false}
               disabled={!loaded}
-              className="h-40 resize-none rounded border border-zinc-800 bg-zinc-900 p-2 text-xs leading-5 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none"
+              style={{ height: editorHeight }}
+              className="resize-none rounded border border-zinc-800 bg-zinc-900 p-2 text-xs leading-5 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none"
             />
             <button
               onClick={() => void copyDraft()}
@@ -240,9 +334,14 @@ export function NotepadPanel({
             >
               <Copy size={12} />
               <span>Copy</span>
-              <span className="text-zinc-500">Ctrl+Enter</span>
+              <span className="text-zinc-500">Ctrl+A · Ctrl+C</span>
             </button>
           </div>
+
+          <div
+            onMouseDown={onEditorResizeStart}
+            className="h-1 shrink-0 cursor-row-resize border-t border-zinc-800 hover:bg-zinc-600"
+          />
 
           <div className="flex-1 overflow-y-auto p-2">
             {history.length === 0 ? (
