@@ -175,14 +175,18 @@ export function NotepadPanel({
   };
 
   // Ctrl+A then Ctrl+C / Ctrl+X: copying or cutting the WHOLE draft validates
-  // it — the native event already puts the text on the clipboard, we archive
-  // it and clear the editor. Partial copies stay plain copies.
-  const onEditorCopyOrCut = () => {
+  // it — archive to history and clear the editor, like the Copy button.
+  // Partial copies stay plain copies. We take over the clipboard write
+  // (preventDefault + setData): clearing the editor re-renders the textarea,
+  // which could otherwise race the native default action and copy nothing.
+  const onEditorCopyOrCut = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const ta = textareaRef.current;
     if (!ta || !projectId || !loaded) return;
     if (ta.selectionStart !== 0 || ta.selectionEnd !== ta.value.length) return;
     const text = ta.value.trimEnd();
     if (text.trim().length === 0) return;
+    e.preventDefault();
+    e.clipboardData.setData("text/plain", text);
     archiveDraft(text);
   };
 
