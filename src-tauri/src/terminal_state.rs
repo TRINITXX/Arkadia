@@ -241,6 +241,69 @@ impl TerminalState {
         hits
     }
 
+    /// Extracts the text covered by an inclusive selection in *total* row
+    /// coordinates (0 = oldest scrollback line, `scrollback_len()` = visible
+    /// row 0 — same convention as `search`). Endpoints may be passed in any
+    /// order. Continuation cells of wide graphemes are skipped; trailing
+    /// blanks are trimmed per line, lines are joined with '\n'.
+    pub fn text_range(
+        &self,
+        start_col: u32,
+        start_row: u32,
+        end_col: u32,
+        end_row: u32,
+    ) -> String {
+        let ((sc, sr), (ec, er)) = if (start_row, start_col) > (end_row, end_col) {
+            ((end_col, end_row), (start_col, start_row))
+        } else {
+            ((start_col, start_row), (end_col, end_row))
+        };
+        let sb_len = self.scrollback_len() as u32;
+        let total_rows = sb_len + self.rows as u32;
+        if sr >= total_rows {
+            return String::new();
+        }
+        let er = er.min(total_rows - 1);
+        let mut lines: Vec<String> = Vec::new();
+        for row in sr..=er {
+            let line: &[TerminalCell] = if row < sb_len {
+                &self.scrollback[row as usize]
+            } else {
+                match self.active_screen().get((row - sb_len) as usize) {
+                    Some(l) => l,
+                    None => continue,
+                }
+            };
+            let mut row_text = String::new();
+            for (idx, cell) in line.iter().enumerate() {
+                let col = idx as u32;
+                // Continuation cell (right half of a wide grapheme): the main
+                // cell on its left already contributed the full text.
+                if cell.width == 0 {
+                    continue;
+                }
+                let selected = if sr == er {
+                    col >= sc && col <= ec
+                } else if row == sr {
+                    col >= sc
+                } else if row == er {
+                    col <= ec
+                } else {
+                    true
+                };
+                if selected {
+                    row_text.push_str(&cell.text);
+                }
+            }
+            lines.push(row_text.trim_end().to_string());
+        }
+        // Trim trailing empty lines then join with newline.
+        while lines.last().map(|s: &String| s.is_empty()).unwrap_or(false) {
+            lines.pop();
+        }
+        lines.join("\n")
+    }
+
     /// Returns the cell at (row, col) of the visible screen, considering scroll offset.
     /// `scroll_offset` = 0 means live (bottom). N means N lines into history.
     pub fn cell_at(&self, scroll_offset: u32, row: u16, col: u16) -> Option<&TerminalCell> {
@@ -1355,5 +1418,60 @@ mod tests {
         assert_eq!(&widths(&t, 0)[..4], &[1, 1, 1, 1]);
         assert_eq!(texts(&t, 0)[0], "a");
         assert_eq!(texts(&t, 0)[1], " ");
+    }
+
+    #[test]
+    fn text_range_single_line() {
+        let mut t = TerminalState::new(4, 20);
+        t.advance_bytes(b"hello world");
+        // No scrollback yet: total row 0 = screen row 0.
+        assert_eq!(t.text_range(2, 0, 4, 0), "llo");
+    }
+
+    #[test]
+    fn text_range_reversed_endpoints() {
+        let mut t = TerminalState::new(4, 20);
+        t.advance_bytes(b"hello world");
+        assert_eq!(t.text_range(4, 0, 2, 0), "llo");
+    }
+
+    #[test]
+    fn text_range_multiline_trims_trailing_blanks() {
+        let mut t = TerminalState::new(4, 20);
+        t.advance_bytes(b"alpha\r\nbeta");
+        // From inside "alpha" to the right edge of "beta"'s row: trailing
+        // blank cells must be trimmed on every line.
+        assert_eq!(t.text_range(2, 0, 19, 1), "pha
+beta");
+    }
+
+    #[test]
+    fn text_range_spans_scrollback_and_screen() {
+        let mut t = TerminalState::new(2, 10);
+        // Three lines on a 2-row screen: "one" scrolls out into scrollback.
+        t.advance_bytes(b"one\r\ntwo\r\nthree");
+        assert_eq!(t.scrollback_len(), 1);
+        // total row 0 = "one" (scrollback), 1 = "two", 2 = "three" (screen).
+        assert_eq!(t.text_range(0, 0, 9, 2), "one
+two
+three");
+    }
+
+    #[test]
+    fn text_range_wide_grapheme_skips_continuation() {
+        let mut t = TerminalState::new(2, 10);
+        t.advance_bytes("日本".as_bytes());
+        // 日 occupies cols 0-1 (continuation cell at col 1), 本 cols 2-3.
+        assert_eq!(t.text_range(0, 0, 3, 0), "日本");
+    }
+
+    #[test]
+    fn text_range_out_of_bounds_clamps() {
+        let mut t = TerminalState::new(2, 10);
+        t.advance_bytes(b"ab");
+        // End row far beyond the grid: clamps to the last total row.
+        assert_eq!(t.text_range(0, 0, 9, 99), "ab");
+        // Start row beyond the grid: empty result.
+        assert_eq!(t.text_range(0, 50, 9, 99), "");
     }
 }

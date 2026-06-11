@@ -774,6 +774,26 @@ pub fn search_terminal(
     Ok(hits)
 }
 
+#[tauri::command]
+pub fn get_text_range(
+    session_id: String,
+    start_col: u32,
+    start_row: u32,
+    end_col: u32,
+    end_row: u32,
+    state: State<'_, SessionMap>,
+) -> Result<String, String> {
+    let sessions = state.sessions.lock();
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("unknown session {session_id}"))?;
+    let text = session
+        .term
+        .lock()
+        .text_range(start_col, start_row, end_col, end_row);
+    Ok(text)
+}
+
 /// Decides whether a mouse event from the frontend should be forwarded to the
 /// PTY given the active protocol. Wheel events (button >= 64) bypass protocol
 /// filtering — apps expect them as soon as any mouse mode is on.

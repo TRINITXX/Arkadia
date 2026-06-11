@@ -12,8 +12,8 @@ use claude_watcher::watcher::run_watcher;
 use fonts::get_font_data;
 use tauri::{Emitter, Manager};
 use terminal::{
-    close_terminal, request_render, resize_terminal, scroll_terminal, search_terminal, send_input,
-    send_mouse_event, spawn_terminal, SessionMap,
+    close_terminal, get_text_range, request_render, resize_terminal, scroll_terminal,
+    search_terminal, send_input, send_mouse_event, spawn_terminal, SessionMap,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -72,6 +72,7 @@ pub fn run() {
             close_terminal,
             scroll_terminal,
             search_terminal,
+            get_text_range,
             send_mouse_event,
             get_font_data,
             agent_state_for_pane,
