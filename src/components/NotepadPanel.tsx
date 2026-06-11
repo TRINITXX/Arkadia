@@ -39,16 +39,20 @@ export function NotepadPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Live mirrors so window-level resize handlers and unmount flush read
-  // current values without re-subscribing.
+  // Live mirrors so window-level resize handlers, unmount flush, and
+  // project-switch flush read current values without re-subscribing.
   const historyRef = useRef(history);
   const widthRef = useRef(width);
+  const draftRef = useRef(draft);
   useEffect(() => {
     historyRef.current = history;
   }, [history]);
   useEffect(() => {
     widthRef.current = width;
   }, [width]);
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
 
   // Panel width: load once.
   useEffect(() => {
@@ -73,7 +77,18 @@ export function NotepadPanel({
     });
     return () => {
       cancelled = true;
-      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      // Flush a pending debounced draft save so closing the panel (or
+      // switching project) within the debounce window loses nothing.
+      if (draftTimerRef.current) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+        if (projectId) {
+          void saveProjectNotepad(projectId, {
+            draft: draftRef.current,
+            history: historyRef.current,
+          });
+        }
+      }
       if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
     };
   }, [projectId]);
