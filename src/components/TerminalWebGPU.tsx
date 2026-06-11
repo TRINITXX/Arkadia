@@ -431,6 +431,9 @@ export function TerminalWebGPU({
   // Last mouse position of an in-progress drag, to re-anchor the selection
   // end when the viewport scrolls under a stationary cursor.
   const lastDragPosRef = useRef<{ x: number; y: number } | null>(null);
+  // Edge auto-scroll while drag-selecting past the top/bottom border.
+  const autoScrollTimerRef = useRef<number | null>(null);
+  const autoScrollDeltaRef = useRef(0);
   const hoveredUrlRef = useRef<HoverRange | null>(null);
   const pendingClickRef = useRef<ClickableMatch | null>(null);
   // When the running TUI has mouse tracking on and the user presses a button
@@ -530,6 +533,14 @@ export function TerminalWebGPU({
       col: Math.min(col, (s?.cols ?? 1) - 1),
       row: Math.min(row, (s?.rows ?? 1) - 1),
     };
+  };
+
+  const stopAutoScroll = () => {
+    if (autoScrollTimerRef.current !== null) {
+      clearInterval(autoScrollTimerRef.current);
+      autoScrollTimerRef.current = null;
+    }
+    autoScrollDeltaRef.current = 0;
   };
 
   // ─── 1. Init / teardown — once per pane ─────────────────────────
@@ -884,6 +895,34 @@ export function TerminalWebGPU({
         endRow: totalRow,
       };
       r.set_selection(start.col, start.row, col, totalRow);
+      // Edge auto-scroll: dragging past the top/bottom edge scrolls into
+      // history/live (speed ∝ overshoot, one tick per 50ms). The selection
+      // end is re-anchored by the scroll_offset effect on each repaint.
+      const wrapper = wrapperRef.current;
+      if (wrapper) {
+        const rect = wrapper.getBoundingClientRect();
+        const cellH = cellRef.current.h;
+        let delta = 0;
+        if (e.clientY < rect.top) {
+          // Backend convention: positive delta = scroll INTO history (up).
+          delta = Math.ceil((rect.top - e.clientY) / cellH);
+        } else if (e.clientY > rect.bottom) {
+          delta = -Math.ceil((e.clientY - rect.bottom) / cellH);
+        }
+        autoScrollDeltaRef.current = delta;
+        if (delta !== 0 && autoScrollTimerRef.current === null) {
+          autoScrollTimerRef.current = window.setInterval(() => {
+            const d = autoScrollDeltaRef.current;
+            if (d === 0 || !dragStartRef.current) {
+              stopAutoScroll();
+              return;
+            }
+            void invoke("scroll_terminal", { sessionId: pane.id, delta: d });
+          }, 50);
+        } else if (delta === 0) {
+          stopAutoScroll();
+        }
+      }
     };
     const onUp = async (e: MouseEvent) => {
       // Mouse-mode passthrough: emit release for the press-button we recorded.
@@ -907,6 +946,7 @@ export function TerminalWebGPU({
       const start = dragStartRef.current;
       dragStartRef.current = null;
       lastDragPosRef.current = null;
+      stopAutoScroll();
       const r = rendererRef.current;
 
       // Click-without-drag on a clickable target (URL, OSC 8, path) → open.
@@ -949,9 +989,31 @@ export function TerminalWebGPU({
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      stopAutoScroll();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pane.id]);
+
+  // While a drag is in progress, a wheel or edge auto-scroll moves the
+  // content under a (possibly stationary) cursor: re-anchor the selection
+  // end to the cell currently under the last known mouse position so the
+  // selection keeps extending past one screen.
+  useEffect(() => {
+    const start = dragStartRef.current;
+    const pos = lastDragPosRef.current;
+    const r = rendererRef.current;
+    if (!start || !dragMovedRef.current || !pos || !r) return;
+    const { col, row } = selectionCellAt(pos.x, pos.y);
+    const totalRow = visibleStartRow() + row;
+    selectionRef.current = {
+      startCol: start.col,
+      startRow: start.row,
+      endCol: col,
+      endRow: totalRow,
+    };
+    r.set_selection(start.col, start.row, col, totalRow);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pane.screen?.scroll_offset, pane.screen?.scroll_max]);
 
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     const { col, row } = cellAt(e.clientX, e.clientY);
