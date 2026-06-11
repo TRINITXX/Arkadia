@@ -39,6 +39,7 @@ import {
   type CustomPalette,
   type CwdPayload,
   type EditorProtocol,
+  type MessageMarker,
   type PaletteId,
   type PaneState,
   type Project,
@@ -933,6 +934,47 @@ export function App() {
     });
   };
 
+  // Jump to the previous/next conversation message (kind 1 = user `❯`,
+  // 2 = Claude white `●`) in the active pane. The current position is the
+  // viewport's center row in total coordinates; the target head row is
+  // centered with the same math as the search-hit scroll.
+  const navigateMessage = useCallback(
+    async (kind: 1 | 2, dir: -1 | 1) => {
+      const tab = tabs.find((t) => t.id === activeTabId);
+      const pane = tab ? tab.panes[tab.activePaneId] : undefined;
+      const screen = pane?.screen;
+      if (!pane || !screen) return;
+      try {
+        const markers = await invoke<MessageMarker[]>("list_message_markers", {
+          sessionId: pane.id,
+        });
+        const rows = markers
+          .filter((m) => m.kind === kind)
+          .map((m) => m.total_row);
+        if (rows.length === 0) return;
+        const center =
+          screen.scroll_max -
+          screen.scroll_offset +
+          Math.floor(screen.rows / 2);
+        const target =
+          dir < 0
+            ? [...rows].reverse().find((r) => r < center)
+            : rows.find((r) => r > center);
+        if (target === undefined) return;
+        const desired =
+          screen.scroll_max - target + Math.floor(screen.rows / 2);
+        const clamped = Math.max(0, Math.min(screen.scroll_max, desired));
+        const delta = clamped - screen.scroll_offset;
+        if (delta !== 0) {
+          await invoke("scroll_terminal", { sessionId: pane.id, delta });
+        }
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [tabs, activeTabId],
+  );
+
   const runToolbarAction = useCallback(
     async (button: ActionButton) => {
       if (!activeProject) return;
@@ -1007,6 +1049,8 @@ export function App() {
           disabled={!activeProject}
           notepadOpen={notepadOpen}
           onToggleNotepad={() => setNotepadOpen((v) => !v)}
+          onNavigateMessage={navigateMessage}
+          messageNavDisabled={!activePaneIdOfActiveTab}
         />
 
         {error && (

@@ -57,6 +57,12 @@ export interface RenderPayload {
   mouse_sgr: boolean;
   /** True iff the running app enabled bracketed paste (DEC mode 2004). */
   bracketed_paste: boolean;
+  /**
+   * Per visible row, the conversation message block it belongs to:
+   * 0 = none, 1 = user (`❯`), 2 = Claude (white `●`). Optional for backward
+   * compat with older payloads.
+   */
+  line_kinds?: number[];
 }
 
 export interface ClosedPayload {
@@ -77,6 +83,13 @@ export interface SearchHit {
   total_row: number;
   start_col: number;
   end_col: number;
+}
+
+export interface MessageMarker {
+  /** Same convention as SearchHit: 0 = oldest scrollback line. */
+  total_row: number;
+  /** 1 = user message (`❯`), 2 = Claude message (white `●`). */
+  kind: number;
 }
 
 export interface Project {

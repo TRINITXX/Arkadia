@@ -15,7 +15,8 @@ use termwiz::color::ColorAttribute;
 
 use crate::agent_registry::AgentRegistry;
 use crate::terminal_state::{
-    encode_mouse, MouseEncoding, MouseProtocol, SearchHit, TerminalCell, TerminalState,
+    encode_mouse, MessageMarker, MouseEncoding, MouseProtocol, SearchHit, TerminalCell,
+    TerminalState,
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -107,6 +108,10 @@ pub struct RenderPayload {
     /// True iff the running app enabled bracketed paste (DEC mode 2004).
     /// The frontend wraps clipboard content with `\x1b[200~` … `\x1b[201~` when set.
     pub bracketed_paste: bool,
+    /// Per visible row, the conversation message block it belongs to:
+    /// 0 = none, 1 = user (`❯`), 2 = Claude (white `●`). The frontend paints
+    /// a subtle background tint behind rows of kind 1/2.
+    pub line_kinds: Vec<u8>,
 }
 
 #[derive(Serialize, Clone)]
@@ -660,6 +665,7 @@ fn emit_render(
     };
     let mouse_sgr = matches!(term.mouse_encoding(), MouseEncoding::Sgr);
     let bracketed_paste = term.bracketed_paste();
+    let line_kinds = term.visible_line_kinds(offset);
     let payload = RenderPayload {
         session_id: session_id.to_string(),
         cols,
@@ -674,6 +680,7 @@ fn emit_render(
         mouse_protocol,
         mouse_sgr,
         bracketed_paste,
+        line_kinds,
     };
     let _ = app.emit("terminal-render", payload);
 }
@@ -772,6 +779,19 @@ pub fn search_terminal(
         .ok_or_else(|| format!("unknown session {session_id}"))?;
     let hits = session.term.lock().search(&query);
     Ok(hits)
+}
+
+#[tauri::command]
+pub fn list_message_markers(
+    session_id: String,
+    state: State<'_, SessionMap>,
+) -> Result<Vec<MessageMarker>, String> {
+    let sessions = state.sessions.lock();
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("unknown session {session_id}"))?;
+    let markers = session.term.lock().message_markers();
+    Ok(markers)
 }
 
 #[tauri::command]

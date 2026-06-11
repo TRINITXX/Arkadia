@@ -14,8 +14,8 @@ use fonts::get_font_data;
 use screenshots::save_screenshot;
 use tauri::{Emitter, Manager};
 use terminal::{
-    close_terminal, get_text_range, request_render, resize_terminal, scroll_terminal,
-    search_terminal, send_input, send_mouse_event, spawn_terminal, SessionMap,
+    close_terminal, get_text_range, list_message_markers, request_render, resize_terminal,
+    scroll_terminal, search_terminal, send_input, send_mouse_event, spawn_terminal, SessionMap,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -74,6 +74,7 @@ pub fn run() {
             close_terminal,
             scroll_terminal,
             search_terminal,
+            list_message_markers,
             get_text_range,
             send_mouse_event,
             get_font_data,

@@ -9,6 +9,12 @@ import { Renderer } from "@renderer/terminal_renderer.js";
 import { ensureWasmReady, paletteToWasm } from "@/lib/wasmRenderer";
 import { measureCellSize } from "@/lib/cellSize";
 import {
+  CLAUDE_TINT,
+  MESSAGE_TINT_ALPHA,
+  mixHex,
+  USER_TINT,
+} from "@/lib/messageTint";
+import {
   findClickableAt,
   buildRowMapping,
   colToCharIndex,
@@ -17,6 +23,7 @@ import {
   type PathMatch,
 } from "@/lib/urlDetect";
 import type {
+  CellColor,
   CellRun,
   EditorProtocol,
   PaneState,
@@ -228,6 +235,31 @@ function applyHoverHighlight(
   return { ...screen, lines: newLines };
 }
 
+/**
+ * Paints the permanent conversation tint behind message lines (`line_kinds`
+ * from the backend: 1 = user → green, 2 = Claude → purple). Applied first in
+ * the redraw chain so search/hover highlights keep priority. Only runs whose
+ * background is still `default` are tinted — colored TUI backgrounds stay
+ * untouched.
+ */
+function applyMessageTint(screen: RenderPayload, bg: string): RenderPayload {
+  const kinds = screen.line_kinds;
+  if (!kinds || !kinds.some((k) => k === 1 || k === 2)) return screen;
+  const tints: Record<number, CellColor> = {
+    1: { kind: "rgb", value: mixHex(bg, USER_TINT, MESSAGE_TINT_ALPHA) },
+    2: { kind: "rgb", value: mixHex(bg, CLAUDE_TINT, MESSAGE_TINT_ALPHA) },
+  };
+  const newLines = screen.lines.slice();
+  for (let row = 0; row < newLines.length; row++) {
+    const tint = tints[kinds[row]];
+    if (!tint) continue;
+    newLines[row] = newLines[row].map((run) =>
+      run.bg.kind === "default" ? { ...run, bg: tint } : run,
+    );
+  }
+  return { ...screen, lines: newLines };
+}
+
 /** True iff the running app has activated some form of mouse tracking. */
 function mouseModeActive(screen: RenderPayload | null): boolean {
   return (screen?.mouse_protocol ?? 0) > 0;
@@ -413,6 +445,13 @@ export function TerminalWebGPU({
     cwdRef.current = pane.cwd;
   }, [pane.cwd]);
 
+  // Live palette in a ref so redraws triggered from stale closures (resize
+  // observer, window listeners) still tint with the current background.
+  const paletteRef = useRef(palette);
+  useEffect(() => {
+    paletteRef.current = palette;
+  }, [palette]);
+
   // Mouse-selection state. cellRef is the CSS-pixel cell size so we can
   // convert mouse coords → grid cells without a fresh measurement.
   const cellRef = useRef<{ w: number; h: number }>({ w: 1, h: 1 });
@@ -462,8 +501,9 @@ export function TerminalWebGPU({
     const screen = screenRef.current;
     if (!readyRef.current || !r || !screen) return;
     recomputeVisibleHits();
-    let modified = applySearchHighlight(
-      screen,
+    let modified = applyMessageTint(screen, paletteRef.current.bg);
+    modified = applySearchHighlight(
+      modified,
       visibleHitsRef.current,
       "#fde047", // yellow for non-current hits
       "#fb923c", // orange for the current hit

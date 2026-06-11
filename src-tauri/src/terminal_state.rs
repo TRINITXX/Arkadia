@@ -304,6 +304,99 @@ impl TerminalState {
         lines.join("\n")
     }
 
+    /// Line at `total_row` (same convention as `search`): scrollback first,
+    /// then the active screen.
+    fn line_at_total(&self, total_row: u32) -> Option<&[TerminalCell]> {
+        let sb_len = self.scrollback_len();
+        let r = total_row as usize;
+        if r < sb_len {
+            return self.scrollback.get(r).map(|l| l.as_slice());
+        }
+        self.active_screen().get(r - sb_len).map(|l| l.as_slice())
+    }
+
+    /// Heads of user/Claude message blocks across scrollback + screen,
+    /// oldest first. Empty on the alt screen.
+    pub fn message_markers(&self) -> Vec<MessageMarker> {
+        if self.on_alt {
+            return Vec::new();
+        }
+        let total = self.scrollback.len() + self.active_screen().len();
+        let mut out = Vec::new();
+        for r in 0..total {
+            let Some(line) = self.line_at_total(r as u32) else {
+                continue;
+            };
+            if let Some(kind @ (MessageKind::User | MessageKind::Claude)) = block_head_kind(line)
+            {
+                out.push(MessageMarker {
+                    total_row: r as u32,
+                    kind: kind.as_u8(),
+                });
+            }
+        }
+        out
+    }
+
+    /// One `MessageKind` (as u8) per visible row at `scroll_offset` — the
+    /// tint the frontend paints behind each line. All zeros on the alt screen.
+    ///
+    /// A line with a non-space character in column 0 starts a block; indented
+    /// and blank lines belong to the block above. Blank lines are tinted only
+    /// when more block content follows (interior paragraph gap), so trailing
+    /// gaps between blocks stay unpainted.
+    pub fn visible_line_kinds(&self, scroll_offset: u32) -> Vec<u8> {
+        let rows = self.rows as usize;
+        if self.on_alt {
+            return vec![0; rows];
+        }
+        let offset = self.clamp_scroll(scroll_offset) as usize;
+        let sb_len = self.scrollback.len();
+        let total = sb_len + self.active_screen().len();
+        let first = sb_len - offset; // total row of visible row 0
+        // Kind of the block enclosing the first visible row: nearest head at
+        // or above it. Heads are O(1) to test, so the walk up is cheap.
+        let mut cur = MessageKind::None;
+        for r in (0..=first).rev() {
+            if let Some(kind) = self.line_at_total(r as u32).and_then(block_head_kind) {
+                cur = kind;
+                break;
+            }
+        }
+        let mut kinds = Vec::with_capacity(rows);
+        for vis in 0..rows {
+            let r = first + vis;
+            let Some(line) = self.line_at_total(r as u32) else {
+                kinds.push(0);
+                continue;
+            };
+            if let Some(kind) = block_head_kind(line) {
+                cur = kind;
+            }
+            if line_is_blank(line) {
+                // Tint only interior gaps: scan to the next non-blank line of
+                // the same block (bounded by the gap length).
+                let mut k = MessageKind::None;
+                for nr in (r + 1)..total {
+                    let Some(next) = self.line_at_total(nr as u32) else {
+                        break;
+                    };
+                    if block_head_kind(next).is_some() {
+                        break;
+                    }
+                    if !line_is_blank(next) {
+                        k = cur;
+                        break;
+                    }
+                }
+                kinds.push(k.as_u8());
+            } else {
+                kinds.push(cur.as_u8());
+            }
+        }
+        kinds
+    }
+
     /// Returns the cell at (row, col) of the visible screen, considering scroll offset.
     /// `scroll_offset` = 0 means live (bottom). N means N lines into history.
     pub fn cell_at(&self, scroll_offset: u32, row: u16, col: u16) -> Option<&TerminalCell> {
@@ -971,6 +1064,71 @@ impl TerminalState {
     }
 }
 
+/// Kind of conversation message block a line belongs to when the pane runs
+/// Claude Code. Wire format: 0 = none, 1 = user, 2 = Claude.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MessageKind {
+    None,
+    User,
+    Claude,
+}
+
+impl MessageKind {
+    pub fn as_u8(self) -> u8 {
+        match self {
+            MessageKind::None => 0,
+            MessageKind::User => 1,
+            MessageKind::Claude => 2,
+        }
+    }
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MessageMarker {
+    /// Same convention as `SearchHit`: 0 = oldest scrollback line.
+    pub total_row: u32,
+    /// 1 = user message (`❯`), 2 = Claude message (white `●`).
+    pub kind: u8,
+}
+
+/// True when `fg` renders as the default/white foreground — the color Claude
+/// Code uses for the `●` bullet of assistant text. Tool/todo bullets are
+/// colored and must not match.
+fn is_default_or_white_fg(fg: &ColorAttribute) -> bool {
+    match fg {
+        ColorAttribute::Default => true,
+        ColorAttribute::PaletteIndex(7) | ColorAttribute::PaletteIndex(15) => true,
+        ColorAttribute::TrueColorWithDefaultFallback(c)
+        | ColorAttribute::TrueColorWithPaletteFallback(c, _) => {
+            c.0 >= 0.85 && c.1 >= 0.85 && c.2 >= 0.85
+        }
+        _ => false,
+    }
+}
+
+fn line_is_blank(line: &[TerminalCell]) -> bool {
+    line.iter().all(|c| c.text.trim().is_empty())
+}
+
+/// `Some(kind)` when the line starts a block (non-space character in column
+/// 0); `Some(MessageKind::None)` for blocks we don't tint (tool output,
+/// banners, …); `None` for continuation/blank lines.
+fn block_head_kind(line: &[TerminalCell]) -> Option<MessageKind> {
+    let head = line.first()?;
+    let ch = head.text.trim();
+    if ch.is_empty() {
+        return None;
+    }
+    let kind = match ch {
+        // `❯` heads a user message only when followed by content on the same
+        // line — a bare `❯` is the (empty) live input prompt.
+        "❯" if !line_is_blank(&line[1..]) => MessageKind::User,
+        "●" if is_default_or_white_fg(&head.attrs.fg) => MessageKind::Claude,
+        _ => MessageKind::None,
+    };
+    Some(kind)
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct SearchHit {
     /// 0 = oldest scrollback line, `scrollback_len` = visible row 0.
@@ -1473,5 +1631,61 @@ three");
         assert_eq!(t.text_range(0, 0, 9, 99), "ab");
         // Start row beyond the grid: empty result.
         assert_eq!(t.text_range(0, 50, 9, 99), "");
+    }
+
+    #[test]
+    fn message_markers_user_and_white_bullet_only() {
+        let mut t = TerminalState::new(10, 40);
+        t.advance_bytes(
+            "❯ hello\r\n  continued\r\n\r\n\x1b[32m●\x1b[0m tool call\r\n● answer\r\n".as_bytes(),
+        );
+        let markers = t.message_markers();
+        assert_eq!(markers.len(), 2);
+        assert_eq!((markers[0].total_row, markers[0].kind), (0, 1));
+        assert_eq!((markers[1].total_row, markers[1].kind), (4, 2));
+    }
+
+    #[test]
+    fn bare_prompt_is_not_a_user_marker() {
+        let mut t = TerminalState::new(4, 20);
+        t.advance_bytes("❯ ".as_bytes());
+        assert!(t.message_markers().is_empty());
+        // With typed content it becomes one.
+        t.advance_bytes(b"hi");
+        let markers = t.message_markers();
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].kind, 1);
+    }
+
+    #[test]
+    fn visible_line_kinds_blocks_and_trailing_gaps() {
+        let mut t = TerminalState::new(10, 40);
+        t.advance_bytes(
+            "❯ hello\r\n  continued\r\n\r\n\x1b[32m●\x1b[0m tool call\r\n● answer\r\n".as_bytes(),
+        );
+        let kinds = t.visible_line_kinds(0);
+        // Row 2 is a trailing gap before the next block → untinted. The
+        // blank rows after "● answer" trail to EOF → untinted too.
+        assert_eq!(kinds, vec![1, 1, 0, 0, 2, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn visible_line_kinds_tints_interior_paragraph_gap() {
+        let mut t = TerminalState::new(5, 40);
+        t.advance_bytes("● first paragraph\r\n\r\n  second paragraph\r\n".as_bytes());
+        let kinds = t.visible_line_kinds(0);
+        assert_eq!(kinds, vec![2, 2, 2, 0, 0]);
+    }
+
+    #[test]
+    fn visible_line_kinds_head_in_scrollback() {
+        let mut t = TerminalState::new(5, 40);
+        // Six lines on a 5-row screen: the "● answer" head scrolls out.
+        t.advance_bytes("● answer\r\n  l1\r\n  l2\r\n  l3\r\n  l4\r\n  l5".as_bytes());
+        assert_eq!(t.scrollback_len(), 1);
+        // Live view shows only continuation lines — still classified Claude.
+        assert_eq!(t.visible_line_kinds(0), vec![2, 2, 2, 2, 2]);
+        // Scrolled up by one, the head itself is visible.
+        assert_eq!(t.visible_line_kinds(1), vec![2, 2, 2, 2, 2]);
     }
 }
