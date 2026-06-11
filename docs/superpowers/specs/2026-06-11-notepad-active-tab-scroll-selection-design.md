@@ -16,8 +16,8 @@ Un panneau intégré pour rédiger des prompts, les copier au presse-papier, et 
 - Le terminal s'adapte : il ne doit **jamais être recouvert** — le panneau prend sa place dans le layout et le terminal rétrécit. Le `ResizeObserver` existant (`TerminalWebGPU.tsx:700`) redimensionne le PTY automatiquement, aucun travail supplémentaire.
 - Structure du panneau, de haut en bas :
   1. En-tête : titre « Bloc-note » + nom du projet actif + bouton fermer.
-  2. Zone d'écriture : `textarea` multi-lignes (hauteur confortable, ~8 lignes, scrollable).
-  3. Bouton « Copier » (raccourci `Ctrl+Entrée` dans la textarea).
+  2. Zone d'écriture : `textarea` multi-lignes, **hauteur par défaut ≈ moitié de l'écran** (`window.innerHeight / 2`), **redimensionnable verticalement** par un séparateur de drag entre l'éditeur et l'historique (min 120 px, max = hauteur fenêtre − 160 px). Hauteur persistée dans `notepad.json` (clé globale `editorHeight`).
+  3. Bouton « Copier ».
   4. Historique : liste scrollable des messages archivés, du plus récent au plus ancien. Chaque entrée : aperçu tronqué (2-3 lignes max) + au survol, actions « recharger dans l'éditeur » et « supprimer ». Clic sur l'entrée = re-copie au presse-papier (feedback visuel bref).
 
 ### Ouverture / fermeture
@@ -25,7 +25,8 @@ Un panneau intégré pour rédiger des prompts, les copier au presse-papier, et 
 - **Icône bloc-note dans la toolbar** (`Toolbar.tsx`), placée juste à **gauche du bouton paramètres** en haut à droite. Même style que le bouton paramètres existant (icône lucide `NotebookPen`, taille 14, mêmes classes). Toggle ouvre/ferme le panneau ; état visuel « actif » quand le panneau est ouvert.
 - Pas de raccourci clavier global d'ouverture.
 - `Échap` : ferme le panneau quand le focus est à l'intérieur.
-- `Ctrl+Entrée` dans la textarea : équivalent au bouton « Copier ».
+- **Validation clavier** : `Ctrl+A` puis `Ctrl+C` ou `Ctrl+X` — copier ou couper **l'intégralité** du texte (sélection couvrant tout le contenu) archive le message et vide la zone, comme le bouton « Copier ». Une copie partielle reste une copie ordinaire. Remplace l'ancien `Ctrl+Entrée`, retiré.
+- **Collage d'image (capture d'écran)** : coller une image (ex. PrintScreen) dans la textarea sauvegarde le fichier via la commande backend `save_screenshot` dans `<app-data>/screenshots/screenshot-<timestamp>.<ext>` et insère le **chemin absolu** au curseur, prêt pour un prompt. Le collage de texte reste natif.
 - **Édition classique** : la zone d'écriture est une `textarea` native — Ctrl+A (tout sélectionner), Ctrl+C/X/V, Ctrl+flèches (saut de mot), Maj+flèches (sélection), Ctrl+Backspace, undo/redo natifs fonctionnent comme dans un bloc-note classique. Aucun handler clavier global de l'app ne doit intercepter ces touches quand le focus est dans le panneau (les handlers du terminal sont scopés à leur élément — vérifier seulement qu'aucun listener `window` n'interfère).
 
 ### Comportement « Copier »
