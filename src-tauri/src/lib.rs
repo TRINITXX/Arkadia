@@ -1,6 +1,7 @@
 mod agent_registry;
 mod claude_watcher;
 mod fonts;
+mod screenshots;
 mod terminal;
 mod terminal_state;
 
@@ -10,6 +11,7 @@ use std::sync::Arc;
 use agent_registry::AgentRegistry;
 use claude_watcher::watcher::run_watcher;
 use fonts::get_font_data;
+use screenshots::save_screenshot;
 use tauri::{Emitter, Manager};
 use terminal::{
     close_terminal, get_text_range, request_render, resize_terminal, scroll_terminal,
@@ -79,6 +81,7 @@ pub fn run() {
             agent_state_for_project,
             open_path,
             resolve_path_at,
+            save_screenshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
