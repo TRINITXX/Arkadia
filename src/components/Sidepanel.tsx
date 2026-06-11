@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   closestCenter,
   DndContext,
@@ -184,6 +184,21 @@ export function Sidepanel({
 }: SidepanelProps) {
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null);
   const [view, setView] = useState<"active" | "inactive">("inactive");
+
+  // Auto-switch to the Active tab when a project transitions inactive→active
+  // (the user typed in one of its terminals). Never switches back the other way.
+  const prevActiveIdsRef = useRef<ReadonlySet<string> | null>(null);
+  useEffect(() => {
+    const prev = prevActiveIdsRef.current;
+    prevActiveIdsRef.current = activeProjectIds;
+    if (!prev) return; // initial render — keep the default view
+    for (const id of activeProjectIds) {
+      if (!prev.has(id)) {
+        setView("active");
+        return;
+      }
+    }
+  }, [activeProjectIds]);
 
   // "Active" tab: flat list of active projects, sorted by name.
   const activeProjects = useMemo(
