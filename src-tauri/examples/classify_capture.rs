@@ -18,19 +18,36 @@ fn main() {
     println!("--- per visible row: col0 cell ---");
     for row in 0..45u16 {
         let cell = t.cell_at(0, row, 0);
-        let (text, fg, width) = match cell {
-            Some(c) => (c.text.clone(), format!("{:?}", c.attrs.fg), c.width),
-            None => ("<none>".into(), "-".into(), 0),
+        let (text, fg, bg) = match cell {
+            Some(c) => (
+                c.text.clone(),
+                format!("{:?}", c.attrs.fg),
+                format!("{:?}", c.attrs.bg),
+            ),
+            None => ("<none>".into(), "-".into(), "-".into()),
         };
-        // First 20 cols of text for context.
+        // bg at a few columns to see how far a block background extends.
+        let bg_at = |col: u16| {
+            t.cell_at(0, row, col)
+                .map(|c| match &c.attrs.bg {
+                    termwiz::color::ColorAttribute::Default => "D".to_string(),
+                    other => format!("{other:?}").chars().take(28).collect(),
+                })
+                .unwrap_or_default()
+        };
         let mut line = String::new();
-        for col in 0..30u16 {
+        for col in 0..40u16 {
             if let Some(c) = t.cell_at(0, row, col) {
                 if c.width > 0 {
                     line.push_str(&c.text);
                 }
             }
         }
-        println!("row {row:2}: col0={text:?} w={width} fg={fg} | {line:?}");
+        println!(
+            "row {row:2}: col0={text:?} fg={fg} bg0={bg} bg5={} bg60={} bg120={} | {line:?}",
+            bg_at(5),
+            bg_at(60),
+            bg_at(120)
+        );
     }
 }

@@ -102,16 +102,46 @@ fn main() {
     };
 
     for (kind, label) in [(1u8, "user"), (2u8, "claude")] {
+        let mut anchor: Option<u64> = None;
         for i in 0..3 {
-            let ok = wheel_navigate(&term, send_wheel, kind, -1, ROWS);
+            let (ok, t) = wheel_navigate(&term, send_wheel, kind, -1, ROWS, anchor);
+            anchor = t;
             println!("--- prev {label} #{i} -> {ok}");
             dump_center(label);
         }
+        if kind == 2 {
+            // And one hop forward (newer).
+            let (ok, _) = wheel_navigate(&term, send_wheel, 2, 1, ROWS, anchor);
+            println!("--- next claude -> {ok}");
+            dump_center("claude+1");
+        }
     }
-    // And one hop forward (newer).
-    let ok = wheel_navigate(&term, send_wheel, 2, 1, ROWS);
-    println!("--- next claude -> {ok}");
-    dump_center("claude+1");
+
+    // Sanity probe: is wheel-down processed at all right now?
+    {
+        let t = term.lock();
+        println!(
+            "post: on_alt={} mouse={:?} hash={:x}",
+            t.is_on_alt_screen(),
+            t.mouse_protocol(),
+            t.screen_content_hash()
+        );
+    }
+    for _ in 0..10 {
+        send_wheel(false);
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let t = term.lock();
+        println!("after 10 wheel-downs: hash={:x}", t.screen_content_hash());
+    }
+    dump_center("post-down");
+    match child.try_wait() {
+        Ok(Some(status)) => println!("claude EXITED during the test: {status:?}"),
+        Ok(None) => println!("claude still alive"),
+        Err(e) => println!("try_wait error: {e}"),
+    }
 
     let _ = child.kill();
 }

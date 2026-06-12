@@ -20,25 +20,25 @@ const MESSAGE_NAV = [
     kind: 1,
     dir: -1,
     title: "Previous message (you)",
-    className: "bg-[rgba(34,197,94,0.12)] hover:bg-[rgba(34,197,94,0.28)]",
+    className: "bg-[rgba(34,197,94,0.06)] hover:bg-[rgba(34,197,94,0.14)]",
   },
   {
     kind: 1,
     dir: 1,
     title: "Next message (you)",
-    className: "bg-[rgba(34,197,94,0.12)] hover:bg-[rgba(34,197,94,0.28)]",
+    className: "bg-[rgba(34,197,94,0.06)] hover:bg-[rgba(34,197,94,0.14)]",
   },
   {
     kind: 2,
     dir: -1,
     title: "Previous message (Claude)",
-    className: "bg-[rgba(168,85,247,0.12)] hover:bg-[rgba(168,85,247,0.28)]",
+    className: "bg-[rgba(168,85,247,0.06)] hover:bg-[rgba(168,85,247,0.14)]",
   },
   {
     kind: 2,
     dir: 1,
     title: "Next message (Claude)",
-    className: "bg-[rgba(168,85,247,0.12)] hover:bg-[rgba(168,85,247,0.28)]",
+    className: "bg-[rgba(168,85,247,0.06)] hover:bg-[rgba(168,85,247,0.14)]",
   },
 ] as const;
 

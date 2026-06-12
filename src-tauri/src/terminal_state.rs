@@ -354,13 +354,23 @@ impl TerminalState {
         let sb_len = self.scrollback_len();
         let total = sb_len + self.active_screen().len();
         let first = sb_len - offset; // total row of visible row 0
-        // Kind of the block enclosing the first visible row: nearest head at
-        // or above it. Heads are O(1) to test, so the walk up is cheap.
+        // Block state at the first visible row: replay from the nearest head
+        // at or above it. Heads are O(1) to test, so the walk up is cheap.
         let mut cur = MessageKind::None;
+        let mut head_row = None;
         for r in (0..=first).rev() {
-            if let Some(kind) = self.line_at_total(r as u32).and_then(block_head_kind) {
-                cur = kind;
-                break;
+            if let Some(line) = self.line_at_total(r as u32) {
+                if block_head_kind(line).is_some() {
+                    head_row = Some(r);
+                    break;
+                }
+            }
+        }
+        if let Some(hr) = head_row {
+            for r in hr..first {
+                if let Some(line) = self.line_at_total(r as u32) {
+                    cur = advance_block(cur, line);
+                }
             }
         }
         let mut kinds = Vec::with_capacity(rows);
@@ -370,10 +380,8 @@ impl TerminalState {
                 kinds.push(0);
                 continue;
             };
-            if let Some(kind) = block_head_kind(line) {
-                cur = kind;
-            }
-            if line_is_blank(line) {
+            cur = advance_block(cur, line);
+            if cur == MessageKind::Claude && line_is_blank(line) {
                 // Tint only interior gaps: scan to the next non-blank line of
                 // the same block (bounded by the gap length).
                 let mut k = MessageKind::None;
@@ -1147,6 +1155,30 @@ fn hash_line(line: &[TerminalCell]) -> u64 {
     h.finish()
 }
 
+/// True when the row carries Claude Code's "user prompt" background — the
+/// grey band it paints across the full width of transcript user messages.
+/// The live input box `❯` has a default background, so it never matches.
+fn col0_has_bg(line: &[TerminalCell]) -> bool {
+    line.first()
+        .map(|c| c.attrs.bg != ColorAttribute::Default)
+        .unwrap_or(false)
+}
+
+/// Advances the block state over one line. A head line switches blocks; a
+/// user block is exactly Claude Code's grey background band, so the first
+/// row without it ends the block (indented content below a user prompt —
+/// image placeholders, the sticky last-prompt header's surroundings — must
+/// not inherit the user kind). Claude blocks keep the indent rule.
+fn advance_block(cur: MessageKind, line: &[TerminalCell]) -> MessageKind {
+    if let Some(kind) = block_head_kind(line) {
+        return kind;
+    }
+    if cur == MessageKind::User && !col0_has_bg(line) {
+        return MessageKind::None;
+    }
+    cur
+}
+
 /// `Some(kind)` when the line starts a block (non-space character in column
 /// 0); `Some(MessageKind::None)` for blocks we don't tint (tool output,
 /// banners, …); `None` for continuation/blank lines.
@@ -1157,10 +1189,10 @@ fn block_head_kind(line: &[TerminalCell]) -> Option<MessageKind> {
         return None;
     }
     let kind = match ch {
-        // Claude Code transcript user messages: `❯ text` (grey). The live
-        // input prompt is also `❯` but with nothing after it (NBSP only) —
-        // requiring content excludes the empty prompt.
-        "❯" if !line_is_blank(&line[1..]) => MessageKind::User,
+        // Claude Code transcript user messages: `❯ text` over the grey
+        // full-width background band. The live input box `❯` (and text being
+        // typed there) has a default background, so it never matches.
+        "❯" if col0_has_bg(line) && !line_is_blank(&line[1..]) => MessageKind::User,
         // Assistant text bullet: white/default `●` (or `⏺` on some versions).
         // Colored bullets (tool calls, todos) don't match the white check.
         "●" | "⏺" if is_default_or_white_fg(&head.attrs.fg) => MessageKind::Claude,
@@ -1173,8 +1205,12 @@ fn block_head_kind(line: &[TerminalCell]) -> Option<MessageKind> {
 /// scrolling, so we emit wheel events via `send_wheel(up)` and watch the
 /// redrawn grid until a marker line of `kind` reaches the vertical center.
 /// `dir` < 0 targets an older message (above), else a newer one (below).
-/// Returns true when a target was found (centered, or as close as the app's
-/// scroll granularity allows); false when no message exists in `dir`.
+///
+/// `prev_target` is the line hash of the message a previous call navigated
+/// to: when it is still on screen, the next target is picked relative to IT
+/// — this is what makes successive clicks progress message by message even
+/// though the app's wheel granularity leaves "centered" messages a few rows
+/// off-center. Returns (found, target hash to remember for the next call).
 ///
 /// The grid is re-read on every iteration — a PTY reader thread keeps
 /// feeding `term` concurrently while this loop sleeps between probes.
@@ -1184,21 +1220,24 @@ pub fn wheel_navigate(
     kind: u8,
     dir: i32,
     rows: u16,
-) -> bool {
+    prev_target: Option<u64>,
+) -> (bool, Option<u64>) {
     let center = (rows / 2) as i32;
-    // The app scrolls a few lines per wheel notch, so a "centered" message
-    // can rest up to NEAR rows off-center. A marker within NEAR of center is
-    // the currently-centered one: the next target is picked relative to its
-    // row (never re-picked itself), which keeps adjacent messages reachable
-    // and successive clicks progressing.
-    const NEAR: i32 = 3;
+    // Fallback anchor when the remembered target is gone (first click, user
+    // scrolled away, content changed): a marker within NEAR of the center is
+    // considered "the current message".
+    const NEAR: i32 = 5;
     let pick = |markers: &[(u16, u64)]| -> Option<(i32, u64)> {
         let rows_i: Vec<(i32, u64)> = markers.iter().map(|&(r, h)| (r as i32, h)).collect();
-        let anchor = rows_i
-            .iter()
-            .map(|&(r, _)| r)
-            .min_by_key(|r| (r - center).abs())
-            .filter(|r| (r - center).abs() <= NEAR)
+        let anchor = prev_target
+            .and_then(|h| rows_i.iter().find(|&&(_, hh)| hh == h).map(|&(r, _)| r))
+            .or_else(|| {
+                rows_i
+                    .iter()
+                    .map(|&(r, _)| r)
+                    .min_by_key(|r| (r - center).abs())
+                    .filter(|r| (r - center).abs() <= NEAR)
+            })
             .unwrap_or(center);
         if dir < 0 {
             rows_i.iter().rev().copied().find(|&(r, _)| r < anchor)
@@ -1210,7 +1249,8 @@ pub fn wheel_navigate(
     let mut target: Option<u64> = None;
     let mut last_dist = i32::MAX;
     let mut stale = 0u32;
-    for _ in 0..400 {
+    let mut blind = 0u32;
+    for _ in 0..150 {
         let (markers, screen_hash) = {
             let t = term.lock();
             (t.visible_markers_with_hash(kind), t.screen_content_hash())
@@ -1233,13 +1273,22 @@ pub fn wheel_navigate(
             // Centered — or one wheel notch past center, which is as close
             // as the app's scroll granularity allows.
             if dist.abs() <= 1 || dist.abs() > last_dist {
-                return true;
+                return (true, target);
             }
             last_dist = dist.abs();
+            blind = 0;
             dist < 0 // target above center → wheel-up moves content down
         } else {
+            // No candidate on screen: scroll blindly toward `dir`, but give
+            // up after a while — regions dense in tool output can go hundreds
+            // of lines without a message of the requested kind.
+            blind += 1;
+            if blind > 60 {
+                return (false, prev_target);
+            }
             dir < 0
         };
+        let sent_at = std::time::Instant::now();
         send_wheel(scroll_up);
 
         // Wait for the app to repaint (Claude Code repaints within ~50ms).
@@ -1255,13 +1304,21 @@ pub fn wheel_navigate(
             stale = 0;
         } else {
             stale += 1;
-            if stale >= 3 {
+            if stale >= 2 {
                 // Edge of the transcript: nothing further in that direction.
-                return target.is_some();
+                return (target.is_some(), target.or(prev_target));
             }
         }
+        // Throttle: Claude Code coalesces rapid wheel events and its scroll
+        // state machine wedges at the buffer edges when slammed (verified
+        // empirically — 30ms gaps wedge it, 250ms never does). Keep a humane
+        // cadence between events.
+        let elapsed = sent_at.elapsed();
+        if elapsed < std::time::Duration::from_millis(150) {
+            std::thread::sleep(std::time::Duration::from_millis(150) - elapsed);
+        }
     }
-    target.is_some()
+    (target.is_some(), target.or(prev_target))
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1768,11 +1825,15 @@ three");
         assert_eq!(t.text_range(0, 50, 9, 99), "");
     }
 
+    /// Claude Code paints user messages over a grey background band.
+    const USER_BG: &str = "\x1b[48;2;55;55;55m";
+
     #[test]
     fn message_markers_user_and_white_bullet_only() {
         let mut t = TerminalState::new(10, 40);
         t.advance_bytes(
-            "❯ hello\r\n  continued\r\n\r\n\x1b[32m●\x1b[0m tool call\r\n● answer\r\n".as_bytes(),
+            format!("{USER_BG}❯ hello\x1b[0m\r\n{USER_BG}  continued\x1b[0m\r\n\r\n\x1b[32m●\x1b[0m tool call\r\n● answer\r\n")
+                .as_bytes(),
         );
         let markers = t.message_markers();
         assert_eq!(markers.len(), 2);
@@ -1787,7 +1848,7 @@ three");
         // `❯` user line, pure-white `●` assistant line, green `●` tool call,
         // `⎿` result.
         t.advance_bytes(
-            "\x1b[38;2;80;80;80m❯\x1b[0m fix the bug please\r\n\r\n\x1b[38;2;255;255;255m●\x1b[0m Looking at it.\r\n\r\n\x1b[38;2;78;186;101m●\x1b[0m Bash(cargo test)\r\n  ⎿ ok\r\n"
+            "\x1b[48;2;55;55;55m\x1b[38;2;80;80;80m❯\x1b[39m fix the bug please\x1b[0m\r\n\r\n\x1b[38;2;255;255;255m●\x1b[0m Looking at it.\r\n\r\n\x1b[38;2;78;186;101m●\x1b[0m Bash(cargo test)\r\n  ⎿ ok\r\n"
                 .as_bytes(),
         );
         let markers = t.message_markers();
@@ -1802,7 +1863,7 @@ three");
         // Claude Code runs its TUI on the alt screen (DEC 1049).
         t.advance_bytes(b"\x1b[?1049h");
         t.advance_bytes(
-            "\x1b[38;2;80;80;80m❯\x1b[0m hello\r\n\r\n\x1b[38;2;255;255;255m●\x1b[0m Answer text.\r\n  wrapped line\r\n"
+            "\x1b[48;2;55;55;55m\x1b[38;2;80;80;80m❯\x1b[39m hello\x1b[0m\r\n\r\n\x1b[38;2;255;255;255m●\x1b[0m Answer text.\r\n  wrapped line\r\n"
                 .as_bytes(),
         );
         assert!(t.is_on_alt_screen());
@@ -1841,25 +1902,41 @@ three");
     }
 
     #[test]
-    fn bare_prompt_is_not_a_user_marker() {
+    fn input_box_prompt_is_never_a_user_marker() {
         let mut t = TerminalState::new(4, 20);
+        // The live input box renders with a default background — empty or
+        // while typing, it must not classify as a user message.
         t.advance_bytes("❯ ".as_bytes());
         assert!(t.message_markers().is_empty());
-        // With typed content it becomes one.
         t.advance_bytes(b"hi");
-        let markers = t.message_markers();
-        assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0].kind, 1);
+        assert!(t.message_markers().is_empty());
+        assert_eq!(t.visible_line_kinds(0), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn sticky_prompt_header_tints_only_its_own_row() {
+        let mut t = TerminalState::new(6, 40);
+        // When scrolled, Claude Code pins the last user prompt at row 0; the
+        // unrelated (default-bg) content below must not inherit the kind.
+        t.advance_bytes(
+            format!(
+                "{USER_BG}❯ mon dernier prompt\x1b[0m\r\n     placeholder content\r\n     more content\r\n"
+            )
+            .as_bytes(),
+        );
+        let kinds = t.visible_line_kinds(0);
+        assert_eq!(kinds, vec![1, 0, 0, 0, 0, 0]);
     }
 
     #[test]
     fn visible_line_kinds_blocks_and_trailing_gaps() {
         let mut t = TerminalState::new(10, 40);
         t.advance_bytes(
-            "❯ hello\r\n  continued\r\n\r\n\x1b[32m●\x1b[0m tool call\r\n● answer\r\n".as_bytes(),
+            format!("{USER_BG}❯ hello\x1b[0m\r\n{USER_BG}  continued\x1b[0m\r\n\r\n\x1b[32m●\x1b[0m tool call\r\n● answer\r\n")
+                .as_bytes(),
         );
         let kinds = t.visible_line_kinds(0);
-        // Row 2 is a trailing gap before the next block → untinted. The
+        // Row 2 is a default-bg gap before the next block → untinted. The
         // blank rows after "● answer" trail to EOF → untinted too.
         assert_eq!(kinds, vec![1, 1, 0, 0, 2, 0, 0, 0, 0, 0]);
     }

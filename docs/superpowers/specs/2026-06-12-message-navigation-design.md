@@ -8,10 +8,12 @@ Status: approved
 When a pane runs Claude Code, let the user (a) visually distinguish conversation
 messages while scrolling, and (b) jump between them with toolbar buttons.
 
-- **User messages** — blocks whose head line starts with `❯` at column 0
-  with content after it (the empty live prompt `❯` + NBSP is excluded).
-  Ground truth from a ConPTY capture of the real app: `❯ text` in grey
-  truecolor #505050.
+- **User messages** — head line `❯` at column 0 **over Claude Code's grey
+  background band** (truecolor ≈ #373737, painted across the full row). The
+  block extends exactly as far as the grey band does. The live input box `❯`
+  (empty or while typing) has a default background and never matches; the
+  sticky last-prompt header shown when scrolled tints only its own row.
+  Ground truth from a ConPTY capture: `❯ text`, fg grey #505050, bg #373737.
 - **Claude messages** — blocks whose head line starts with `●` (U+25CF, pure
   white truecolor in the capture; `⏺` U+23FA accepted as fallback) at
   column 0, rendered in the **default/white-ish** foreground (truecolor
@@ -28,10 +30,12 @@ navigation cannot use `scroll_terminal`.
 ### 1. Permanent line tint
 
 Every line belonging to a message block gets a subtle background tint
-(~12% opacity over the palette background — just visible while scrolling):
+(~6% opacity over the palette background — just visible while scrolling):
 
-- User blocks → green (`#22c55e` @ 12%)
-- Claude blocks → purple (`#a855f7` @ 12%)
+- User blocks → green (`#22c55e` @ 6%). The green **replaces** Claude Code's
+  own grey band (every run is repainted on user rows).
+- Claude blocks → purple (`#a855f7` @ 6%), default-bg runs only (diffs/code
+  backgrounds inside a response stay intact).
 
 Block extent rule (matches Claude Code layout): a line with a non-space
 character at column 0 starts a new block; indented and blank lines belong to
@@ -79,10 +83,16 @@ In the toolbar, left of the notepad button:
     offset directly (same math as search hits) and re-emit.
   - **Alt screen** (Claude Code): `wheel_navigate` sends SGR wheel events to
     the PTY and watches the redrawn grid until the target marker reaches the
-    vertical center. Targets are picked relative to the marker currently
-    nearest the center (±3 rows — the app scrolls ~3 lines per notch), so
-    successive clicks progress message by message and adjacent messages are
-    never skipped. Stops at the transcript edges (screen stops changing).
+    vertical center. The anchor is the message navigated to by the previous
+    click (line hash remembered per session in `Session.nav_target`), falling
+    back to the marker nearest the center — successive clicks progress
+    message by message and adjacent messages are never skipped. Stops at the
+    transcript edges (screen stops changing) and bails after ~60 blind
+    notches when no message of the kind exists nearby.
+    **Throttled to ≥150ms between wheel events**: Claude Code coalesces
+    rapid wheel input and its scroll state machine wedges at the buffer top
+    when slammed (30ms gaps wedge it irrecoverably, 250ms never does —
+    verified with `examples/wheel_probe.rs`).
 - `list_message_markers(session_id)` kept as a debugging command.
 - Debug examples (`src-tauri/examples/`): `capture_claude.rs` (ConPTY raw
   capture of a resumed session), `classify_capture.rs` (classification dump),

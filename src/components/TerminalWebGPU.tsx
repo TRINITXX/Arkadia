@@ -238,24 +238,33 @@ function applyHoverHighlight(
 /**
  * Paints the permanent conversation tint behind message lines (`line_kinds`
  * from the backend: 1 = user → green, 2 = Claude → purple). Applied first in
- * the redraw chain so search/hover highlights keep priority. Only runs whose
- * background is still `default` are tinted — colored TUI backgrounds stay
- * untouched.
+ * the redraw chain so search/hover highlights keep priority.
+ *
+ * User rows: every run is repainted — Claude Code already draws its own grey
+ * band over user prompts, and the green must replace it, not hide under it.
+ * Claude rows: only default-background runs, so colored content inside a
+ * response (diffs, code blocks) keeps its background.
  */
 function applyMessageTint(screen: RenderPayload, bg: string): RenderPayload {
   const kinds = screen.line_kinds;
   if (!kinds || !kinds.some((k) => k === 1 || k === 2)) return screen;
-  const tints: Record<number, CellColor> = {
-    1: { kind: "rgb", value: mixHex(bg, USER_TINT, MESSAGE_TINT_ALPHA) },
-    2: { kind: "rgb", value: mixHex(bg, CLAUDE_TINT, MESSAGE_TINT_ALPHA) },
+  const userTint: CellColor = {
+    kind: "rgb",
+    value: mixHex(bg, USER_TINT, MESSAGE_TINT_ALPHA),
+  };
+  const claudeTint: CellColor = {
+    kind: "rgb",
+    value: mixHex(bg, CLAUDE_TINT, MESSAGE_TINT_ALPHA),
   };
   const newLines = screen.lines.slice();
   for (let row = 0; row < newLines.length; row++) {
-    const tint = tints[kinds[row]];
-    if (!tint) continue;
-    newLines[row] = newLines[row].map((run) =>
-      run.bg.kind === "default" ? { ...run, bg: tint } : run,
-    );
+    if (kinds[row] === 1) {
+      newLines[row] = newLines[row].map((run) => ({ ...run, bg: userTint }));
+    } else if (kinds[row] === 2) {
+      newLines[row] = newLines[row].map((run) =>
+        run.bg.kind === "default" ? { ...run, bg: claudeTint } : run,
+      );
+    }
   }
   return { ...screen, lines: newLines };
 }

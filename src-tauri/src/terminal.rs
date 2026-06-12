@@ -38,6 +38,9 @@ pub struct Session {
     writer: SharedWriter,
     term: SharedTerm,
     scroll_offset: Arc<AtomicU32>,
+    /// (kind, line hash) of the message the last `navigate_message` call
+    /// landed on — the anchor that makes successive clicks progress.
+    nav_target: Arc<Mutex<Option<(u8, u64)>>>,
     stop: Arc<AtomicBool>,
     _child: Box<dyn portable_pty::Child + Send + Sync>,
 }
@@ -444,6 +447,7 @@ pub fn spawn_terminal(
             writer,
             term,
             scroll_offset,
+            nav_target: Arc::new(Mutex::new(None)),
             stop,
             _child: child,
         },
@@ -802,12 +806,17 @@ pub fn navigate_message(
 ) -> Result<bool, String> {
     // Clone the handles out so the sessions-map lock is not held while the
     // alt-screen loop sleeps (other commands keep working during navigation).
-    let (term, writer, scroll_offset) = {
+    let (term, writer, scroll_offset, nav_target) = {
         let sessions = state.sessions.lock();
         let s = sessions
             .get(&session_id)
             .ok_or_else(|| format!("unknown session {session_id}"))?;
-        (s.term.clone(), s.writer.clone(), s.scroll_offset.clone())
+        (
+            s.term.clone(),
+            s.writer.clone(),
+            s.scroll_offset.clone(),
+            s.nav_target.clone(),
+        )
     };
     let dir: i32 = if dir < 0 { -1 } else { 1 };
 
@@ -861,9 +870,15 @@ pub fn navigate_message(
         let _ = w.write_all(&bytes);
         let _ = w.flush();
     };
-    Ok(crate::terminal_state::wheel_navigate(
-        &term, send_wheel, kind, dir, rows,
-    ))
+    // Anchor on the previously-navigated message of the same kind, if any.
+    let prev = (*nav_target.lock())
+        .filter(|&(k, _)| k == kind)
+        .map(|(_, h)| h);
+    let (found, target) = crate::terminal_state::wheel_navigate(
+        &term, send_wheel, kind, dir, rows, prev,
+    );
+    *nav_target.lock() = target.map(|h| (kind, h));
+    Ok(found)
 }
 
 #[tauri::command]

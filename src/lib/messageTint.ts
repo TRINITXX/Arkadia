@@ -3,7 +3,7 @@
  * the toolbar navigation buttons so both render the exact same color at the
  * exact same opacity.
  */
-export const MESSAGE_TINT_ALPHA = 0.12;
+export const MESSAGE_TINT_ALPHA = 0.06;
 /** User messages (`❯`) — green-500. */
 export const USER_TINT = "#22c55e";
 /** Claude messages (white `●`) — purple-500. */
