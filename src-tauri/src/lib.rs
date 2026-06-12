@@ -3,7 +3,7 @@ mod claude_watcher;
 mod fonts;
 mod screenshots;
 mod terminal;
-mod terminal_state;
+pub mod terminal_state;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,8 +14,9 @@ use fonts::get_font_data;
 use screenshots::save_screenshot;
 use tauri::{Emitter, Manager};
 use terminal::{
-    close_terminal, get_text_range, list_message_markers, request_render, resize_terminal,
-    scroll_terminal, search_terminal, send_input, send_mouse_event, spawn_terminal, SessionMap,
+    close_terminal, get_text_range, list_message_markers, navigate_message, request_render,
+    resize_terminal, scroll_terminal, search_terminal, send_input, send_mouse_event,
+    spawn_terminal, SessionMap,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -75,6 +76,7 @@ pub fn run() {
             scroll_terminal,
             search_terminal,
             list_message_markers,
+            navigate_message,
             get_text_range,
             send_mouse_event,
             get_font_data,

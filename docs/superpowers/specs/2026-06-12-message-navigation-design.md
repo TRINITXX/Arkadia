@@ -8,13 +8,20 @@ Status: approved
 When a pane runs Claude Code, let the user (a) visually distinguish conversation
 messages while scrolling, and (b) jump between them with toolbar buttons.
 
-- **User messages** — blocks whose head line starts with `>` or `❯` at
-  column 0 (Claude Code renders past user messages as a dim `> text`; `❯` is
-  the input prompt, accepted too).
-- **Claude messages** — blocks whose head line starts with `⏺` (U+23FA, the
-  glyph current Claude Code uses) or `●` (U+25CF fallback) at column 0,
-  rendered in the **default/white-ish** foreground (truecolor ≥ 0.7 per
-  channel). Colored bullets (tool calls, todos) are ignored.
+- **User messages** — blocks whose head line starts with `❯` at column 0
+  with content after it (the empty live prompt `❯` + NBSP is excluded).
+  Ground truth from a ConPTY capture of the real app: `❯ text` in grey
+  truecolor #505050.
+- **Claude messages** — blocks whose head line starts with `●` (U+25CF, pure
+  white truecolor in the capture; `⏺` U+23FA accepted as fallback) at
+  column 0, rendered in the **default/white-ish** foreground (truecolor
+  ≥ 0.7 per channel). Colored bullets (tool calls, todos) are ignored.
+
+**Critical environmental fact (found the hard way):** Claude Code runs its
+TUI on the **alt screen** (DEC 1049) with full mouse tracking (1003 + SGR
+1006) and scrolls its transcript internally. Arkadia's scrollback is empty
+for those panes, so classification must run on the visible alt screen and
+navigation cannot use `scroll_terminal`.
 
 ## Features
 
@@ -64,9 +71,22 @@ In the toolbar, left of the notepad button:
 
 ### Rust — `terminal.rs` / `lib.rs`
 
-- `RenderPayload.line_kinds: Vec<u8>` filled in `emit_render`.
-- New Tauri command `list_message_markers(session_id) -> Vec<MessageMarker>`,
-  registered in `lib.rs`. Invoked on demand (button click only).
+- `RenderPayload.line_kinds: Vec<u8>` filled in `emit_render`. On the alt
+  screen the visible screen is classified as-is (no scrollback).
+- Tauri command `navigate_message(session_id, kind, dir) -> bool` with two
+  strategies:
+  - **Main screen**: markers live in Arkadia's scrollback — set the scroll
+    offset directly (same math as search hits) and re-emit.
+  - **Alt screen** (Claude Code): `wheel_navigate` sends SGR wheel events to
+    the PTY and watches the redrawn grid until the target marker reaches the
+    vertical center. Targets are picked relative to the marker currently
+    nearest the center (±3 rows — the app scrolls ~3 lines per notch), so
+    successive clicks progress message by message and adjacent messages are
+    never skipped. Stops at the transcript edges (screen stops changing).
+- `list_message_markers(session_id)` kept as a debugging command.
+- Debug examples (`src-tauri/examples/`): `capture_claude.rs` (ConPTY raw
+  capture of a resumed session), `classify_capture.rs` (classification dump),
+  `navigate_live.rs` (end-to-end wheel navigation against the real app).
 
 ### Frontend — `types.ts`, `TerminalWebGPU.tsx`
 

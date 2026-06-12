@@ -781,6 +781,91 @@ pub fn search_terminal(
     Ok(hits)
 }
 
+/// Navigates the conversation to the previous/next message of `kind`
+/// (1 = user `❯`, 2 = Claude white `●`). `dir` < 0 = older (up), else newer.
+/// Returns false when there is no further message in that direction.
+///
+/// Two strategies:
+/// - Main screen: the transcript lives in Arkadia's scrollback — jump by
+///   setting the scroll offset directly (same math as search hits).
+/// - Alt screen (Claude Code's TUI): Arkadia has no scrollback there; the
+///   app owns scrolling and subscribes to mouse tracking. We send SGR wheel
+///   events to the PTY and watch the redrawn grid until the target marker
+///   line reaches the vertical center.
+#[tauri::command]
+pub fn navigate_message(
+    app: AppHandle,
+    session_id: String,
+    kind: u8,
+    dir: i32,
+    state: State<'_, SessionMap>,
+) -> Result<bool, String> {
+    // Clone the handles out so the sessions-map lock is not held while the
+    // alt-screen loop sleeps (other commands keep working during navigation).
+    let (term, writer, scroll_offset) = {
+        let sessions = state.sessions.lock();
+        let s = sessions
+            .get(&session_id)
+            .ok_or_else(|| format!("unknown session {session_id}"))?;
+        (s.term.clone(), s.writer.clone(), s.scroll_offset.clone())
+    };
+    let dir: i32 = if dir < 0 { -1 } else { 1 };
+
+    let (on_alt, mouse_proto, encoding, rows) = {
+        let t = term.lock();
+        (
+            t.is_on_alt_screen(),
+            t.mouse_protocol(),
+            t.mouse_encoding(),
+            t.screen_size().0,
+        )
+    };
+    let center = (rows / 2) as i32;
+
+    if !on_alt {
+        let target: Option<i64> = {
+            let t = term.lock();
+            let sb = t.scrollback_len() as i64;
+            let offset = t.clamp_scroll(scroll_offset.load(Ordering::Acquire)) as i64;
+            let cur_center = sb - offset + center as i64;
+            let rows_of_kind: Vec<i64> = t
+                .message_markers()
+                .into_iter()
+                .filter(|m| m.kind == kind)
+                .map(|m| m.total_row as i64)
+                .collect();
+            let tgt = if dir < 0 {
+                rows_of_kind.into_iter().rev().find(|&r| r < cur_center)
+            } else {
+                rows_of_kind.into_iter().find(|&r| r > cur_center)
+            };
+            tgt.map(|t_row| (sb - t_row + center as i64).clamp(0, sb))
+        };
+        let Some(desired) = target else {
+            return Ok(false);
+        };
+        scroll_offset.store(desired as u32, Ordering::Release);
+        emit_render(&app, &session_id, &term, &scroll_offset);
+        return Ok(true);
+    }
+
+    // Alt screen: without mouse tracking we have no way to scroll the app.
+    if mouse_proto == MouseProtocol::None {
+        return Ok(false);
+    }
+
+    let send_wheel = |up: bool| {
+        let button = if up { 64 } else { 65 };
+        let bytes = encode_mouse(button, 5, rows / 2, 0, false, true, encoding);
+        let mut w = writer.lock();
+        let _ = w.write_all(&bytes);
+        let _ = w.flush();
+    };
+    Ok(crate::terminal_state::wheel_navigate(
+        &term, send_wheel, kind, dir, rows,
+    ))
+}
+
 #[tauri::command]
 pub fn list_message_markers(
     session_id: String,

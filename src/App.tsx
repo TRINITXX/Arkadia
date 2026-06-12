@@ -39,7 +39,6 @@ import {
   type CustomPalette,
   type CwdPayload,
   type EditorProtocol,
-  type MessageMarker,
   type PaletteId,
   type PaneState,
   type Project,
@@ -935,39 +934,20 @@ export function App() {
   };
 
   // Jump to the previous/next conversation message (kind 1 = user `❯`,
-  // 2 = Claude white `●`) in the active pane. The current position is the
-  // viewport's center row in total coordinates; the target head row is
-  // centered with the same math as the search-hit scroll.
+  // 2 = Claude white `●`) in the active pane. The backend owns the strategy:
+  // direct scrollback jump on the main screen, wheel-event feedback loop on
+  // the alt screen (Claude Code scrolls its own transcript).
   const navigateMessage = useCallback(
     async (kind: 1 | 2, dir: -1 | 1) => {
       const tab = tabs.find((t) => t.id === activeTabId);
       const pane = tab ? tab.panes[tab.activePaneId] : undefined;
-      const screen = pane?.screen;
-      if (!pane || !screen) return;
+      if (!pane) return;
       try {
-        const markers = await invoke<MessageMarker[]>("list_message_markers", {
+        await invoke<boolean>("navigate_message", {
           sessionId: pane.id,
+          kind,
+          dir,
         });
-        const rows = markers
-          .filter((m) => m.kind === kind)
-          .map((m) => m.total_row);
-        if (rows.length === 0) return;
-        const center =
-          screen.scroll_max -
-          screen.scroll_offset +
-          Math.floor(screen.rows / 2);
-        const target =
-          dir < 0
-            ? [...rows].reverse().find((r) => r < center)
-            : rows.find((r) => r > center);
-        if (target === undefined) return;
-        const desired =
-          screen.scroll_max - target + Math.floor(screen.rows / 2);
-        const clamped = Math.max(0, Math.min(screen.scroll_max, desired));
-        const delta = clamped - screen.scroll_offset;
-        if (delta !== 0) {
-          await invoke("scroll_terminal", { sessionId: pane.id, delta });
-        }
       } catch (e) {
         setError(String(e));
       }
