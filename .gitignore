@@ -25,3 +25,6 @@ src-tauri/target/
 
 # Claude Code local files
 .claude/
+
+# Visual brainstorming companion (mockups)
+.superpowers/

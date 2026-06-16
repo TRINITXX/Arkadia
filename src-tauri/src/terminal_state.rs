@@ -136,7 +136,25 @@ pub struct TerminalState {
     mouse_protocol: MouseProtocol,
     mouse_encoding: MouseEncoding,
     bracketed_paste: bool,
+    /// Alt-screen tint memory: line content hash → message kind, recorded as
+    /// lines are classified while their block head (`●`) is on screen, so a
+    /// continuation keeps its purple tint after the head scrolls off the top.
+    /// Bounded FIFO; user blocks need no cache (their grey band is intrinsic).
+    line_kind_cache: std::collections::HashMap<u64, MessageKind>,
+    line_kind_order: VecDeque<u64>,
+    /// De-bulleted text hashes of lines seen as tool calls (`● Update(…)`).
+    /// While a tool runs, Claude Code *blinks* its bullet — the cell toggles to
+    /// a space, so the line momentarily looks like an assistant continuation and
+    /// the block above bleeds onto it (and gets cached, persisting even after
+    /// the tool finishes). Remembering the de-bulleted text lets a blinked-off
+    /// frame still be recognised as a tool call. Bounded like `line_kind_cache`.
+    tool_line_cache: std::collections::HashSet<u64>,
+    tool_line_order: VecDeque<u64>,
 }
+
+/// Cap on the alt-screen tint cache — large enough for any on-screen scroll
+/// session, small enough to stay negligible in memory.
+const LINE_KIND_CACHE_CAP: usize = 4096;
 
 impl TerminalState {
     pub fn new(rows: u16, cols: u16) -> Self {
@@ -159,6 +177,10 @@ impl TerminalState {
             mouse_protocol: MouseProtocol::None,
             mouse_encoding: MouseEncoding::Default,
             bracketed_paste: false,
+            line_kind_cache: std::collections::HashMap::new(),
+            line_kind_order: VecDeque::new(),
+            tool_line_cache: std::collections::HashSet::new(),
+            tool_line_order: VecDeque::new(),
         }
     }
 
@@ -344,9 +366,10 @@ impl TerminalState {
     /// when more block content follows (interior paragraph gap), so trailing
     /// gaps between blocks stay unpainted. On the alt screen (Claude Code's
     /// TUI) there is no scrollback: the visible screen is classified as-is.
-    pub fn visible_line_kinds(&self, scroll_offset: u32) -> Vec<u8> {
+    pub fn visible_line_kinds(&mut self, scroll_offset: u32) -> Vec<u8> {
         let rows = self.rows as usize;
-        let offset = if self.on_alt {
+        let on_alt = self.on_alt;
+        let offset = if on_alt {
             0
         } else {
             self.clamp_scroll(scroll_offset) as usize
@@ -374,6 +397,8 @@ impl TerminalState {
             }
         }
         let mut kinds = Vec::with_capacity(rows);
+        let mut to_cache: Vec<(u64, MessageKind)> = Vec::new();
+        let mut tool_to_cache: Vec<u64> = Vec::new();
         for vis in 0..rows {
             let r = first + vis;
             let Some(line) = self.line_at_total(r as u32) else {
@@ -381,7 +406,38 @@ impl TerminalState {
                 continue;
             };
             cur = advance_block(cur, line);
-            if cur == MessageKind::Claude && line_is_blank(line) {
+            // Tool calls (`● Update(…)`, `● Search(…)`) share the bullet with
+            // assistant text but must never be framed. A running tool *blinks*
+            // its bullet: the cell toggles to a space, so the line momentarily
+            // looks like a continuation and the block above bleeds onto it. We
+            // remember each bulleted tool line by its de-bulleted text; on a
+            // blinked-off frame of the same line, end the block here instead of
+            // inheriting the assistant kind.
+            let is_known_tool_line =
+                on_alt && self.tool_line_cache.contains(&hash_debulleted(line));
+            if on_alt && line_starts_with_bullet(line) && is_tool_call_line(line) {
+                tool_to_cache.push(hash_debulleted(line));
+            } else if cur != MessageKind::None && is_known_tool_line && block_head_kind(line).is_none()
+            {
+                cur = MessageKind::None;
+            }
+            // Alt screen only: when `advance_block` has no context for a line
+            // (its `●` head is off the top, e.g. below Claude Code's pinned
+            // sticky user-prompt header), recover the Claude tint from the
+            // scroll cache and let it propagate down. User blocks need no cache
+            // — their grey band is intrinsic in `advance_block`. A known tool
+            // line is never recovered as Claude (it would undo the reset above).
+            if on_alt
+                && cur == MessageKind::None
+                && !line_is_blank(line)
+                && !is_right_aligned(line)
+                && !is_known_tool_line
+            {
+                if self.line_kind_cache.get(&hash_line(line)) == Some(&MessageKind::Claude) {
+                    cur = MessageKind::Claude;
+                }
+            }
+            let pushed = if cur == MessageKind::Claude && line_is_blank(line) {
                 // Tint only interior gaps: scan to the next non-blank line of
                 // the same block (bounded by the gap length).
                 let mut k = MessageKind::None;
@@ -397,12 +453,52 @@ impl TerminalState {
                         break;
                     }
                 }
-                kinds.push(k.as_u8());
+                k
             } else {
-                kinds.push(cur.as_u8());
+                cur
+            };
+            kinds.push(pushed.as_u8());
+            // Remember the classification of real content so the tint survives
+            // the head scrolling off the alt screen on a later frame.
+            if on_alt && pushed != MessageKind::None && !line_is_blank(line) {
+                to_cache.push((hash_line(line), pushed));
             }
         }
+        for (h, k) in to_cache {
+            self.record_line_kind(h, k);
+        }
+        for h in tool_to_cache {
+            self.record_tool_line(h);
+        }
         kinds
+    }
+
+    /// Records a line's classification in the bounded alt-screen tint cache.
+    fn record_line_kind(&mut self, hash: u64, kind: MessageKind) {
+        if kind == MessageKind::None {
+            return;
+        }
+        if self.line_kind_cache.insert(hash, kind).is_none() {
+            self.line_kind_order.push_back(hash);
+            if self.line_kind_order.len() > LINE_KIND_CACHE_CAP {
+                if let Some(old) = self.line_kind_order.pop_front() {
+                    self.line_kind_cache.remove(&old);
+                }
+            }
+        }
+    }
+
+    /// Records a tool-call line's de-bulleted hash in the bounded cache, so a
+    /// later frame with the bullet blinked off is still recognised as a tool call.
+    fn record_tool_line(&mut self, hash: u64) {
+        if self.tool_line_cache.insert(hash) {
+            self.tool_line_order.push_back(hash);
+            if self.tool_line_order.len() > LINE_KIND_CACHE_CAP {
+                if let Some(old) = self.tool_line_order.pop_front() {
+                    self.tool_line_cache.remove(&old);
+                }
+            }
+        }
     }
 
     /// Marker rows of `kind` on the visible screen (live view, offset 0),
@@ -1127,16 +1223,20 @@ pub struct MessageMarker {
 
 /// True when `fg` renders as the default/white-ish foreground — the color
 /// Claude Code uses for the bullet of assistant text. Tool/todo bullets are
-/// colored (green/orange/red…) and must not match. The truecolor threshold is
-/// deliberately loose (≥ 0.7 per channel ≈ #b3b3b3) so themed near-whites
-/// pass while saturated colors and dim greys (~0.5–0.6) don't.
+/// colored (green/orange/red…) and must not match. A true-colour bullet counts
+/// as white only when it is both bright (≥ 0.7 per channel ≈ #b3b3b3, so themed
+/// near-whites pass) AND near-neutral (channels within 0.18, so a *light* green
+/// success dot — bright but chromatic — is rejected even though all its channels
+/// clear 0.7).
 fn is_default_or_white_fg(fg: &ColorAttribute) -> bool {
     match fg {
         ColorAttribute::Default => true,
         ColorAttribute::PaletteIndex(7) | ColorAttribute::PaletteIndex(15) => true,
         ColorAttribute::TrueColorWithDefaultFallback(c)
         | ColorAttribute::TrueColorWithPaletteFallback(c, _) => {
-            c.0 >= 0.7 && c.1 >= 0.7 && c.2 >= 0.7
+            let max = c.0.max(c.1).max(c.2);
+            let min = c.0.min(c.1).min(c.2);
+            min >= 0.7 && (max - min) <= 0.18
         }
         _ => false,
     }
@@ -1146,12 +1246,45 @@ fn line_is_blank(line: &[TerminalCell]) -> bool {
     line.iter().all(|c| c.text.trim().is_empty())
 }
 
+/// True when the line's content sits in its right third (a long run of leading
+/// blanks then text). Claude Code's footer — the right-aligned token counter,
+/// for one — looks like this; real message continuations are left-indented
+/// (column ~2). Used to stop the tint bleeding onto the footer.
+fn is_right_aligned(line: &[TerminalCell]) -> bool {
+    match line.iter().position(|c| !c.text.trim().is_empty()) {
+        Some(idx) => idx * 3 > line.len() * 2,
+        None => false,
+    }
+}
+
 fn hash_line(line: &[TerminalCell]) -> u64 {
     use std::hash::Hasher;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for cell in line {
         h.write(cell.text.as_bytes());
     }
+    h.finish()
+}
+
+/// First glyph is Claude Code's message/tool bullet.
+fn line_starts_with_bullet(line: &[TerminalCell]) -> bool {
+    line.first()
+        .map(|c| matches!(c.text.trim(), "●" | "⏺"))
+        .unwrap_or(false)
+}
+
+/// Hash of a line's text with leading whitespace and a `●`/`⏺` bullet stripped,
+/// so a tool call hashes identically whether its bullet is currently drawn or
+/// has blinked to a space (`is_tool_call_line` uses the same normalisation).
+fn hash_debulleted(line: &[TerminalCell]) -> u64 {
+    use std::hash::Hasher;
+    let mut text = String::new();
+    for cell in line {
+        text.push_str(&cell.text);
+    }
+    let rest = text.trim_start().trim_start_matches(['●', '⏺']).trim_start();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    h.write(rest.as_bytes());
     h.finish()
 }
 
@@ -1164,19 +1297,125 @@ fn col0_has_bg(line: &[TerminalCell]) -> bool {
         .unwrap_or(false)
 }
 
+/// True when the row carries Claude Code's specific user-prompt band — a dark
+/// neutral grey (≈ #373737). Stricter than `col0_has_bg`: it must be a grey
+/// (channels close together) in the dark band, so colored backgrounds inside a
+/// Claude response (diffs, highlighted code) are never mistaken for a user
+/// block when the `❯` head is off-screen and the band is the only clue.
+fn is_user_band(line: &[TerminalCell]) -> bool {
+    let Some(cell) = line.first() else {
+        return false;
+    };
+    match cell.attrs.bg {
+        ColorAttribute::TrueColorWithDefaultFallback(c)
+        | ColorAttribute::TrueColorWithPaletteFallback(c, _) => {
+            let (r, g, b) = (c.0, c.1, c.2);
+            let max = r.max(g).max(b);
+            let min = r.min(g).min(b);
+            // #373737 ≈ 0.216. Accept a dark, near-neutral grey only.
+            max <= 0.45 && min >= 0.08 && (max - min) <= 0.06
+        }
+        _ => false,
+    }
+}
+
 /// Advances the block state over one line. A head line switches blocks; a
-/// user block is exactly Claude Code's grey background band, so the first
-/// row without it ends the block (indented content below a user prompt —
-/// image placeholders, the sticky last-prompt header's surroundings — must
-/// not inherit the user kind). Claude blocks keep the indent rule.
+/// user block is Claude Code's grey background band plus its attachment
+/// continuation lines (`⎿ [Image #N]`), so the frame wraps the whole message.
+/// Any other row without the band ends the block (indented Claude content, the
+/// sticky last-prompt header's surroundings — must not inherit the user kind).
+/// Claude blocks keep the indent rule.
 fn advance_block(cur: MessageKind, line: &[TerminalCell]) -> MessageKind {
     if let Some(kind) = block_head_kind(line) {
         return kind;
     }
+    // A grey-band continuation belongs to a user block even when its `❯` head
+    // has scrolled off the top — the band is the block's full extent. This is
+    // what keeps user messages tinted while scrolling on the alt screen.
+    if cur == MessageKind::None && is_user_band(line) {
+        return MessageKind::User;
+    }
     if cur == MessageKind::User && !col0_has_bg(line) {
+        // A user prompt's attachment line (`⎿ [Image #N]`, `[Pasted text]`)
+        // renders without the grey band but belongs to the message — keep it in
+        // the block so the frame wraps it too.
+        let text: String = line.iter().map(|c| c.text.as_str()).collect();
+        if text.contains("[Image") || text.contains("[Pasted") {
+            return MessageKind::User;
+        }
+        return MessageKind::None;
+    }
+    // Claude Code's right-aligned footer (token counter, etc.) has a blank
+    // column 0, so it would otherwise extend the block above it. It is not
+    // message content — end the block so the tint never bleeds onto it.
+    if !line_is_blank(line) && is_right_aligned(line) {
         return MessageKind::None;
     }
     cur
+}
+
+/// True when a white-bulleted line is a Claude Code *tool call* rather than an
+/// assistant text message. Tool calls share the white `●`/`⏺` bullet with
+/// assistant text, so they're told apart by shape. Three forms are recognized:
+///   - native:        `Bash(…)`, `Read(…)`, `mcp__server__tool(…)` — `Ident(`
+///   - MCP server:    `posthog - exec (MCP)(…)`                     — `(MCP)(`
+///   - MCP bracket:   `Claude in Chrome[navigate](…)`              — `Name[tool](`
+/// Real prose (words separated by spaces, then maybe a paren) never matches the
+/// native form, and the bracket form is protected by the `[tool](` structure.
+fn is_tool_call_line(line: &[TerminalCell]) -> bool {
+    let mut text = String::new();
+    for c in line {
+        text.push_str(&c.text);
+    }
+    let rest = text.trim_start().trim_start_matches(['●', '⏺']).trim_start();
+    // MCP "server - tool" form: the `(MCP)(` signature is unique to a tool
+    // invocation — assistant prose never contains it.
+    if rest.contains("(MCP)(") {
+        return true;
+    }
+    let chars: Vec<char> = rest.chars().collect();
+    // Must start with an identifier character.
+    match chars.first() {
+        Some(c) if c.is_ascii_alphabetic() || *c == '_' => {}
+        _ => return false,
+    }
+    // Native form: a bare `Identifier(` with no spaces, so prose (words then a
+    // paren) never matches.
+    for &c in &chars {
+        if c == '(' {
+            return true;
+        }
+        if c.is_alphanumeric() || c == '_' || c == '-' {
+            continue;
+        }
+        break;
+    }
+    // MCP "bracket" form: `Server Name[tool](args…)` — a display name (letters,
+    // digits, spaces, hyphens) then a bracketed tool then `(`. The `[tool](`
+    // structure is what lets us allow spaces here without matching ordinary prose.
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '[' {
+            let mut j = i + 1;
+            let start = j;
+            while j < chars.len()
+                && (chars[j].is_alphanumeric()
+                    || chars[j] == '_'
+                    || chars[j] == '.'
+                    || chars[j] == '-')
+            {
+                j += 1;
+            }
+            return j > start && j + 1 < chars.len() && chars[j] == ']' && chars[j + 1] == '(';
+        }
+        if c.is_alphanumeric() || c == '_' || c == '-' || c == ' ' {
+            i += 1;
+            continue;
+        }
+        return false;
+    }
+    false
 }
 
 /// `Some(kind)` when the line starts a block (non-space character in column
@@ -1194,8 +1433,14 @@ fn block_head_kind(line: &[TerminalCell]) -> Option<MessageKind> {
         // typed there) has a default background, so it never matches.
         "❯" if col0_has_bg(line) && !line_is_blank(&line[1..]) => MessageKind::User,
         // Assistant text bullet: white/default `●` (or `⏺` on some versions).
-        // Colored bullets (tool calls, todos) don't match the white check.
-        "●" | "⏺" if is_default_or_white_fg(&head.attrs.fg) => MessageKind::Claude,
+        // Colored bullets (tool calls, todos) don't match the white check; tool
+        // calls that *do* render a white bullet (`● Bash(…)`) are told apart by
+        // their `Name(` shape so they aren't tinted as a message.
+        "●" | "⏺"
+            if is_default_or_white_fg(&head.attrs.fg) && !is_tool_call_line(line) =>
+        {
+            MessageKind::Claude
+        }
         _ => MessageKind::None,
     };
     Some(kind)
@@ -1214,6 +1459,16 @@ fn block_head_kind(line: &[TerminalCell]) -> Option<MessageKind> {
 ///
 /// The grid is re-read on every iteration — a PTY reader thread keeps
 /// feeding `term` concurrently while this loop sleeps between probes.
+/// Minimum delay between wheel notches. Claude Code applies *momentum* to its
+/// transcript scroll: notches arriving close together accelerate it to ~20+
+/// lines each, which overshoots messages and makes centering impossible
+/// (verified via a trace — a single 55ms notch jumped a `●` 22 rows). At ~150ms
+/// the scroll stays at a few lines per notch. 110ms is the fastest cadence
+/// that still centers reliably — empirically 100ms already triggers momentum
+/// ("jumps ~10 blocks at once"), 110ms does not. This is the physical floor of
+/// the speed/precision tradeoff; do not lower it without re-introducing skips.
+const WHEEL_NOTCH_GAP_MS: u64 = 110;
+
 pub fn wheel_navigate(
     term: &parking_lot::Mutex<TerminalState>,
     send_wheel: impl Fn(bool),
@@ -1221,6 +1476,7 @@ pub fn wheel_navigate(
     dir: i32,
     rows: u16,
     prev_target: Option<u64>,
+    cancel: &dyn Fn() -> bool,
 ) -> (bool, Option<u64>) {
     let center = (rows / 2) as i32;
     // Fallback anchor when the remembered target is gone (first click, user
@@ -1251,6 +1507,10 @@ pub fn wheel_navigate(
     let mut stale = 0u32;
     let mut blind = 0u32;
     for _ in 0..150 {
+        // Superseded by a newer navigation or a manual scroll → stop.
+        if cancel() {
+            return (false, target.or(prev_target));
+        }
         let (markers, screen_hash) = {
             let t = term.lock();
             (t.visible_markers_with_hash(kind), t.screen_content_hash())
@@ -1291,7 +1551,10 @@ pub fn wheel_navigate(
         let sent_at = std::time::Instant::now();
         send_wheel(scroll_up);
 
-        // Wait for the app to repaint (Claude Code repaints within ~50ms).
+        // Wait for the app to repaint (Claude Code repaints within ~50ms). The
+        // next iteration re-reads the grid and centers on whatever marker
+        // appeared — one notch at a time, so a target scrolling into view is
+        // never overshot and the message is never skipped.
         let mut changed = false;
         for _ in 0..25 {
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1309,16 +1572,138 @@ pub fn wheel_navigate(
                 return (target.is_some(), target.or(prev_target));
             }
         }
-        // Throttle: Claude Code coalesces rapid wheel events and its scroll
-        // state machine wedges at the buffer edges when slammed (verified
-        // empirically — 30ms gaps wedge it, 250ms never does). Keep a humane
-        // cadence between events.
+        // Throttle below Claude Code's wedge threshold (≈30ms jams its scroll).
         let elapsed = sent_at.elapsed();
-        if elapsed < std::time::Duration::from_millis(150) {
-            std::thread::sleep(std::time::Duration::from_millis(150) - elapsed);
+        if elapsed < std::time::Duration::from_millis(WHEEL_NOTCH_GAP_MS) {
+            std::thread::sleep(std::time::Duration::from_millis(WHEEL_NOTCH_GAP_MS) - elapsed);
         }
     }
     (target.is_some(), target.or(prev_target))
+}
+
+/// Where the start of a reply lands when scrolled to "the top": a couple of rows
+/// below the viewport edge so the `●` head has breathing room and doesn't sit
+/// flush against the frame.
+const REPLY_TOP_MARGIN: i32 = 2;
+/// Acceptable settle window for the head: anywhere from the top edge down to
+/// `REPLY_TOP_BAND`. The app's wheel granularity is coarse (several lines per
+/// notch), so insisting on the exact margin row makes the loop oscillate or
+/// overshoot; landing anywhere in this band reads as "at the top".
+const REPLY_TOP_BAND: i32 = 6;
+
+/// Alt-screen: bring the most recent message of `kind` (2 = Claude) to near the
+/// top of the viewport, so the user reads the reply from its start when Claude
+/// finishes. Unlike `wheel_navigate` (which *centres* a target relative to an
+/// anchor), this locks onto the bottom-most — i.e. most recent — visible marker
+/// and drives it to a small top margin.
+///
+/// Behaviour by reply length (we are at the live bottom when Claude finishes):
+/// - Long reply (head scrolled off the top): no marker is visible, so we wheel
+///   up until the head appears, then settle it at `REPLY_TOP_MARGIN`.
+/// - Short reply (head already on screen): it can't be pulled above its natural
+///   live position (the app pins its input at the bottom), so the wheel-down
+///   notches are no-ops, the screen stops changing, and we return having left
+///   the already-visible reply in place.
+///
+/// Returns true if it locked onto a target marker.
+pub fn wheel_message_to_top(
+    term: &parking_lot::Mutex<TerminalState>,
+    send_wheel: impl Fn(bool),
+    kind: u8,
+    cancel: &dyn Fn() -> bool,
+) -> bool {
+    let mut locked: Option<u64> = None;
+    let mut last_dist = i32::MAX;
+    let mut stale = 0u32;
+    let mut blind = 0u32;
+    for _ in 0..150 {
+        // Superseded by a manual scroll or a newer navigation → stop.
+        if cancel() {
+            return locked.is_some();
+        }
+        let (markers, screen_hash) = {
+            let t = term.lock();
+            (t.visible_markers_with_hash(kind), t.screen_content_hash())
+        };
+        // The target head: once locked, track it by hash across redraws; before
+        // that, the most recent message of `kind` is the bottom-most marker.
+        let head: Option<(i32, u64)> = match locked {
+            Some(h) => markers
+                .iter()
+                .find(|&&(_, hh)| hh == h)
+                .map(|&(r, hh)| (r as i32, hh)),
+            None => markers
+                .iter()
+                .max_by_key(|&&(r, _)| r)
+                .map(|&(r, hh)| (r as i32, hh)),
+        };
+
+        let scroll_up = match head {
+            Some((row, h)) => {
+                if locked != Some(h) {
+                    locked = Some(h);
+                    last_dist = (row - REPLY_TOP_MARGIN).abs();
+                }
+                let dist = row - REPLY_TOP_MARGIN;
+                // Settled when the head sits inside the top band (we don't need the
+                // exact row — the app's wheel granularity is coarse), or once it
+                // starts oscillating past the target.
+                if (dist >= 0 && dist <= REPLY_TOP_BAND) || dist.abs() > last_dist {
+                    return true;
+                }
+                last_dist = dist.abs();
+                blind = 0;
+                // Head above the target (row < margin) → wheel up pushes it down;
+                // head below → wheel down brings it up toward the top.
+                dist < 0
+            }
+            None => {
+                if locked.is_some() {
+                    // The locked head overshot OFF the top (one coarse wheel-down
+                    // notch jumped it above row 0). Wheel UP — older content — to
+                    // bring it back down into view; wheeling DOWN here would chase
+                    // the live bottom and dump the user at the end of the reply.
+                    true
+                } else {
+                    // No marker on screen yet (long reply, head off the top) →
+                    // reveal it by scrolling up. Bail out if it never shows.
+                    blind += 1;
+                    if blind > 80 {
+                        return false;
+                    }
+                    true
+                }
+            }
+        };
+
+        let sent_at = std::time::Instant::now();
+        send_wheel(scroll_up);
+
+        // Wait for the app to repaint, then re-read the grid next iteration.
+        let mut changed = false;
+        for _ in 0..25 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            if term.lock().screen_content_hash() != screen_hash {
+                changed = true;
+                break;
+            }
+        }
+        if changed {
+            stale = 0;
+        } else {
+            stale += 1;
+            if stale >= 2 {
+                // Can't scroll further that way (already at live, or transcript
+                // edge): leave the reply wherever it ended up.
+                return locked.is_some();
+            }
+        }
+        let elapsed = sent_at.elapsed();
+        if elapsed < std::time::Duration::from_millis(WHEEL_NOTCH_GAP_MS) {
+            std::thread::sleep(std::time::Duration::from_millis(WHEEL_NOTCH_GAP_MS) - elapsed);
+        }
+    }
+    locked.is_some()
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1902,6 +2287,84 @@ three");
     }
 
     #[test]
+    fn white_bullet_tool_call_is_not_a_message() {
+        // Tool calls share the white bullet with assistant text but must not be
+        // tinted/bordered as a message.
+        let mut t = TerminalState::new(4, 40);
+        t.advance_bytes("\x1b[38;2;230;230;230m⏺\x1b[0m Bash(cd foo)\r\n".as_bytes());
+        assert!(t.message_markers().is_empty());
+        // Plain prose after the same white bullet stays a Claude message.
+        let mut t2 = TerminalState::new(4, 40);
+        t2.advance_bytes("\x1b[38;2;230;230;230m⏺\x1b[0m Voici la reponse\r\n".as_bytes());
+        assert_eq!(t2.message_markers().len(), 1);
+    }
+
+    #[test]
+    fn bash_tool_call_with_quoted_args_is_not_a_message() {
+        // `● Bash(cd "…" && git commit -m "…")` — white bullet, native tool call.
+        // The `Name(` shape must exclude it from the Claude frame even with
+        // spaces/quotes/`&&` in the arguments.
+        let mut t = TerminalState::new(4, 80);
+        t.advance_bytes(
+            "\x1b[38;2;230;230;230m●\x1b[0m Bash(cd \"C:/x\" && git commit -m \"msg\")\r\n"
+                .as_bytes(),
+        );
+        assert!(t.message_markers().is_empty());
+    }
+
+    #[test]
+    fn bracket_mcp_tool_call_is_not_a_message() {
+        // MCP servers with a display name render as `Name[tool](args…)`
+        // (e.g. `Claude in Chrome[navigate](url)`). The spaces break the strict
+        // native scan, so the `[tool](` structure is what excludes it.
+        let mut t = TerminalState::new(4, 80);
+        t.advance_bytes(
+            "\x1b[38;2;230;230;230m●\x1b[0m Claude in Chrome[navigate](www.x.tech)\r\n".as_bytes(),
+        );
+        assert!(t.message_markers().is_empty());
+        // But a real Claude line that merely opens a paren after words stays a
+        // message (native scan must not match prose).
+        let mut t2 = TerminalState::new(4, 80);
+        t2.advance_bytes("\x1b[38;2;230;230;230m●\x1b[0m Voici la reponse (oui)\r\n".as_bytes());
+        assert_eq!(t2.message_markers().len(), 1);
+    }
+
+    #[test]
+    fn mcp_tool_call_is_not_a_message() {
+        // MCP tool calls render as `server - tool (MCP)(args…)` after the white
+        // bullet. The spaces/hyphen break the strict identifier scan, so the
+        // `(MCP)(` signature is what keeps them out of the Claude frame.
+        let mut t = TerminalState::new(4, 60);
+        t.advance_bytes(
+            "\x1b[38;2;230;230;230m⏺\x1b[0m posthog - exec (MCP)(command: \"x\")\r\n".as_bytes(),
+        );
+        assert!(t.message_markers().is_empty());
+    }
+
+    #[test]
+    fn light_green_bullet_is_not_claude() {
+        // A light success-green dot (#b3ffb3) is bright in every channel but
+        // chromatic — it must not count as the white assistant bullet, even
+        // when followed by prose (i.e. independent of the tool-call shape).
+        let mut t = TerminalState::new(4, 40);
+        t.advance_bytes("\x1b[38;2;179;255;179m⏺\x1b[0m done\r\n".as_bytes());
+        assert!(t.message_markers().is_empty());
+    }
+
+    #[test]
+    fn user_block_includes_image_attachment_line() {
+        // A user prompt (grey band) followed by its `⎿ [Image #N]` attachment
+        // line (no band) — both rows must be the user block so the frame wraps
+        // the whole message.
+        let mut t = TerminalState::new(4, 40);
+        t.advance_bytes("\x1b[48;2;55;55;55m❯ question [Image #3]\x1b[0m\r\n".as_bytes());
+        t.advance_bytes("  \u{23bf} [Image #3]\r\n".as_bytes());
+        let kinds = t.visible_line_kinds(0);
+        assert_eq!(kinds[0], 1);
+        assert_eq!(kinds[1], 1);
+    }
+
+    #[test]
     fn input_box_prompt_is_never_a_user_marker() {
         let mut t = TerminalState::new(4, 20);
         // The live input box renders with a default background — empty or
@@ -1959,5 +2422,114 @@ three");
         assert_eq!(t.visible_line_kinds(0), vec![2, 2, 2, 2, 2]);
         // Scrolled up by one, the head itself is visible.
         assert_eq!(t.visible_line_kinds(1), vec![2, 2, 2, 2, 2]);
+    }
+
+    #[test]
+    fn alt_screen_user_band_tinted_without_head() {
+        let mut t = TerminalState::new(4, 40);
+        t.advance_bytes(b"\x1b[?1049h");
+        // Only continuation lines of a user message are visible — the `❯` head
+        // scrolled above the top of the alt screen. Each still carries the
+        // grey band, which is enough to keep them tinted green.
+        t.advance_bytes(
+            format!("{USER_BG}  continued one\x1b[0m\r\n{USER_BG}  continued two\x1b[0m\r\n")
+                .as_bytes(),
+        );
+        let kinds = t.visible_line_kinds(0);
+        assert_eq!(&kinds[..2], &[1, 1]);
+    }
+
+    #[test]
+    fn alt_screen_claude_continuation_tinted_from_scroll_cache() {
+        let mut t = TerminalState::new(6, 40);
+        t.advance_bytes(b"\x1b[?1049h");
+        // Frame 1: the white `●` head is on screen, so the body lines are
+        // classified Claude and recorded in the scroll cache.
+        t.advance_bytes(
+            "\x1b[38;2;255;255;255m●\x1b[0m answer\r\n  body line A\r\n  body line B\r\n  body line C\r\n"
+                .as_bytes(),
+        );
+        assert_eq!(t.visible_line_kinds(0)[0], 2);
+        // Frame 2: Claude Code redraws with the head scrolled off — only the
+        // continuation lines remain. They must stay purple via the cache.
+        t.advance_bytes(b"\x1b[2J\x1b[H");
+        t.advance_bytes("  body line A\r\n  body line B\r\n  body line C\r\n".as_bytes());
+        let kinds = t.visible_line_kinds(0);
+        assert_eq!(&kinds[..3], &[2, 2, 2]);
+    }
+
+    #[test]
+    fn alt_screen_claude_tinted_under_sticky_user_header() {
+        let mut t = TerminalState::new(6, 50);
+        t.advance_bytes(b"\x1b[?1049h");
+        // Frame 1: the Claude answer's white `●` head is on screen — fills the
+        // scroll cache with its body lines.
+        t.advance_bytes(
+            "\x1b[38;2;255;255;255m●\x1b[0m answer body\r\n  more body text\r\n  even more body\r\n"
+                .as_bytes(),
+        );
+        assert_eq!(t.visible_line_kinds(0)[0], 2);
+        // Frame 2: scrolled — Claude Code pins the last user prompt at row 0
+        // (grey band) above the answer's continuations, and the `●` head is
+        // gone. Only the scroll cache can keep the body purple *under* the
+        // green sticky header. This is the real-world case the user hit.
+        t.advance_bytes(b"\x1b[2J\x1b[H");
+        t.advance_bytes(
+            format!("{USER_BG}❯ my prompt\x1b[0m\r\n\r\n  more body text\r\n  even more body\r\n")
+                .as_bytes(),
+        );
+        let kinds = t.visible_line_kinds(0);
+        assert_eq!(&kinds[..4], &[1, 0, 2, 2]);
+    }
+
+    #[test]
+    fn alt_screen_right_aligned_footer_not_tinted() {
+        let mut t = TerminalState::new(5, 50);
+        t.advance_bytes(b"\x1b[?1049h");
+        // A Claude answer followed by Claude Code's right-aligned token-counter
+        // footer (blank column 0, text in the right third). The counter must
+        // NOT inherit the purple tint and must not poison the cache.
+        let mut s = String::from("\x1b[38;2;255;255;255m●\x1b[0m answer\r\n  body\r\n");
+        s.push_str(&" ".repeat(38));
+        s.push_str("12345 tokens\r\n");
+        t.advance_bytes(s.as_bytes());
+        let kinds = t.visible_line_kinds(0);
+        assert_eq!(&kinds[..3], &[2, 2, 0]);
+    }
+
+    #[test]
+    fn alt_screen_blinking_tool_bullet_does_not_extend_claude_frame() {
+        let mut t = TerminalState::new(6, 50);
+        t.advance_bytes(b"\x1b[?1049h");
+        // Frame 1: a Claude answer, then a tool call whose `●` bullet is drawn.
+        // The tool line is kind 0 (not framed) and is remembered by its text.
+        t.advance_bytes(
+            "\x1b[38;2;255;255;255m●\x1b[0m answer\r\n  body line\r\n\x1b[38;2;255;255;255m●\x1b[0m Update(src/store.ts)\r\n"
+                .as_bytes(),
+        );
+        assert_eq!(&t.visible_line_kinds(0)[..3], &[2, 2, 0]);
+        // Frame 2: the running tool blinks its bullet OFF — the cell is now a
+        // space, so the line looks like a continuation. It must still NOT inherit
+        // the Claude tint above (the bug: a purple frame closing under the tool).
+        t.advance_bytes(b"\x1b[2J\x1b[H");
+        t.advance_bytes(
+            "\x1b[38;2;255;255;255m●\x1b[0m answer\r\n  body line\r\n  Update(src/store.ts)\r\n"
+                .as_bytes(),
+        );
+        assert_eq!(&t.visible_line_kinds(0)[..3], &[2, 2, 0]);
+    }
+
+    #[test]
+    fn alt_screen_claude_code_line_with_call_shape_still_framed() {
+        // A genuine assistant continuation line that *looks* like a tool call
+        // (`foo(bar)` in a code block) was never seen with a bullet, so it must
+        // not be mistaken for a blinked-off tool call and drop out of the frame.
+        let mut t = TerminalState::new(6, 50);
+        t.advance_bytes(b"\x1b[?1049h");
+        t.advance_bytes(
+            "\x1b[38;2;255;255;255m●\x1b[0m here is code\r\n  print(value)\r\n  done()\r\n"
+                .as_bytes(),
+        );
+        assert_eq!(&t.visible_line_kinds(0)[..3], &[2, 2, 2]);
     }
 }

@@ -48,7 +48,36 @@ impl From<&AgentState> for AgentStatePayload {
     }
 }
 
+/// Normalizes a Windows-ish path for matching: `/`→`\`, drop trailing
+/// separators, lowercase. A pane cwd (OSC 7, backslashes) and a hook cwd
+/// (reported by Claude Code) can differ only by case / separators / trailing
+/// slash, so normalize both before comparing.
+fn normalize_cwd(p: &str) -> String {
+    p.replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
+}
+
 impl AgentRegistry {
+    /// All cwds Arkadia panes have reported (via OSC 7). Diagnostic only.
+    pub fn all_cwds(&self) -> Vec<String> {
+        let g = self.inner.lock();
+        g.pane_cwd.values().cloned().collect()
+    }
+
+    /// Pane UUIDs whose live cwd matches `cwd` (normalized). Used to route a
+    /// hook notification (which carries a cwd) to the Arkadia pane(s) running
+    /// that Claude Code session.
+    pub fn panes_for_cwd(&self, cwd: &str) -> Vec<Uuid> {
+        let target = normalize_cwd(cwd);
+        let g = self.inner.lock();
+        g.pane_cwd
+            .iter()
+            .filter(|(_, c)| normalize_cwd(c) == target)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
     pub fn observe_session(&self, cwd: &str, session_id: &str, state: AgentState) {
         let mut g = self.inner.lock();
         g.cwd_session.insert(cwd.to_string(), session_id.to_string());

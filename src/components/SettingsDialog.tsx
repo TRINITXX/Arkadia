@@ -24,6 +24,14 @@ interface SettingsDialogProps {
   onChangeCustomPalette: (next: CustomPalette) => void;
   editorProtocol: EditorProtocol;
   onChangeEditorProtocol: (next: EditorProtocol) => void;
+  popupEnabled: boolean;
+  onChangePopupEnabled: (next: boolean) => void;
+  navRailEnabled: boolean;
+  onChangeNavRailEnabled: (next: boolean) => void;
+  messageFramesEnabled: boolean;
+  onChangeMessageFramesEnabled: (next: boolean) => void;
+  autoScrollReplyEnabled: boolean;
+  onChangeAutoScrollReplyEnabled: (next: boolean) => void;
 }
 
 type Tab = "toolbar" | "general";
@@ -43,6 +51,14 @@ export function SettingsDialog({
   onChangeCustomPalette,
   editorProtocol,
   onChangeEditorProtocol,
+  popupEnabled,
+  onChangePopupEnabled,
+  navRailEnabled,
+  onChangeNavRailEnabled,
+  messageFramesEnabled,
+  onChangeMessageFramesEnabled,
+  autoScrollReplyEnabled,
+  onChangeAutoScrollReplyEnabled,
 }: SettingsDialogProps) {
   const [tab, setTab] = useState<Tab>("toolbar");
 
@@ -110,6 +126,14 @@ export function SettingsDialog({
                 onChangeCustomPalette={onChangeCustomPalette}
                 editorProtocol={editorProtocol}
                 onChangeEditorProtocol={onChangeEditorProtocol}
+                popupEnabled={popupEnabled}
+                onChangePopupEnabled={onChangePopupEnabled}
+                navRailEnabled={navRailEnabled}
+                onChangeNavRailEnabled={onChangeNavRailEnabled}
+                messageFramesEnabled={messageFramesEnabled}
+                onChangeMessageFramesEnabled={onChangeMessageFramesEnabled}
+                autoScrollReplyEnabled={autoScrollReplyEnabled}
+                onChangeAutoScrollReplyEnabled={onChangeAutoScrollReplyEnabled}
               />
             )}
           </div>
@@ -154,6 +178,14 @@ interface GeneralSettingsProps {
   onChangeCustomPalette: (next: CustomPalette) => void;
   editorProtocol: EditorProtocol;
   onChangeEditorProtocol: (next: EditorProtocol) => void;
+  popupEnabled: boolean;
+  onChangePopupEnabled: (next: boolean) => void;
+  navRailEnabled: boolean;
+  onChangeNavRailEnabled: (next: boolean) => void;
+  messageFramesEnabled: boolean;
+  onChangeMessageFramesEnabled: (next: boolean) => void;
+  autoScrollReplyEnabled: boolean;
+  onChangeAutoScrollReplyEnabled: (next: boolean) => void;
 }
 
 const EDITOR_PROTOCOLS: { id: EditorProtocol; label: string; hint: string }[] =
@@ -291,6 +323,33 @@ function clampSize(n: number): number {
   return Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, Math.round(n)));
 }
 
+function SettingToggle({
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <label className="flex items-start gap-3 rounded border border-zinc-800 bg-zinc-900/40 p-3">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 h-4 w-4 accent-zinc-300"
+      />
+      <span>
+        <span className="block text-sm text-zinc-200">{label}</span>
+        <span className="mt-0.5 block text-[11px] text-zinc-500">{hint}</span>
+      </span>
+    </label>
+  );
+}
+
 function GeneralSettings({
   font,
   onChangeFont,
@@ -302,6 +361,14 @@ function GeneralSettings({
   onChangeCustomPalette,
   editorProtocol,
   onChangeEditorProtocol,
+  popupEnabled,
+  onChangePopupEnabled,
+  navRailEnabled,
+  onChangeNavRailEnabled,
+  messageFramesEnabled,
+  onChangeMessageFramesEnabled,
+  autoScrollReplyEnabled,
+  onChangeAutoScrollReplyEnabled,
 }: GeneralSettingsProps) {
   const allPalettes = [...PALETTES, customAsPalette(customPalette)];
   return (
@@ -415,6 +482,38 @@ function GeneralSettings({
             </span>
           </span>
         </label>
+      </section>
+
+      <section>
+        <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+          Affichage
+        </h4>
+        <div className="space-y-2">
+          <SettingToggle
+            checked={popupEnabled}
+            onChange={onChangePopupEnabled}
+            label="Pop-up de notification"
+            hint="Affiche une fenêtre en bas à droite quand Claude attend une réponse et qu'Arkadia est en arrière-plan."
+          />
+          <SettingToggle
+            checked={navRailEnabled}
+            onChange={onChangeNavRailEnabled}
+            label="Boutons de navigation"
+            hint="La barre de boutons à droite du terminal pour sauter entre les messages."
+          />
+          <SettingToggle
+            checked={messageFramesEnabled}
+            onChange={onChangeMessageFramesEnabled}
+            label="Cadres autour des messages"
+            hint="Les cadres vert (tes messages) et violet (Claude) autour des réponses."
+          />
+          <SettingToggle
+            checked={autoScrollReplyEnabled}
+            onChange={onChangeAutoScrollReplyEnabled}
+            label="Défilement auto vers la réponse"
+            hint="Quand Claude a fini, remonte au début de sa dernière réponse pour la lire du haut."
+          />
+        </div>
       </section>
 
       <section>

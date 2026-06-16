@@ -14,6 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
 tauri-plugin-store = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
@@ -31,6 +32,15 @@ tokio = { version = "1", features = ["fs", "sync", "rt", "rt-multi-thread", "mac
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 open = "5"
+
+# Win32 z-order inspection so the notification popup can tell when Arkadia is
+# only behind an always-on-top overlay (Picture-in-Picture) vs a real window.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Dwm",
+] }
 
 [dev-dependencies]
 tempfile = "3"

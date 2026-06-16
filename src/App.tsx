@@ -9,6 +9,7 @@ import { TabBar } from "@/components/TabBar";
 import { Sidepanel } from "@/components/Sidepanel";
 import { Toolbar } from "@/components/Toolbar";
 import { PaneTreeView } from "@/components/PaneTreeView";
+import { MessageNavRail } from "@/components/MessageNavRail";
 import { AddProjectDialog } from "@/components/AddProjectDialog";
 import { ProjectContextMenu } from "@/components/ProjectContextMenu";
 import { PaneContextMenu } from "@/components/PaneContextMenu";
@@ -16,6 +17,7 @@ import { RenameDialog } from "@/components/RenameDialog";
 import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { NotepadPanel } from "@/components/NotepadPanel";
+import { ReadingPanel } from "@/components/ReadingPanel";
 import { loadState, saveState, newProjectId, newWorkspaceId } from "@/store";
 import { WorkspaceContextMenu } from "@/components/WorkspaceContextMenu";
 import { WorkspaceDialog } from "@/components/WorkspaceDialog";
@@ -94,12 +96,25 @@ export function App() {
   const [editorProtocol, setEditorProtocol] = useState<EditorProtocol>(
     DEFAULT_EDITOR_PROTOCOL,
   );
+  const [popupEnabled, setPopupEnabled] = useState(true);
+  const [navRailEnabled, setNavRailEnabled] = useState(true);
+  const [messageFramesEnabled, setMessageFramesEnabled] = useState(true);
+  const [autoScrollReplyEnabled, setAutoScrollReplyEnabled] = useState(true);
+  // Session-only focus mode (mask everything but framed messages); not persisted.
+  const [focusMessages, setFocusMessages] = useState(false);
   const palette = useMemo(
     () => resolveActivePalette(paletteId, customPalette),
     [paletteId, customPalette],
   );
 
   const [tabs, setTabs] = useState<Tab[]>([]);
+  // Mirror of `tabs` for the (set-up-once) agent-state listener, so it can read
+  // the current panes synchronously without a stale closure — `setTabs(fn)` runs
+  // its updater asynchronously, so reading an outer var right after it is racy.
+  const tabsRef = useRef<Tab[]>([]);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
   const [activeTabIdByProject, setActiveTabIdByProject] = useState<
     Record<string, string>
   >({});
@@ -114,6 +129,7 @@ export function App() {
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notepadOpen, setNotepadOpen] = useState(false);
+  const [readingOpen, setReadingOpen] = useState(false);
   const [projectMenu, setProjectMenu] = useState<ProjectMenuState | null>(null);
   const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuState | null>(
     null,
@@ -223,7 +239,7 @@ export function App() {
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
 
-    getCurrentWindow()
+    void getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
         if (!focused) return;
         const active = document.activeElement;
@@ -266,6 +282,10 @@ export function App() {
         setUseWebGPU(state.useWebGPU);
         setCustomPalette(state.customPalette);
         setEditorProtocol(state.editorProtocol);
+        setPopupEnabled(state.popupEnabled);
+        setNavRailEnabled(state.navRailEnabled);
+        setMessageFramesEnabled(state.messageFramesEnabled);
+        setAutoScrollReplyEnabled(state.autoScrollReplyEnabled);
         setLoaded(true);
       })
       .catch((e) => {
@@ -291,6 +311,10 @@ export function App() {
         useWebGPU,
         customPalette,
         editorProtocol,
+        popupEnabled,
+        navRailEnabled,
+        messageFramesEnabled,
+        autoScrollReplyEnabled,
       });
     }, 500);
     return () => clearTimeout(t);
@@ -305,7 +329,26 @@ export function App() {
     useWebGPU,
     customPalette,
     editorProtocol,
+    popupEnabled,
+    navRailEnabled,
+    messageFramesEnabled,
+    autoScrollReplyEnabled,
   ]);
+
+  // The popup is triggered by the Rust backend, so mirror its on/off setting there.
+  useEffect(() => {
+    if (!loaded) return;
+    void invoke("popup_set_enabled", { enabled: popupEnabled }).catch(() => {});
+  }, [loaded, popupEnabled]);
+
+  // The terminal auto-scroll is also driven by the backend (off the hook), so
+  // mirror its on/off setting there too.
+  useEffect(() => {
+    if (!loaded) return;
+    void invoke("popup_set_auto_scroll", {
+      enabled: autoScrollReplyEnabled,
+    }).catch(() => {});
+  }, [loaded, autoScrollReplyEnabled]);
 
   // ─── Pane / tab spawning ────────────────────────────────────────
 
@@ -612,26 +655,30 @@ export function App() {
         (event) => {
           if (!active) return;
           const { cwd, state } = event.payload;
-          // Find all panes whose live cwd matches this event's cwd, update their
-          // states. We read tabs through setTabs's updater to avoid stale closures.
-          setTabs((currentTabs) => {
-            const matchingPaneIds: string[] = [];
-            for (const tab of currentTabs) {
-              for (const paneId of Object.keys(tab.panes)) {
-                const pane = tab.panes[paneId];
-                if (pane.cwd === cwd) matchingPaneIds.push(paneId);
-              }
+          // Panes whose live cwd matches this event's cwd, read synchronously
+          // from the tabs ref (a `setTabs` updater would run too late to drive
+          // the side effects below).
+          const matchingPaneIds: string[] = [];
+          for (const tab of tabsRef.current) {
+            for (const paneId of Object.keys(tab.panes)) {
+              if (tab.panes[paneId].cwd === cwd) matchingPaneIds.push(paneId);
             }
-            if (matchingPaneIds.length === 0) return currentTabs;
-            setPaneAgentStates((prev) => {
-              const next = { ...prev };
-              for (const id of matchingPaneIds) next[id] = state;
-              return next;
-            });
-            return currentTabs;
+          }
+          if (matchingPaneIds.length === 0) return;
+          // Badge state only. The terminal auto-scroll is NOT driven from here:
+          // the watcher coalesces fast transcript writes and can skip the
+          // busy→waiting edge, so we trigger it off the Stop hook instead (see
+          // the `pane-reply-finished` listener below).
+          setPaneAgentStates((prev) => {
+            const next = { ...prev };
+            for (const id of matchingPaneIds) next[id] = state;
+            return next;
           });
         },
       );
+      // The terminal auto-scroll to the reply start is driven entirely in the
+      // backend (off the Stop/PreToolUse hook, when Arkadia is foreground) — no
+      // frontend listener needed. Its on/off setting is synced below.
     }
     void setup();
 
@@ -644,6 +691,46 @@ export function App() {
       unlistenAgent?.();
     };
   }, [closePane]);
+
+  // ─── Focus a pane on request from the notification popup ────────
+  // The "open in Arkadia" button emits `focus-pane` with the pane id; bring its
+  // project + tab forward and focus the pane so the user lands on the
+  // conversation they were notified about.
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let active = true;
+    void listen<string>("focus-pane", (event) => {
+      if (!active) return;
+      const paneId = event.payload;
+      const tabId = paneToTab.current.get(paneId);
+      if (!tabId) return;
+      setTabs((cur) => {
+        const tab = cur.find((t) => t.id === tabId);
+        if (!tab) return cur;
+        setActiveProjectId(tab.projectId);
+        setActiveTabIdByProject((prev) => ({
+          ...prev,
+          [tab.projectId]: tabId,
+        }));
+        return cur.map((t) =>
+          t.id === tabId ? { ...t, activePaneId: paneId } : t,
+        );
+      });
+      requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLElement>(
+          `[data-pane-id="${paneId}"]`,
+        );
+        el?.focus();
+      });
+    }).then((fn) => {
+      if (active) unlisten = fn;
+      else fn();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
 
   // ─── Auto-spawn first tab when activating an empty project ────
 
@@ -986,7 +1073,7 @@ export function App() {
   }
 
   return (
-    <div className="flex h-screen w-screen bg-zinc-950 text-zinc-100">
+    <div className="relative flex h-screen w-screen bg-zinc-950 text-zinc-100">
       <Sidepanel
         projects={projects}
         workspaces={workspaces}
@@ -1028,9 +1115,15 @@ export function App() {
           onOpenSettings={() => setSettingsOpen(true)}
           disabled={!activeProject}
           notepadOpen={notepadOpen}
-          onToggleNotepad={() => setNotepadOpen((v) => !v)}
-          onNavigateMessage={navigateMessage}
-          messageNavDisabled={!activePaneIdOfActiveTab}
+          onToggleNotepad={() => {
+            setNotepadOpen((v) => !v);
+            setReadingOpen(false);
+          }}
+          readingOpen={readingOpen}
+          onToggleReading={() => {
+            setReadingOpen((v) => !v);
+            setNotepadOpen(false);
+          }}
         />
 
         {error && (
@@ -1047,7 +1140,15 @@ export function App() {
           </div>
         )}
 
-        <div ref={paneHostRef} className="flex flex-1 overflow-hidden">
+        <div ref={paneHostRef} className="relative flex flex-1 overflow-hidden">
+          {activeProject && navRailEnabled && (
+            <MessageNavRail
+              onNavigate={navigateMessage}
+              disabled={!activePaneIdOfActiveTab}
+              focusActive={focusMessages}
+              onToggleFocus={() => setFocusMessages((v) => !v)}
+            />
+          )}
           {!activeProject && (
             <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
               {projects.length === 0
@@ -1071,6 +1172,8 @@ export function App() {
                   palette={palette}
                   useWebGPU={useWebGPU}
                   editorProtocol={editorProtocol}
+                  showMessageFrames={messageFramesEnabled}
+                  focusMessages={focusMessages}
                   onActivate={(paneId) => focusPane(tab.id, paneId)}
                   onUserInput={() => markProjectInput(tab.projectId)}
                   onContextMenu={(paneId, x, y) =>
@@ -1084,6 +1187,15 @@ export function App() {
             ))}
         </div>
       </div>
+
+      {readingOpen && (
+        <ReadingPanel
+          paneId={activePaneIdOfActiveTab}
+          projectName={activeProject?.name ?? null}
+          palette={palette}
+          onClose={() => setReadingOpen(false)}
+        />
+      )}
 
       {notepadOpen && (
         <NotepadPanel
@@ -1223,6 +1335,14 @@ export function App() {
         onChangeCustomPalette={setCustomPalette}
         editorProtocol={editorProtocol}
         onChangeEditorProtocol={setEditorProtocol}
+        popupEnabled={popupEnabled}
+        onChangePopupEnabled={setPopupEnabled}
+        navRailEnabled={navRailEnabled}
+        onChangeNavRailEnabled={setNavRailEnabled}
+        messageFramesEnabled={messageFramesEnabled}
+        onChangeMessageFramesEnabled={setMessageFramesEnabled}
+        autoScrollReplyEnabled={autoScrollReplyEnabled}
+        onChangeAutoScrollReplyEnabled={setAutoScrollReplyEnabled}
       />
     </div>
   );

@@ -1,46 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  BookOpen,
   ChevronDown,
   ChevronRight,
-  ChevronUp,
   NotebookPen,
   Settings as SettingsIcon,
 } from "lucide-react";
 import type { ActionButton, FolderButton, ToolbarButton } from "@/types";
 import { getIcon } from "@/icons";
-
-/**
- * Backgrounds match the terminal line tints exactly: USER_TINT/CLAUDE_TINT
- * (`@/lib/messageTint`) at MESSAGE_TINT_ALPHA. Tailwind arbitrary values must
- * be literal strings, hence the duplication.
- */
-const MESSAGE_NAV = [
-  {
-    kind: 1,
-    dir: -1,
-    title: "Previous message (you)",
-    className: "bg-[rgba(34,197,94,0.06)] hover:bg-[rgba(34,197,94,0.14)]",
-  },
-  {
-    kind: 1,
-    dir: 1,
-    title: "Next message (you)",
-    className: "bg-[rgba(34,197,94,0.06)] hover:bg-[rgba(34,197,94,0.14)]",
-  },
-  {
-    kind: 2,
-    dir: -1,
-    title: "Previous message (Claude)",
-    className: "bg-[rgba(168,85,247,0.06)] hover:bg-[rgba(168,85,247,0.14)]",
-  },
-  {
-    kind: 2,
-    dir: 1,
-    title: "Next message (Claude)",
-    className: "bg-[rgba(168,85,247,0.06)] hover:bg-[rgba(168,85,247,0.14)]",
-  },
-] as const;
 
 interface ToolbarProps {
   buttons: ToolbarButton[];
@@ -49,8 +17,8 @@ interface ToolbarProps {
   disabled?: boolean;
   notepadOpen: boolean;
   onToggleNotepad: () => void;
-  onNavigateMessage: (kind: 1 | 2, dir: -1 | 1) => void;
-  messageNavDisabled?: boolean;
+  readingOpen: boolean;
+  onToggleReading: () => void;
 }
 
 export function Toolbar({
@@ -60,8 +28,8 @@ export function Toolbar({
   disabled = false,
   notepadOpen,
   onToggleNotepad,
-  onNavigateMessage,
-  messageNavDisabled = false,
+  readingOpen,
+  onToggleReading,
 }: ToolbarProps) {
   return (
     <div className="flex h-9 items-center gap-1 border-b border-zinc-800 bg-zinc-950 px-2">
@@ -91,19 +59,17 @@ export function Toolbar({
             ),
           )}
       </div>
-      {MESSAGE_NAV.map((b) => (
-        <button
-          key={`${b.kind}:${b.dir}`}
-          onClick={() => onNavigateMessage(b.kind, b.dir)}
-          disabled={messageNavDisabled}
-          className={`ml-1 flex size-7 items-center justify-center rounded text-zinc-400 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 ${b.className}`}
-          title={b.title}
-          aria-label={b.title}
-          type="button"
-        >
-          {b.dir < 0 ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-        </button>
-      ))}
+      <button
+        onClick={onToggleReading}
+        className={`ml-1 flex size-7 items-center justify-center rounded hover:bg-zinc-900 hover:text-zinc-100 ${
+          readingOpen ? "bg-zinc-900 text-zinc-100" : "text-zinc-400"
+        }`}
+        title="Lecture — messages seuls, compactés"
+        aria-label="Mode lecture"
+        type="button"
+      >
+        <BookOpen size={14} />
+      </button>
       <button
         onClick={onToggleNotepad}
         className={`ml-1 flex size-7 items-center justify-center rounded hover:bg-zinc-900 hover:text-zinc-100 ${

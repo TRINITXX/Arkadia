@@ -294,8 +294,8 @@ export function NotepadPanel({
 
   return (
     <div
-      style={{ width }}
-      className="relative flex h-full shrink-0 flex-col border-l border-zinc-800 bg-zinc-950"
+      style={{ width, boxShadow: "-12px 0 36px -16px rgba(0,0,0,0.7)" }}
+      className="absolute inset-y-0 right-0 z-30 flex flex-col border-l border-zinc-800 bg-zinc-950"
       onKeyDown={(e) => {
         if (e.key === "Escape") onClose();
       }}

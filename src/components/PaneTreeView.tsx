@@ -17,6 +17,10 @@ interface PaneTreeViewProps {
   palette: TerminalPalette;
   useWebGPU: boolean;
   editorProtocol: EditorProtocol;
+  /** Draw the green/purple conversation frames (WebGPU renderer only). */
+  showMessageFrames: boolean;
+  /** Focus mode: mask everything but framed messages (WebGPU renderer only). */
+  focusMessages: boolean;
   onActivate: (paneId: string) => void;
   /** Fired when the user produces real input (keystroke/paste) in a pane. */
   onUserInput?: () => void;
@@ -33,6 +37,8 @@ export function PaneTreeView({
   palette,
   useWebGPU,
   editorProtocol,
+  showMessageFrames,
+  focusMessages,
   onActivate,
   onUserInput,
   onContextMenu,
@@ -50,6 +56,8 @@ export function PaneTreeView({
         font={font}
         palette={palette}
         editorProtocol={editorProtocol}
+        showMessageFrames={showMessageFrames}
+        focusMessages={focusMessages}
         onActivate={() => onActivate(pane.id)}
         onUserInput={onUserInput}
         onContextMenu={(x, y) => onContextMenu(pane.id, x, y)}
@@ -99,6 +107,8 @@ export function PaneTreeView({
           palette={palette}
           useWebGPU={useWebGPU}
           editorProtocol={editorProtocol}
+          showMessageFrames={showMessageFrames}
+          focusMessages={focusMessages}
           onActivate={onActivate}
           onUserInput={onUserInput}
           onContextMenu={onContextMenu}
@@ -122,6 +132,8 @@ export function PaneTreeView({
           palette={palette}
           useWebGPU={useWebGPU}
           editorProtocol={editorProtocol}
+          showMessageFrames={showMessageFrames}
+          focusMessages={focusMessages}
           onActivate={onActivate}
           onUserInput={onUserInput}
           onContextMenu={onContextMenu}

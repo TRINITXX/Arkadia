@@ -8,12 +8,8 @@ import {
 import { Renderer } from "@renderer/terminal_renderer.js";
 import { ensureWasmReady, paletteToWasm } from "@/lib/wasmRenderer";
 import { measureCellSize } from "@/lib/cellSize";
-import {
-  CLAUDE_TINT,
-  MESSAGE_TINT_ALPHA,
-  mixHex,
-  USER_TINT,
-} from "@/lib/messageTint";
+import { CLAUDE_TINT, hexToRgba, USER_TINT } from "@/lib/messageTint";
+import { isChromeRow, isInputRow, isJumpPill } from "@/lib/terminalChrome";
 import {
   findClickableAt,
   buildRowMapping,
@@ -236,37 +232,318 @@ function applyHoverHighlight(
 }
 
 /**
- * Paints the permanent conversation tint behind message lines (`line_kinds`
- * from the backend: 1 = user → green, 2 = Claude → purple). Applied first in
- * the redraw chain so search/hover highlights keep priority.
- *
- * User rows: every run is repainted — Claude Code already draws its own grey
- * band over user prompts, and the green must replace it, not hide under it.
- * Claude rows: only default-background runs, so colored content inside a
- * response (diffs, code blocks) keeps its background.
+ * Strips Claude Code's grey user-prompt band: user rows (`line_kinds === 1`)
+ * get their cell backgrounds reset to default, so only the green frame
+ * (MessageBorderOverlay) marks a user message — no grey fill behind the text.
  */
-function applyMessageTint(screen: RenderPayload, bg: string): RenderPayload {
+function stripUserBand(screen: RenderPayload): RenderPayload {
   const kinds = screen.line_kinds;
-  if (!kinds || !kinds.some((k) => k === 1 || k === 2)) return screen;
-  const userTint: CellColor = {
-    kind: "rgb",
-    value: mixHex(bg, USER_TINT, MESSAGE_TINT_ALPHA),
-  };
-  const claudeTint: CellColor = {
-    kind: "rgb",
-    value: mixHex(bg, CLAUDE_TINT, MESSAGE_TINT_ALPHA),
-  };
+  if (!kinds || !kinds.some((k) => k === 1)) return screen;
+  const transparent: CellColor = { kind: "default" };
   const newLines = screen.lines.slice();
   for (let row = 0; row < newLines.length; row++) {
     if (kinds[row] === 1) {
-      newLines[row] = newLines[row].map((run) => ({ ...run, bg: userTint }));
-    } else if (kinds[row] === 2) {
       newLines[row] = newLines[row].map((run) =>
-        run.bg.kind === "default" ? { ...run, bg: claudeTint } : run,
+        run.bg.kind === "default" ? run : { ...run, bg: transparent },
       );
     }
   }
   return { ...screen, lines: newLines };
+}
+
+/**
+ * Blanks Claude Code's floating "Jump to bottom (ctrl+End)" pill — a centred
+ * overlay that clutters the transcript. The message-nav rail + ctrl+End cover
+ * its function.
+ */
+function hideJumpPill(screen: RenderPayload): RenderPayload {
+  let changed = false;
+  const transparent: CellColor = { kind: "default" };
+  const newLines = screen.lines.map((line) => {
+    if (!isJumpPill(line)) return line;
+    changed = true;
+    return line.map((run) => ({
+      ...run,
+      text: " ".repeat([...run.text].length),
+      bg: transparent,
+    }));
+  });
+  return changed ? { ...screen, lines: newLines } : screen;
+}
+
+interface MessageBlock {
+  /** 1 = user → green, 2 = Claude → purple. */
+  kind: number;
+  /** First and last visible row index (inclusive) of the contiguous block. */
+  start: number;
+  end: number;
+}
+
+/** Contiguous runs of same-kind rows in `line_kinds` (skipping kind 0). */
+function messageBlocks(kinds: number[] | null | undefined): MessageBlock[] {
+  if (!kinds) return [];
+  const blocks: MessageBlock[] = [];
+  let i = 0;
+  while (i < kinds.length) {
+    const k = kinds[i];
+    if (k === 1 || k === 2) {
+      let j = i;
+      while (j + 1 < kinds.length && kinds[j + 1] === k) j++;
+      blocks.push({ kind: k, start: i, end: j });
+      i = j + 1;
+    } else {
+      i++;
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Draws the conversation block outline (`line_kinds` from the backend: 1 = user
+ * → green, 2 = Claude → purple) as a framed box per contiguous block, as a DOM
+ * overlay above the canvas. A border (not a background fill) keeps the terminal
+ * colors untouched; rgba alpha gives the outline its own, higher opacity. Rows
+ * map to pixels via the same CSS-pixel cell height the grid is laid out with
+ * (`measureCellSize`), so the box stays aligned at any font size / DPR.
+ */
+function MessageBorderOverlay({
+  screen,
+  font,
+}: {
+  screen: RenderPayload | null;
+  font: TerminalFont;
+}) {
+  const blocks = messageBlocks(screen?.line_kinds);
+  if (blocks.length === 0) return null;
+  const lines = screen?.lines ?? [];
+  const cols = screen?.cols ?? 80;
+  const rows = screen?.rows ?? lines.length;
+  const { height: cellH } = measureCellSize(font.family, font.size);
+  // Horizontal overshoot of the frame into the pane padding.
+  const GAP = 8;
+  // Vertical breathing room (px) into adjacent whitespace — capped at half the
+  // available gap so two stacked frames never overlap and keep a clear margin.
+  const MARGIN_V = 4;
+
+  // Column of the first non-space cell of a row, or null when blank.
+  const firstContentCol = (row: number): number | null => {
+    const line = lines[row];
+    if (!line) return null;
+    let col = 0;
+    for (const r of line) {
+      const w = r.cell_width ?? 1;
+      for (const ch of [...r.text]) {
+        if (ch.trim().length > 0) return col;
+        col += w;
+      }
+    }
+    return null;
+  };
+  // "Left content" = a genuine message line (starts in the left quarter). Blank
+  // rows, centred pills ("Jump to bottom"), and right-aligned footers are
+  // excluded, so the backend's tint bleed across empty space never gets framed.
+  const isLeftContent = (row: number): boolean => {
+    const idx = firstContentCol(row);
+    return idx !== null && idx * 4 <= cols;
+  };
+  // A right-aligned row = the footer token counter. A cut-off frame stops just
+  // above it.
+  const isRightAligned = (row: number): boolean => {
+    const idx = firstContentCol(row);
+    return idx !== null && idx * 4 >= cols * 3;
+  };
+  // Count of consecutive non-content (blank/footer) rows from `row` in `dir`.
+  const blankRun = (row: number, dir: 1 | -1): number => {
+    let n = 0;
+    for (let r = row; r >= 0 && r < rows && !isLeftContent(r); r += dir) n++;
+    return n;
+  };
+
+  // The "Jump to bottom" pill is only present when the transcript is scrolled
+  // up — i.e. the bottom-most visible message continues below the fold and must
+  // keep its bottom open. Detected by its text (stable), not by position: the
+  // pill is a fixed overlay that can sit on top of any content row.
+  const scrolledUp = lines.some((line) => isJumpPill(line));
+
+  // First pass: trim each block to its real content rows.
+  const trimmed = blocks
+    .map((b) => {
+      let start = b.start;
+      let end = b.end;
+      while (start <= end && !isLeftContent(start)) start++;
+      while (end >= start && !isLeftContent(end)) end--;
+      return start <= end ? { kind: b.kind, start, end } : null;
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+  const maxEnd = trimmed.reduce((m, b) => Math.max(m, b.end), -1);
+
+  // True when the message at `end` runs off the bottom of the viewport: scrolled
+  // up, it's the bottom-most block, and nothing but chrome/footer follows it. If
+  // a conversation row (e.g. a `∴` thinking line) sits below it before the
+  // footer, the message actually ended on screen → not cut off.
+  const runsOffBottom = (end: number): boolean => {
+    if (!scrolledUp || end !== maxEnd) return false;
+    for (let r = end + 1; r < rows; r++) {
+      if (firstContentCol(r) === null) continue; // blank
+      if (isChromeRow(lines[r], cols) || isInputRow(lines[r])) break; // footer
+      return false; // real conversation content below → ended on screen
+    }
+    return true;
+  };
+
+  // True when `row` is the actual head of its message (Claude `●`/`⏺`, user `❯`).
+  // When the head has scrolled off the top, the block's first visible row is a
+  // continuation — so the frame is cut at the top and its top border is dropped.
+  const startsWithHead = (row: number, kind: number): boolean => {
+    const line = lines[row];
+    if (!line) return false;
+    let text = "";
+    for (const r of line) text += r.text;
+    const t = text.replace(/^\s+/u, "");
+    if (kind === 2) return t.startsWith("●") || t.startsWith("⏺");
+    if (kind === 1) return t.startsWith("❯");
+    return true;
+  };
+
+  const boxes = trimmed.map(({ kind, start, end }) => {
+    // Cut off at the bottom: the bottom-most block while scrolled up.
+    const cutOff = runsOffBottom(end);
+    // Cut off at the top: the message head scrolled above the viewport, so the
+    // first visible row isn't the `●`/`❯` head → drop the top border.
+    const cutTop = !startsWithHead(start, kind);
+    // Where a cut-off frame stops: just above the token counter (right-aligned)
+    // or the input separator / `❯` box (left content) — whichever comes first.
+    // Never the viewport bottom, so the sides don't wrap the input/status area.
+    let footerBottom = end + 1;
+    while (
+      footerBottom < rows &&
+      !isLeftContent(footerBottom) &&
+      !isRightAligned(footerBottom)
+    )
+      footerBottom++;
+    // Reach up to MARGIN_V into adjacent whitespace for text breathing, but
+    // never more than half of it — so two stacked frames (e.g. a pinned prompt
+    // above a Claude reply) keep a clear gap and never overlap.
+    const topExt = Math.min(MARGIN_V, (blankRun(start - 1, -1) * cellH) / 2);
+    const botExt = Math.min(MARGIN_V, (blankRun(end + 1, 1) * cellH) / 2);
+    return { kind, start, end, topExt, botExt, cutOff, cutTop, footerBottom };
+  });
+
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: 0,
+        pointerEvents: "none",
+        zIndex: 1,
+      }}
+    >
+      {boxes.map((b) => {
+        const tint = b.kind === 1 ? USER_TINT : CLAUDE_TINT;
+        // Soft "glow" delimiter (vs. the old hard 1px box): a barely-there tint
+        // fill + a low-alpha ring (no glow). The ring is per-side so a cut edge
+        // stays open.
+        const ring = `1px solid ${hexToRgba(tint, 0.2)}`;
+        // No breathing room above a top-cut frame: it opens at the viewport edge.
+        const tExt = b.cutTop ? 0 : b.topExt;
+        const R = 10;
+        const tl = b.cutTop ? 0 : R;
+        const br = b.cutOff ? 0 : R;
+        return (
+          <div
+            key={`${b.kind}:${b.start}`}
+            style={{
+              position: "absolute",
+              top: b.start * cellH - tExt,
+              // When cut off, the open frame stops just under the token count
+              // (footerBottom), not at the viewport bottom — so its sides don't
+              // run through the input/status area.
+              height: b.cutOff
+                ? (b.footerBottom - b.start) * cellH + tExt
+                : (b.end - b.start + 1) * cellH + tExt + b.botExt,
+              left: -GAP,
+              // Clear the scrollbar overlay (6px + a small margin) on the right.
+              right: 10,
+              background: hexToRgba(tint, 0.05),
+              borderTop: b.cutTop ? "none" : ring,
+              borderLeft: ring,
+              borderRight: ring,
+              borderBottom: b.cutOff ? "none" : ring,
+              // Square off whichever edge is open (cut at top and/or bottom).
+              borderRadius: `${tl}px ${tl}px ${br}px ${br}px`,
+              boxSizing: "border-box",
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Focus mode: paints opaque background rectangles over every row that isn't a
+ * framed user/Claude message (`line_kinds` 1 or 2), so only the conversation
+ * messages stay visible — tool calls, command output, banners and the input box
+ * are masked out. The canvas grid can't be re-flowed, so the rows keep their
+ * vertical space (the masked areas read as blank gaps between messages). Rendered
+ * under `MessageBorderOverlay` so the green/purple borders stay on top.
+ */
+function MessageFocusMask({
+  screen,
+  font,
+  bg,
+}: {
+  screen: RenderPayload | null;
+  font: TerminalFont;
+  bg: string;
+}) {
+  const kinds = screen?.line_kinds;
+  if (!kinds) return null;
+  // Nothing to focus on (e.g. a plain shell, no Claude Code transcript) → don't
+  // blank the whole screen; leave it untouched.
+  if (!kinds.some((k) => k === 1 || k === 2)) return null;
+  const rows = screen?.rows ?? kinds.length;
+  const { height: cellH } = measureCellSize(font.family, font.size);
+  // Coalesce contiguous non-message rows into one rectangle each.
+  const rects: { top: number; height: number }[] = [];
+  let r = 0;
+  while (r < rows) {
+    if (kinds[r] === 1 || kinds[r] === 2) {
+      r++;
+      continue;
+    }
+    let j = r;
+    while (j < rows && kinds[j] !== 1 && kinds[j] !== 2) j++;
+    rects.push({ top: r * cellH, height: (j - r) * cellH });
+    r = j;
+  }
+  if (rects.length === 0) return null;
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: 0,
+        pointerEvents: "none",
+        zIndex: 1,
+      }}
+    >
+      {rects.map((rect, i) => (
+        <div
+          key={i}
+          style={{
+            position: "absolute",
+            top: rect.top,
+            height: rect.height,
+            left: 0,
+            right: 0,
+            backgroundColor: bg,
+          }}
+        />
+      ))}
+    </div>
+  );
 }
 
 /** True iff the running app has activated some form of mouse tracking. */
@@ -410,6 +687,10 @@ interface Props {
   font: TerminalFont;
   palette: TerminalPalette;
   editorProtocol: EditorProtocol;
+  /** Draw the green/purple conversation frames. */
+  showMessageFrames: boolean;
+  /** Focus mode: mask everything that isn't a framed user/Claude message. */
+  focusMessages: boolean;
   onActivate: () => void;
   /** Fired when the user produces real input (keystroke/paste) in this pane. */
   onUserInput?: () => void;
@@ -421,6 +702,8 @@ export function TerminalWebGPU({
   isActive,
   font,
   palette,
+  showMessageFrames,
+  focusMessages,
   onActivate,
   onUserInput,
   onContextMenu,
@@ -510,7 +793,11 @@ export function TerminalWebGPU({
     const screen = screenRef.current;
     if (!readyRef.current || !r || !screen) return;
     recomputeVisibleHits();
-    let modified = applyMessageTint(screen, paletteRef.current.bg);
+    // Conversation block outlines are a DOM overlay (MessageBorderOverlay); the
+    // only cell repaint is stripping Claude Code's grey user-prompt band so the
+    // green frame stands alone. Search + hover layer on top.
+    let modified = stripUserBand(screen);
+    modified = hideJumpPill(modified);
     modified = applySearchHighlight(
       modified,
       visibleHitsRef.current,
@@ -1436,6 +1723,12 @@ export function TerminalWebGPU({
     >
       <div ref={wrapperRef} className="relative h-full w-full">
         <canvas ref={canvasRef} className="block h-full w-full" />
+        {focusMessages && (
+          <MessageFocusMask screen={pane.screen} font={font} bg={palette.bg} />
+        )}
+        {showMessageFrames && (
+          <MessageBorderOverlay screen={pane.screen} font={font} />
+        )}
         <ScrollbarOverlay
           screen={pane.screen}
           visible={scrollbarVisible}

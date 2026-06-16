@@ -104,14 +104,14 @@ fn main() {
     for (kind, label) in [(1u8, "user"), (2u8, "claude")] {
         let mut anchor: Option<u64> = None;
         for i in 0..3 {
-            let (ok, t) = wheel_navigate(&term, send_wheel, kind, -1, ROWS, anchor);
+            let (ok, t) = wheel_navigate(&term, send_wheel, kind, -1, ROWS, anchor, &|| false);
             anchor = t;
             println!("--- prev {label} #{i} -> {ok}");
             dump_center(label);
         }
         if kind == 2 {
             // And one hop forward (newer).
-            let (ok, _) = wheel_navigate(&term, send_wheel, 2, 1, ROWS, anchor);
+            let (ok, _) = wheel_navigate(&term, send_wheel, 2, 1, ROWS, anchor, &|| false);
             println!("--- next claude -> {ok}");
             dump_center("claude+1");
         }

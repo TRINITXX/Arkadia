@@ -27,6 +27,10 @@ const KEY_PALETTE_ID = "paletteId";
 const KEY_USE_WEBGPU = "useWebGPU";
 const KEY_CUSTOM_PALETTE = "customPalette";
 const KEY_EDITOR_PROTOCOL = "editorProtocol";
+const KEY_POPUP_ENABLED = "popupEnabled";
+const KEY_NAV_RAIL_ENABLED = "navRailEnabled";
+const KEY_MESSAGE_FRAMES_ENABLED = "messageFramesEnabled";
+const KEY_AUTO_SCROLL_REPLY = "autoScrollReplyEnabled";
 
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 28;
@@ -56,6 +60,14 @@ export interface PersistedState {
   useWebGPU: boolean;
   customPalette: CustomPalette;
   editorProtocol: EditorProtocol;
+  /** Show the background-notification popup when Claude is waiting. */
+  popupEnabled: boolean;
+  /** Show the message-navigation rail on the right of the terminal. */
+  navRailEnabled: boolean;
+  /** Draw the green/purple frames around conversation messages. */
+  messageFramesEnabled: boolean;
+  /** Scroll to the start of Claude's reply when it finishes. */
+  autoScrollReplyEnabled: boolean;
 }
 
 const DEFAULT_STATE: PersistedState = {
@@ -68,7 +80,16 @@ const DEFAULT_STATE: PersistedState = {
   useWebGPU: false,
   customPalette: DEFAULT_CUSTOM_PALETTE,
   editorProtocol: DEFAULT_EDITOR_PROTOCOL,
+  popupEnabled: true,
+  navRailEnabled: true,
+  messageFramesEnabled: true,
+  autoScrollReplyEnabled: true,
 };
+
+/** Reads a boolean store key, defaulting to `fallback`. */
+function boolOr(raw: unknown, fallback: boolean): boolean {
+  return typeof raw === "boolean" ? raw : fallback;
+}
 
 let storePromise: Promise<Store> | null = null;
 
@@ -210,6 +231,10 @@ async function tryMigrateFromLocalStorage(
       useWebGPU: false,
       customPalette: DEFAULT_CUSTOM_PALETTE,
       editorProtocol: DEFAULT_EDITOR_PROTOCOL,
+      popupEnabled: true,
+      navRailEnabled: true,
+      messageFramesEnabled: true,
+      autoScrollReplyEnabled: true,
     };
     await store.set(KEY_PROJECTS, state.projects);
     await store.set(KEY_WORKSPACES, state.workspaces);
@@ -248,6 +273,10 @@ export async function loadState(): Promise<PersistedState> {
   const rawUseWebGPU = await store.get<unknown>(KEY_USE_WEBGPU);
   const rawCustomPalette = await store.get<unknown>(KEY_CUSTOM_PALETTE);
   const rawEditorProtocol = await store.get<unknown>(KEY_EDITOR_PROTOCOL);
+  const rawPopupEnabled = await store.get<unknown>(KEY_POPUP_ENABLED);
+  const rawNavRailEnabled = await store.get<unknown>(KEY_NAV_RAIL_ENABLED);
+  const rawMessageFrames = await store.get<unknown>(KEY_MESSAGE_FRAMES_ENABLED);
+  const rawAutoScrollReply = await store.get<unknown>(KEY_AUTO_SCROLL_REPLY);
 
   return {
     projects: Array.isArray(rawProjects)
@@ -268,6 +297,16 @@ export async function loadState(): Promise<PersistedState> {
         : DEFAULT_STATE.useWebGPU,
     customPalette: normalizeCustomPalette(rawCustomPalette),
     editorProtocol: normalizeEditorProtocol(rawEditorProtocol),
+    popupEnabled: boolOr(rawPopupEnabled, DEFAULT_STATE.popupEnabled),
+    navRailEnabled: boolOr(rawNavRailEnabled, DEFAULT_STATE.navRailEnabled),
+    messageFramesEnabled: boolOr(
+      rawMessageFrames,
+      DEFAULT_STATE.messageFramesEnabled,
+    ),
+    autoScrollReplyEnabled: boolOr(
+      rawAutoScrollReply,
+      DEFAULT_STATE.autoScrollReplyEnabled,
+    ),
   };
 }
 
@@ -282,6 +321,10 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_USE_WEBGPU, state.useWebGPU);
   await store.set(KEY_CUSTOM_PALETTE, state.customPalette);
   await store.set(KEY_EDITOR_PROTOCOL, state.editorProtocol);
+  await store.set(KEY_POPUP_ENABLED, state.popupEnabled);
+  await store.set(KEY_NAV_RAIL_ENABLED, state.navRailEnabled);
+  await store.set(KEY_MESSAGE_FRAMES_ENABLED, state.messageFramesEnabled);
+  await store.set(KEY_AUTO_SCROLL_REPLY, state.autoScrollReplyEnabled);
   await store.save();
 }
 

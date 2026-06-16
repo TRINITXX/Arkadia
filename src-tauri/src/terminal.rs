@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -41,6 +41,11 @@ pub struct Session {
     /// (kind, line hash) of the message the last `navigate_message` call
     /// landed on — the anchor that makes successive clicks progress.
     nav_target: Arc<Mutex<Option<(u8, u64)>>>,
+    /// Monotonic generation for alt-screen wheel navigation. Each new
+    /// `navigate_message`, and any manual scroll (wheel / `scroll_terminal`),
+    /// bumps it; the running nav loop aborts as soon as its captured generation
+    /// is stale — so a second button press or a wheel scroll cancels it.
+    nav_gen: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     _child: Box<dyn portable_pty::Child + Send + Sync>,
 }
@@ -280,6 +285,11 @@ pub fn spawn_terminal(
     cmd.cwd(&cwd);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    // Stamp the pane UUID into the PTY env so descendants (the shell → Claude
+    // Code → its hooks) can report exactly which pane they belong to. The
+    // notification hook echoes this back, letting the popup target the right
+    // conversation even when several Claude tabs share one project folder.
+    cmd.env("ARKADIA_PANE_ID", &session_id);
     // Identify ourselves as WezTerm-compatible: many TUIs (incl. Claude Code's
     // status line) gate Nerd Font / Powerline glyphs on these env vars.
     // Arkadia's renderer embeds Symbols Nerd Font as a fallback, so claiming
@@ -448,6 +458,7 @@ pub fn spawn_terminal(
             term,
             scroll_offset,
             nav_target: Arc::new(Mutex::new(None)),
+            nav_gen: Arc::new(AtomicU64::new(0)),
             stop,
             _child: child,
         },
@@ -589,7 +600,7 @@ fn emit_render(
     term: &Mutex<TerminalState>,
     scroll_offset: &AtomicU32,
 ) {
-    let term = term.lock();
+    let mut term = term.lock();
     let (rows, cols) = term.screen_size();
     let (cursor_row, cursor_col) = term.cursor_position();
     let cursor_visible = term.cursor_visible();
@@ -806,7 +817,7 @@ pub fn navigate_message(
 ) -> Result<bool, String> {
     // Clone the handles out so the sessions-map lock is not held while the
     // alt-screen loop sleeps (other commands keep working during navigation).
-    let (term, writer, scroll_offset, nav_target) = {
+    let (term, writer, scroll_offset, nav_target, nav_gen) = {
         let sessions = state.sessions.lock();
         let s = sessions
             .get(&session_id)
@@ -816,6 +827,7 @@ pub fn navigate_message(
             s.writer.clone(),
             s.scroll_offset.clone(),
             s.nav_target.clone(),
+            s.nav_gen.clone(),
         )
     };
     let dir: i32 = if dir < 0 { -1 } else { 1 };
@@ -863,22 +875,146 @@ pub fn navigate_message(
         return Ok(false);
     }
 
-    let send_wheel = |up: bool| {
-        let button = if up { 64 } else { 65 };
-        let bytes = encode_mouse(button, 5, rows / 2, 0, false, true, encoding);
-        let mut w = writer.lock();
-        let _ = w.write_all(&bytes);
-        let _ = w.flush();
+    // Bump the generation: this supersedes any in-flight navigation (which will
+    // see its captured `my_gen` go stale and abort on its next iteration). A
+    // manual scroll bumps it too, so the wheel/another button press stops the
+    // current navigation.
+    let my_gen = nav_gen.fetch_add(1, Ordering::AcqRel) + 1;
+
+    // The wheel feedback loop is sleep-driven (≥150ms per notch, up to dozens
+    // of notches). Run it OFF the main thread so the Wry event loop — and thus
+    // the whole window — stays responsive instead of freezing for seconds.
+    thread::spawn(move || {
+        let send_wheel = |up: bool| {
+            let button = if up { 64 } else { 65 };
+            let bytes = encode_mouse(button, 5, rows / 2, 0, false, true, encoding);
+            let mut w = writer.lock();
+            let _ = w.write_all(&bytes);
+            let _ = w.flush();
+        };
+        // Anchor on the previously-navigated message of the same kind, if any.
+        let prev = (*nav_target.lock())
+            .filter(|&(k, _)| k == kind)
+            .map(|(_, h)| h);
+        let cancel = || nav_gen.load(Ordering::Acquire) != my_gen;
+        let (_found, target) = crate::terminal_state::wheel_navigate(
+            &term, send_wheel, kind, dir, rows, prev, &cancel,
+        );
+        // Only record the anchor if we weren't superseded mid-flight.
+        if !cancel() {
+            *nav_target.lock() = target.map(|h| (kind, h));
+        }
+    });
+    Ok(true)
+}
+
+/// Scrolls so the start of Claude's most recent reply (its white `●` head) sits
+/// near the top of the viewport — fired when Claude finishes so the user reads
+/// the answer from its beginning instead of being dumped at the bottom.
+///
+/// Same two strategies as `navigate_message`:
+/// - Main screen: the transcript is in Arkadia's scrollback — set the scroll
+///   offset so the marker row lands `TOP_MARGIN` rows below the top edge.
+/// - Alt screen (Claude Code): drive the app's own scroll via SGR wheel events
+///   off the main thread (`wheel_message_to_top`).
+///
+/// Returns false when there is no Claude reply to scroll to.
+#[tauri::command]
+pub fn scroll_reply_to_top(
+    app: AppHandle,
+    session_id: String,
+    state: State<'_, SessionMap>,
+) -> Result<bool, String> {
+    Ok(scroll_pane_to_reply_top(&app, &session_id, &state))
+}
+
+/// Core of `scroll_reply_to_top`, callable directly from the backend (the popup
+/// signal handler scrolls the foreground terminal without a frontend round-trip).
+pub fn scroll_pane_to_reply_top(app: &AppHandle, session_id: &str, state: &SessionMap) -> bool {
+    const CLAUDE_KIND: u8 = 2;
+    // Mirror of `terminal_state::REPLY_TOP_MARGIN` for the main-screen math.
+    const TOP_MARGIN: i64 = 2;
+
+    let (term, writer, scroll_offset, nav_gen) = {
+        let sessions = state.sessions.lock();
+        let Some(s) = sessions.get(session_id) else {
+            crate::popup::log_line("[scroll_reply] UNKNOWN SESSION — not in SessionMap");
+            return false;
+        };
+        (
+            s.term.clone(),
+            s.writer.clone(),
+            s.scroll_offset.clone(),
+            s.nav_gen.clone(),
+        )
     };
-    // Anchor on the previously-navigated message of the same kind, if any.
-    let prev = (*nav_target.lock())
-        .filter(|&(k, _)| k == kind)
-        .map(|(_, h)| h);
-    let (found, target) = crate::terminal_state::wheel_navigate(
-        &term, send_wheel, kind, dir, rows, prev,
-    );
-    *nav_target.lock() = target.map(|h| (kind, h));
-    Ok(found)
+
+    let (on_alt, mouse_proto, encoding, rows) = {
+        let t = term.lock();
+        (
+            t.is_on_alt_screen(),
+            t.mouse_protocol(),
+            t.mouse_encoding(),
+            t.screen_size().0,
+        )
+    };
+    crate::popup::log_line(&format!(
+        "[scroll_reply] sess={} on_alt={on_alt} mouse_proto={mouse_proto:?} rows={rows}",
+        &session_id[..session_id.len().min(8)]
+    ));
+
+    if !on_alt {
+        let desired: Option<u32> = {
+            let t = term.lock();
+            let sb = t.scrollback_len() as i64;
+            // Most recent Claude message head = last kind-2 marker in row order.
+            let last = t
+                .message_markers()
+                .into_iter()
+                .filter(|m| m.kind == CLAUDE_KIND)
+                .map(|m| m.total_row as i64)
+                .last();
+            // Visible row v shows total row (sb - offset) + v; put the marker at
+            // v = TOP_MARGIN → offset = sb + TOP_MARGIN - row.
+            last.map(|row| (sb + TOP_MARGIN - row).clamp(0, sb) as u32)
+        };
+        let Some(off) = desired else {
+            return false;
+        };
+        nav_gen.fetch_add(1, Ordering::Release);
+        scroll_offset.store(off, Ordering::Release);
+        emit_render(app, session_id, &term, &scroll_offset);
+        return true;
+    }
+
+    // Alt screen: without mouse tracking we have no way to scroll the app.
+    if mouse_proto == MouseProtocol::None {
+        return false;
+    }
+
+    // Supersede any in-flight navigation; the loop aborts when its gen goes stale.
+    let my_gen = nav_gen.fetch_add(1, Ordering::AcqRel) + 1;
+    let visible_markers = term.lock().visible_markers_with_hash(CLAUDE_KIND).len();
+    crate::popup::log_line(&format!(
+        "[scroll_reply] alt path — spawning wheel loop, visible_kind2_markers={visible_markers}"
+    ));
+    // Sleep-driven wheel loop runs off the main thread so the window stays live.
+    thread::spawn(move || {
+        let send_wheel = |up: bool| {
+            let button = if up { 64 } else { 65 };
+            let bytes = encode_mouse(button, 5, rows / 2, 0, false, true, encoding);
+            let mut w = writer.lock();
+            let _ = w.write_all(&bytes);
+            let _ = w.flush();
+        };
+        let cancel = || nav_gen.load(Ordering::Acquire) != my_gen;
+        let found =
+            crate::terminal_state::wheel_message_to_top(&term, send_wheel, CLAUDE_KIND, &cancel);
+        crate::popup::log_line(&format!(
+            "[scroll_reply] wheel loop finished, positioned={found}"
+        ));
+    });
+    true
 }
 
 #[tauri::command]
@@ -958,6 +1094,11 @@ pub fn send_mouse_event(
         .get(&session_id)
         .ok_or_else(|| format!("unknown session {session_id}"))?;
 
+    // A wheel scroll (button 64/65) supersedes any in-flight message navigation.
+    if button >= 64 {
+        session.nav_gen.fetch_add(1, Ordering::Release);
+    }
+
     let (protocol, encoding) = {
         let term = session.term.lock();
         (term.mouse_protocol(), term.mouse_encoding())
@@ -985,6 +1126,9 @@ pub fn scroll_terminal(
     let session = sessions
         .get(&session_id)
         .ok_or_else(|| format!("unknown session {session_id}"))?;
+
+    // A manual scroll supersedes any in-flight message navigation.
+    session.nav_gen.fetch_add(1, Ordering::Release);
 
     // On alt screen (TUI apps like claude code, less, vim), our scrollback is
     // frozen by design. Translate wheel into PgUp/PgDn so the running app can

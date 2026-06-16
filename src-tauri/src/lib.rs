@@ -1,6 +1,8 @@
 mod agent_registry;
 mod claude_watcher;
+mod conversation;
 mod fonts;
+mod popup;
 mod screenshots;
 mod terminal;
 pub mod terminal_state;
@@ -15,27 +17,63 @@ use screenshots::save_screenshot;
 use tauri::{Emitter, Manager};
 use terminal::{
     close_terminal, get_text_range, list_message_markers, navigate_message, request_render,
-    resize_terminal, scroll_terminal, search_terminal, send_input, send_mouse_event,
-    spawn_terminal, SessionMap,
+    resize_terminal, scroll_reply_to_top, scroll_terminal, search_terminal, send_input,
+    send_mouse_event, spawn_terminal, SessionMap,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let registry: Arc<AgentRegistry> = Arc::new(AgentRegistry::default());
 
-    tauri::Builder::default()
+    // `mut` is only used by the release-only single-instance block below.
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+    // Single-instance is RELEASE-ONLY. In a release build a second launch (e.g.
+    // running a fresh build without closing the old one) would start a duplicate
+    // app — and a duplicate popup watcher → several popup windows, some routing
+    // the wrong conversation; instead we focus the running window and exit. In
+    // debug we skip it so `tauri dev` always launches, even alongside a daily
+    // instance. Must be the first plugin registered.
+    #[cfg(not(debug_assertions))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(
+            |app, _argv, _cwd| {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            },
+        ));
+    }
+
+    builder
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(SessionMap::default())
         .manage(registry.clone())
+        .manage(popup::PopupQueue::default())
         .setup({
             let registry = registry.clone();
             move |app| {
                 let app_handle = app.handle().clone();
                 if let Some(window) = app_handle.get_webview_window("main") {
                     let _ = window.maximize();
+                }
+
+                // Background-notification popup: watch the hook signal dir and
+                // surface a reply popup when Claude is waiting and the main
+                // window is unfocused.
+                {
+                    let popup_app = app_handle.clone();
+                    let popup_registry = registry.clone();
+                    std::thread::spawn(move || {
+                        if let Err(e) = popup::run_notify_watcher(popup_app, popup_registry) {
+                            eprintln!("[arkadia popup] watcher stopped: {e}");
+                        }
+                    });
                 }
                 let claude_root = dirs::home_dir()
                     .unwrap_or_else(|| PathBuf::from("."))
@@ -74,6 +112,7 @@ pub fn run() {
             request_render,
             close_terminal,
             scroll_terminal,
+            scroll_reply_to_top,
             search_terminal,
             list_message_markers,
             navigate_message,
@@ -85,6 +124,13 @@ pub fn run() {
             open_path,
             resolve_path_at,
             save_screenshot,
+            conversation::read_conversation,
+            popup::popup_request_state,
+            popup::popup_log_ui,
+            popup::popup_set_enabled,
+            popup::popup_set_auto_scroll,
+            popup::popup_dismiss,
+            popup::popup_open_in_main,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
