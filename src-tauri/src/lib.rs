@@ -125,6 +125,7 @@ pub fn run() {
             resolve_path_at,
             save_screenshot,
             conversation::read_conversation,
+            conversation::read_conversation_blocks,
             popup::popup_request_state,
             popup::popup_log_ui,
             popup::popup_set_enabled,

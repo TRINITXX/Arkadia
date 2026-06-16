@@ -17,8 +17,8 @@ interface ToolbarProps {
   disabled?: boolean;
   notepadOpen: boolean;
   onToggleNotepad: () => void;
-  readingOpen: boolean;
-  onToggleReading: () => void;
+  modernViewEnabled: boolean;
+  onToggleModernView: () => void;
 }
 
 export function Toolbar({
@@ -28,8 +28,8 @@ export function Toolbar({
   disabled = false,
   notepadOpen,
   onToggleNotepad,
-  readingOpen,
-  onToggleReading,
+  modernViewEnabled,
+  onToggleModernView,
 }: ToolbarProps) {
   return (
     <div className="flex h-9 items-center gap-1 border-b border-zinc-800 bg-zinc-950 px-2">
@@ -60,12 +60,13 @@ export function Toolbar({
           )}
       </div>
       <button
-        onClick={onToggleReading}
+        onClick={onToggleModernView}
         className={`ml-1 flex size-7 items-center justify-center rounded hover:bg-zinc-900 hover:text-zinc-100 ${
-          readingOpen ? "bg-zinc-900 text-zinc-100" : "text-zinc-400"
+          modernViewEnabled ? "bg-zinc-900 text-sky-300" : "text-zinc-400"
         }`}
-        title="Lecture — messages seuls, compactés"
+        title="Lecture — conversation structurée, filtrable"
         aria-label="Mode lecture"
+        aria-pressed={modernViewEnabled}
         type="button"
       >
         <BookOpen size={14} />

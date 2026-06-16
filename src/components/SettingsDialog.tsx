@@ -6,6 +6,7 @@ import type {
   PaletteId,
   TerminalFont,
   ToolbarButton,
+  ToolDensity,
 } from "@/types";
 import { ToolbarSettings } from "@/components/ToolbarSettings";
 
@@ -32,6 +33,8 @@ interface SettingsDialogProps {
   onChangeMessageFramesEnabled: (next: boolean) => void;
   autoScrollReplyEnabled: boolean;
   onChangeAutoScrollReplyEnabled: (next: boolean) => void;
+  toolDensity: ToolDensity;
+  onChangeToolDensity: (next: ToolDensity) => void;
 }
 
 type Tab = "toolbar" | "general";
@@ -59,6 +62,8 @@ export function SettingsDialog({
   onChangeMessageFramesEnabled,
   autoScrollReplyEnabled,
   onChangeAutoScrollReplyEnabled,
+  toolDensity,
+  onChangeToolDensity,
 }: SettingsDialogProps) {
   const [tab, setTab] = useState<Tab>("toolbar");
 
@@ -134,6 +139,8 @@ export function SettingsDialog({
                 onChangeMessageFramesEnabled={onChangeMessageFramesEnabled}
                 autoScrollReplyEnabled={autoScrollReplyEnabled}
                 onChangeAutoScrollReplyEnabled={onChangeAutoScrollReplyEnabled}
+                toolDensity={toolDensity}
+                onChangeToolDensity={onChangeToolDensity}
               />
             )}
           </div>
@@ -186,7 +193,15 @@ interface GeneralSettingsProps {
   onChangeMessageFramesEnabled: (next: boolean) => void;
   autoScrollReplyEnabled: boolean;
   onChangeAutoScrollReplyEnabled: (next: boolean) => void;
+  toolDensity: ToolDensity;
+  onChangeToolDensity: (next: ToolDensity) => void;
 }
+
+const TOOL_DENSITIES: { id: ToolDensity; label: string; hint: string }[] = [
+  { id: "compact", label: "Compact", hint: "1 ligne / outil, replié" },
+  { id: "preview", label: "Aperçu", hint: "en-tête + 2-3 lignes" },
+  { id: "full", label: "Déplié", hint: "sortie complète" },
+];
 
 const EDITOR_PROTOCOLS: { id: EditorProtocol; label: string; hint: string }[] =
   [
@@ -369,6 +384,8 @@ function GeneralSettings({
   onChangeMessageFramesEnabled,
   autoScrollReplyEnabled,
   onChangeAutoScrollReplyEnabled,
+  toolDensity,
+  onChangeToolDensity,
 }: GeneralSettingsProps) {
   const allPalettes = [...PALETTES, customAsPalette(customPalette)];
   return (
@@ -513,6 +530,38 @@ function GeneralSettings({
             label="Défilement auto vers la réponse"
             hint="Quand Claude a fini, remonte au début de sa dernière réponse pour la lire du haut."
           />
+        </div>
+      </section>
+
+      <section>
+        <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+          Vue moderne
+        </h4>
+        <p className="mb-3 text-[11px] text-zinc-500">
+          Densité par défaut des cartes d'appel d'outil dans la vue moderne
+          (toggle dans la barre d'outils).
+        </p>
+        <div className="grid grid-cols-3 gap-2">
+          {TOOL_DENSITIES.map((opt) => {
+            const selected = opt.id === toolDensity;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => onChangeToolDensity(opt.id)}
+                className={`rounded border p-3 text-left transition ${
+                  selected
+                    ? "border-zinc-300 bg-zinc-900 ring-1 ring-zinc-300"
+                    : "border-zinc-800 bg-zinc-900/40 hover:border-zinc-600"
+                }`}
+              >
+                <div className="text-sm text-zinc-100">{opt.label}</div>
+                <div className="mt-0.5 text-[11px] text-zinc-500">
+                  {opt.hint}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </section>
 

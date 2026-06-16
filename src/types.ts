@@ -214,3 +214,12 @@ export const DEFAULT_PALETTE_ID: PaletteId = "wez";
 export type EditorProtocol = "vscode" | "cursor" | "idea" | "fleet";
 
 export const DEFAULT_EDITOR_PROTOCOL: EditorProtocol = "vscode";
+
+/**
+ * Default expand state of tool-call cards in the modern view:
+ * `compact` = one line per tool, `preview` = header + a few output lines,
+ * `full` = full output inline.
+ */
+export type ToolDensity = "compact" | "preview" | "full";
+
+export const DEFAULT_TOOL_DENSITY: ToolDensity = "preview";

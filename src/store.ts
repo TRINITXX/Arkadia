@@ -4,6 +4,7 @@ import {
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_PALETTE_ID,
   DEFAULT_TERMINAL_FONT,
+  DEFAULT_TOOL_DENSITY,
   MAX_FOLDER_DEPTH,
   type ActionButton,
   type CustomPalette,
@@ -12,6 +13,7 @@ import {
   type Project,
   type TerminalFont,
   type ToolbarButton,
+  type ToolDensity,
   type Workspace,
 } from "@/types";
 
@@ -31,6 +33,8 @@ const KEY_POPUP_ENABLED = "popupEnabled";
 const KEY_NAV_RAIL_ENABLED = "navRailEnabled";
 const KEY_MESSAGE_FRAMES_ENABLED = "messageFramesEnabled";
 const KEY_AUTO_SCROLL_REPLY = "autoScrollReplyEnabled";
+const KEY_MODERN_VIEW_ENABLED = "modernViewEnabled";
+const KEY_TOOL_DENSITY = "toolDensity";
 
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 28;
@@ -48,6 +52,7 @@ const VALID_EDITOR_PROTOCOLS: EditorProtocol[] = [
   "idea",
   "fleet",
 ];
+const VALID_TOOL_DENSITIES: ToolDensity[] = ["compact", "preview", "full"];
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
 export interface PersistedState {
@@ -68,6 +73,10 @@ export interface PersistedState {
   messageFramesEnabled: boolean;
   /** Scroll to the start of Claude's reply when it finishes. */
   autoScrollReplyEnabled: boolean;
+  /** Global: render every pane as the structured modern view instead of the terminal. */
+  modernViewEnabled: boolean;
+  /** Default expand state of tool-call cards in the modern view. */
+  toolDensity: ToolDensity;
 }
 
 const DEFAULT_STATE: PersistedState = {
@@ -84,11 +93,24 @@ const DEFAULT_STATE: PersistedState = {
   navRailEnabled: true,
   messageFramesEnabled: true,
   autoScrollReplyEnabled: true,
+  modernViewEnabled: false,
+  toolDensity: DEFAULT_TOOL_DENSITY,
 };
 
 /** Reads a boolean store key, defaulting to `fallback`. */
 function boolOr(raw: unknown, fallback: boolean): boolean {
   return typeof raw === "boolean" ? raw : fallback;
+}
+
+/** Validates a persisted tool-density value, falling back to the default. */
+function normalizeToolDensity(raw: unknown): ToolDensity {
+  if (
+    typeof raw === "string" &&
+    (VALID_TOOL_DENSITIES as string[]).includes(raw)
+  ) {
+    return raw as ToolDensity;
+  }
+  return DEFAULT_TOOL_DENSITY;
 }
 
 let storePromise: Promise<Store> | null = null;
@@ -235,6 +257,8 @@ async function tryMigrateFromLocalStorage(
       navRailEnabled: true,
       messageFramesEnabled: true,
       autoScrollReplyEnabled: true,
+      modernViewEnabled: false,
+      toolDensity: DEFAULT_TOOL_DENSITY,
     };
     await store.set(KEY_PROJECTS, state.projects);
     await store.set(KEY_WORKSPACES, state.workspaces);
@@ -277,6 +301,10 @@ export async function loadState(): Promise<PersistedState> {
   const rawNavRailEnabled = await store.get<unknown>(KEY_NAV_RAIL_ENABLED);
   const rawMessageFrames = await store.get<unknown>(KEY_MESSAGE_FRAMES_ENABLED);
   const rawAutoScrollReply = await store.get<unknown>(KEY_AUTO_SCROLL_REPLY);
+  const rawModernViewEnabled = await store.get<unknown>(
+    KEY_MODERN_VIEW_ENABLED,
+  );
+  const rawToolDensity = await store.get<unknown>(KEY_TOOL_DENSITY);
 
   return {
     projects: Array.isArray(rawProjects)
@@ -307,6 +335,11 @@ export async function loadState(): Promise<PersistedState> {
       rawAutoScrollReply,
       DEFAULT_STATE.autoScrollReplyEnabled,
     ),
+    modernViewEnabled: boolOr(
+      rawModernViewEnabled,
+      DEFAULT_STATE.modernViewEnabled,
+    ),
+    toolDensity: normalizeToolDensity(rawToolDensity),
   };
 }
 
@@ -325,6 +358,8 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_NAV_RAIL_ENABLED, state.navRailEnabled);
   await store.set(KEY_MESSAGE_FRAMES_ENABLED, state.messageFramesEnabled);
   await store.set(KEY_AUTO_SCROLL_REPLY, state.autoScrollReplyEnabled);
+  await store.set(KEY_MODERN_VIEW_ENABLED, state.modernViewEnabled);
+  await store.set(KEY_TOOL_DENSITY, state.toolDensity);
   await store.save();
 }
 

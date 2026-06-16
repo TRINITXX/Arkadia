@@ -17,7 +17,11 @@ import { RenameDialog } from "@/components/RenameDialog";
 import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { NotepadPanel } from "@/components/NotepadPanel";
-import { ReadingPanel } from "@/components/ReadingPanel";
+import {
+  DEFAULT_CONV_FILTERS,
+  type ConvFilters,
+  type ModernNavHandle,
+} from "@/components/ModernConversationView";
 import { loadState, saveState, newProjectId, newWorkspaceId } from "@/store";
 import { WorkspaceContextMenu } from "@/components/WorkspaceContextMenu";
 import { WorkspaceDialog } from "@/components/WorkspaceDialog";
@@ -35,6 +39,7 @@ import {
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_PALETTE_ID,
   DEFAULT_TERMINAL_FONT,
+  DEFAULT_TOOL_DENSITY,
   type ActionButton,
   type BellPayload,
   type ClosedPayload,
@@ -49,6 +54,7 @@ import {
   type Tab,
   type TerminalFont,
   type ToolbarButton,
+  type ToolDensity,
   type Workspace,
 } from "@/types";
 
@@ -100,8 +106,15 @@ export function App() {
   const [navRailEnabled, setNavRailEnabled] = useState(true);
   const [messageFramesEnabled, setMessageFramesEnabled] = useState(true);
   const [autoScrollReplyEnabled, setAutoScrollReplyEnabled] = useState(true);
-  // Session-only focus mode (mask everything but framed messages); not persisted.
-  const [focusMessages, setFocusMessages] = useState(false);
+  // Global: render every pane as the structured modern view instead of the terminal.
+  const [modernViewEnabled, setModernViewEnabled] = useState(false);
+  const [toolDensity, setToolDensity] =
+    useState<ToolDensity>(DEFAULT_TOOL_DENSITY);
+  // Modern-view message-type filters (session-only; default all visible).
+  const [convFilters, setConvFilters] =
+    useState<ConvFilters>(DEFAULT_CONV_FILTERS);
+  // Imperative handle to the active pane's modern view, so the nav arrows drive it.
+  const modernNavRef = useRef<ModernNavHandle>(null);
   const palette = useMemo(
     () => resolveActivePalette(paletteId, customPalette),
     [paletteId, customPalette],
@@ -129,7 +142,6 @@ export function App() {
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notepadOpen, setNotepadOpen] = useState(false);
-  const [readingOpen, setReadingOpen] = useState(false);
   const [projectMenu, setProjectMenu] = useState<ProjectMenuState | null>(null);
   const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuState | null>(
     null,
@@ -286,6 +298,8 @@ export function App() {
         setNavRailEnabled(state.navRailEnabled);
         setMessageFramesEnabled(state.messageFramesEnabled);
         setAutoScrollReplyEnabled(state.autoScrollReplyEnabled);
+        setModernViewEnabled(state.modernViewEnabled);
+        setToolDensity(state.toolDensity);
         setLoaded(true);
       })
       .catch((e) => {
@@ -315,6 +329,8 @@ export function App() {
         navRailEnabled,
         messageFramesEnabled,
         autoScrollReplyEnabled,
+        modernViewEnabled,
+        toolDensity,
       });
     }, 500);
     return () => clearTimeout(t);
@@ -333,6 +349,8 @@ export function App() {
     navRailEnabled,
     messageFramesEnabled,
     autoScrollReplyEnabled,
+    modernViewEnabled,
+    toolDensity,
   ]);
 
   // The popup is triggered by the Rust backend, so mirror its on/off setting there.
@@ -1026,6 +1044,11 @@ export function App() {
   // the alt screen (Claude Code scrolls its own transcript).
   const navigateMessage = useCallback(
     async (kind: 1 | 2, dir: -1 | 1) => {
+      // In the modern view the arrows drive the structured view, not the terminal.
+      if (modernViewEnabled) {
+        modernNavRef.current?.navigate(kind, dir);
+        return;
+      }
       const tab = tabs.find((t) => t.id === activeTabId);
       const pane = tab ? tab.panes[tab.activePaneId] : undefined;
       if (!pane) return;
@@ -1039,7 +1062,7 @@ export function App() {
         setError(String(e));
       }
     },
-    [tabs, activeTabId],
+    [tabs, activeTabId, modernViewEnabled],
   );
 
   const runToolbarAction = useCallback(
@@ -1115,15 +1138,9 @@ export function App() {
           onOpenSettings={() => setSettingsOpen(true)}
           disabled={!activeProject}
           notepadOpen={notepadOpen}
-          onToggleNotepad={() => {
-            setNotepadOpen((v) => !v);
-            setReadingOpen(false);
-          }}
-          readingOpen={readingOpen}
-          onToggleReading={() => {
-            setReadingOpen((v) => !v);
-            setNotepadOpen(false);
-          }}
+          onToggleNotepad={() => setNotepadOpen((v) => !v)}
+          modernViewEnabled={modernViewEnabled}
+          onToggleModernView={() => setModernViewEnabled((v) => !v)}
         />
 
         {error && (
@@ -1145,8 +1162,6 @@ export function App() {
             <MessageNavRail
               onNavigate={navigateMessage}
               disabled={!activePaneIdOfActiveTab}
-              focusActive={focusMessages}
-              onToggleFocus={() => setFocusMessages((v) => !v)}
             />
           )}
           {!activeProject && (
@@ -1173,7 +1188,14 @@ export function App() {
                   useWebGPU={useWebGPU}
                   editorProtocol={editorProtocol}
                   showMessageFrames={messageFramesEnabled}
-                  focusMessages={focusMessages}
+                  modernViewEnabled={modernViewEnabled}
+                  toolDensity={toolDensity}
+                  paneAgentStates={paneAgentStates}
+                  convFilters={convFilters}
+                  onConvFiltersChange={setConvFilters}
+                  modernNavRef={
+                    tab.id === activeTabId ? modernNavRef : undefined
+                  }
                   onActivate={(paneId) => focusPane(tab.id, paneId)}
                   onUserInput={() => markProjectInput(tab.projectId)}
                   onContextMenu={(paneId, x, y) =>
@@ -1187,15 +1209,6 @@ export function App() {
             ))}
         </div>
       </div>
-
-      {readingOpen && (
-        <ReadingPanel
-          paneId={activePaneIdOfActiveTab}
-          projectName={activeProject?.name ?? null}
-          palette={palette}
-          onClose={() => setReadingOpen(false)}
-        />
-      )}
 
       {notepadOpen && (
         <NotepadPanel
@@ -1343,6 +1356,8 @@ export function App() {
         onChangeMessageFramesEnabled={setMessageFramesEnabled}
         autoScrollReplyEnabled={autoScrollReplyEnabled}
         onChangeAutoScrollReplyEnabled={setAutoScrollReplyEnabled}
+        toolDensity={toolDensity}
+        onChangeToolDensity={setToolDensity}
       />
     </div>
   );

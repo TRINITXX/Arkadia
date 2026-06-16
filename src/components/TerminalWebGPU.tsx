@@ -481,71 +481,6 @@ function MessageBorderOverlay({
   );
 }
 
-/**
- * Focus mode: paints opaque background rectangles over every row that isn't a
- * framed user/Claude message (`line_kinds` 1 or 2), so only the conversation
- * messages stay visible — tool calls, command output, banners and the input box
- * are masked out. The canvas grid can't be re-flowed, so the rows keep their
- * vertical space (the masked areas read as blank gaps between messages). Rendered
- * under `MessageBorderOverlay` so the green/purple borders stay on top.
- */
-function MessageFocusMask({
-  screen,
-  font,
-  bg,
-}: {
-  screen: RenderPayload | null;
-  font: TerminalFont;
-  bg: string;
-}) {
-  const kinds = screen?.line_kinds;
-  if (!kinds) return null;
-  // Nothing to focus on (e.g. a plain shell, no Claude Code transcript) → don't
-  // blank the whole screen; leave it untouched.
-  if (!kinds.some((k) => k === 1 || k === 2)) return null;
-  const rows = screen?.rows ?? kinds.length;
-  const { height: cellH } = measureCellSize(font.family, font.size);
-  // Coalesce contiguous non-message rows into one rectangle each.
-  const rects: { top: number; height: number }[] = [];
-  let r = 0;
-  while (r < rows) {
-    if (kinds[r] === 1 || kinds[r] === 2) {
-      r++;
-      continue;
-    }
-    let j = r;
-    while (j < rows && kinds[j] !== 1 && kinds[j] !== 2) j++;
-    rects.push({ top: r * cellH, height: (j - r) * cellH });
-    r = j;
-  }
-  if (rects.length === 0) return null;
-  return (
-    <div
-      aria-hidden="true"
-      style={{
-        position: "absolute",
-        inset: 0,
-        pointerEvents: "none",
-        zIndex: 1,
-      }}
-    >
-      {rects.map((rect, i) => (
-        <div
-          key={i}
-          style={{
-            position: "absolute",
-            top: rect.top,
-            height: rect.height,
-            left: 0,
-            right: 0,
-            backgroundColor: bg,
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
 /** True iff the running app has activated some form of mouse tracking. */
 function mouseModeActive(screen: RenderPayload | null): boolean {
   return (screen?.mouse_protocol ?? 0) > 0;
@@ -689,8 +624,6 @@ interface Props {
   editorProtocol: EditorProtocol;
   /** Draw the green/purple conversation frames. */
   showMessageFrames: boolean;
-  /** Focus mode: mask everything that isn't a framed user/Claude message. */
-  focusMessages: boolean;
   onActivate: () => void;
   /** Fired when the user produces real input (keystroke/paste) in this pane. */
   onUserInput?: () => void;
@@ -703,7 +636,6 @@ export function TerminalWebGPU({
   font,
   palette,
   showMessageFrames,
-  focusMessages,
   onActivate,
   onUserInput,
   onContextMenu,
@@ -1723,9 +1655,6 @@ export function TerminalWebGPU({
     >
       <div ref={wrapperRef} className="relative h-full w-full">
         <canvas ref={canvasRef} className="block h-full w-full" />
-        {focusMessages && (
-          <MessageFocusMask screen={pane.screen} font={font} bg={palette.bg} />
-        )}
         {showMessageFrames && (
           <MessageBorderOverlay screen={pane.screen} font={font} />
         )}

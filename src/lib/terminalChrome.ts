@@ -1,4 +1,4 @@
-import type { CellRun } from "@/types";
+import type { CellRun, RenderPayload } from "@/types";
 
 /** Column of the first non-space cell of a row, or null when the row is blank. */
 export function firstContentCol(runs: CellRun[]): number | null {
@@ -86,6 +86,95 @@ export function isInputRow(runs: CellRun[]): boolean {
  */
 export function isOptionRow(runs: CellRun[]): boolean {
   return /^[❯>]?\s*\d+\.\s/.test(unframed(runs));
+}
+
+/** Smallest footer we'll ever reserve (a bare prompt with no box). */
+const MIN_FOOTER_ROWS = 3;
+
+/**
+ * The live "working" indicator Claude Code prints just above the input while it's
+ * busy: the spinner line ("✶ Skedaddling… (6m 25s · ↑ 18.0k tokens)" / "esc to
+ * interrupt") and the todo / sub-step bullets underneath it. Detected so the
+ * modern view's footer grows to surface live activity, then shrinks when idle.
+ */
+export function isActivityRow(runs: CellRun[]): boolean {
+  const t = runs.map((r) => r.text).join("");
+  if (/\besc to interrupt\b/i.test(t)) return true;
+  if (/↑\s*[\d.]+\s*k?\s*tokens/i.test(t)) return true;
+  if (/\(\s*\d+m\s*\d+s\b/.test(t) || /\(\s*\d+s\b/.test(t)) return true;
+  return /^[◻◼☐☑✓✔⎿⏺↳]\s/u.test(unframed(runs));
+}
+
+/**
+ * Number of rows — counted from the bottom — that make up Claude Code's input
+ * footer: the input box (`❯`) plus everything below it (statusline, mode/hint
+ * row), and any interactive prompt box that replaces the input (ExitPlanMode /
+ * AskUserQuestion option selectors). The modern view overlays everything *above*
+ * this so the real terminal's input region stays visible and usable beneath it.
+ *
+ * Strategy: find the bottom-most input/option row, extend up through the box
+ * border (and a blank line) that wraps it, then take everything from there down.
+ * Capped at 60% of the pane so a long ExitPlanMode plan can't swallow the view.
+ */
+export function footerRowCount(screen: RenderPayload | null): number {
+  if (!screen) return MIN_FOOTER_ROWS;
+  const { lines, cols, rows } = screen;
+  if (rows <= 0) return MIN_FOOTER_ROWS;
+
+  let inputIdx = -1;
+  for (let r = rows - 1; r >= 0; r--) {
+    const runs = lines[r] ?? [];
+    if (isInputRow(runs) || isOptionRow(runs)) {
+      inputIdx = r;
+      break;
+    }
+  }
+  if (inputIdx < 0) {
+    // No Claude Code prompt found — keep just enough for a chrome/statusline strip.
+    let chromeTop = rows;
+    for (let r = rows - 1; r >= 0; r--) {
+      const runs = lines[r] ?? [];
+      if (isChromeRow(runs, cols) || firstContentCol(runs) === null) {
+        chromeTop = r;
+      } else {
+        break;
+      }
+    }
+    return Math.max(MIN_FOOTER_ROWS, rows - chromeTop);
+  }
+
+  // Extend up through the box border / a blank line wrapping the prompt.
+  let top = inputIdx;
+  for (let r = inputIdx - 1; r >= 0; r--) {
+    const runs = lines[r] ?? [];
+    if (isBoxRow(runs) || firstContentCol(runs) === null) {
+      top = r;
+    } else {
+      break;
+    }
+  }
+
+  // Keep climbing through the live activity block (spinner + its todo lines) and
+  // any chrome above the box, so the footer surfaces what Claude is doing while
+  // it works; stops at the first real transcript row.
+  for (let r = top - 1; r >= 0; r--) {
+    const runs = lines[r] ?? [];
+    if (
+      isActivityRow(runs) ||
+      isChromeRow(runs, cols) ||
+      firstContentCol(runs) === null
+    ) {
+      top = r;
+    } else {
+      break;
+    }
+  }
+
+  const count = rows - top;
+  // Allow a tall interactive prompt (ExitPlanMode plan, AskUserQuestion options)
+  // to take most of the pane so its top isn't clipped.
+  const max = Math.max(MIN_FOOTER_ROWS, Math.floor(rows * 0.85));
+  return Math.min(Math.max(count, MIN_FOOTER_ROWS), max);
 }
 
 /**

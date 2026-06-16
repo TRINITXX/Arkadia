@@ -5,9 +5,35 @@ import type {
   SplitDirection,
   TerminalFont,
   TerminalPalette,
+  ToolDensity,
 } from "@/types";
+import { footerRowCount } from "@/lib/terminalChrome";
+import { measureCellSize } from "@/lib/cellSize";
 import { Terminal } from "./Terminal";
 import { TerminalWebGPU } from "./TerminalWebGPU";
+import {
+  ModernConversationView,
+  type ConvFilters,
+  type ModernNavHandle,
+} from "./ModernConversationView";
+import type { AgentStateValue } from "@/lib/agentState";
+
+/** Pixel height of the real-terminal footer left uncovered by the modern view. */
+// One row of headroom so the top border of the input box is never clipped
+// (cell-height measured here can differ slightly from the renderer's).
+const FOOTER_HEADROOM_ROWS = 1;
+
+function footerPx(
+  pane: PaneState,
+  font: TerminalFont,
+  useWebGPU: boolean,
+): number {
+  const rows = footerRowCount(pane.screen);
+  const { height } = measureCellSize(font.family, font.size);
+  // Mirror the terminal's own bottom padding (TerminalWebGPU = 20, Terminal = 12).
+  const pad = useWebGPU ? 20 : 12;
+  return Math.round((rows + FOOTER_HEADROOM_ROWS) * height + pad);
+}
 
 interface PaneTreeViewProps {
   tree: PaneTree;
@@ -19,8 +45,15 @@ interface PaneTreeViewProps {
   editorProtocol: EditorProtocol;
   /** Draw the green/purple conversation frames (WebGPU renderer only). */
   showMessageFrames: boolean;
-  /** Focus mode: mask everything but framed messages (WebGPU renderer only). */
-  focusMessages: boolean;
+  /** Render every pane as the structured modern view over the terminal footer. */
+  modernViewEnabled: boolean;
+  toolDensity: ToolDensity;
+  convFilters: ConvFilters;
+  onConvFiltersChange: (next: ConvFilters) => void;
+  /** Attached to the active pane's modern view so the nav arrows can drive it. */
+  modernNavRef?: React.Ref<ModernNavHandle>;
+  /** Per-pane agent state, so the modern view can show a live "working" indicator. */
+  paneAgentStates: Record<string, AgentStateValue>;
   onActivate: (paneId: string) => void;
   /** Fired when the user produces real input (keystroke/paste) in a pane. */
   onUserInput?: () => void;
@@ -38,7 +71,12 @@ export function PaneTreeView({
   useWebGPU,
   editorProtocol,
   showMessageFrames,
-  focusMessages,
+  modernViewEnabled,
+  toolDensity,
+  convFilters,
+  onConvFiltersChange,
+  modernNavRef,
+  paneAgentStates,
   onActivate,
   onUserInput,
   onContextMenu,
@@ -57,7 +95,6 @@ export function PaneTreeView({
         palette={palette}
         editorProtocol={editorProtocol}
         showMessageFrames={showMessageFrames}
-        focusMessages={focusMessages}
         onActivate={() => onActivate(pane.id)}
         onUserInput={onUserInput}
         onContextMenu={(x, y) => onContextMenu(pane.id, x, y)}
@@ -76,9 +113,26 @@ export function PaneTreeView({
     return (
       <div className="relative h-full w-full">
         {terminal}
+        {modernViewEnabled && (
+          <div
+            className="absolute inset-x-0 top-0 z-20"
+            style={{ bottom: footerPx(pane, font, useWebGPU) }}
+          >
+            <ModernConversationView
+              ref={isActive ? modernNavRef : undefined}
+              paneId={pane.id}
+              filters={convFilters}
+              onFiltersChange={onConvFiltersChange}
+              density={toolDensity}
+              palette={palette}
+              agentState={paneAgentStates[pane.id]}
+              isActive={isActive}
+            />
+          </div>
+        )}
         {isActive && (
           <div
-            className="pointer-events-none absolute inset-0"
+            className="pointer-events-none absolute inset-0 z-30"
             style={{ boxShadow: "inset 0 0 0 1.5px rgba(59,130,246,0.55)" }}
           />
         )}
@@ -108,7 +162,12 @@ export function PaneTreeView({
           useWebGPU={useWebGPU}
           editorProtocol={editorProtocol}
           showMessageFrames={showMessageFrames}
-          focusMessages={focusMessages}
+          modernViewEnabled={modernViewEnabled}
+          toolDensity={toolDensity}
+          convFilters={convFilters}
+          onConvFiltersChange={onConvFiltersChange}
+          modernNavRef={modernNavRef}
+          paneAgentStates={paneAgentStates}
           onActivate={onActivate}
           onUserInput={onUserInput}
           onContextMenu={onContextMenu}
@@ -133,7 +192,12 @@ export function PaneTreeView({
           useWebGPU={useWebGPU}
           editorProtocol={editorProtocol}
           showMessageFrames={showMessageFrames}
-          focusMessages={focusMessages}
+          modernViewEnabled={modernViewEnabled}
+          toolDensity={toolDensity}
+          convFilters={convFilters}
+          onConvFiltersChange={onConvFiltersChange}
+          modernNavRef={modernNavRef}
+          paneAgentStates={paneAgentStates}
           onActivate={onActivate}
           onUserInput={onUserInput}
           onContextMenu={onContextMenu}

@@ -7,6 +7,7 @@
 //! locate that file, and return just the genuine messages (the user's prompts
 //! and Claude's prose), filtering out tool calls/results and injected context.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -211,6 +212,190 @@ pub fn read_conversation(
     Ok(out)
 }
 
+// ─── Structured blocks (modern view) ──────────────────────────────────────
+//
+// Unlike `read_conversation` (which keeps only the genuine prose), the modern
+// view shows *everything* Claude produced — prose, thinking, and tool calls —
+// each as its own typed block so the UI can render and filter them. `tool_use`
+// and its later `tool_result` are paired (by `tool_use_id`) into one block.
+
+/// A cap on tool input/output text so a single huge read/output can't bloat the
+/// IPC payload; the full content still lives in the terminal/transcript.
+const TOOL_TEXT_CAP: usize = 6000;
+
+#[derive(Serialize)]
+pub struct ConvBlock {
+    /// "user" | "assistant" | "thinking" | "tool".
+    pub kind: String,
+    /// Markdown text for user/assistant/thinking blocks (cleaned of injected noise).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Tool name (tool blocks only), e.g. "Bash", "Read", "Edit".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    /// Compact JSON of the tool input; the UI derives a one-line summary from it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_input: Option<String>,
+    /// The paired tool_result content (text extracted); `None` until it lands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_output: Option<String>,
+}
+
+/// Truncates `s` to `TOOL_TEXT_CAP` chars, appending a marker when cut.
+fn cap(s: &str) -> String {
+    if s.chars().count() > TOOL_TEXT_CAP {
+        let head: String = s.chars().take(TOOL_TEXT_CAP).collect();
+        format!("{head}\n… (tronqué)")
+    } else {
+        s.to_string()
+    }
+}
+
+/// Extracts displayable text from a `tool_result` `content` (string or array).
+fn tool_result_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(arr) => {
+            let mut parts = Vec::new();
+            for block in arr {
+                match block.get("type").and_then(|x| x.as_str()) {
+                    Some("text") => {
+                        if let Some(t) = block.get("text").and_then(|x| x.as_str()) {
+                            parts.push(t.to_string());
+                        }
+                    }
+                    Some("image") => parts.push("[image]".to_string()),
+                    _ => {}
+                }
+            }
+            parts.join("\n")
+        }
+        _ => String::new(),
+    }
+}
+
+/// Appends the typed blocks of one transcript line to `out`. `tool_index` maps a
+/// `tool_use_id` to the index of its (already-pushed) tool block so a later
+/// `tool_result` can fill `tool_output`.
+fn append_blocks(v: &Value, out: &mut Vec<ConvBlock>, tool_index: &mut HashMap<String, usize>) {
+    let Some(typ) = v.get("type").and_then(|x| x.as_str()) else {
+        return;
+    };
+    if typ != "user" && typ != "assistant" {
+        return;
+    }
+    let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
+        return;
+    };
+    match content {
+        Value::String(s) => {
+            let cleaned = clean_text(s);
+            if !cleaned.is_empty() {
+                out.push(ConvBlock {
+                    kind: typ.to_string(),
+                    text: Some(cleaned),
+                    tool_name: None,
+                    tool_input: None,
+                    tool_output: None,
+                });
+            }
+        }
+        Value::Array(arr) => {
+            for block in arr {
+                match block.get("type").and_then(|x| x.as_str()) {
+                    Some("text") => {
+                        if let Some(t) = block.get("text").and_then(|x| x.as_str()) {
+                            let cleaned = clean_text(t);
+                            if !cleaned.is_empty() {
+                                out.push(ConvBlock {
+                                    kind: typ.to_string(),
+                                    text: Some(cleaned),
+                                    tool_name: None,
+                                    tool_input: None,
+                                    tool_output: None,
+                                });
+                            }
+                        }
+                    }
+                    Some("thinking") => {
+                        if let Some(t) = block.get("thinking").and_then(|x| x.as_str()) {
+                            let cleaned = clean_text(t);
+                            if !cleaned.is_empty() {
+                                out.push(ConvBlock {
+                                    kind: "thinking".to_string(),
+                                    text: Some(cleaned),
+                                    tool_name: None,
+                                    tool_input: None,
+                                    tool_output: None,
+                                });
+                            }
+                        }
+                    }
+                    Some("tool_use") => {
+                        let name = block
+                            .get("name")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("tool")
+                            .to_string();
+                        let input = block.get("input").map(|i| cap(&i.to_string()));
+                        out.push(ConvBlock {
+                            kind: "tool".to_string(),
+                            text: None,
+                            tool_name: Some(name),
+                            tool_input: input,
+                            tool_output: None,
+                        });
+                        if let Some(id) = block.get("id").and_then(|x| x.as_str()) {
+                            tool_index.insert(id.to_string(), out.len() - 1);
+                        }
+                    }
+                    Some("tool_result") => {
+                        if let Some(id) = block.get("tool_use_id").and_then(|x| x.as_str()) {
+                            if let Some(&idx) = tool_index.get(id) {
+                                let text = block
+                                    .get("content")
+                                    .map(tool_result_text)
+                                    .unwrap_or_default();
+                                out[idx].tool_output = Some(cap(&text));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Like `read_conversation` but returns every typed block (prose, thinking, tool
+/// calls paired with their results), oldest first — the source for the modern view.
+#[tauri::command]
+pub fn read_conversation_blocks(pane_id: String) -> Result<Vec<ConvBlock>, String> {
+    // Only the exact pane→transcript map (written by the hook on this pane's first
+    // turn). No cwd-based fallback on purpose: a brand-new Claude tab (or a plain
+    // shell) has no map yet, so this returns nothing instead of grabbing a
+    // *neighbouring* session's transcript — which would otherwise surface the
+    // previous tab's conversation until the new pane sends its first message.
+    let path = transcript_from_pane_map(&pane_id)
+        .ok_or("no Claude conversation found for this pane yet")?;
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+
+    let mut out: Vec<ConvBlock> = Vec::new();
+    let mut tool_index: HashMap<String, usize> = HashMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        append_blocks(&v, &mut out, &mut tool_index);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +452,50 @@ mod tests {
         )
         .unwrap();
         assert!(extract(&v).is_none());
+    }
+
+    #[test]
+    fn blocks_pair_tool_use_with_its_result() {
+        let mut out = Vec::new();
+        let mut idx = HashMap::new();
+        let call: Value = serde_json::from_str(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#,
+        )
+        .unwrap();
+        let result: Value = serde_json::from_str(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"file.txt"}]}}"#,
+        )
+        .unwrap();
+        append_blocks(&call, &mut out, &mut idx);
+        append_blocks(&result, &mut out, &mut idx);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind, "tool");
+        assert_eq!(out[0].tool_name.as_deref(), Some("Bash"));
+        assert_eq!(out[0].tool_output.as_deref(), Some("file.txt"));
+    }
+
+    #[test]
+    fn blocks_keep_thinking_and_text_in_order() {
+        let mut out = Vec::new();
+        let mut idx = HashMap::new();
+        let v: Value = serde_json::from_str(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"hi"}]}}"#,
+        )
+        .unwrap();
+        append_blocks(&v, &mut out, &mut idx);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].kind, "thinking");
+        assert_eq!(out[0].text.as_deref(), Some("hmm"));
+        assert_eq!(out[1].kind, "assistant");
+        assert_eq!(out[1].text.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn blocks_extract_array_tool_result_text() {
+        let v: Value = serde_json::from_str(
+            r#"[{"type":"text","text":"line one"},{"type":"image"},{"type":"text","text":"line two"}]"#,
+        )
+        .unwrap();
+        assert_eq!(tool_result_text(&v), "line one\n[image]\nline two");
     }
 }
