@@ -137,35 +137,36 @@ export function PopupApp() {
 
   const current = items.find((i) => i.pane_id === paneId) ?? null;
 
-  if (!palette || !current) {
-    return (
-      <div
-        style={{
-          width: "100vw",
-          height: "100vh",
-          backgroundColor: palette?.bg ?? "#0a0a0a",
-        }}
-      />
-    );
-  }
-
+  // Bound to the URL's pane id, so both actions work even when the queue no
+  // longer carries this pane (the empty/fallback state below) — the ✕ must
+  // always be able to close the frameless window.
   const dismiss = () =>
     void invoke("popup_dismiss", { paneId }).catch(() => {});
   const openInMain = () =>
     void invoke("popup_open_in_main", { paneId }).catch(() => {});
 
-  const folder =
-    current.cwd
-      .replace(/[\\/]+$/, "")
-      .split(/[\\/]/)
-      .pop() || current.cwd;
-  const isQuestion = current.kind === "question";
-  const label = isQuestion ? "Claude attend ta réponse" : "Claude a terminé";
+  const bg = palette?.bg ?? "#0a0a0a";
+  const fg = palette?.fg ?? "#e5e5e5";
+  const folder = current
+    ? current.cwd
+        .replace(/[\\/]+$/, "")
+        .split(/[\\/]/)
+        .pop() || current.cwd
+    : "";
+  const isQuestion = current?.kind === "question";
+  const label = current
+    ? isQuestion
+      ? "Claude attend ta réponse"
+      : "Claude a terminé"
+    : "";
 
+  // The header (with its ✕) is ALWAYS rendered — even before the palette loads
+  // or when the pane has left the queue — so the frameless, undecorated window
+  // can never get stuck with no way to close it.
   return (
     <div
       className="arkadia-popup flex h-screen w-screen flex-col overflow-hidden"
-      style={{ backgroundColor: palette.bg, color: palette.fg }}
+      style={{ backgroundColor: bg, color: fg }}
     >
       {/* The mirrored terminal's footer (status line, input box) is full
           terminal width, so its no-wrap blocks would show scrollbars. Hide all
@@ -178,12 +179,12 @@ export function PopupApp() {
       <div
         data-tauri-drag-region
         className="flex items-center gap-2 border-b px-3 py-1.5 text-xs"
-        style={{ borderColor: `${palette.fg}22` }}
+        style={{ borderColor: `${fg}22` }}
       >
         <span style={{ color: isQuestion ? CLAUDE_TINT : USER_TINT }}>●</span>
         <span className="flex-1 truncate" data-tauri-drag-region>
           {label}
-          <span style={{ opacity: 0.55 }}> · {folder}</span>
+          {folder && <span style={{ opacity: 0.55 }}> · {folder}</span>}
         </span>
         <button
           type="button"
@@ -207,15 +208,26 @@ export function PopupApp() {
         </button>
       </div>
       <div className="min-h-0 flex-1">
-        <PopupReading
-          key={current.pane_id}
-          paneId={current.pane_id}
-          resetSignal={current.ts}
-          kind={current.kind}
-          font={font}
-          palette={palette}
-          onSubmit={dismiss}
-        />
+        {current && palette ? (
+          <PopupReading
+            key={current.pane_id}
+            paneId={current.pane_id}
+            resetSignal={current.ts}
+            kind={current.kind}
+            font={font}
+            palette={palette}
+            onSubmit={dismiss}
+          />
+        ) : (
+          <div
+            className="flex h-full items-center justify-center px-4 text-center text-xs"
+            style={{ opacity: 0.45 }}
+          >
+            {palette && !current
+              ? "Conversation introuvable — ferme cette fenêtre."
+              : ""}
+          </div>
+        )}
       </div>
     </div>
   );
