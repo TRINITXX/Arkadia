@@ -380,6 +380,11 @@ impl TerminalState {
         // Block state at the first visible row: replay from the nearest head
         // at or above it. Heads are O(1) to test, so the walk up is cheap.
         let mut cur = MessageKind::None;
+        // Whether we're inside a non-tinted block established by a *visible* head
+        // (tool call, banner, thinking line). Distinguishes "intentional None"
+        // from "orphan None" so the orphan-default below never overrides real
+        // tool output whose head is on screen.
+        let mut in_none_block = false;
         let mut head_row = None;
         for r in (0..=first).rev() {
             if let Some(line) = self.line_at_total(r as u32) {
@@ -393,6 +398,9 @@ impl TerminalState {
             for r in hr..first {
                 if let Some(line) = self.line_at_total(r as u32) {
                     cur = advance_block(cur, line);
+                    if let Some(k) = block_head_kind(line) {
+                        in_none_block = k == MessageKind::None;
+                    }
                 }
             }
         }
@@ -406,6 +414,12 @@ impl TerminalState {
                 continue;
             };
             cur = advance_block(cur, line);
+            // A visible head that isn't tinted (tool call, banner, thinking line)
+            // opens a non-tinted block — remember it so the orphan-default below
+            // doesn't repaint that block's body as Claude.
+            if let Some(k) = block_head_kind(line) {
+                in_none_block = k == MessageKind::None;
+            }
             // Tool calls (`● Update(…)`, `● Search(…)`) share the bullet with
             // assistant text but must never be framed. A running tool *blinks*
             // its bullet: the cell toggles to a space, so the line momentarily
@@ -434,6 +448,11 @@ impl TerminalState {
                 && !is_known_tool_line
             {
                 if self.line_kind_cache.get(&hash_line(line)) == Some(&MessageKind::Claude) {
+                    cur = MessageKind::Claude;
+                } else if !in_none_block && orphan_claude_default(line) {
+                    // No head, no cache hit, and not inside a tool/banner block:
+                    // an indented prose/code line this deep in an orphan window is
+                    // assistant text — tint it so long Claude answers stay framed.
                     cur = MessageKind::Claude;
                 }
             }
@@ -1354,6 +1373,34 @@ fn advance_block(cur: MessageKind, line: &[TerminalCell]) -> MessageKind {
     cur
 }
 
+/// Heuristic default for an "orphan" alt-screen line — one the renderer has no
+/// block context for: its `●` head scrolled off the top (no scrollback on the
+/// alt screen) AND the tint cache has never seen it. This is the long-message
+/// case where the head and the body are never co-visible, so neither the walk-up
+/// nor the per-line cache can classify the body.
+///
+/// Claude message bodies are always *indented* (continuation under the `●`), so
+/// an indented line that isn't a tool-result / todo / thinking / box-drawing
+/// marker is almost certainly assistant text. Flush-left lines (the `●`/`❯`
+/// heads, banners, thinking `∴`, separators) and marker rows are left untinted.
+/// The caller only applies this when not already inside a head-established
+/// non-tinted block (`in_none_block`), so visible tool output is never caught.
+fn orphan_claude_default(line: &[TerminalCell]) -> bool {
+    let Some(idx) = line.iter().position(|c| !c.text.trim().is_empty()) else {
+        return false; // blank
+    };
+    if idx < 1 {
+        return false; // flush-left → a head / banner, not an indented message body
+    }
+    let first = line[idx].text.trim().chars().next().unwrap_or(' ');
+    !matches!(
+        first,
+        '⎿' | '↳' | '∴' | '·' | '◻' | '◼' | '☐' | '☑' | '✓' | '✔' | '⏺'
+            | '✶' | '✻' | '│' | '┃' | '╭' | '╮' | '╰' | '╯' | '├' | '┤'
+            | '┌' | '┐' | '└' | '┘' | '─' | '━'
+    )
+}
+
 /// True when a white-bulleted line is a Claude Code *tool call* rather than an
 /// assistant text message. Tool calls share the white `●`/`⏺` bullet with
 /// assistant text, so they're told apart by shape. Three forms are recognized:
@@ -2262,6 +2309,37 @@ three");
         let claude = t.visible_markers_with_hash(2);
         assert_eq!(claude.len(), 1);
         assert_eq!(claude[0].0, 2);
+    }
+
+    #[test]
+    fn orphan_claude_body_is_tinted_on_alt_screen() {
+        // A Claude answer taller than the screen: its `●` head has scrolled off
+        // the top, there is no scrollback on the alt screen, and the tint cache
+        // is empty. The indented body must still be framed (the reported bug).
+        let mut t = TerminalState::new(6, 60);
+        t.advance_bytes(b"\x1b[?1049h");
+        t.advance_bytes(
+            "  Voici une explication structuree de la navigation.\r\n  function f(x) {\r\n    return x + 1;\r\n  }\r\n  Conclusion finale de la reponse ici.\r\n"
+                .as_bytes(),
+        );
+        assert!(t.is_on_alt_screen());
+        let kinds = t.visible_line_kinds(0);
+        assert_eq!(&kinds[..5], &[2, 2, 2, 2, 2]);
+    }
+
+    #[test]
+    fn orphan_default_does_not_repaint_visible_tool_output() {
+        // When a tool call's white `●` head IS on screen, its `⎿` result and the
+        // indented output below must stay untinted — the orphan-default must not
+        // override a head-established non-tinted block.
+        let mut t = TerminalState::new(6, 60);
+        t.advance_bytes(b"\x1b[?1049h");
+        t.advance_bytes(
+            "\x1b[38;2;230;230;230m●\x1b[0m Bash(cargo test)\r\n  ⎿ running tests\r\n     all checks passed\r\n"
+                .as_bytes(),
+        );
+        let kinds = t.visible_line_kinds(0);
+        assert_eq!(&kinds[..3], &[0, 0, 0]);
     }
 
     #[test]
