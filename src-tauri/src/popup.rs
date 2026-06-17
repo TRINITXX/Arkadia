@@ -413,14 +413,31 @@ fn cascade_position(win: &WebviewWindow, index: usize) {
         let margin = (16.0 * scale) as i32;
         // Reserve a typical taskbar height so the popup isn't hidden behind it.
         let taskbar = (56.0 * scale) as i32;
-        let pw = (POPUP_W * scale) as i32;
-        let ph = (POPUP_H * scale) as i32;
+        // Anchor on the window's ACTUAL outer size, not the default POPUP_W/H:
+        // the user can resize a popup (drag handles) and the window persists
+        // across re-notifications, so assuming 470px would let a widened popup
+        // hang off the right edge and clip the ✕. Fall back to the defaults when
+        // the size isn't available yet (a freshly built window).
+        let (ww, wh) = match win.outer_size() {
+            Ok(s) => (s.width as i32, s.height as i32),
+            Err(_) => ((POPUP_W * scale) as i32, (POPUP_H * scale) as i32),
+        };
         let dx = (CASCADE_DX * scale) as i32 * index as i32;
         let dy = (CASCADE_DY * scale) as i32 * index as i32;
+        // Right/bottom edges keep a margin; left/top are clamped too so even a
+        // popup larger than the work area still shows its top-right controls.
         let x =
-            (mpos.x + msize.width as i32 - pw - margin - dx).max(mpos.x + margin);
+            (mpos.x + msize.width as i32 - ww - margin - dx).max(mpos.x + margin);
         let y =
-            (mpos.y + msize.height as i32 - ph - taskbar - dy).max(mpos.y + margin);
+            (mpos.y + msize.height as i32 - wh - taskbar - dy).max(mpos.y + margin);
+        log_line(&format!(
+            "cascade[{index}]: mon=({},{})+{}x{} scale={scale} win={ww}x{wh} -> ({x},{y}) right_edge={}",
+            mpos.x,
+            mpos.y,
+            msize.width,
+            msize.height,
+            x + ww,
+        ));
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
     }
 }
