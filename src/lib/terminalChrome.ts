@@ -88,6 +88,31 @@ export function isOptionRow(runs: CellRun[]): boolean {
   return /^[❯>]?\s*\d+\.\s/.test(unframed(runs));
 }
 
+/**
+ * AskUserQuestion with MORE THAN ONE question draws a tab/progress bar above the
+ * options: `←  ☐ Header1  ☐ Header2  ✔ Submit  →`. Each question is a `☐` chip
+ * that flips to `☒` once answered; the trailing `✔ Submit` chip is the final step
+ * that actually submits the whole tool call. A single-question prompt has only a
+ * lone `☐ Header` chip — no arrows, no `Submit`.
+ *
+ * Returns `null` when no such bar is on screen (single question / not a question),
+ * or `{ atSubmit }` where `atSubmit` is true once every question is answered (no
+ * `☐` left) — i.e. the active step is `Submit`, where Enter resolves the prompt.
+ * The popup uses this so plain Enter advances between questions (keep the popup
+ * open) and only closes it on the final Submit. Verified against real captures.
+ */
+export function askQuestionTabBar(
+  lines: CellRun[][],
+): { atSubmit: boolean } | null {
+  for (const runs of lines) {
+    const t = runs.map((r) => r.text).join("");
+    if (t.includes("←") && t.includes("→") && t.includes("Submit")) {
+      return { atSubmit: !t.includes("☐") };
+    }
+  }
+  return null;
+}
+
 /** Smallest footer we'll ever reserve (a bare prompt with no box). */
 const MIN_FOOTER_ROWS = 3;
 

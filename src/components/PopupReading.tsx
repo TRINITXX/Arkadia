@@ -10,6 +10,7 @@ import { readText as readClipboard } from "@tauri-apps/plugin-clipboard-manager"
 import { resolveColor } from "@/lib/palettes";
 import { keyEventToBytes } from "@/lib/keymap";
 import {
+  askQuestionTabBar,
   isBoxRow,
   isChromeRow,
   isInputRow,
@@ -512,7 +513,13 @@ export function PopupReading({
         console.error("[arkadia popup] reply failed:", err);
       }
       // Plain Enter submits the prompt / picks the option → dismiss the popup.
-      if (isPlainEnter) onSubmit?.();
+      // Exception: a multi-question AskUserQuestion advances to the NEXT question
+      // on Enter (it doesn't resolve), so keep the popup open until the final
+      // Submit step — when its tab bar has no unanswered `☐` chip left.
+      if (isPlainEnter) {
+        const tab = askQuestionTabBar(screenRef.current?.lines ?? []);
+        if (!tab || tab.atSubmit) onSubmit?.();
+      }
     }
   };
 
