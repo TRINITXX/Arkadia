@@ -439,13 +439,14 @@ export function App() {
   }, [font.family, font.size]);
 
   const spawnPane = useCallback(
-    async (cwd: string): Promise<string | null> => {
+    async (cwd: string, initCommand?: string): Promise<string | null> => {
       const { cols, rows } = measureSpawnSize();
       try {
         const sessionId = await invoke<string>("spawn_terminal", {
           cwd,
           cols,
           rows,
+          init_command: initCommand,
         });
         return sessionId;
       } catch (e) {
@@ -459,8 +460,9 @@ export function App() {
   const spawnTabFor = useCallback(
     async (
       project: Project,
+      initCommand?: string,
     ): Promise<{ tabId: string; paneId: string } | null> => {
-      const paneId = await spawnPane(project.path);
+      const paneId = await spawnPane(project.path, initCommand);
       if (!paneId) return null;
       const tabId = newTabId();
       paneToTab.current.set(paneId, tabId);
