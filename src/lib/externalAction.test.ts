@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { findProjectByPath, parentOf } from "./externalAction";
+import {
+  findProjectByPath,
+  findProjectsByPath,
+  parentOf,
+} from "./externalAction";
 import type { Project } from "../types";
 
 const p = (
@@ -28,6 +32,22 @@ describe("findProjectByPath", () => {
   });
   it("returns undefined when absent", () => {
     expect(findProjectByPath(projects, "C:\\other")).toBeUndefined();
+  });
+});
+
+describe("findProjectsByPath", () => {
+  const dup = [
+    p("a", "side", "C:\\VTC\\vtc-mobile-side"),
+    p("b", "side", "C:\\VTC\\vtc-mobile-side"),
+    p("c", "other", "C:\\VTC\\vtc-mobile-prod"),
+  ];
+  it("returns every project sharing the path", () => {
+    expect(
+      findProjectsByPath(dup, "c:/vtc/vtc-mobile-side").map((p) => p.id),
+    ).toEqual(["a", "b"]);
+  });
+  it("returns an empty array when none match", () => {
+    expect(findProjectsByPath(dup, "C:\\VTC\\nope")).toEqual([]);
   });
 });
 

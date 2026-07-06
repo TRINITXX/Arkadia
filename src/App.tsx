@@ -36,7 +36,7 @@ import {
 import { measureCellSize } from "@/lib/cellSize";
 import { DEFAULT_CUSTOM_PALETTE, resolveActivePalette } from "@/lib/palettes";
 import { stateFromTitle, type AgentStateValue } from "@/lib/agentState";
-import { findProjectByPath, parentOf } from "@/lib/externalAction";
+import { findProjectsByPath, parentOf } from "@/lib/externalAction";
 import {
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_NOTIF_STYLE,
@@ -450,7 +450,8 @@ export function App() {
           cwd,
           cols,
           rows,
-          init_command: initCommand,
+          // Tauri v2 maps this camelCase key to the Rust `init_command` param.
+          initCommand,
         });
         return sessionId;
       } catch (e) {
@@ -993,6 +994,14 @@ export function App() {
       }
 
       if (a.kind === "add" && a.path && a.name) {
+        const existing = findProjectsByPath(projects, a.path)[0];
+        if (existing) {
+          // Idempotent: this worktree is already a project → just switch to it
+          // instead of piling up duplicates on repeated /w calls.
+          setActiveProjectId(existing.id);
+          pushToast("info", `${a.name} déjà présent — basculé`);
+          return;
+        }
         const parent = parentOf(projects, a.path);
         const project: Project = {
           id: newProjectId(),
@@ -1012,21 +1021,23 @@ export function App() {
       }
 
       if (a.kind === "remove" && a.path) {
-        const proj = findProjectByPath(projects, a.path);
-        if (!proj) {
+        const matches = findProjectsByPath(projects, a.path);
+        if (matches.length === 0) {
           pushToast("error", `Projet introuvable pour ${a.path}`);
           return;
         }
-        onDeleteProject(proj.id);
+        // Remove ALL projects on this path (repeated adds can leave duplicates).
+        matches.forEach((p) => onDeleteProject(p.id));
         if (a.after) {
           const parent = parentOf(projects, a.path);
           const cwd = parent?.path ?? "C:\\";
           void invoke("run_detached", { command: a.after, cwd });
         }
-        pushToast(
-          "info",
-          `➖ ${proj.name} retiré — nettoyage worktree en cours`,
-        );
+        const label =
+          matches.length > 1
+            ? `${matches[0].name} (×${matches.length})`
+            : matches[0].name;
+        pushToast("info", `➖ ${label} retiré — nettoyage worktree en cours`);
       }
     }).then((u) => {
       // If the component unmounted before listen() resolved, unlisten now so
