@@ -542,6 +542,47 @@ export function App() {
     [tabs, activeTabIdByProject],
   );
 
+  // Close every tab of a project at once (middle-click on a row in the sidebar
+  // "Active" list). Batched so the project drops from the Active set exactly
+  // once, instead of the per-tab churn of looping closeTab.
+  const closeProjectTabs = useCallback(
+    async (projectId: string) => {
+      const projTabs = tabs.filter((t) => t.projectId === projectId);
+      if (projTabs.length === 0) return;
+
+      const ids = new Set(projTabs.map((t) => t.id));
+      setTabs((prev) => prev.filter((t) => !ids.has(t.id)));
+
+      setActiveTabIdByProject((prev) => {
+        if (!(projectId in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[projectId];
+        return copy;
+      });
+
+      // No tabs left → the project leaves the "Active" set (same rule as
+      // closing its last tab in closeTab).
+      setActiveInputProjectIds((prev) => {
+        if (!prev.has(projectId)) return prev;
+        const next = new Set(prev);
+        next.delete(projectId);
+        return next;
+      });
+
+      for (const t of projTabs) {
+        for (const pid of collectPaneIds(t.tree)) {
+          paneToTab.current.delete(pid);
+          try {
+            await invoke("close_terminal", { sessionId: pid });
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    },
+    [tabs],
+  );
+
   const closePane = useCallback(
     async (tabId: string, paneId: string) => {
       let shouldCloseTab = false;
@@ -1209,6 +1250,7 @@ export function App() {
         onProjectContextMenu={(project, x, y) =>
           setProjectMenu({ project, x, y })
         }
+        onCloseProjectTabs={closeProjectTabs}
         onWorkspaceContextMenu={(workspace, x, y) =>
           setWorkspaceMenu({ workspace, x, y })
         }

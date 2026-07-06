@@ -28,6 +28,8 @@ interface SidepanelProps {
   onAdd: () => void;
   onAddWorkspace: () => void;
   onProjectContextMenu: (project: Project, x: number, y: number) => void;
+  /** Middle-click on a project row in the "Active" list closes all its tabs. */
+  onCloseProjectTabs: (projectId: string) => void;
   onWorkspaceContextMenu: (workspace: Workspace, x: number, y: number) => void;
   onMoveProject: (
     projectId: string,
@@ -184,6 +186,7 @@ export function Sidepanel({
   onAdd,
   onAddWorkspace,
   onProjectContextMenu,
+  onCloseProjectTabs,
   onWorkspaceContextMenu,
   onMoveProject,
   onPlaceProjectInRoot,
@@ -451,6 +454,7 @@ export function Sidepanel({
                 active={project.id === activeProjectId}
                 onActivate={onActivate}
                 onContextMenu={onProjectContextMenu}
+                onCloseTabs={onCloseProjectTabs}
                 agentStates={projectAgentStates(
                   project.id,
                   tabs,
@@ -740,6 +744,8 @@ interface DraggableProjectRowProps {
   active: boolean;
   onActivate: (id: string) => void;
   onContextMenu: (project: Project, x: number, y: number) => void;
+  /** Middle-click closes all of the project's tabs. Only wired in the Active list. */
+  onCloseTabs?: (projectId: string) => void;
   agentStates: TabAgentState[];
 }
 
@@ -832,12 +838,20 @@ function StaticProjectRow({
   active,
   onActivate,
   onContextMenu,
+  onCloseTabs,
   agentStates,
 }: DraggableProjectRowProps) {
   return (
     <div
       style={{ borderLeftColor: project.color }}
       onClick={() => onActivate(project.id)}
+      onMouseDown={(e) => {
+        // Middle-click closes every tab of this project.
+        if (e.button === 1) {
+          e.preventDefault();
+          onCloseTabs?.(project.id);
+        }
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu(project, e.clientX, e.clientY);
