@@ -38,11 +38,17 @@ pub fn run() {
     #[cfg(not(debug_assertions))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(
-            |app, _argv, _cwd| {
+            |app, argv, _cwd| {
+                // Focus the running window (previous behaviour).
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.unminimize();
                     let _ = w.show();
                     let _ = w.set_focus();
+                }
+                // If this second launch carried a --wt-* action, forward it to
+                // the frontend, which reuses the live add/remove project paths.
+                if let Some(action) = crate::external_action::parse_external_action(&argv) {
+                    let _ = app.emit("external-action", action);
                 }
             },
         ));
