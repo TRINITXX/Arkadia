@@ -3,6 +3,7 @@ mod claude_watcher;
 mod conversation;
 mod fonts;
 mod popup;
+mod external_action;
 mod screenshots;
 mod terminal;
 pub mod terminal_state;
