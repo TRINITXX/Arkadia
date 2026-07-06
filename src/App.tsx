@@ -17,6 +17,7 @@ import { RenameDialog } from "@/components/RenameDialog";
 import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { NotepadPanel } from "@/components/NotepadPanel";
+import { Toaster, useToasts } from "@/components/Toaster";
 import {
   DEFAULT_CONV_FILTERS,
   type ConvFilters,
@@ -35,6 +36,7 @@ import {
 import { measureCellSize } from "@/lib/cellSize";
 import { DEFAULT_CUSTOM_PALETTE, resolveActivePalette } from "@/lib/palettes";
 import { stateFromTitle, type AgentStateValue } from "@/lib/agentState";
+import { findProjectByPath, parentOf } from "@/lib/externalAction";
 import {
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_NOTIF_STYLE,
@@ -48,6 +50,7 @@ import {
   type CustomPalette,
   type CwdPayload,
   type EditorProtocol,
+  type ExternalAction,
   type NotifStyle,
   type PaletteId,
   type PaneState,
@@ -95,6 +98,7 @@ export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const { toasts, pushToast } = useToasts();
   const [toolbarButtons, setToolbarButtons] = useState<ToolbarButton[]>([]);
   const [font, setFont] = useState<TerminalFont>(DEFAULT_TERMINAL_FONT);
   const [paletteId, setPaletteId] = useState<PaletteId>(DEFAULT_PALETTE_ID);
@@ -907,6 +911,94 @@ export function App() {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, color } : p)));
   };
 
+  // ─── External-action listener (/w and /m skills) ──────────────
+  //
+  // The listener must always act on the freshest projects/handlers, but keying
+  // an effect on them would re-subscribe every render: `projects` changes often
+  // and `onDeleteProject` is a fresh closure each render. Since `listen()` is
+  // async, a re-subscribe that fires before the previous promise resolves leaks
+  // the old listener → the same event handled twice (e.g. a project added
+  // twice) during a live terminal's frequent re-renders. So we subscribe ONCE
+  // and read fresh values from a ref.
+  const externalActionRef = useRef({
+    projects,
+    spawnTabFor,
+    onDeleteProject,
+    pushToast,
+  });
+  // Refresh the ref after each commit (never during render — that trips the
+  // react-hooks/refs lint rule and can miss updates) so the subscribe-once
+  // listener below always reads the freshest state and handlers.
+  useEffect(() => {
+    externalActionRef.current = {
+      projects,
+      spawnTabFor,
+      onDeleteProject,
+      pushToast,
+    };
+  });
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let disposed = false;
+    void listen<ExternalAction>("external-action", async (event) => {
+      const a = event.payload;
+      const { projects, spawnTabFor, onDeleteProject, pushToast } =
+        externalActionRef.current;
+
+      if (a.kind === "notify") {
+        pushToast(a.level ?? "info", a.message ?? "");
+        return;
+      }
+
+      if (a.kind === "add" && a.path && a.name) {
+        const parent = parentOf(projects, a.path);
+        const project: Project = {
+          id: newProjectId(),
+          name: a.name,
+          path: a.path,
+          color: a.color || parent?.color || "#a8a8a8",
+          order: projects.length,
+          workspaceId: parent?.workspaceId ?? null,
+        };
+        setProjects((prev) => [...prev, project]);
+        // Add the ccd tab BEFORE activating so the auto-spawn effect
+        // (see "Auto-spawn first tab") sees a tab and skips the blank one.
+        await spawnTabFor(project, a.run);
+        setActiveProjectId(project.id);
+        pushToast("info", `➕ ${a.name} ajouté`);
+        return;
+      }
+
+      if (a.kind === "remove" && a.path) {
+        const proj = findProjectByPath(projects, a.path);
+        if (!proj) {
+          pushToast("error", `Projet introuvable pour ${a.path}`);
+          return;
+        }
+        onDeleteProject(proj.id);
+        if (a.after) {
+          const parent = parentOf(projects, a.path);
+          const cwd = parent?.path ?? "C:\\";
+          void invoke("run_detached", { command: a.after, cwd });
+        }
+        pushToast(
+          "info",
+          `➖ ${proj.name} retiré — nettoyage worktree en cours`,
+        );
+      }
+    }).then((u) => {
+      // If the component unmounted before listen() resolved, unlisten now so
+      // the handler doesn't leak past the effect's lifetime.
+      if (disposed) u();
+      else unlisten = u;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   // ─── Workspace handlers ────────────────────────────────────────
 
   const onAddWorkspace = (name: string) => {
@@ -1373,6 +1465,7 @@ export function App() {
         toolDensity={toolDensity}
         onChangeToolDensity={setToolDensity}
       />
+      <Toaster toasts={toasts} />
     </div>
   );
 }
