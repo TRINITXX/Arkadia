@@ -131,6 +131,7 @@ pub fn run() {
             agent_state_for_pane,
             agent_state_for_project,
             open_path,
+            run_detached,
             resolve_path_at,
             save_screenshot,
             conversation::read_conversation,
@@ -190,6 +191,25 @@ fn open_path(path: String) -> Result<(), String> {
         return Err(format!("refusing to open executable file type: {path}"));
     }
     open::that_detached(&path).map_err(|e| e.to_string())
+}
+
+/// Runs `command` via a detached PowerShell process. Detached so it outlives the
+/// terminal that requested it — used by the worktree merge flow, where Arkadia
+/// closes the requesting terminal and the leftover `git worktree remove` must
+/// still run. `cwd` must be a directory NOT inside the worktree being removed.
+#[tauri::command]
+fn run_detached(command: String, cwd: String) -> Result<(), String> {
+    use std::process::Command;
+    let mut c = Command::new("pwsh.exe");
+    c.arg("-NoProfile").arg("-Command").arg(&command).current_dir(&cwd);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // DETACHED_PROCESS (0x8) | CREATE_NEW_PROCESS_GROUP (0x200): fully
+        // independent of the caller's console so a closed PTY can't kill it.
+        c.creation_flags(0x0000_0008 | 0x0000_0200);
+    }
+    c.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// A file path located inside a terminal line by `resolve_path_at`. `start`/`end`
@@ -385,6 +405,13 @@ mod tests {
     fn click_at(line: &str, needle: &str, offset: usize) -> usize {
         let byte_pos = line.find(needle).expect("needle in line");
         line[..byte_pos].chars().count() + offset
+    }
+
+    #[test]
+    fn run_detached_spawns_without_error() {
+        // A trivial command that exits immediately.
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        assert!(run_detached("exit 0".to_string(), cwd).is_ok());
     }
 
     #[test]
