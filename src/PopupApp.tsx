@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { loadState } from "@/store";
+import { subscribePopupState } from "@/lib/popupState";
 import { resolveActivePalette } from "@/lib/palettes";
 import { PopupReading } from "@/components/PopupReading";
 import { CLAUDE_TINT, USER_TINT } from "@/lib/messageTint";
@@ -108,7 +109,9 @@ export function PopupApp() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadState().then((s) => {
+    // Read-only: the popup shares the main window's store cache, so it must
+    // never write/heal it. { heal: false } makes loadState purely observational.
+    void loadState({ heal: false }).then((s) => {
       if (cancelled) return;
       setFont(s.font);
       setPalette(resolveActivePalette(s.paletteId, s.customPalette));
@@ -118,22 +121,18 @@ export function PopupApp() {
     };
   }, []);
 
-  useEffect(() => {
-    let unlisten: UnlistenFn | undefined;
-    let active = true;
-    void listen<{ items: WaitingItem[] }>("popup-state", (e) => {
-      if (!active) return;
-      setItems(e.payload.items);
-    }).then((fn) => {
-      if (active) unlisten = fn;
-      else fn();
-    });
-    void invoke("popup_request_state").catch(() => {});
-    return () => {
-      active = false;
-      unlisten?.();
-    };
-  }, []);
+  useEffect(
+    () =>
+      subscribePopupState<WaitingItem>({
+        listen: (handler) =>
+          listen<{ items: WaitingItem[] }>("popup-state", (e) =>
+            handler(e.payload.items),
+          ),
+        requestState: () => invoke("popup_request_state"),
+        onItems: setItems,
+      }),
+    [],
+  );
 
   const current = items.find((i) => i.pane_id === paneId) ?? null;
 
@@ -167,6 +166,12 @@ export function PopupApp() {
     <div
       className="arkadia-popup flex h-screen w-screen flex-col overflow-hidden"
       style={{ backgroundColor: bg, color: fg }}
+      // The window is created WS_EX_NOACTIVATE so APPEARING never steals the
+      // focus from a fullscreen game. Clicking it is a deliberate user action:
+      // activate the OS window then, so typing a reply works.
+      onPointerDownCapture={() => {
+        if (!document.hasFocus()) void getCurrentWindow().setFocus();
+      }}
     >
       {/* The mirrored terminal's footer (status line, input box) is full
           terminal width, so its no-wrap blocks would show scrollbars. Hide all

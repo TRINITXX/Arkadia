@@ -1,4 +1,11 @@
 import { Store } from "@tauri-apps/plugin-store";
+import {
+  ensureDurableOnLoad,
+  pushBackupIfHealthy,
+  type DurableSpec,
+  type KvStore,
+  type StoreOpener,
+} from "@/lib/durableStore";
 
 /**
  * Persistence for the notepad panel. Separate file from store.json so the
@@ -37,6 +44,51 @@ function getStore(): Promise<Store> {
   return storePromise;
 }
 
+/** Opens any plugin-store file as a durable-store-compatible KV handle. */
+const openStore: StoreOpener = async (name) =>
+  (await Store.load(name, { autoSave: false, defaults: {} })) as KvStore;
+
+/**
+ * Backup ring for notepad.json (notepad.bak1..3.json). "Healthy" = at least one
+ * project has real notepad content. A fresh user has an empty notepad, which is
+ * legitimately empty — so the guard leans on corrupt-restore, not emptiness, and
+ * the ring only starts filling once there is real content to protect.
+ */
+export const NOTEPAD_SPEC: DurableSpec = {
+  base: "notepad",
+  ringSize: 3,
+  isHealthy: (entries) =>
+    entries.some(([k, v]) => {
+      if (!k.startsWith("proj-") || !v || typeof v !== "object") return false;
+      const s = v as { draft?: unknown; history?: unknown };
+      return (
+        (typeof s.draft === "string" && s.draft.length > 0) ||
+        (Array.isArray(s.history) && s.history.length > 0)
+      );
+    }),
+};
+
+/** Runs the load-time guard once (memoised). Notepad is main-window only. */
+let durableReady: Promise<void> | null = null;
+function ensureNotepadDurable(): Promise<void> {
+  if (!durableReady) {
+    durableReady = getStore().then(async (store) => {
+      await ensureDurableOnLoad(openStore, NOTEPAD_SPEC, store as KvStore, {
+        heal: true,
+      });
+    });
+  }
+  return durableReady;
+}
+
+/** Saves the notepad store, then rotates a healthy snapshot into the ring. */
+async function saveAndBackup(store: Store): Promise<void> {
+  await store.save();
+  await pushBackupIfHealthy(openStore, NOTEPAD_SPEC, store as KvStore, {
+    heal: true,
+  });
+}
+
 export function newEntryId(): string {
   return `note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -73,6 +125,7 @@ export function normalizeProjectState(raw: unknown): NotepadProjectState {
 export async function loadProjectNotepad(
   projectId: string,
 ): Promise<NotepadProjectState> {
+  await ensureNotepadDurable();
   const store = await getStore();
   const raw = await store.get<unknown>(projectId);
   return normalizeProjectState(raw);
@@ -87,10 +140,11 @@ export async function saveProjectNotepad(
     draft: state.draft,
     history: state.history.slice(0, HISTORY_CAP),
   });
-  await store.save();
+  await saveAndBackup(store);
 }
 
 export async function loadPanelWidth(): Promise<number> {
+  await ensureNotepadDurable();
   const store = await getStore();
   const raw = await store.get<unknown>(KEY_PANEL_WIDTH);
   return clampPanelWidth(raw);
@@ -99,13 +153,14 @@ export async function loadPanelWidth(): Promise<number> {
 export async function savePanelWidth(width: number): Promise<void> {
   const store = await getStore();
   await store.set(KEY_PANEL_WIDTH, clampPanelWidth(width));
-  await store.save();
+  await saveAndBackup(store);
 }
 
 /** Persisted editor height in px, or null when unset/invalid — the panel
  *  then defaults to half the window height. The upper bound depends on the
  *  live window size, so the caller clamps it. */
 export async function loadEditorHeight(): Promise<number | null> {
+  await ensureNotepadDurable();
   const store = await getStore();
   const raw = await store.get<unknown>(KEY_EDITOR_HEIGHT);
   if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
@@ -118,5 +173,5 @@ export async function saveEditorHeight(height: number): Promise<void> {
     KEY_EDITOR_HEIGHT,
     Math.max(EDITOR_HEIGHT_MIN, Math.round(height)),
   );
-  await store.save();
+  await saveAndBackup(store);
 }

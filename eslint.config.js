@@ -13,6 +13,10 @@ export default [
       "crates/terminal-renderer/pkg/**",
       "crates/**",
       "src-tauri/**",
+      // Tests are excluded from tsconfig (kept out of the production typecheck),
+      // so the type-aware parser can't resolve them — skip them here too.
+      // Vitest runs them; type-checking of the tested API happens via its imports.
+      "src/**/*.test.ts",
     ],
   },
   js.configs.recommended,

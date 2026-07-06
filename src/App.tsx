@@ -34,9 +34,11 @@ import {
 } from "@/lib/paneTree";
 import { measureCellSize } from "@/lib/cellSize";
 import { DEFAULT_CUSTOM_PALETTE, resolveActivePalette } from "@/lib/palettes";
-import type { AgentEventPayload, AgentStateValue } from "@/lib/agentState";
+import { stateFromTitle, type AgentStateValue } from "@/lib/agentState";
 import {
   DEFAULT_EDITOR_PROTOCOL,
+  DEFAULT_NOTIF_STYLE,
+  DEFAULT_NOTIF_WIDTH,
   DEFAULT_PALETTE_ID,
   DEFAULT_TERMINAL_FONT,
   DEFAULT_TOOL_DENSITY,
@@ -46,6 +48,7 @@ import {
   type CustomPalette,
   type CwdPayload,
   type EditorProtocol,
+  type NotifStyle,
   type PaletteId,
   type PaneState,
   type Project,
@@ -102,7 +105,9 @@ export function App() {
   const [editorProtocol, setEditorProtocol] = useState<EditorProtocol>(
     DEFAULT_EDITOR_PROTOCOL,
   );
-  const [popupEnabled, setPopupEnabled] = useState(true);
+  const [notifStyle, setNotifStyle] = useState<NotifStyle>(DEFAULT_NOTIF_STYLE);
+  const [notifFullscreen, setNotifFullscreen] = useState(false);
+  const [notifWidth, setNotifWidth] = useState(DEFAULT_NOTIF_WIDTH);
   const [navRailEnabled, setNavRailEnabled] = useState(true);
   const [messageFramesEnabled, setMessageFramesEnabled] = useState(true);
   const [autoScrollReplyEnabled, setAutoScrollReplyEnabled] = useState(true);
@@ -121,23 +126,28 @@ export function App() {
   );
 
   const [tabs, setTabs] = useState<Tab[]>([]);
-  // Mirror of `tabs` for the (set-up-once) agent-state listener, so it can read
-  // the current panes synchronously without a stale closure — `setTabs(fn)` runs
-  // its updater asynchronously, so reading an outer var right after it is racy.
-  const tabsRef = useRef<Tab[]>([]);
-  useEffect(() => {
-    tabsRef.current = tabs;
-  }, [tabs]);
   const [activeTabIdByProject, setActiveTabIdByProject] = useState<
     Record<string, string>
   >({});
   /** tabIds that have a pending bell. Cleared when the tab is activated. */
   const [bellTabs, setBellTabs] = useState<Record<string, true>>({});
-  /** paneId → current agent state, mirrored from the backend watcher via cwd.
-   *  Consumed by T8 (Sidepanel badge) and T9 (TabBar badge). */
-  const [paneAgentStates, setPaneAgentStates] = useState<
-    Record<string, AgentStateValue>
-  >({});
+  // Badge state is derived PURELY from each pane's own terminal title. Claude
+  // Code stamps a status marker into the title (✳ = waiting for a message, a
+  // spinner dot = working); a plain shell (or any non-Claude pane) has neither.
+  // We deliberately do NOT use the backend cwd-watcher here: it maps state by
+  // working directory (many-to-one), so a non-Claude terminal that merely
+  // shares a folder with a Claude session inherited its state and showed a
+  // phantom badge. The title is the only reliable per-pane signal.
+  const effectivePaneStates = useMemo(() => {
+    const merged: Record<string, AgentStateValue> = {};
+    for (const tab of tabs) {
+      for (const [paneId, pane] of Object.entries(tab.panes)) {
+        const fromTitle = stateFromTitle(pane.title);
+        if (fromTitle) merged[paneId] = fromTitle;
+      }
+    }
+    return merged;
+  }, [tabs]);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -294,7 +304,9 @@ export function App() {
         setUseWebGPU(state.useWebGPU);
         setCustomPalette(state.customPalette);
         setEditorProtocol(state.editorProtocol);
-        setPopupEnabled(state.popupEnabled);
+        setNotifStyle(state.notifStyle);
+        setNotifFullscreen(state.notifFullscreen);
+        setNotifWidth(state.notifWidth);
         setNavRailEnabled(state.navRailEnabled);
         setMessageFramesEnabled(state.messageFramesEnabled);
         setAutoScrollReplyEnabled(state.autoScrollReplyEnabled);
@@ -325,7 +337,9 @@ export function App() {
         useWebGPU,
         customPalette,
         editorProtocol,
-        popupEnabled,
+        notifStyle,
+        notifFullscreen,
+        notifWidth,
         navRailEnabled,
         messageFramesEnabled,
         autoScrollReplyEnabled,
@@ -345,7 +359,9 @@ export function App() {
     useWebGPU,
     customPalette,
     editorProtocol,
-    popupEnabled,
+    notifStyle,
+    notifFullscreen,
+    notifWidth,
     navRailEnabled,
     messageFramesEnabled,
     autoScrollReplyEnabled,
@@ -353,11 +369,42 @@ export function App() {
     toolDensity,
   ]);
 
-  // The popup is triggered by the Rust backend, so mirror its on/off setting there.
+  // The notification is triggered by the Rust backend, so mirror its style and
+  // fullscreen-override settings there.
   useEffect(() => {
     if (!loaded) return;
-    void invoke("popup_set_enabled", { enabled: popupEnabled }).catch(() => {});
-  }, [loaded, popupEnabled]);
+    void invoke("popup_set_style", { style: notifStyle }).catch(() => {});
+  }, [loaded, notifStyle]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    void invoke("popup_set_fullscreen", { enabled: notifFullscreen }).catch(
+      () => {},
+    );
+  }, [loaded, notifFullscreen]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    void invoke("popup_set_notif_width", { width: notifWidth }).catch(() => {});
+  }, [loaded, notifWidth]);
+
+  // Register each pane's Arkadia project name with the backend so the compact
+  // notification can label "project · tab" (the backend only knows cwds). Pushed
+  // only when the mapping actually changes — pane titles churn far more often
+  // than which project a pane belongs to.
+  const paneProjectsRef = useRef("");
+  useEffect(() => {
+    if (!loaded) return;
+    const nameById = new Map(projects.map((p) => [p.id, p.name]));
+    const entries = tabs.flatMap((tab) => {
+      const projectName = nameById.get(tab.projectId) ?? "";
+      return Object.keys(tab.panes).map((paneId) => ({ paneId, projectName }));
+    });
+    const key = JSON.stringify(entries);
+    if (key === paneProjectsRef.current) return;
+    paneProjectsRef.current = key;
+    void invoke("set_pane_projects", { entries }).catch(() => {});
+  }, [loaded, tabs, projects]);
 
   // The terminal auto-scroll is also driven by the backend (off the hook), so
   // mirror its on/off setting there too.
@@ -587,7 +634,6 @@ export function App() {
     let unlistenClosed: UnlistenFn | undefined;
     let unlistenCwd: UnlistenFn | undefined;
     let unlistenBell: UnlistenFn | undefined;
-    let unlistenAgent: UnlistenFn | undefined;
     let active = true;
 
     async function setup() {
@@ -628,7 +674,7 @@ export function App() {
           void closePane(tabId, paneId);
         },
       );
-      unlistenCwd = await listen<CwdPayload>("terminal-cwd", async (event) => {
+      unlistenCwd = await listen<CwdPayload>("terminal-cwd", (event) => {
         if (!active) return;
         const paneId = event.payload.session_id;
         const tabId = paneToTab.current.get(paneId);
@@ -647,17 +693,6 @@ export function App() {
             };
           }),
         );
-        // Refresh agent state from the registry — the watcher may already have a
-        // session at this cwd from before this pane reported its cwd.
-        try {
-          const fresh = await invoke<AgentStateValue>("agent_state_for_pane", {
-            paneId,
-          });
-          if (!active) return;
-          setPaneAgentStates((prev) => ({ ...prev, [paneId]: fresh }));
-        } catch {
-          /* ignore */
-        }
       });
       unlistenBell = await listen<BellPayload>("terminal-bell", (event) => {
         if (!active) return;
@@ -668,32 +703,6 @@ export function App() {
           prev[tabId] ? prev : { ...prev, [tabId]: true },
         );
       });
-      unlistenAgent = await listen<AgentEventPayload>(
-        "agent-state-changed",
-        (event) => {
-          if (!active) return;
-          const { cwd, state } = event.payload;
-          // Panes whose live cwd matches this event's cwd, read synchronously
-          // from the tabs ref (a `setTabs` updater would run too late to drive
-          // the side effects below).
-          const matchingPaneIds: string[] = [];
-          for (const tab of tabsRef.current) {
-            for (const paneId of Object.keys(tab.panes)) {
-              if (tab.panes[paneId].cwd === cwd) matchingPaneIds.push(paneId);
-            }
-          }
-          if (matchingPaneIds.length === 0) return;
-          // Badge state only. The terminal auto-scroll is NOT driven from here:
-          // the watcher coalesces fast transcript writes and can skip the
-          // busy→waiting edge, so we trigger it off the Stop hook instead (see
-          // the `pane-reply-finished` listener below).
-          setPaneAgentStates((prev) => {
-            const next = { ...prev };
-            for (const id of matchingPaneIds) next[id] = state;
-            return next;
-          });
-        },
-      );
       // The terminal auto-scroll to the reply start is driven entirely in the
       // backend (off the Stop/PreToolUse hook, when Arkadia is foreground) — no
       // frontend listener needed. Its on/off setting is synced below.
@@ -706,7 +715,6 @@ export function App() {
       unlistenClosed?.();
       unlistenCwd?.();
       unlistenBell?.();
-      unlistenAgent?.();
     };
   }, [closePane]);
 
@@ -1116,7 +1124,7 @@ export function App() {
         onPlaceWorkspaceInRoot={onPlaceWorkspaceInRoot}
         onToggleWorkspaceCollapsed={onToggleWorkspaceCollapsed}
         tabs={tabs}
-        paneAgentStates={paneAgentStates}
+        paneAgentStates={effectivePaneStates}
         activeProjectIds={activeProjectIds}
       />
 
@@ -1190,7 +1198,7 @@ export function App() {
                   showMessageFrames={messageFramesEnabled}
                   modernViewEnabled={modernViewEnabled}
                   toolDensity={toolDensity}
-                  paneAgentStates={paneAgentStates}
+                  paneAgentStates={effectivePaneStates}
                   convFilters={convFilters}
                   onConvFiltersChange={setConvFilters}
                   modernNavRef={
@@ -1348,8 +1356,12 @@ export function App() {
         onChangeCustomPalette={setCustomPalette}
         editorProtocol={editorProtocol}
         onChangeEditorProtocol={setEditorProtocol}
-        popupEnabled={popupEnabled}
-        onChangePopupEnabled={setPopupEnabled}
+        notifStyle={notifStyle}
+        onChangeNotifStyle={setNotifStyle}
+        notifFullscreen={notifFullscreen}
+        onChangeNotifFullscreen={setNotifFullscreen}
+        notifWidth={notifWidth}
+        onChangeNotifWidth={setNotifWidth}
         navRailEnabled={navRailEnabled}
         onChangeNavRailEnabled={setNavRailEnabled}
         messageFramesEnabled={messageFramesEnabled}

@@ -22,15 +22,36 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, Webvi
 
 use crate::agent_registry::AgentRegistry;
 
-/// Popup window logical size. Width matches the user's requested ~600px panel;
-/// height is a fixed band — the mirrored pane is scaled to fit the width and
-/// the bottom (latest output + input box) is kept in view.
+/// Mirror-popup window logical size. Width matches the user's requested ~600px
+/// panel; height is a fixed band — the mirrored pane is scaled to fit the width
+/// and the bottom (latest output + input box) is kept in view.
 const POPUP_W: f64 = 470.0;
 const POPUP_H: f64 = 380.0;
+/// Compact-notification window: default width (overridable via the settings
+/// slider) and a fixed two-line height (project on top, tab below).
+const NOTIF_W: f64 = 360.0;
+const NOTIF_H: f64 = 76.0;
+/// Width slider bounds — must match `NOTIF_WIDTH_MIN`/`MAX` in `types.ts`.
+const NOTIF_W_MIN: u32 = 260;
+const NOTIF_W_MAX: u32 = 560;
 /// Cascade offset (logical px) per stack level, so a window behind the active
 /// one peeks out to the upper-left instead of hiding completely.
 const CASCADE_DX: f64 = 16.0;
 const CASCADE_DY: f64 = 32.0;
+
+/// Notification style (mirrors the frontend `notifStyle` setting), stored in the
+/// queue as an `AtomicU8`.
+const STYLE_OFF: u8 = 0;
+const STYLE_MIRROR: u8 = 1;
+const STYLE_COMPACT: u8 = 2;
+
+fn style_from_str(s: &str) -> u8 {
+    match s {
+        "off" => STYLE_OFF,
+        "compact" => STYLE_COMPACT,
+        _ => STYLE_MIRROR,
+    }
+}
 
 /// One waiting pane shown (or queued) in the popup. `pane_id` is the Arkadia
 /// pane UUID, which is also the PTY session id (`send_input` target) and the
@@ -44,13 +65,24 @@ pub struct WaitingItem {
     /// Hook timestamp (ms). Changes on every fresh signal for a pane, so the
     /// popup UI can detect a re-appearance and re-run its open-time scroll.
     pub ts: u64,
+    /// Arkadia project display name (frontend-registered). Empty when unknown;
+    /// the compact notification then falls back to the cwd folder name.
+    pub project_name: String,
+    /// Live terminal title of the pane (the tab name), used by the compact
+    /// notification. Empty when the session isn't in the live map.
+    pub tab_title: String,
 }
 
 /// Managed FIFO of panes awaiting the user. Front (`items[0]`) is shown.
 pub struct PopupQueue {
     pub items: parking_lot::Mutex<Vec<WaitingItem>>,
-    /// Whether the popup is enabled (mirrors the frontend setting).
-    pub enabled: std::sync::atomic::AtomicBool,
+    /// Notification style (`STYLE_OFF` / `STYLE_MIRROR` / `STYLE_COMPACT`),
+    /// mirroring the frontend `notifStyle` setting.
+    pub style: std::sync::atomic::AtomicU8,
+    /// Whether the notification may show even over a fullscreen app (game/video).
+    pub fullscreen: std::sync::atomic::AtomicBool,
+    /// Compact-notification window width in logical px (user-tunable slider).
+    pub notif_width: std::sync::atomic::AtomicU32,
     /// Whether to auto-scroll the terminal to the reply start when Claude
     /// finishes while Arkadia is foreground (mirrors the frontend setting).
     pub auto_scroll: std::sync::atomic::AtomicBool,
@@ -60,7 +92,9 @@ impl Default for PopupQueue {
     fn default() -> Self {
         Self {
             items: parking_lot::Mutex::new(Vec::new()),
-            enabled: std::sync::atomic::AtomicBool::new(true),
+            style: std::sync::atomic::AtomicU8::new(STYLE_MIRROR),
+            fullscreen: std::sync::atomic::AtomicBool::new(false),
+            notif_width: std::sync::atomic::AtomicU32::new(NOTIF_W as u32),
             auto_scroll: std::sync::atomic::AtomicBool::new(true),
         }
     }
@@ -265,29 +299,69 @@ fn handle_signal(
         return;
     }
 
-    // Backgrounded → show the popup (it has its own scroll); leave the terminal
-    // alone. The popup window is gated on its on/off setting.
-    if !app.state::<PopupQueue>().enabled.load(Ordering::Acquire) {
-        log_line("popup disabled in settings — ignoring");
+    // Backgrounded → show the notification (it has its own scroll); leave the
+    // terminal alone. Gated on the notification style setting.
+    let queue = app.state::<PopupQueue>();
+    let style = queue.style.load(Ordering::Acquire);
+    if style == STYLE_OFF {
+        log_line("notifications disabled in settings — ignoring");
         return;
     }
-    log_line(&format!("showing popup for pane {pane_id}"));
+
+    // Don't interrupt a fullscreen game/video unless the user opted in. An
+    // EXCLUSIVE D3D fullscreen (a real game) is suppressed even with the opt-in:
+    // showing a topmost window above an exclusive swap chain kicks the game out
+    // of fullscreen (minimize / back to desktop), and the toast wouldn't be
+    // visible over it anyway. The opt-in only covers "soft" fullscreen
+    // (borderless games, fullscreen video, presentations), where a topmost
+    // toast overlays harmlessly.
+    let fullscreen_opt_in = queue.fullscreen.load(Ordering::Acquire);
+    let fs_kind = fullscreen_kind();
+    if suppress_for_fullscreen(fullscreen_opt_in, fs_kind) {
+        log_line(&format!(
+            "fullscreen app foreground ({fs_kind:?}, opt_in={fullscreen_opt_in}) — notification suppressed"
+        ));
+        return;
+    }
+
+    // Enrich with the labels the compact notification shows (the mirror popup
+    // ignores them). Project name is frontend-registered; the tab title is the
+    // pane's live terminal title.
+    let project_name = uuid::Uuid::parse_str(&pane_id)
+        .ok()
+        .and_then(|u| registry.project_name_for_pane(u))
+        .unwrap_or_default();
+    let sessions = app.state::<crate::terminal::SessionMap>();
+    let tab_title =
+        crate::terminal::session_title(sessions.inner(), &pane_id).unwrap_or_default();
+
+    // Compact style shows ONE notification at a time: while one is up for another
+    // pane, drop the rest (nothing re-appears when it's closed).
+    if style == STYLE_COMPACT && queue.items.lock().iter().any(|i| i.pane_id != pane_id) {
+        log_line("compact notification busy — dropping this signal");
+        return;
+    }
+
+    log_line(&format!("showing notification (style {style}) for pane {pane_id}"));
 
     let item = WaitingItem {
         pane_id,
         kind: derive_kind(sig),
         cwd: cwd.to_string(),
         ts: sig.ts.unwrap_or(0),
+        project_name,
+        tab_title,
     };
 
     {
-        let queue = app.state::<PopupQueue>();
         let mut q = queue.items.lock();
         if let Some(existing) = q.iter_mut().find(|i| i.pane_id == item.pane_id) {
-            // Same pane re-notified: refresh kind/ts in place, keep its stack
-            // slot so an active popup the user is reading isn't shuffled.
+            // Same pane re-notified: refresh in place, keep its stack slot so an
+            // active popup the user is reading isn't shuffled.
             existing.kind = item.kind.clone();
             existing.ts = item.ts;
+            existing.project_name = item.project_name.clone();
+            existing.tab_title = item.tab_title.clone();
         } else {
             // A new conversation goes BEHIND the others, in arrival order — the
             // active (front) popup is never disrupted by a fresh notification.
@@ -374,32 +448,124 @@ fn main_is_effective_foreground(_app: &AppHandle) -> bool {
     false
 }
 
+/// What kind of fullscreen app currently owns the screen, per the Shell's own
+/// "is it OK to notify" query (`SHQueryUserNotificationState`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FullscreenKind {
+    /// No fullscreen app in front.
+    None,
+    /// "Soft" fullscreen: borderless-fullscreen game, fullscreen video/F11
+    /// (`QUNS_BUSY`) or presentation mode. A topmost toast overlays harmlessly.
+    Soft,
+    /// Exclusive D3D fullscreen (`QUNS_RUNNING_D3D_FULL_SCREEN`): a real game
+    /// owns the swap chain; showing any topmost window kicks it back to the
+    /// desktop.
+    Exclusive,
+}
+
+/// Whether to suppress the notification for the current fullscreen state.
+/// Exclusive fullscreen is always suppressed — the "show over fullscreen"
+/// opt-in only lifts the suppression for soft fullscreen.
+fn suppress_for_fullscreen(opt_in: bool, kind: FullscreenKind) -> bool {
+    match kind {
+        FullscreenKind::Exclusive => true,
+        FullscreenKind::Soft => !opt_in,
+        FullscreenKind::None => false,
+    }
+}
+
+#[cfg(windows)]
+fn fullscreen_kind() -> FullscreenKind {
+    use windows::Win32::UI::Shell::{
+        SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE,
+        QUNS_RUNNING_D3D_FULL_SCREEN,
+    };
+    // SAFETY: SHQueryUserNotificationState only writes its out-param and returns
+    // an HRESULT; no pointers we own are involved.
+    unsafe {
+        match SHQueryUserNotificationState() {
+            Ok(state) if state == QUNS_RUNNING_D3D_FULL_SCREEN => FullscreenKind::Exclusive,
+            // QUNS_BUSY = a fullscreen app owns the screen without an exclusive
+            // swap chain (borderless game, fullscreen video, F11 browser).
+            Ok(state) if state == QUNS_BUSY || state == QUNS_PRESENTATION_MODE => {
+                FullscreenKind::Soft
+            }
+            _ => FullscreenKind::None,
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn fullscreen_kind() -> FullscreenKind {
+    FullscreenKind::None
+}
+
 /// Window label for a pane's popup. Pane ids are UUIDs (`[0-9a-f-]`), which are
 /// valid Tauri window labels.
 fn popup_label(pane_id: &str) -> String {
     format!("popup-{pane_id}")
 }
 
-/// Creates the popup window for a pane, or returns the existing one.
-fn ensure_pane_window(app: &AppHandle, pane_id: &str) -> tauri::Result<WebviewWindow> {
+/// Logical (width, height) for a notification window of the given style. For the
+/// compact toast the width comes from the settings slider (`notif_w`).
+fn popup_dims(compact: bool, notif_w: f64) -> (f64, f64) {
+    if compact {
+        (notif_w, NOTIF_H)
+    } else {
+        (POPUP_W, POPUP_H)
+    }
+}
+
+/// Creates the notification window for a pane, or returns the existing one.
+/// `compact` picks the two-line toast (`window=notif`) vs the terminal-mirror
+/// popup (`window=popup`); both share the `popup-<id>` label so dismiss/open and
+/// the cleanup sweeps work regardless of style.
+fn ensure_pane_window(
+    app: &AppHandle,
+    pane_id: &str,
+    compact: bool,
+    notif_w: f64,
+) -> tauri::Result<WebviewWindow> {
     let label = popup_label(pane_id);
     if let Some(w) = app.get_webview_window(&label) {
         return Ok(w);
     }
-    let url = format!("index.html?window=popup&pane={pane_id}");
-    WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+    let (w, h) = popup_dims(compact, notif_w);
+    let kind = if compact { "notif" } else { "popup" };
+    let url = format!("index.html?window={kind}&pane={pane_id}");
+    let (min_w, min_h) = if compact { (240.0, 52.0) } else { (320.0, 160.0) };
+    let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("Arkadia")
-        .inner_size(POPUP_W, POPUP_H)
-        .min_inner_size(320.0, 160.0)
+        .inner_size(w, h)
+        .min_inner_size(min_w, min_h)
         .decorations(false)
-        // Resizable: the frameless window has no OS resize borders, so the popup
-        // UI draws its own drag handles (startResizeDragging).
-        .resizable(true)
+        // Mirror popup is resizable (draws its own drag handles); the compact
+        // toast is a fixed one-liner.
+        .resizable(!compact)
         .always_on_top(true)
         .skip_taskbar(true)
         .focused(false)
         .visible(false)
-        .build()
+        .build()?;
+    // A notification must NEVER take activation when it appears: stealing the
+    // foreground from an exclusive-fullscreen game minimizes it back to the
+    // desktop. `focused(false)` only covers the first show; WS_EX_NOACTIVATE
+    // makes the window structurally non-activating (clicks still deliver mouse
+    // events, so the toast's open/dismiss keep working). The mirror popup
+    // re-activates itself explicitly on user interaction (`setFocus()` in the
+    // frontend), which is a deliberate user action and still allowed.
+    #[cfg(windows)]
+    if let Ok(hwnd) = win.hwnd() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+        };
+        // SAFETY: reading/writing our own window's style bits on a valid HWND.
+        unsafe {
+            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE.0 as isize);
+        }
+    }
+    Ok(win)
 }
 
 /// Positions a popup at its stack `index`: index 0 (active) sits bottom-right;
@@ -408,11 +574,12 @@ fn ensure_pane_window(app: &AppHandle, pane_id: &str) -> tauri::Result<WebviewWi
 fn cascade_position(win: &WebviewWindow, index: usize) {
     if let Ok(Some(monitor)) = win.primary_monitor() {
         let scale = monitor.scale_factor();
-        let msize = monitor.size();
-        let mpos = monitor.position();
+        // The work area already excludes the taskbar (and adapts to its size,
+        // side, and auto-hide), so no hard-coded taskbar height to guess.
+        let wa = monitor.work_area();
         let margin = (16.0 * scale) as i32;
-        // Reserve a typical taskbar height so the popup isn't hidden behind it.
-        let taskbar = (56.0 * scale) as i32;
+        // Sit close above the taskbar — a small gap, not the side margin.
+        let bottom_gap = (8.0 * scale) as i32;
         // Anchor on the window's ACTUAL outer size, not the default POPUP_W/H:
         // the user can resize a popup (drag handles) and the window persists
         // across re-notifications, so assuming 470px would let a widened popup
@@ -424,18 +591,18 @@ fn cascade_position(win: &WebviewWindow, index: usize) {
         };
         let dx = (CASCADE_DX * scale) as i32 * index as i32;
         let dy = (CASCADE_DY * scale) as i32 * index as i32;
-        // Right/bottom edges keep a margin; left/top are clamped too so even a
+        // Right/bottom edges keep their gap; left/top are clamped too so even a
         // popup larger than the work area still shows its top-right controls.
-        let x =
-            (mpos.x + msize.width as i32 - ww - margin - dx).max(mpos.x + margin);
-        let y =
-            (mpos.y + msize.height as i32 - wh - taskbar - dy).max(mpos.y + margin);
+        let x = (wa.position.x + wa.size.width as i32 - ww - margin - dx)
+            .max(wa.position.x + margin);
+        let y = (wa.position.y + wa.size.height as i32 - wh - bottom_gap - dy)
+            .max(wa.position.y + margin);
         log_line(&format!(
-            "cascade[{index}]: mon=({},{})+{}x{} scale={scale} win={ww}x{wh} -> ({x},{y}) right_edge={}",
-            mpos.x,
-            mpos.y,
-            msize.width,
-            msize.height,
+            "cascade[{index}]: work_area=({},{})+{}x{} scale={scale} win={ww}x{wh} -> ({x},{y}) right_edge={}",
+            wa.position.x,
+            wa.position.y,
+            wa.size.width,
+            wa.size.height,
             x + ww,
         ));
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
@@ -448,11 +615,14 @@ fn cascade_position(win: &WebviewWindow, index: usize) {
 /// re-raises a window in place WITHOUT stealing OS focus, so a fresh notification
 /// never pulls focus away from whatever the user is doing.
 fn sync_popups(app: &AppHandle) {
-    let items = {
+    let (items, compact, notif_w) = {
         let queue = app.state::<PopupQueue>();
+        let compact = queue.style.load(Ordering::Acquire) == STYLE_COMPACT;
+        let notif_w = queue.notif_width.load(Ordering::Acquire) as f64;
         let q = queue.items.lock();
-        q.clone()
+        (q.clone(), compact, notif_w)
     };
+    let (fresh_w, fresh_h) = popup_dims(compact, notif_w);
     let wanted: std::collections::HashSet<String> =
         items.iter().map(|i| popup_label(&i.pane_id)).collect();
     // Close windows whose pane is no longer queued.
@@ -461,13 +631,14 @@ fn sync_popups(app: &AppHandle) {
             let _ = win.close();
         }
     }
-    // Create / position / show each queued window by its stack index.
+    // Create / position / show each queued window by its stack index. (Compact
+    // style keeps at most one item, so this is a single bottom-right window.)
     for (index, item) in items.iter().enumerate() {
-        match ensure_pane_window(app, &item.pane_id) {
+        match ensure_pane_window(app, &item.pane_id, compact, notif_w) {
             Ok(win) => {
                 let fresh = !win.is_visible().unwrap_or(false);
                 if fresh {
-                    let _ = win.set_size(tauri::LogicalSize::new(POPUP_W, POPUP_H));
+                    let _ = win.set_size(tauri::LogicalSize::new(fresh_w, fresh_h));
                 }
                 cascade_position(&win, index);
                 if fresh {
@@ -512,6 +683,25 @@ fn close_all_popups(app: &AppHandle) {
     }
 }
 
+/// Dismiss every notification and clear the queue. Called when Arkadia's main
+/// window regains focus (the user alt-tabbed back), so a pending notification
+/// doesn't linger once they're already looking at Arkadia. No-op (and silent)
+/// when nothing is queued — `Focused(true)` fires on every normal focus gain.
+pub fn dismiss_all(app: &AppHandle) {
+    let had = {
+        let queue = app.state::<PopupQueue>();
+        let mut items = queue.items.lock();
+        let n = items.len();
+        items.clear();
+        n
+    };
+    if had > 0 {
+        close_all_popups(app);
+        emit_state(app);
+        log_line("main window focused — dismissed all notifications");
+    }
+}
+
 /// Popup asks for the current queue (on mount / reconnect).
 #[tauri::command]
 pub fn popup_request_state(app: AppHandle) {
@@ -525,15 +715,60 @@ pub fn popup_log_ui(msg: String) {
     log_line(&format!("[ui] {msg}"));
 }
 
-/// Enable/disable the popup from the frontend setting. Disabling clears the
-/// queue and closes any open popup windows.
+/// Set the notification style from the frontend (`off` / `mirror` / `compact`).
+/// On an actual change we clear the queue and close any open windows, so we
+/// never leave a stale window of the previous style around.
 #[tauri::command]
-pub fn popup_set_enabled(enabled: bool, app: AppHandle, queue: State<'_, PopupQueue>) {
-    queue.enabled.store(enabled, Ordering::Release);
-    if !enabled {
+pub fn popup_set_style(style: String, app: AppHandle, queue: State<'_, PopupQueue>) {
+    let next = style_from_str(&style);
+    let prev = queue.style.swap(next, Ordering::Release);
+    if prev != next {
         queue.items.lock().clear();
         close_all_popups(&app);
     }
+}
+
+/// Mirror the "show even over a fullscreen app" frontend setting into the queue.
+#[tauri::command]
+pub fn popup_set_fullscreen(enabled: bool, queue: State<'_, PopupQueue>) {
+    queue.fullscreen.store(enabled, Ordering::Release);
+}
+
+/// Set the compact-notification width (px) from the settings slider. Live-resizes
+/// an open compact notification and re-anchors it bottom-right.
+#[tauri::command]
+pub fn popup_set_notif_width(width: u32, app: AppHandle, queue: State<'_, PopupQueue>) {
+    let clamped = width.clamp(NOTIF_W_MIN, NOTIF_W_MAX);
+    queue.notif_width.store(clamped, Ordering::Release);
+    if queue.style.load(Ordering::Acquire) == STYLE_COMPACT {
+        for (label, win) in app.webview_windows() {
+            if label.starts_with("popup-") {
+                let _ = win.set_size(tauri::LogicalSize::new(clamped as f64, NOTIF_H));
+                cascade_position(&win, 0);
+            }
+        }
+    }
+}
+
+/// One pane → project-name pair, as pushed by the frontend.
+#[derive(Deserialize)]
+pub struct PaneProject {
+    #[serde(rename = "paneId")]
+    pane_id: String,
+    #[serde(rename = "projectName")]
+    project_name: String,
+}
+
+/// Register the full pane → Arkadia-project-name map (used to label the compact
+/// notification). The frontend pushes the whole map whenever tabs/projects
+/// change, so this replaces the previous map wholesale.
+#[tauri::command]
+pub fn set_pane_projects(entries: Vec<PaneProject>, registry: State<'_, Arc<AgentRegistry>>) {
+    let parsed = entries
+        .into_iter()
+        .filter_map(|e| uuid::Uuid::parse_str(&e.pane_id).ok().map(|u| (u, e.project_name)))
+        .collect();
+    registry.set_pane_projects(parsed);
 }
 
 /// Mirror the "auto-scroll to reply" frontend setting into the backend, which
@@ -569,4 +804,29 @@ pub fn popup_open_in_main(pane_id: String, app: AppHandle, queue: State<'_, Popu
         let _ = w.close();
     }
     sync_popups(&app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{suppress_for_fullscreen, FullscreenKind};
+
+    #[test]
+    fn exclusive_fullscreen_is_always_suppressed() {
+        // Even with the "show over fullscreen" opt-in: a topmost window over an
+        // exclusive swap chain kicks the game back to the desktop.
+        assert!(suppress_for_fullscreen(true, FullscreenKind::Exclusive));
+        assert!(suppress_for_fullscreen(false, FullscreenKind::Exclusive));
+    }
+
+    #[test]
+    fn soft_fullscreen_follows_the_opt_in() {
+        assert!(suppress_for_fullscreen(false, FullscreenKind::Soft));
+        assert!(!suppress_for_fullscreen(true, FullscreenKind::Soft));
+    }
+
+    #[test]
+    fn no_fullscreen_never_suppresses() {
+        assert!(!suppress_for_fullscreen(true, FullscreenKind::None));
+        assert!(!suppress_for_fullscreen(false, FullscreenKind::None));
+    }
 }

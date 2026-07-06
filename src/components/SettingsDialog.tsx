@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { customAsPalette, PALETTES } from "@/lib/palettes";
-import type {
-  CustomPalette,
-  EditorProtocol,
-  PaletteId,
-  TerminalFont,
-  ToolbarButton,
-  ToolDensity,
+import {
+  NOTIF_WIDTH_MAX,
+  NOTIF_WIDTH_MIN,
+  type CustomPalette,
+  type EditorProtocol,
+  type NotifStyle,
+  type PaletteId,
+  type TerminalFont,
+  type ToolbarButton,
+  type ToolDensity,
 } from "@/types";
 import { ToolbarSettings } from "@/components/ToolbarSettings";
 
@@ -25,8 +28,12 @@ interface SettingsDialogProps {
   onChangeCustomPalette: (next: CustomPalette) => void;
   editorProtocol: EditorProtocol;
   onChangeEditorProtocol: (next: EditorProtocol) => void;
-  popupEnabled: boolean;
-  onChangePopupEnabled: (next: boolean) => void;
+  notifStyle: NotifStyle;
+  onChangeNotifStyle: (next: NotifStyle) => void;
+  notifFullscreen: boolean;
+  onChangeNotifFullscreen: (next: boolean) => void;
+  notifWidth: number;
+  onChangeNotifWidth: (next: number) => void;
   navRailEnabled: boolean;
   onChangeNavRailEnabled: (next: boolean) => void;
   messageFramesEnabled: boolean;
@@ -54,8 +61,12 @@ export function SettingsDialog({
   onChangeCustomPalette,
   editorProtocol,
   onChangeEditorProtocol,
-  popupEnabled,
-  onChangePopupEnabled,
+  notifStyle,
+  onChangeNotifStyle,
+  notifFullscreen,
+  onChangeNotifFullscreen,
+  notifWidth,
+  onChangeNotifWidth,
   navRailEnabled,
   onChangeNavRailEnabled,
   messageFramesEnabled,
@@ -131,8 +142,12 @@ export function SettingsDialog({
                 onChangeCustomPalette={onChangeCustomPalette}
                 editorProtocol={editorProtocol}
                 onChangeEditorProtocol={onChangeEditorProtocol}
-                popupEnabled={popupEnabled}
-                onChangePopupEnabled={onChangePopupEnabled}
+                notifStyle={notifStyle}
+                onChangeNotifStyle={onChangeNotifStyle}
+                notifFullscreen={notifFullscreen}
+                onChangeNotifFullscreen={onChangeNotifFullscreen}
+                notifWidth={notifWidth}
+                onChangeNotifWidth={onChangeNotifWidth}
                 navRailEnabled={navRailEnabled}
                 onChangeNavRailEnabled={onChangeNavRailEnabled}
                 messageFramesEnabled={messageFramesEnabled}
@@ -185,8 +200,12 @@ interface GeneralSettingsProps {
   onChangeCustomPalette: (next: CustomPalette) => void;
   editorProtocol: EditorProtocol;
   onChangeEditorProtocol: (next: EditorProtocol) => void;
-  popupEnabled: boolean;
-  onChangePopupEnabled: (next: boolean) => void;
+  notifStyle: NotifStyle;
+  onChangeNotifStyle: (next: NotifStyle) => void;
+  notifFullscreen: boolean;
+  onChangeNotifFullscreen: (next: boolean) => void;
+  notifWidth: number;
+  onChangeNotifWidth: (next: number) => void;
   navRailEnabled: boolean;
   onChangeNavRailEnabled: (next: boolean) => void;
   messageFramesEnabled: boolean;
@@ -201,6 +220,12 @@ const TOOL_DENSITIES: { id: ToolDensity; label: string; hint: string }[] = [
   { id: "compact", label: "Compact", hint: "1 ligne / outil, replié" },
   { id: "preview", label: "Aperçu", hint: "en-tête + 2-3 lignes" },
   { id: "full", label: "Déplié", hint: "sortie complète" },
+];
+
+const NOTIF_STYLES: { id: NotifStyle; label: string; hint: string }[] = [
+  { id: "off", label: "Désactivée", hint: "Aucune notification" },
+  { id: "mirror", label: "Aperçu complet", hint: "Miroir du terminal" },
+  { id: "compact", label: "Compacte", hint: "Projet · onglet" },
 ];
 
 const EDITOR_PROTOCOLS: { id: EditorProtocol; label: string; hint: string }[] =
@@ -343,17 +368,24 @@ function SettingToggle({
   onChange,
   label,
   hint,
+  disabled = false,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   label: string;
   hint: string;
+  disabled?: boolean;
 }) {
   return (
-    <label className="flex items-start gap-3 rounded border border-zinc-800 bg-zinc-900/40 p-3">
+    <label
+      className={`flex items-start gap-3 rounded border border-zinc-800 bg-zinc-900/40 p-3 ${
+        disabled ? "cursor-not-allowed opacity-50" : ""
+      }`}
+    >
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
         className="mt-0.5 h-4 w-4 accent-zinc-300"
       />
@@ -376,8 +408,12 @@ function GeneralSettings({
   onChangeCustomPalette,
   editorProtocol,
   onChangeEditorProtocol,
-  popupEnabled,
-  onChangePopupEnabled,
+  notifStyle,
+  onChangeNotifStyle,
+  notifFullscreen,
+  onChangeNotifFullscreen,
+  notifWidth,
+  onChangeNotifWidth,
   navRailEnabled,
   onChangeNavRailEnabled,
   messageFramesEnabled,
@@ -506,12 +542,73 @@ function GeneralSettings({
           Affichage
         </h4>
         <div className="space-y-2">
+          <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
+            <div className="mb-0.5 text-sm text-zinc-200">
+              Notification quand Claude attend
+            </div>
+            <div className="mb-2.5 text-[11px] text-zinc-500">
+              {
+                "Quand Claude attend une réponse (ou a terminé) et qu'Arkadia est en arrière-plan, en bas à droite de l'écran."
+              }
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {NOTIF_STYLES.map((opt) => {
+                const selected = opt.id === notifStyle;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => onChangeNotifStyle(opt.id)}
+                    className={`rounded border p-2.5 text-left transition ${
+                      selected
+                        ? "border-zinc-300 bg-zinc-900 ring-1 ring-zinc-300"
+                        : "border-zinc-800 bg-zinc-950 hover:border-zinc-600"
+                    }`}
+                  >
+                    <div className="text-[13px] text-zinc-100">{opt.label}</div>
+                    <div className="mt-0.5 text-[11px] text-zinc-500">
+                      {opt.hint}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <SettingToggle
-            checked={popupEnabled}
-            onChange={onChangePopupEnabled}
-            label="Pop-up de notification"
-            hint="Affiche une fenêtre en bas à droite quand Claude attend une réponse et qu'Arkadia est en arrière-plan."
+            checked={notifFullscreen}
+            onChange={onChangeNotifFullscreen}
+            disabled={notifStyle === "off"}
+            label="Afficher même en plein écran (jeu/vidéo)"
+            hint="Par défaut, la notif est masquée quand un jeu ou une vidéo occupe tout l'écran. Les jeux en plein écran exclusif restent toujours protégés : la notif n'y est jamais affichée (elle ferait sortir le jeu du plein écran)."
           />
+          {notifStyle === "compact" && (
+            <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
+              <label className="block">
+                <span className="mb-1 flex items-baseline justify-between text-sm text-zinc-200">
+                  <span>Largeur de la notification compacte</span>
+                  <span className="font-mono text-xs text-zinc-400">
+                    {notifWidth}px
+                  </span>
+                </span>
+                <input
+                  type="range"
+                  min={NOTIF_WIDTH_MIN}
+                  max={NOTIF_WIDTH_MAX}
+                  step={10}
+                  value={notifWidth}
+                  onChange={(e) =>
+                    onChangeNotifWidth(parseInt(e.target.value, 10))
+                  }
+                  className="w-full accent-zinc-300"
+                />
+                <span className="mt-1 block text-[11px] text-zinc-500">
+                  {
+                    "La police du nom d'onglet s'ajuste pour rentrer dans cette largeur."
+                  }
+                </span>
+              </label>
+            </div>
+          )}
           <SettingToggle
             checked={navRailEnabled}
             onChange={onChangeNavRailEnabled}
@@ -538,8 +635,9 @@ function GeneralSettings({
           Vue moderne
         </h4>
         <p className="mb-3 text-[11px] text-zinc-500">
-          Densité par défaut des cartes d'appel d'outil dans la vue moderne
-          (toggle dans la barre d'outils).
+          {
+            "Densité par défaut des cartes d'appel d'outil dans la vue moderne (toggle dans la barre d'outils)."
+          }
         </p>
         <div className="grid grid-cols-3 gap-2">
           {TOOL_DENSITIES.map((opt) => {

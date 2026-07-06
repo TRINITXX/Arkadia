@@ -150,6 +150,13 @@ pub struct TerminalState {
     /// frame still be recognised as a tool call. Bounded like `line_kind_cache`.
     tool_line_cache: std::collections::HashSet<u64>,
     tool_line_order: VecDeque<u64>,
+    /// Hashes of lines seen as tool / thinking output while their non-message
+    /// head (`● Bash(…)`, `∴`, or a `⎿` result marker) was on screen. Lets that
+    /// output stay untinted once the head scrolls off the top — without it, white
+    /// Bash command output reads exactly like a Claude message body to the
+    /// orphan-default and flashes purple on scroll. Bounded like the others.
+    none_line_cache: std::collections::HashSet<u64>,
+    none_line_order: VecDeque<u64>,
 }
 
 /// Cap on the alt-screen tint cache — large enough for any on-screen scroll
@@ -181,6 +188,8 @@ impl TerminalState {
             line_kind_order: VecDeque::new(),
             tool_line_cache: std::collections::HashSet::new(),
             tool_line_order: VecDeque::new(),
+            none_line_cache: std::collections::HashSet::new(),
+            none_line_order: VecDeque::new(),
         }
     }
 
@@ -407,6 +416,13 @@ impl TerminalState {
         let mut kinds = Vec::with_capacity(rows);
         let mut to_cache: Vec<(u64, MessageKind)> = Vec::new();
         let mut tool_to_cache: Vec<u64> = Vec::new();
+        let mut none_to_cache: Vec<u64> = Vec::new();
+        // Whether the current Claude run was *guessed* by the orphan-default
+        // rather than anchored by a real `●` head / band / cache hit. Guesses are
+        // shown but never cached — caching a guess makes it permanent, which is
+        // how a thinking block's body stayed purple after its `∴` head scrolled
+        // back on screen (the reported false positive).
+        let mut cur_is_orphan = false;
         for vis in 0..rows {
             let r = first + vis;
             let Some(line) = self.line_at_total(r as u32) else {
@@ -414,11 +430,23 @@ impl TerminalState {
                 continue;
             };
             cur = advance_block(cur, line);
+            // A real anchor (any head line, or a user grey-band row) is hard
+            // evidence — it clears the "guessed" flag so the run below it caches.
+            if block_head_kind(line).is_some() || cur == MessageKind::User {
+                cur_is_orphan = false;
+            }
             // A visible head that isn't tinted (tool call, banner, thinking line)
             // opens a non-tinted block — remember it so the orphan-default below
             // doesn't repaint that block's body as Claude.
             if let Some(k) = block_head_kind(line) {
                 in_none_block = k == MessageKind::None;
+            }
+            // A `⎿`/`↳` result marker is the head of a tool call's *output*. Its
+            // `● Tool(…)` line is often a row or two above the top, so treat the
+            // marker itself as opening a non-message block — this protects white
+            // command output (e.g. Bash) sitting below it from the orphan-default.
+            if is_tool_result_marker(line) {
+                in_none_block = true;
             }
             // Tool calls (`● Update(…)`, `● Search(…)`) share the bullet with
             // assistant text but must never be framed. A running tool *blinks*
@@ -443,17 +471,27 @@ impl TerminalState {
             // line is never recovered as Claude (it would undo the reset above).
             if on_alt
                 && cur == MessageKind::None
+                && !in_none_block
                 && !line_is_blank(line)
                 && !is_right_aligned(line)
                 && !is_known_tool_line
             {
                 if self.line_kind_cache.get(&hash_line(line)) == Some(&MessageKind::Claude) {
+                    // Anchored by a frame where the `●` head was on screen.
                     cur = MessageKind::Claude;
-                } else if !in_none_block && orphan_claude_default(line) {
+                    cur_is_orphan = false;
+                } else if self.none_line_cache.contains(&hash_line(line)) {
+                    // Seen as tool/thinking output under a visible head or `⎿` on
+                    // an earlier frame — keep it untinted now that the head is off
+                    // the top, instead of guessing it is a Claude message. This is
+                    // what stops white Bash output flashing purple while scrolling.
+                } else if orphan_claude_default(line) {
                     // No head, no cache hit, and not inside a tool/banner block:
-                    // an indented prose/code line this deep in an orphan window is
-                    // assistant text — tint it so long Claude answers stay framed.
+                    // an indented prose/code/table line this deep in an orphan
+                    // window is assistant text — tint it so long Claude answers
+                    // stay framed. A guess: shown now, but not cached below.
                     cur = MessageKind::Claude;
+                    cur_is_orphan = true;
                 }
             }
             let pushed = if cur == MessageKind::Claude && line_is_blank(line) {
@@ -478,9 +516,27 @@ impl TerminalState {
             };
             kinds.push(pushed.as_u8());
             // Remember the classification of real content so the tint survives
-            // the head scrolling off the alt screen on a later frame.
-            if on_alt && pushed != MessageKind::None && !line_is_blank(line) {
+            // the head scrolling off the alt screen on a later frame — but only
+            // when it was *anchored* (head/band/cache), never an orphan-default
+            // guess. Caching a guess makes it stick after the real head returns.
+            if on_alt
+                && pushed != MessageKind::None
+                && !line_is_blank(line)
+                && !(pushed == MessageKind::Claude && cur_is_orphan)
+            {
                 to_cache.push((hash_line(line), pushed));
+            }
+            // Symmetric to the Claude cache: remember tool/thinking output seen
+            // while its non-message head (or `⎿`) is on screen, so it stays
+            // untinted once that head scrolls off the top. Right-aligned footers
+            // are excluded — they are chrome, not a block's output.
+            if on_alt
+                && in_none_block
+                && pushed == MessageKind::None
+                && !line_is_blank(line)
+                && !is_right_aligned(line)
+            {
+                none_to_cache.push(hash_line(line));
             }
         }
         for (h, k) in to_cache {
@@ -488,6 +544,9 @@ impl TerminalState {
         }
         for h in tool_to_cache {
             self.record_tool_line(h);
+        }
+        for h in none_to_cache {
+            self.record_none_line(h);
         }
         kinds
     }
@@ -515,6 +574,20 @@ impl TerminalState {
             if self.tool_line_order.len() > LINE_KIND_CACHE_CAP {
                 if let Some(old) = self.tool_line_order.pop_front() {
                     self.tool_line_cache.remove(&old);
+                }
+            }
+        }
+    }
+
+    /// Records a tool/thinking output line's hash in the bounded none cache, so a
+    /// later frame with the head scrolled off keeps it untinted instead of
+    /// orphan-defaulting it to Claude.
+    fn record_none_line(&mut self, hash: u64) {
+        if self.none_line_cache.insert(hash) {
+            self.none_line_order.push_back(hash);
+            if self.none_line_order.len() > LINE_KIND_CACHE_CAP {
+                if let Some(old) = self.none_line_order.pop_front() {
+                    self.none_line_cache.remove(&old);
                 }
             }
         }
@@ -1292,6 +1365,17 @@ fn line_starts_with_bullet(line: &[TerminalCell]) -> bool {
         .unwrap_or(false)
 }
 
+/// First non-blank glyph is a tool-result marker (`⎿`/`↳`) — the head of a tool
+/// call's output. Its `● Tool(…)` line sits just above it, so the marker opens a
+/// non-message block in its own right.
+fn is_tool_result_marker(line: &[TerminalCell]) -> bool {
+    line.iter()
+        .find(|c| !c.text.trim().is_empty())
+        .and_then(|c| c.text.trim().chars().next())
+        .map(|ch| matches!(ch, '⎿' | '↳'))
+        .unwrap_or(false)
+}
+
 /// Hash of a line's text with leading whitespace and a `●`/`⏺` bullet stripped,
 /// so a tool call hashes identically whether its bullet is currently drawn or
 /// has blinked to a space (`is_tool_call_line` uses the same normalisation).
@@ -1380,11 +1464,26 @@ fn advance_block(cur: MessageKind, line: &[TerminalCell]) -> MessageKind {
 /// nor the per-line cache can classify the body.
 ///
 /// Claude message bodies are always *indented* (continuation under the `●`), so
-/// an indented line that isn't a tool-result / todo / thinking / box-drawing
-/// marker is almost certainly assistant text. Flush-left lines (the `●`/`❯`
-/// heads, banners, thinking `∴`, separators) and marker rows are left untinted.
-/// The caller only applies this when not already inside a head-established
-/// non-tinted block (`in_none_block`), so visible tool output is never caught.
+/// an indented line that isn't a tool-result / todo / thinking marker is almost
+/// certainly assistant text. Flush-left lines (the `●`/`❯` heads, banners,
+/// thinking `∴`, separators) and marker rows are left untinted. The caller only
+/// applies this when not already inside a head-established non-tinted block
+/// (`in_none_block`), so visible tool output is never caught.
+///
+/// The decisive signal is the foreground STYLE. A live capture showed Claude
+/// streams its prose and tables in the *default* foreground with no faint/italic
+/// (`fg=Default, dim=false, italic=false`), whereas tool output / thinking /
+/// todos are rendered in an explicit grey (e.g. `⎿ …` result lines at ≈#999) and
+/// often faint or italic. So an orphan line whose first glyph is off-default,
+/// faint, or italic is NOT an assistant message — this is what stops thinking
+/// and tool results flashing purple while the transcript is scrolled and their
+/// `∴`/`●`/`⎿` head is momentarily above the viewport.
+///
+/// Square box-drawing glyphs (`│ ─ ┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼`) are NOT rejected by shape:
+/// an indented run of them in the default fg is a markdown table or ASCII diagram
+/// inside the answer — assistant content that must stay framed. Claude Code's own
+/// chrome boxes use the *rounded* corners (`╭ ╮ ╰ ╯`) and are flush-left, so those
+/// stay rejected.
 fn orphan_claude_default(line: &[TerminalCell]) -> bool {
     let Some(idx) = line.iter().position(|c| !c.text.trim().is_empty()) else {
         return false; // blank
@@ -1392,12 +1491,28 @@ fn orphan_claude_default(line: &[TerminalCell]) -> bool {
     if idx < 1 {
         return false; // flush-left → a head / banner, not an indented message body
     }
-    let first = line[idx].text.trim().chars().next().unwrap_or(' ');
+    // Claude message bodies wrap to the bullet's indent (col 2). A line indented
+    // markedly deeper is nested under a marker — tool / command output below a
+    // `⎿` (multi-line git/bash output, file dumps) sits at col ≥ 4. Don't
+    // *bootstrap* the tint from such a line; if it really is deep Claude content
+    // (a code block, a nested list) the tint still reaches it by propagation from
+    // the col-2 line above, since this guard only fires when there is no block
+    // context yet. A live capture showed `/commit` git output at col 5–8 tinted
+    // purple exactly here, until its `⎿`/`●` head scrolled into view.
+    if idx > 3 {
+        return false;
+    }
+    let cell = &line[idx];
+    // Off-default / faint / italic ⇒ tool output, thinking, or a todo — never an
+    // assistant message body. This is the guard that keeps scroll-through clean.
+    if !is_default_or_white_fg(&cell.attrs.fg) || cell.attrs.dim || cell.attrs.italic {
+        return false;
+    }
+    let first = cell.text.trim().chars().next().unwrap_or(' ');
     !matches!(
         first,
         '⎿' | '↳' | '∴' | '·' | '◻' | '◼' | '☐' | '☑' | '✓' | '✔' | '⏺'
-            | '✶' | '✻' | '│' | '┃' | '╭' | '╮' | '╰' | '╯' | '├' | '┤'
-            | '┌' | '┐' | '└' | '┘' | '─' | '━'
+            | '✶' | '✻' | '╭' | '╮' | '╰' | '╯'
     )
 }
 
@@ -2609,5 +2724,152 @@ three");
                 .as_bytes(),
         );
         assert_eq!(&t.visible_line_kinds(0)[..3], &[2, 2, 2]);
+    }
+
+    #[test]
+    fn orphan_claude_table_prefix_is_tinted_on_alt_screen() {
+        // A markdown TABLE at the very top of an orphan window: the assistant
+        // `●` head and the prose above scrolled off the alt screen, the cache is
+        // cold. The box-drawing table rows are assistant content and must be
+        // framed — not left as an untinted gap with the violet box starting only
+        // below the table (the reported bug). They share the prose's attributes
+        // (fg=Default, no dim/italic), confirmed by a live capture.
+        let mut t = TerminalState::new(7, 60);
+        t.advance_bytes(b"\x1b[?1049h");
+        t.advance_bytes(
+            "  \u{250c}\u{2500}\u{2500}\u{252c}\u{2500}\u{2500}\u{2510}\r\n  \u{2502} popup.js  \u{2502} DEFAULT \u{2502}\r\n  \u{251c}\u{2500}\u{2500}\u{253c}\u{2500}\u{2500}\u{2524}\r\n  \u{2502} popup.html\u{2502} toggle  \u{2502}\r\n  \u{2514}\u{2500}\u{2500}\u{2534}\u{2500}\u{2500}\u{2518}\r\n  La table ci-dessus resume les modules.\r\n"
+                .as_bytes(),
+        );
+        assert!(t.is_on_alt_screen());
+        let kinds = t.visible_line_kinds(0);
+        // Five table rows + the prose line below — all framed as one block.
+        assert_eq!(&kinds[..6], &[2, 2, 2, 2, 2, 2]);
+    }
+
+    #[test]
+    fn alt_screen_orphan_default_does_not_poison_cache_for_thinking() {
+        // The reported false positive: a thinking block whose `∴` head scrolls
+        // off the top during streaming. While the head is off-screen the orphan
+        // default may transiently tint the indented continuations — but it must
+        // NOT remember that guess, or the tint sticks even after the `∴` head
+        // scrolls back into view (where the block is unambiguously non-message).
+        let mut t = TerminalState::new(6, 60);
+        t.advance_bytes(b"\x1b[?1049h");
+        // Frame 1 (live bottom, `∴` head above the top): only the continuations
+        // show. The orphan default has no head/band/cache anchor here.
+        t.advance_bytes(
+            "  The key insight is the cache.\r\n  More reasoning prose here.\r\n  Even more thinking text.\r\n"
+                .as_bytes(),
+        );
+        let _ = t.visible_line_kinds(0);
+        // Frame 2 (scrolled up): the `∴` head is visible again above the same
+        // body. The head establishes a non-message block; the body must be 0.
+        t.advance_bytes(b"\x1b[2J\x1b[H");
+        t.advance_bytes(
+            "\u{2234} I am thinking about it.\r\n  The key insight is the cache.\r\n  More reasoning prose here.\r\n  Even more thinking text.\r\n"
+                .as_bytes(),
+        );
+        let kinds = t.visible_line_kinds(0);
+        assert_eq!(&kinds[..4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn alt_screen_orphan_default_skips_grey_tool_output() {
+        // The reported scroll flash: a wrapped tool-output line in an orphan
+        // window (its `●`/`⎿` head momentarily above the top). It is indented and
+        // prose-like, but rendered in Claude Code's grey (#999) — so it must NOT
+        // be tinted as an assistant message. A live capture showed tool results
+        // at fg≈(0.6,0.6,0.6); assistant prose is fg=Default.
+        let mut t = TerminalState::new(4, 60);
+        t.advance_bytes(b"\x1b[?1049h");
+        t.advance_bytes(
+            "\x1b[38;2;153;153;153m  reading file contents here and a lot more text\x1b[0m\r\n"
+                .as_bytes(),
+        );
+        assert_eq!(t.visible_line_kinds(0)[0], 0);
+        // Sanity: the same words in the DEFAULT fg (an assistant continuation)
+        // are still tinted, so the guard keys on style, not on the words.
+        let mut t2 = TerminalState::new(4, 60);
+        t2.advance_bytes(b"\x1b[?1049h");
+        t2.advance_bytes("  reading file contents here and a lot more text\r\n".as_bytes());
+        assert_eq!(t2.visible_line_kinds(0)[0], 2);
+    }
+
+    #[test]
+    fn alt_screen_orphan_default_skips_faint_or_italic_thinking() {
+        // Thinking continuations in an orphan window: even in the default fg they
+        // are rendered faint and/or italic, which marks them as non-message.
+        let mut t = TerminalState::new(4, 60);
+        t.advance_bytes(b"\x1b[?1049h");
+        // SGR 2 (faint) + 3 (italic).
+        t.advance_bytes("\x1b[2m\x1b[3m  the key insight is the scroll cache here\x1b[0m\r\n".as_bytes());
+        assert_eq!(t.visible_line_kinds(0)[0], 0);
+    }
+
+    #[test]
+    fn alt_screen_white_bash_output_stays_untinted_after_head_scrolls_off() {
+        // The reported case: `Bash` writes its output in the *default* (white)
+        // fg, identical to a Claude message body, so the style guard can't tell
+        // them apart. The structure can: the output sits under a green `● Bash(…)`
+        // head and a `⎿` marker. Seen once with that head/marker on screen, the
+        // output is remembered as non-message and must stay untinted on scroll.
+        let mut t = TerminalState::new(6, 60);
+        t.advance_bytes(b"\x1b[?1049h");
+        // Frame 1: the green tool head + `⎿` + white output are all on screen.
+        t.advance_bytes(
+            "\x1b[38;2;78;186;101m\u{25cf}\x1b[0m Bash(seq 1 50)\r\n  \u{23bf} output line one detail\r\n    output line two detail\r\n    output line three detail\r\n"
+                .as_bytes(),
+        );
+        assert_eq!(&t.visible_line_kinds(0)[..4], &[0, 0, 0, 0]);
+        // Frame 2: scrolled up — the `● Bash` head and `⎿` are above the top, only
+        // the white output shows. It must NOT be guessed as a Claude message.
+        t.advance_bytes(b"\x1b[2J\x1b[H");
+        t.advance_bytes("    output line two detail\r\n    output line three detail\r\n".as_bytes());
+        assert_eq!(&t.visible_line_kinds(0)[..2], &[0, 0]);
+    }
+
+    #[test]
+    fn alt_screen_visible_bash_result_marker_blocks_orphan_tint() {
+        // Even with the `● Bash` head one row above the top, the `⎿` marker is the
+        // first visible row; it opens the tool block so the white output below it
+        // is not orphan-defaulted to Claude on that frame (no cache needed).
+        let mut t = TerminalState::new(4, 60);
+        t.advance_bytes(b"\x1b[?1049h");
+        t.advance_bytes(
+            "  \u{23bf} first output row of the command\r\n    second output row of the command\r\n"
+                .as_bytes(),
+        );
+        assert_eq!(&t.visible_line_kinds(0)[..2], &[0, 0]);
+    }
+
+    #[test]
+    fn alt_screen_deep_bash_output_not_tinted_at_top_of_orphan_window() {
+        // Real `/commit` case (from a live capture): multi-line git/bash output
+        // under a `⎿` whose head is above the top of the alt screen. The output is
+        // white (fg=Default) like a Claude message, but indented far deeper
+        // (col 5–8) than a Claude body (col 2). At the top of an orphan window it
+        // must NOT bootstrap the purple tint — the bug the user saw on every
+        // commit/push until the green bullet scrolled into view.
+        let mut t = TerminalState::new(5, 70);
+        t.advance_bytes(b"\x1b[?1049h");
+        t.advance_bytes(
+            "     To https://github.com/x/arkadia.git\r\n        dc1c7e3..d2ad91f  master -> master\r\n     Deleted branch fix/foo\r\n     === final ===\r\n"
+                .as_bytes(),
+        );
+        assert_eq!(&t.visible_line_kinds(0)[..4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn alt_screen_deep_claude_code_tinted_by_propagation_from_col2() {
+        // The indent guard only blocks *bootstrapping* the tint. A deeply-indented
+        // Claude line (a code block at col 4) preceded by a col-2 body line still
+        // gets tinted, because the kind propagates down from the anchored line.
+        let mut t = TerminalState::new(5, 60);
+        t.advance_bytes(b"\x1b[?1049h");
+        t.advance_bytes(
+            "  Voici le code de la fonction principale.\r\n  function f(x) {\r\n    return x + 1;\r\n  }\r\n"
+                .as_bytes(),
+        );
+        assert_eq!(&t.visible_line_kinds(0)[..4], &[2, 2, 2, 2]);
     }
 }

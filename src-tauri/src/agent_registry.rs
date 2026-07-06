@@ -16,6 +16,9 @@ struct RegistryInner {
     pane_cwd: HashMap<Uuid, String>,
     cwd_session: HashMap<String, String>,
     session_state: HashMap<String, AgentState>,
+    /// Pane UUID → Arkadia project display name, registered by the frontend
+    /// (the backend only knows cwds). Used to label the compact notification.
+    pane_project: HashMap<Uuid, String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -92,6 +95,20 @@ impl AgentRegistry {
     pub fn forget_pane(&self, pane_id: Uuid) {
         let mut g = self.inner.lock();
         g.pane_cwd.remove(&pane_id);
+        g.pane_project.remove(&pane_id);
+    }
+
+    /// Replaces the whole pane → project-name map (the frontend pushes the full
+    /// map whenever tabs/projects change, so a replace also handles removals).
+    pub fn set_pane_projects(&self, entries: Vec<(Uuid, String)>) {
+        let mut g = self.inner.lock();
+        g.pane_project = entries.into_iter().collect();
+    }
+
+    /// Arkadia project display name for a pane, if the frontend registered one.
+    pub fn project_name_for_pane(&self, pane_id: Uuid) -> Option<String> {
+        let g = self.inner.lock();
+        g.pane_project.get(&pane_id).cloned()
     }
 
     pub fn pane_state(&self, pane_id: Uuid) -> AgentStatePayload {

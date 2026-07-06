@@ -35,6 +35,7 @@ const INJECTED_TAGS: &[&str] = &[
     "command-args",
     "local-command-stdout",
     "local-command-caveat",
+    "task-notification",
 ];
 
 /// Removes every `<tag …>…</tag>` span (handles attributes and a missing close).
@@ -61,12 +62,24 @@ fn clean_text(text: &str) -> String {
     s.trim().to_string()
 }
 
+/// `true` when Claude Code flagged this user turn as injected context — skill
+/// contents loaded by the Skill tool, image-cache echoes, auto-continue
+/// prompts — rather than something the user actually typed. Those turns must
+/// not render as user bubbles. (Their `tool_result` blocks, if any, are still
+/// processed; in practice tool results never carry the flag.)
+fn is_injected_user_turn(v: &Value) -> bool {
+    v.get("isMeta").and_then(Value::as_bool).unwrap_or(false)
+}
+
 /// Pulls the displayable text out of a transcript line. `None` when the line
 /// isn't a user/assistant message or carries no genuine text (e.g. a turn that
 /// is only a tool result, or only an injected reminder).
 fn extract(v: &Value) -> Option<ConvMessage> {
     let typ = v.get("type")?.as_str()?;
     if typ != "user" && typ != "assistant" {
+        return None;
+    }
+    if typ == "user" && is_injected_user_turn(v) {
         return None;
     }
     let content = v.get("message")?.get("content")?;
@@ -284,11 +297,15 @@ fn append_blocks(v: &Value, out: &mut Vec<ConvBlock>, tool_index: &mut HashMap<S
     if typ != "user" && typ != "assistant" {
         return;
     }
+    let injected = typ == "user" && is_injected_user_turn(v);
     let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
         return;
     };
     match content {
         Value::String(s) => {
+            if injected {
+                return;
+            }
             let cleaned = clean_text(s);
             if !cleaned.is_empty() {
                 out.push(ConvBlock {
@@ -303,7 +320,7 @@ fn append_blocks(v: &Value, out: &mut Vec<ConvBlock>, tool_index: &mut HashMap<S
         Value::Array(arr) => {
             for block in arr {
                 match block.get("type").and_then(|x| x.as_str()) {
-                    Some("text") => {
+                    Some("text") if !injected => {
                         if let Some(t) = block.get("text").and_then(|x| x.as_str()) {
                             let cleaned = clean_text(t);
                             if !cleaned.is_empty() {
@@ -443,6 +460,53 @@ mod tests {
         )
         .unwrap();
         assert!(extract(&v).is_none());
+    }
+
+    #[test]
+    fn task_notification_only_turn_is_not_a_message() {
+        // Background-task notifications are injected as plain user turns
+        // (no isMeta flag) — the tag strip must make them vanish entirely.
+        let v: Value = serde_json::from_str(
+            r#"{"type":"user","message":{"role":"user","content":"<task-notification> <task-id>borasn00c</task-id> <output>done</output> </task-notification>"}}"#,
+        )
+        .unwrap();
+        assert!(extract(&v).is_none());
+
+        // Real-world shape: the turn *starts* with the notification and a
+        // <system-reminder> follows — both strip, leaving nothing to render.
+        let v: Value = serde_json::from_str(
+            r#"{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id>\n<output>long output here</output>\n</task-notification>\n<system-reminder>\nBackground review feedback\n</system-reminder>"}}"#,
+        )
+        .unwrap();
+        assert!(extract(&v).is_none());
+    }
+
+    #[test]
+    fn meta_user_turn_is_not_a_message() {
+        // Skill contents injected by the Skill tool arrive as a user turn with
+        // isMeta: true — they must not render as a user bubble.
+        let v: Value = serde_json::from_str(
+            r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"Base directory for this skill: C:\\skills\\brainstorming"}}"#,
+        )
+        .unwrap();
+        assert!(extract(&v).is_none());
+    }
+
+    #[test]
+    fn blocks_skip_meta_user_turns() {
+        let mut out = Vec::new();
+        let mut idx = HashMap::new();
+        let string_form: Value = serde_json::from_str(
+            r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"Base directory for this skill: X"}}"#,
+        )
+        .unwrap();
+        let array_form: Value = serde_json::from_str(
+            r#"{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"[Image: source: cache/2.png]"}]}}"#,
+        )
+        .unwrap();
+        append_blocks(&string_form, &mut out, &mut idx);
+        append_blocks(&array_form, &mut out, &mut idx);
+        assert!(out.is_empty());
     }
 
     #[test]

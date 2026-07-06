@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -253,6 +254,42 @@ $initBel = [char]7
 [Console]::Out.Flush()
 ";
 
+/// Locate a real WezTerm install so the `WEZTERM_*` env vars handed to the PTY
+/// stay valid on any machine. Claude Code's status line (and many TUIs) gate
+/// Nerd Font / Powerline glyphs on the WezTerm identity; Arkadia's renderer
+/// embeds Symbols Nerd Font, so claiming the capability is accurate. Resolution
+/// order: the `ARKADIA_WEZTERM_DIR` override, then `wezterm-gui.exe` on `PATH`,
+/// then the conventional `%USERPROFILE%\Documents\Wezterm` location. Returns
+/// `None` when no install is found — callers then ship only the
+/// machine-independent identity vars and skip the path-based ones (pointing them
+/// at a nonexistent path is worse than leaving them unset).
+fn resolve_wezterm_dir() -> Option<PathBuf> {
+    fn has_exe(dir: &Path) -> bool {
+        dir.join("wezterm-gui.exe").exists()
+    }
+
+    if let Some(dir) = std::env::var_os("ARKADIA_WEZTERM_DIR") {
+        let dir = PathBuf::from(dir);
+        if has_exe(&dir) {
+            return Some(dir);
+        }
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            if has_exe(&dir) {
+                return Some(dir);
+            }
+        }
+    }
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        let dir = PathBuf::from(profile).join("Documents").join("Wezterm");
+        if has_exe(&dir) {
+            return Some(dir);
+        }
+    }
+    None
+}
+
 #[tauri::command]
 pub fn spawn_terminal(
     cwd: String,
@@ -291,37 +328,26 @@ pub fn spawn_terminal(
     // conversation even when several Claude tabs share one project folder.
     cmd.env("ARKADIA_PANE_ID", &session_id);
     // Identify ourselves as WezTerm-compatible: many TUIs (incl. Claude Code's
-    // status line) gate Nerd Font / Powerline glyphs on these env vars.
-    // Arkadia's renderer embeds Symbols Nerd Font as a fallback, so claiming
-    // Nerd Font capability is accurate. Values mirror a real WezTerm session
-    // (env-var set captured 2026-05 from the user's WezTerm install).
+    // status line) gate Nerd Font / Powerline glyphs on these env vars. These
+    // three are machine-independent and are the actual glyph-gating signal.
     cmd.env("TERM_PROGRAM", "WezTerm");
     cmd.env("TERM_PROGRAM_VERSION", "20260117-154428-05343b38");
     cmd.env("WEZTERM_PANE", "0");
-    cmd.env(
-        "WEZTERM_EXECUTABLE",
-        "C:\\Users\\TRINITX\\Documents\\Wezterm\\wezterm-gui.exe",
-    );
-    cmd.env(
-        "WEZTERM_EXECUTABLE_DIR",
-        "C:\\Users\\TRINITX\\Documents\\Wezterm",
-    );
-    cmd.env(
-        "WEZTERM_CONFIG_DIR",
-        "C:\\Users\\TRINITX\\Documents\\Wezterm",
-    );
-    cmd.env(
-        "WEZTERM_CONFIG_FILE",
-        "C:\\Users\\TRINITX\\Documents\\Wezterm\\wezterm.lua",
-    );
-    cmd.env(
-        "WEZTERM_UNIX_SOCKET",
-        "C:\\Users\\TRINITX\\.local/share/wezterm\\gui-sock-22340",
-    );
-    cmd.env(
-        "WSLENV",
-        "TERM:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION",
-    );
+    // Point the path-based WEZTERM_* vars at a real install when one exists, so
+    // they stay valid on any machine instead of a hardcoded profile path. When
+    // none is found we ship only the identity vars above. The live-mux socket
+    // var (`WEZTERM_UNIX_SOCKET`) is intentionally never set: there is no
+    // running WezTerm mux to connect to, so a stale path only misleads callers.
+    if let Some(dir) = resolve_wezterm_dir() {
+        cmd.env("WEZTERM_EXECUTABLE", dir.join("wezterm-gui.exe"));
+        cmd.env("WEZTERM_EXECUTABLE_DIR", &dir);
+        cmd.env("WEZTERM_CONFIG_DIR", &dir);
+        let cfg = dir.join("wezterm.lua");
+        if cfg.exists() {
+            cmd.env("WEZTERM_CONFIG_FILE", cfg);
+        }
+    }
+    cmd.env("WSLENV", "TERM:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION");
     let child = pair
         .slave
         .spawn_command(cmd)
@@ -926,6 +952,18 @@ pub fn scroll_reply_to_top(
     state: State<'_, SessionMap>,
 ) -> Result<bool, String> {
     Ok(scroll_pane_to_reply_top(&app, &session_id, &state))
+}
+
+/// Current terminal title of a session (OSC title), if it's live in the map.
+/// Used by the popup handler to label the compact notification with the tab's
+/// name without a frontend round-trip.
+pub fn session_title(state: &SessionMap, session_id: &str) -> Option<String> {
+    let sessions = state.sessions.lock();
+    let s = sessions.get(session_id)?;
+    // Bind to a local so the inner term-guard temporary drops here, before the
+    // `sessions` guard is dropped at the end of the block (avoids E0597).
+    let title = s.term.lock().title().to_string();
+    Some(title)
 }
 
 /// Core of `scroll_reply_to_top`, callable directly from the backend (the popup

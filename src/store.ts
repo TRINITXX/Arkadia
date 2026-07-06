@@ -2,13 +2,18 @@ import { Store } from "@tauri-apps/plugin-store";
 import { DEFAULT_CUSTOM_PALETTE } from "@/lib/palettes";
 import {
   DEFAULT_EDITOR_PROTOCOL,
+  DEFAULT_NOTIF_STYLE,
+  DEFAULT_NOTIF_WIDTH,
   DEFAULT_PALETTE_ID,
   DEFAULT_TERMINAL_FONT,
   DEFAULT_TOOL_DENSITY,
   MAX_FOLDER_DEPTH,
+  NOTIF_WIDTH_MAX,
+  NOTIF_WIDTH_MIN,
   type ActionButton,
   type CustomPalette,
   type EditorProtocol,
+  type NotifStyle,
   type PaletteId,
   type Project,
   type TerminalFont,
@@ -16,6 +21,13 @@ import {
   type ToolDensity,
   type Workspace,
 } from "@/types";
+import {
+  ensureDurableOnLoad,
+  pushBackupIfHealthy,
+  type DurableSpec,
+  type KvStore,
+  type StoreOpener,
+} from "@/lib/durableStore";
 
 const STORE_FILE = "store.json";
 const LEGACY_LOCAL_STORAGE_KEY = "arkadia.v1";
@@ -29,7 +41,11 @@ const KEY_PALETTE_ID = "paletteId";
 const KEY_USE_WEBGPU = "useWebGPU";
 const KEY_CUSTOM_PALETTE = "customPalette";
 const KEY_EDITOR_PROTOCOL = "editorProtocol";
+// Legacy on/off key, kept for read-only migration into KEY_NOTIF_STYLE.
 const KEY_POPUP_ENABLED = "popupEnabled";
+const KEY_NOTIF_STYLE = "notifStyle";
+const KEY_NOTIF_FULLSCREEN = "notifFullscreen";
+const KEY_NOTIF_WIDTH = "notifWidth";
 const KEY_NAV_RAIL_ENABLED = "navRailEnabled";
 const KEY_MESSAGE_FRAMES_ENABLED = "messageFramesEnabled";
 const KEY_AUTO_SCROLL_REPLY = "autoScrollReplyEnabled";
@@ -53,6 +69,7 @@ const VALID_EDITOR_PROTOCOLS: EditorProtocol[] = [
   "fleet",
 ];
 const VALID_TOOL_DENSITIES: ToolDensity[] = ["compact", "preview", "full"];
+const VALID_NOTIF_STYLES: NotifStyle[] = ["off", "mirror", "compact"];
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
 export interface PersistedState {
@@ -65,8 +82,15 @@ export interface PersistedState {
   useWebGPU: boolean;
   customPalette: CustomPalette;
   editorProtocol: EditorProtocol;
-  /** Show the background-notification popup when Claude is waiting. */
-  popupEnabled: boolean;
+  /**
+   * Style of the background notification when Claude finishes / asks while
+   * Arkadia is backgrounded: off / mirror (full popup) / compact (project·tab).
+   */
+  notifStyle: NotifStyle;
+  /** Let the notification show even over a fullscreen app (game/video). */
+  notifFullscreen: boolean;
+  /** Compact-notification window width (logical px). */
+  notifWidth: number;
   /** Show the message-navigation rail on the right of the terminal. */
   navRailEnabled: boolean;
   /** Draw the green/purple frames around conversation messages. */
@@ -89,7 +113,9 @@ const DEFAULT_STATE: PersistedState = {
   useWebGPU: false,
   customPalette: DEFAULT_CUSTOM_PALETTE,
   editorProtocol: DEFAULT_EDITOR_PROTOCOL,
-  popupEnabled: true,
+  notifStyle: DEFAULT_NOTIF_STYLE,
+  notifFullscreen: false,
+  notifWidth: DEFAULT_NOTIF_WIDTH,
   navRailEnabled: true,
   messageFramesEnabled: true,
   autoScrollReplyEnabled: true,
@@ -113,8 +139,56 @@ function normalizeToolDensity(raw: unknown): ToolDensity {
   return DEFAULT_TOOL_DENSITY;
 }
 
+/**
+ * Resolves the notification style. When the new `notifStyle` key is absent,
+ * migrates from the legacy boolean `popupEnabled` (true/absent → "mirror",
+ * false → "off") so existing users keep their prior behavior.
+ */
+function normalizeNotifStyle(
+  raw: unknown,
+  legacyPopupEnabled: unknown,
+): NotifStyle {
+  if (
+    typeof raw === "string" &&
+    (VALID_NOTIF_STYLES as string[]).includes(raw)
+  ) {
+    return raw as NotifStyle;
+  }
+  if (typeof legacyPopupEnabled === "boolean") {
+    return legacyPopupEnabled ? "mirror" : "off";
+  }
+  return DEFAULT_NOTIF_STYLE;
+}
+
+/** Clamps the persisted compact-notification width to its allowed range. */
+function normalizeNotifWidth(raw: unknown): number {
+  if (typeof raw !== "number" || Number.isNaN(raw)) return DEFAULT_NOTIF_WIDTH;
+  return Math.min(NOTIF_WIDTH_MAX, Math.max(NOTIF_WIDTH_MIN, Math.round(raw)));
+}
+
+/** Opens any plugin-store file as a durable-store-compatible KV handle. */
+const openStore: StoreOpener = async (name) =>
+  (await Store.load(name, { autoSave: false, defaults: {} })) as KvStore;
+
+/**
+ * Backup ring for store.json (store.bak1..3.json, alongside it). "Healthy" =
+ * at least one project — the exact state a crash wiped, so an empty projects
+ * list is what triggers a restore on load.
+ */
+const STORE_SPEC: DurableSpec = {
+  base: "store",
+  ringSize: 3,
+  isHealthy: (entries) => {
+    const projects = entries.find(([k]) => k === KEY_PROJECTS)?.[1];
+    return Array.isArray(projects) && projects.length > 0;
+  },
+};
+
 let storePromise: Promise<Store> | null = null;
 
+// NOTE: the popup window shares this exact Store instance — the plugin caches
+// stores per path across windows. Only the main window may write it; the popup
+// calls loadState({ heal: false }) so it never mutates this shared cache.
 function getStore(): Promise<Store> {
   if (!storePromise) {
     storePromise = Store.load(STORE_FILE, { autoSave: false, defaults: {} });
@@ -239,26 +313,18 @@ async function tryMigrateFromLocalStorage(
     const raw = localStorage.getItem(LEGACY_LOCAL_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PersistedState>;
+    // Legacy localStorage only ever held projects/activeProjectId/toolbarButtons;
+    // everything else inherits the current defaults so adding a field to
+    // PersistedState never silently skips the migration path.
     const state: PersistedState = {
+      ...DEFAULT_STATE,
       projects: Array.isArray(parsed.projects)
         ? (parsed.projects.map(normalizeProject).filter(Boolean) as Project[])
         : [],
-      workspaces: [],
       activeProjectId: parsed.activeProjectId ?? null,
       toolbarButtons: Array.isArray(parsed.toolbarButtons)
         ? parsed.toolbarButtons.map((b) => normalizeButton(b))
         : [],
-      font: DEFAULT_TERMINAL_FONT,
-      paletteId: DEFAULT_PALETTE_ID,
-      useWebGPU: false,
-      customPalette: DEFAULT_CUSTOM_PALETTE,
-      editorProtocol: DEFAULT_EDITOR_PROTOCOL,
-      popupEnabled: true,
-      navRailEnabled: true,
-      messageFramesEnabled: true,
-      autoScrollReplyEnabled: true,
-      modernViewEnabled: false,
-      toolDensity: DEFAULT_TOOL_DENSITY,
     };
     await store.set(KEY_PROJECTS, state.projects);
     await store.set(KEY_WORKSPACES, state.workspaces);
@@ -277,13 +343,27 @@ async function tryMigrateFromLocalStorage(
   }
 }
 
-export async function loadState(): Promise<PersistedState> {
+export async function loadState(
+  opts: { heal?: boolean } = {},
+): Promise<PersistedState> {
   const store = await getStore();
+  const heal = opts.heal ?? true;
+
+  // Guard: if store.json is corrupt/empty but a healthy backup exists, restore
+  // it into the store (and heal the file) before we read any keys below. The
+  // popup passes { heal: false } so it only reads — never touches the shared file.
+  await ensureDurableOnLoad(openStore, STORE_SPEC, store as KvStore, { heal });
 
   const hasProjects = (await store.has(KEY_PROJECTS)) === true;
   if (!hasProjects) {
     const migrated = await tryMigrateFromLocalStorage(store);
-    if (migrated) return migrated;
+    if (migrated) {
+      // Seed a backup from the freshly-migrated legacy state.
+      await pushBackupIfHealthy(openStore, STORE_SPEC, store as KvStore, {
+        heal,
+      });
+      return migrated;
+    }
   }
 
   const rawProjects = (await store.get<unknown[]>(KEY_PROJECTS)) ?? [];
@@ -297,7 +377,10 @@ export async function loadState(): Promise<PersistedState> {
   const rawUseWebGPU = await store.get<unknown>(KEY_USE_WEBGPU);
   const rawCustomPalette = await store.get<unknown>(KEY_CUSTOM_PALETTE);
   const rawEditorProtocol = await store.get<unknown>(KEY_EDITOR_PROTOCOL);
+  const rawNotifStyle = await store.get<unknown>(KEY_NOTIF_STYLE);
   const rawPopupEnabled = await store.get<unknown>(KEY_POPUP_ENABLED);
+  const rawNotifFullscreen = await store.get<unknown>(KEY_NOTIF_FULLSCREEN);
+  const rawNotifWidth = await store.get<unknown>(KEY_NOTIF_WIDTH);
   const rawNavRailEnabled = await store.get<unknown>(KEY_NAV_RAIL_ENABLED);
   const rawMessageFrames = await store.get<unknown>(KEY_MESSAGE_FRAMES_ENABLED);
   const rawAutoScrollReply = await store.get<unknown>(KEY_AUTO_SCROLL_REPLY);
@@ -325,7 +408,9 @@ export async function loadState(): Promise<PersistedState> {
         : DEFAULT_STATE.useWebGPU,
     customPalette: normalizeCustomPalette(rawCustomPalette),
     editorProtocol: normalizeEditorProtocol(rawEditorProtocol),
-    popupEnabled: boolOr(rawPopupEnabled, DEFAULT_STATE.popupEnabled),
+    notifStyle: normalizeNotifStyle(rawNotifStyle, rawPopupEnabled),
+    notifFullscreen: boolOr(rawNotifFullscreen, DEFAULT_STATE.notifFullscreen),
+    notifWidth: normalizeNotifWidth(rawNotifWidth),
     navRailEnabled: boolOr(rawNavRailEnabled, DEFAULT_STATE.navRailEnabled),
     messageFramesEnabled: boolOr(
       rawMessageFrames,
@@ -354,13 +439,20 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_USE_WEBGPU, state.useWebGPU);
   await store.set(KEY_CUSTOM_PALETTE, state.customPalette);
   await store.set(KEY_EDITOR_PROTOCOL, state.editorProtocol);
-  await store.set(KEY_POPUP_ENABLED, state.popupEnabled);
+  await store.set(KEY_NOTIF_STYLE, state.notifStyle);
+  await store.set(KEY_NOTIF_FULLSCREEN, state.notifFullscreen);
+  await store.set(KEY_NOTIF_WIDTH, state.notifWidth);
   await store.set(KEY_NAV_RAIL_ENABLED, state.navRailEnabled);
   await store.set(KEY_MESSAGE_FRAMES_ENABLED, state.messageFramesEnabled);
   await store.set(KEY_AUTO_SCROLL_REPLY, state.autoScrollReplyEnabled);
   await store.set(KEY_MODERN_VIEW_ENABLED, state.modernViewEnabled);
   await store.set(KEY_TOOL_DENSITY, state.toolDensity);
   await store.save();
+  // Rotate a healthy snapshot into the backup ring (main window only). Ordered
+  // after the primary save so at most one file is ever mid-write on a crash.
+  await pushBackupIfHealthy(openStore, STORE_SPEC, store as KvStore, {
+    heal: true,
+  });
 }
 
 export function newProjectId() {

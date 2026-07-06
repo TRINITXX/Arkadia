@@ -223,3 +223,18 @@ export const DEFAULT_EDITOR_PROTOCOL: EditorProtocol = "vscode";
 export type ToolDensity = "compact" | "preview" | "full";
 
 export const DEFAULT_TOOL_DENSITY: ToolDensity = "preview";
+
+/**
+ * Style of the background notification shown when Claude finishes / asks while
+ * Arkadia is backgrounded:
+ * `off` = no notification, `mirror` = full terminal-mirror popup (`PopupApp`),
+ * `compact` = one-line "project · tab" toast (`NotifApp`).
+ */
+export type NotifStyle = "off" | "mirror" | "compact";
+
+export const DEFAULT_NOTIF_STYLE: NotifStyle = "mirror";
+
+/** Compact-notification window width (logical px), user-tunable via a slider. */
+export const NOTIF_WIDTH_MIN = 260;
+export const NOTIF_WIDTH_MAX = 560;
+export const DEFAULT_NOTIF_WIDTH = 360;

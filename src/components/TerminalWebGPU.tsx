@@ -1114,9 +1114,11 @@ export function TerminalWebGPU({
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       // Mouse-mode passthrough: forward motion when the running app subscribes
-      // to it (1003 always, 1002 only while a button is held).
+      // to it (1003 always, 1002 only while a button is held). A local
+      // drag-select in progress wins over passthrough — its motion never
+      // reaches the app.
       const screen = screenRef.current;
-      if (mouseModeActive(screen)) {
+      if (mouseModeActive(screen) && !dragStartRef.current) {
         const proto = screen!.mouse_protocol;
         const active = mouseEventActiveRef.current;
         const shouldMove = proto === 3 || (proto === 2 && !!active);
@@ -1249,6 +1251,23 @@ export function TerminalWebGPU({
         r.clear_selection();
         selectionRef.current = null;
         redraw();
+        // The app never saw the left press (it was held back in case a
+        // drag-select followed): replay it as a press+release pair so
+        // click-driven TUIs keep working under mouse mode.
+        if (mouseModeActive(screenRef.current)) {
+          const { col, row } = cellAt(e.clientX, e.clientY);
+          const base = {
+            sessionId: pane.id,
+            col,
+            row,
+            button: 0,
+            modifiers: mouseModifiers(e),
+            motion: false,
+          };
+          void invoke("send_mouse_event", { ...base, pressed: true }).then(() =>
+            invoke("send_mouse_event", { ...base, pressed: false }),
+          );
+        }
       }
       dragMovedRef.current = false;
     };
@@ -1308,8 +1327,17 @@ export function TerminalWebGPU({
       : null;
 
     // Mouse-mode passthrough: forward the press to the PTY and skip the local
-    // drag-select / click-to-open — UNLESS it lands on a link. Shift bypasses.
-    if (mouseModeActive(screen) && !e.shiftKey && e.button <= 2 && !linkHit) {
+    // drag-select / click-to-open. Selection has priority over the app: a
+    // plain left press stays local (drag-select; a click without drag is
+    // replayed to the app on mouseup). Shift+left hands the gesture to the
+    // app; middle/right pass through as before (Shift+right keeps the panel
+    // context menu).
+    if (
+      mouseModeActive(screen) &&
+      !linkHit &&
+      ((e.button === 0 && e.shiftKey) ||
+        (e.button !== 0 && e.button <= 2 && !e.shiftKey))
+    ) {
       e.preventDefault();
       if (!isActive) onActivate();
       outerRef.current?.focus();
@@ -1431,6 +1459,16 @@ export function TerminalWebGPU({
       // Mouse-mode passthrough: encode wheel up/down as buttons 64/65 at the
       // cursor's current cell. One PTY event per wheel notch (no batching).
       if (mouseModeActive(screenRef.current)) {
+        // The app is about to scroll its own content (its alt screen has no
+        // terminal scrollback, so `scroll_offset` never moves). A selection
+        // anchored to terminal rows would freeze in place over the now-wrong
+        // text — drop it, unless a drag is still committing it.
+        const r = rendererRef.current;
+        if (r && !dragStartRef.current && r.has_selection()) {
+          r.clear_selection();
+          selectionRef.current = null;
+          redraw();
+        }
         const button = e.deltaY > 0 ? 65 : 64;
         const { col, row } = cellAt(e.clientX, e.clientY);
         void invoke("send_mouse_event", {

@@ -16,7 +16,7 @@ import {
 } from "@dnd-kit/core";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { shortenPath } from "@/store";
-import { aggregate, type AgentStateValue } from "@/lib/agentState";
+import { aggregate, isActive, type AgentStateValue } from "@/lib/agentState";
 import type { Project, Tab, Workspace } from "@/types";
 import { AgentBadge } from "./AgentBadge";
 
@@ -125,19 +125,31 @@ type DropData =
   | WorkspaceGapDropData
   | DragData;
 
-function projectAgentState(
+// One badge per tab, in tab-bar order (`tabs` array order — drag-reordering
+// the tabs reorders the badges too). A tab's state is the aggregate of its
+// panes (splits); only tabs with an active Claude session (busy/waiting)
+// contribute — idle tabs render no badge at all.
+interface TabAgentState {
+  tabId: string;
+  state: AgentStateValue;
+}
+
+function projectAgentStates(
   projectId: string,
   tabs: Tab[],
   paneAgentStates: Record<string, AgentStateValue>,
-): AgentStateValue {
-  const states: AgentStateValue[] = [];
+): TabAgentState[] {
+  const states: TabAgentState[] = [];
   for (const tab of tabs) {
     if (tab.projectId !== projectId) continue;
-    for (const paneId of Object.keys(tab.panes)) {
-      states.push(paneAgentStates[paneId] ?? { kind: "none" });
-    }
+    const tabState = aggregate(
+      Object.keys(tab.panes).map(
+        (paneId) => paneAgentStates[paneId] ?? { kind: "none" },
+      ),
+    );
+    if (isActive(tabState)) states.push({ tabId: tab.id, state: tabState });
   }
-  return aggregate(states);
+  return states;
 }
 
 function workspaceAgentState(
@@ -382,7 +394,7 @@ export function Sidepanel({
         active={project.id === activeProjectId}
         onActivate={onActivate}
         onContextMenu={onProjectContextMenu}
-        agentState={projectAgentState(project.id, tabs, paneAgentStates)}
+        agentStates={projectAgentStates(project.id, tabs, paneAgentStates)}
       />
     </div>
   );
@@ -439,7 +451,7 @@ export function Sidepanel({
                 active={project.id === activeProjectId}
                 onActivate={onActivate}
                 onContextMenu={onProjectContextMenu}
-                agentState={projectAgentState(
+                agentStates={projectAgentStates(
                   project.id,
                   tabs,
                   paneAgentStates,
@@ -584,7 +596,7 @@ function WorkspaceSection({
                 active={p.id === activeProjectId}
                 onActivate={onActivate}
                 onContextMenu={onProjectContextMenu}
-                agentState={projectAgentState(p.id, tabs, paneAgentStates)}
+                agentStates={projectAgentStates(p.id, tabs, paneAgentStates)}
               />
             </Fragment>
           ))}
@@ -728,7 +740,7 @@ interface DraggableProjectRowProps {
   active: boolean;
   onActivate: (id: string) => void;
   onContextMenu: (project: Project, x: number, y: number) => void;
-  agentState: AgentStateValue;
+  agentStates: TabAgentState[];
 }
 
 function DraggableProjectRow({
@@ -736,7 +748,7 @@ function DraggableProjectRow({
   active,
   onActivate,
   onContextMenu,
-  agentState,
+  agentStates,
 }: DraggableProjectRowProps) {
   const dragData: ProjectDragData = {
     type: "project",
@@ -782,7 +794,7 @@ function DraggableProjectRow({
       }`}
       title={project.path}
     >
-      <ProjectRowContent project={project} agentState={agentState} />
+      <ProjectRowContent project={project} agentStates={agentStates} />
     </div>
   );
 }
@@ -790,10 +802,10 @@ function DraggableProjectRow({
 /** Inner content shared by the draggable (Inactive) and static (Active) rows. */
 function ProjectRowContent({
   project,
-  agentState,
+  agentStates,
 }: {
   project: Project;
-  agentState: AgentStateValue;
+  agentStates: TabAgentState[];
 }) {
   return (
     <>
@@ -803,9 +815,13 @@ function ProjectRowContent({
           {shortenPath(project.path)}
         </div>
       </div>
-      <span className="shrink-0 self-center">
-        <AgentBadge state={agentState} size={8} inline />
-      </span>
+      {agentStates.length > 0 && (
+        <span className="mt-1 flex max-w-[84px] shrink-0 flex-wrap items-center justify-end gap-1">
+          {agentStates.map(({ tabId, state }) => (
+            <AgentBadge key={tabId} state={state} size={8} inline />
+          ))}
+        </span>
+      )}
     </>
   );
 }
@@ -816,7 +832,7 @@ function StaticProjectRow({
   active,
   onActivate,
   onContextMenu,
-  agentState,
+  agentStates,
 }: DraggableProjectRowProps) {
   return (
     <div
@@ -831,7 +847,7 @@ function StaticProjectRow({
       }`}
       title={project.path}
     >
-      <ProjectRowContent project={project} agentState={agentState} />
+      <ProjectRowContent project={project} agentStates={agentStates} />
     </div>
   );
 }

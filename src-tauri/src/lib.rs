@@ -61,6 +61,14 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 if let Some(window) = app_handle.get_webview_window("main") {
                     let _ = window.maximize();
+                    // When the user alt-tabs back to Arkadia, dismiss any pending
+                    // background notification — they're now looking at the app.
+                    let ah = app_handle.clone();
+                    window.on_window_event(move |event| {
+                        if let tauri::WindowEvent::Focused(true) = event {
+                            crate::popup::dismiss_all(&ah);
+                        }
+                    });
                 }
 
                 // Background-notification popup: watch the hook signal dir and
@@ -128,7 +136,10 @@ pub fn run() {
             conversation::read_conversation_blocks,
             popup::popup_request_state,
             popup::popup_log_ui,
-            popup::popup_set_enabled,
+            popup::popup_set_style,
+            popup::popup_set_fullscreen,
+            popup::popup_set_notif_width,
+            popup::set_pane_projects,
             popup::popup_set_auto_scroll,
             popup::popup_dismiss,
             popup::popup_open_in_main,
@@ -192,9 +203,18 @@ struct ResolvedPath {
 }
 
 /// Joins a possibly-relative path against `cwd`. Absolute when it has a Windows
-/// drive prefix (`C:\` / `C:/`) or starts with a slash/backslash. Mirrors the
-/// previous frontend `resolveAbsPath`.
+/// drive prefix (`C:\` / `C:/`) or starts with a slash/backslash. A leading `~`
+/// (alone, or followed by `/` or `\`) expands to the user's home directory.
+/// Mirrors the previous frontend `resolveAbsPath`.
 fn resolve_against_cwd(path_part: &str, cwd: Option<&str>) -> String {
+    // `~`, `~/...`, `~\...` → home directory. The `~` is one ASCII byte, so
+    // slicing at [1..] keeps the leading separator (or empties for a bare `~`).
+    if path_part == "~" || path_part.starts_with("~/") || path_part.starts_with("~\\") {
+        if let Some(home) = dirs::home_dir() {
+            let home = home.to_string_lossy();
+            return format!("{}{}", home.trim_end_matches(['/', '\\']), &path_part[1..]);
+        }
+    }
     let b = path_part.as_bytes();
     let is_abs = path_part.starts_with('/')
         || path_part.starts_with('\\')
@@ -458,6 +478,43 @@ mod tests {
         assert_eq!(r.line, Some(42));
         assert_eq!(r.col, Some(5));
         assert!(r.abs_path.ends_with("App.tsx"));
+    }
+
+    #[test]
+    fn expands_leading_tilde_to_home() {
+        let home = dirs::home_dir().expect("home dir");
+        let home_str = home.to_string_lossy();
+        let home_trimmed = home_str.trim_end_matches(['/', '\\']);
+        // The `~` wins over a cwd join, even though it isn't classically absolute.
+        assert_eq!(
+            resolve_against_cwd("~/Desktop/report.md", Some("/some/cwd")),
+            format!("{home_trimmed}/Desktop/report.md")
+        );
+        assert_eq!(
+            resolve_against_cwd("~\\Desktop\\report.md", Some("/some/cwd")),
+            format!("{home_trimmed}\\Desktop\\report.md")
+        );
+        assert_eq!(resolve_against_cwd("~", None), home_trimmed.to_string());
+        // A `~` not at the start, or `~name`, is left untouched (joined to cwd).
+        assert_eq!(
+            resolve_against_cwd("~user/x", Some("/cwd")),
+            "/cwd/~user/x"
+        );
+    }
+
+    #[test]
+    fn resolves_tilde_home_path() {
+        let home = dirs::home_dir().expect("home dir");
+        let name = "arkadia_tilde_click_test.txt";
+        let file = home.join(name);
+        fs::write(&file, "x").unwrap();
+        let line = format!("open ~/{name} please");
+        let click = click_at(&line, name, 1);
+        let r = resolve_path_at(line, None, click);
+        fs::remove_file(&file).ok();
+        let r = r.expect("should resolve ~ path");
+        // Compare as paths so a mixed `/` vs `\` separator doesn't fail on Windows.
+        assert_eq!(std::path::Path::new(&r.abs_path), file.as_path());
     }
 
     #[test]
