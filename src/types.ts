@@ -238,3 +238,26 @@ export const DEFAULT_NOTIF_STYLE: NotifStyle = "mirror";
 export const NOTIF_WIDTH_MIN = 260;
 export const NOTIF_WIDTH_MAX = 560;
 export const DEFAULT_NOTIF_WIDTH = 360;
+
+/**
+ * Payload forwarded from the Rust single-instance callback when Arkadia is
+ * relaunched with a `--wt-*` argv (from the `/w` and `/m` skills). Mirrors the
+ * Rust `ExternalAction` struct field-for-field.
+ */
+export interface ExternalAction {
+  kind: "add" | "remove" | "notify";
+  path?: string;
+  name?: string;
+  color?: string;
+  run?: string;
+  after?: string;
+  level?: "info" | "error";
+  message?: string;
+}
+
+/** A transient on-screen toast (external-action feedback). */
+export interface Toast {
+  id: string;
+  level: "info" | "error";
+  message: string;
+}
