@@ -1295,6 +1295,18 @@ export function App() {
     async (button: ActionButton) => {
       const paneId = activePaneIdOfActiveTab;
       if (!paneId) return;
+      // "keys" mode: send the captured shortcut bytes verbatim (no bracketed
+      // paste, no submit) — exactly as if the user pressed the combo.
+      if (button.mode === "keys") {
+        if (!button.keys || button.keys.length === 0) return;
+        try {
+          await invoke("send_input", { sessionId: paneId, bytes: button.keys });
+          focusActivePane();
+        } catch (e) {
+          setError(String(e));
+        }
+        return;
+      }
       const pane =
         tabs.find((t) => t.id === activeTabId)?.panes[paneId] ?? null;
       // Claude enables bracketed paste (DEC 2004); wrap the text so embedded

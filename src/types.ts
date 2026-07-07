@@ -162,6 +162,16 @@ export interface ActionButton {
    * command with a trailing Enter in a fresh tab).
    */
   submit?: boolean;
+  /**
+   * Prompt-bar only. "keys" makes the button send a captured keyboard shortcut
+   * (raw PTY bytes in `keys`) instead of the `command` text. Absent/"text" =
+   * send text. Ignored by the top toolbar.
+   */
+  mode?: "text" | "keys";
+  /** Captured shortcut bytes for `mode === "keys"`, e.g. [27,91,90] = Shift+Tab. */
+  keys?: number[];
+  /** Human label for the captured shortcut, e.g. "Shift+Tab". */
+  keysLabel?: string;
 }
 
 export interface FolderButton {

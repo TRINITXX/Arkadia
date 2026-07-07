@@ -22,6 +22,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { newButtonId } from "@/store";
 import { getIcon } from "@/icons";
 import { IconPicker } from "@/components/IconPicker";
+import { describeKeyEvent, keyEventToBytes } from "@/lib/keymap";
 import {
   canAddFolder,
   countDescendants,
@@ -589,6 +590,8 @@ function ActionEditorPane({
   commandPlaceholder: string;
   showSubmit: boolean;
 }) {
+  // "keys" mode (send a captured shortcut) is a prompt-bar-only affordance.
+  const isKeys = showSubmit && button.mode === "keys";
   return (
     <>
       <div className="flex items-center gap-2">
@@ -610,38 +613,120 @@ function ActionEditorPane({
           className="w-full rounded border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-sm outline-none focus:border-zinc-600"
         />
       </FieldRow>
-      <FieldRow label={commandLabel}>
-        <textarea
-          value={button.command}
-          onChange={(e) => onUpdate({ command: e.target.value })}
-          placeholder={commandPlaceholder}
-          rows={5}
-          className="w-full resize-y rounded border border-zinc-800 bg-zinc-950 px-2 py-1.5 font-mono text-xs outline-none focus:border-zinc-600"
-        />
-      </FieldRow>
       {showSubmit && (
-        <label className="flex items-start gap-2.5 rounded border border-zinc-800 bg-zinc-950 p-2.5">
-          <input
-            type="checkbox"
-            checked={button.submit ?? false}
-            onChange={(e) => onUpdate({ submit: e.target.checked })}
-            className="mt-0.5 h-4 w-4 accent-zinc-300"
+        <FieldRow label="Type">
+          <div className="flex gap-2">
+            <ModeButton
+              active={!isKeys}
+              onClick={() => onUpdate({ mode: "text" })}
+            >
+              Texte
+            </ModeButton>
+            <ModeButton
+              active={isKeys}
+              onClick={() => onUpdate({ mode: "keys" })}
+            >
+              Raccourci
+            </ModeButton>
+          </div>
+        </FieldRow>
+      )}
+      {isKeys ? (
+        <FieldRow label="Raccourci">
+          <ShortcutCapture
+            label={button.keysLabel}
+            onCapture={(keys, keysLabel) => onUpdate({ keys, keysLabel })}
           />
-          <span>
-            <span className="block text-xs text-zinc-200">
-              Envoyer avec Entrée
-            </span>
-            <span className="mt-0.5 block text-[11px] text-zinc-500">
-              Coché : le texte est envoyé directement. Décoché : il est juste
-              inséré dans le champ, à toi de valider.
-            </span>
-          </span>
-        </label>
+        </FieldRow>
+      ) : (
+        <>
+          <FieldRow label={commandLabel}>
+            <textarea
+              value={button.command}
+              onChange={(e) => onUpdate({ command: e.target.value })}
+              placeholder={commandPlaceholder}
+              rows={5}
+              className="w-full resize-y rounded border border-zinc-800 bg-zinc-950 px-2 py-1.5 font-mono text-xs outline-none focus:border-zinc-600"
+            />
+          </FieldRow>
+          {showSubmit && (
+            <label className="flex items-start gap-2.5 rounded border border-zinc-800 bg-zinc-950 p-2.5">
+              <input
+                type="checkbox"
+                checked={button.submit ?? false}
+                onChange={(e) => onUpdate({ submit: e.target.checked })}
+                className="mt-0.5 h-4 w-4 accent-zinc-300"
+              />
+              <span>
+                <span className="block text-xs text-zinc-200">
+                  Envoyer avec Entrée
+                </span>
+                <span className="mt-0.5 block text-[11px] text-zinc-500">
+                  Coché : le texte est envoyé directement. Décoché : il est
+                  juste inséré dans le champ, à toi de valider.
+                </span>
+              </span>
+            </label>
+          )}
+        </>
       )}
       <div className="mt-auto flex justify-end pt-2">
         <DeleteButton onClick={onDelete} />
       </div>
     </>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex-1 rounded border px-2 py-1.5 text-xs transition ${
+        active
+          ? "border-zinc-300 bg-zinc-900 text-zinc-100 ring-1 ring-zinc-300"
+          : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-600"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ShortcutCapture({
+  label,
+  onCapture,
+}: {
+  label?: string;
+  onCapture: (keys: number[], keysLabel: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        onKeyDown={(e) => {
+          const bytes = keyEventToBytes(e);
+          if (bytes && bytes.length > 0) {
+            e.preventDefault();
+            onCapture(Array.from(bytes), describeKeyEvent(e));
+          }
+        }}
+        className="w-full rounded border border-zinc-800 bg-zinc-950 px-2 py-2 text-left text-sm text-zinc-200 outline-none hover:border-zinc-600 focus:border-sky-500 focus:text-sky-200"
+      >
+        {label && label.length > 0 ? label : "Clique puis presse un raccourci"}
+      </button>
+      <span className="text-[11px] text-zinc-500">
+        Focus le champ et presse la combinaison (Shift+Tab, Échap, Ctrl+C, ↑…).
+      </span>
+    </div>
   );
 }
 

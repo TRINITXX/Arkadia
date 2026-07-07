@@ -28,6 +28,8 @@ import {
   type KvStore,
   type StoreOpener,
 } from "@/lib/durableStore";
+import { storeIsHealthy } from "@/lib/storeHealth";
+import { dedupeProjectsByPath } from "@/lib/externalAction";
 
 const STORE_FILE = "store.json";
 const LEGACY_LOCAL_STORAGE_KEY = "arkadia.v1";
@@ -180,16 +182,17 @@ const openStore: StoreOpener = async (name) =>
 
 /**
  * Backup ring for store.json (store.bak1..3.json, alongside it). "Healthy" =
- * at least one project — the exact state a crash wiped, so an empty projects
- * list is what triggers a restore on load.
+ * the store has been INITIALIZED by us (it carries a `projects` array, even an
+ * empty one). A crash truncates the file so the plugin surfaces a completely
+ * empty cache (no keys at all): that is the only unhealthy state, and the one
+ * that triggers a restore on load. An empty `projects` list is a legitimate
+ * user state (they deleted every project) and must persist — not be resurrected
+ * from an old backup. See `storeIsHealthy`.
  */
 const STORE_SPEC: DurableSpec = {
   base: "store",
   ringSize: 3,
-  isHealthy: (entries) => {
-    const projects = entries.find(([k]) => k === KEY_PROJECTS)?.[1];
-    return Array.isArray(projects) && projects.length > 0;
-  },
+  isHealthy: storeIsHealthy,
 };
 
 let storePromise: Promise<Store> | null = null;
@@ -216,6 +219,12 @@ function normalizeAction(b: unknown): ActionButton {
   };
   // Prompt-bar buttons carry a `submit` flag; the top toolbar omits it.
   if (typeof x.submit === "boolean") action.submit = x.submit;
+  // Prompt-bar shortcut buttons ("keys" mode) carry captured PTY bytes + label.
+  if (x.mode === "keys") action.mode = "keys";
+  if (Array.isArray(x.keys)) {
+    action.keys = x.keys.filter((n): n is number => typeof n === "number");
+  }
+  if (typeof x.keysLabel === "string") action.keysLabel = x.keysLabel;
   return action;
 }
 
@@ -404,9 +413,11 @@ export async function loadState(
   const rawToolDensity = await store.get<unknown>(KEY_TOOL_DENSITY);
 
   return {
-    projects: Array.isArray(rawProjects)
-      ? (rawProjects.map(normalizeProject).filter(Boolean) as Project[])
-      : DEFAULT_STATE.projects,
+    projects: dedupeProjectsByPath(
+      Array.isArray(rawProjects)
+        ? (rawProjects.map(normalizeProject).filter(Boolean) as Project[])
+        : DEFAULT_STATE.projects,
+    ),
     workspaces: Array.isArray(rawWorkspaces)
       ? (rawWorkspaces.map(normalizeWorkspace).filter(Boolean) as Workspace[])
       : DEFAULT_STATE.workspaces,

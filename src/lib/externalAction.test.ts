@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  dedupeProjectsByPath,
   findProjectByPath,
   findProjectsByPath,
   parentOf,
@@ -48,6 +49,38 @@ describe("findProjectsByPath", () => {
   });
   it("returns an empty array when none match", () => {
     expect(findProjectsByPath(dup, "C:\\VTC\\nope")).toEqual([]);
+  });
+});
+
+describe("dedupeProjectsByPath", () => {
+  it("collapses same-path duplicates down to the first (repeated /w regression)", () => {
+    // The exact shape found in a corrupted store: three identical worktree
+    // paths, distinct ids — deleting one left the twins, so it 'came back'.
+    const dup = [
+      p("keep", "vtc-mobile-side", "C:\\VTC\\vtc-mobile-side", { order: 11 }),
+      p("dup1", "vtc-mobile-side", "C:\\VTC\\vtc-mobile-side", { order: 12 }),
+      p("dup2", "vtc-mobile-side", "C:\\VTC\\vtc-mobile-side", { order: 13 }),
+      p("other", "prod", "C:\\VTC\\vtc-mobile-prod", { order: 14 }),
+    ];
+    expect(dedupeProjectsByPath(dup).map((x) => x.id)).toEqual([
+      "keep",
+      "other",
+    ]);
+  });
+
+  it("dedupes case/separator-insensitively", () => {
+    const dup = [p("a", "x", "C:\\VTC\\Side"), p("b", "x", "c:/vtc/side/")];
+    expect(dedupeProjectsByPath(dup).map((x) => x.id)).toEqual(["a"]);
+  });
+
+  it("keeps distinct paths untouched", () => {
+    const projects = [p("a", "x", "C:\\VTC\\a"), p("b", "y", "C:\\VTC\\b")];
+    expect(dedupeProjectsByPath(projects).map((x) => x.id)).toEqual(["a", "b"]);
+  });
+
+  it("never collapses empty-path projects", () => {
+    const projects = [p("a", "x", ""), p("b", "y", "")];
+    expect(dedupeProjectsByPath(projects).map((x) => x.id)).toEqual(["a", "b"]);
   });
 });
 

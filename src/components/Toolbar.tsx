@@ -106,17 +106,25 @@ export function ActionToolbarButton({
 }) {
   const Icon = getIcon(button.icon);
   const showLabel = button.label.length > 0;
+  const isKeys = button.mode === "keys";
+  const fallback = isKeys ? (button.keysLabel ?? "") : "";
+  const title = isKeys
+    ? button.keysLabel || button.label
+    : button.command || button.label;
   return (
     <button
       onClick={() => onRunAction(button)}
       disabled={disabled}
       className="flex h-7 items-center gap-1.5 rounded border border-zinc-800 bg-zinc-900 px-2 text-xs text-zinc-200 hover:border-zinc-700 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
-      title={button.command || button.label}
+      title={title}
       type="button"
     >
       {Icon && <Icon size={14} />}
       {showLabel && <span>{button.label}</span>}
-      {!Icon && !showLabel && <span className="text-zinc-500">unnamed</span>}
+      {!showLabel && fallback && <span>{fallback}</span>}
+      {!Icon && !showLabel && !fallback && (
+        <span className="text-zinc-500">unnamed</span>
+      )}
     </button>
   );
 }

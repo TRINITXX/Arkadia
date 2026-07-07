@@ -10,6 +10,39 @@
  * Returns `null` when the event produces no byte sequence (pure modifiers,
  * unhandled combos) so the caller can let it through.
  */
+/**
+ * Human-readable label for a keyboard shortcut, e.g. "Shift+Tab", "Ctrl+C",
+ * "Esc", "↑". Used to display a prompt-bar shortcut button captured live in the
+ * settings editor. Modifier order is stable (Ctrl, Alt, Shift, Meta).
+ */
+export function describeKeyEvent(e: React.KeyboardEvent): string {
+  const mods: string[] = [];
+  if (e.ctrlKey) mods.push("Ctrl");
+  if (e.altKey) mods.push("Alt");
+  if (e.shiftKey) mods.push("Shift");
+  if (e.metaKey) mods.push("Meta");
+  const named: Record<string, string> = {
+    " ": "Space",
+    Escape: "Esc",
+    ArrowUp: "↑",
+    ArrowDown: "↓",
+    ArrowLeft: "←",
+    ArrowRight: "→",
+    Enter: "Enter",
+    Tab: "Tab",
+    Backspace: "⌫",
+    Delete: "Del",
+    Home: "Home",
+    End: "End",
+    PageUp: "PgUp",
+    PageDown: "PgDn",
+    Insert: "Ins",
+  };
+  const key =
+    named[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+  return [...mods, key].join("+");
+}
+
 export function keyEventToBytes(e: React.KeyboardEvent): Uint8Array | null {
   if (e.ctrlKey && !e.altKey && !e.metaKey) {
     switch (e.key) {

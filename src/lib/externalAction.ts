@@ -22,6 +22,26 @@ export function findProjectByPath(
   return findProjectsByPath(projects, path)[0];
 }
 
+/**
+ * Collapse projects sharing a normalized path down to the first one. Repeated
+ * non-idempotent `/w` adds (from a build before the idempotency guard landed)
+ * could stack several projects onto the same worktree path, which made them
+ * impossible to remove — deleting one by id left its identical twins, so the
+ * project "came back". Run on load so any such history self-heals; a no-op once
+ * paths are unique. Empty paths are never collapsed (degenerate, kept as-is).
+ */
+export function dedupeProjectsByPath(projects: Project[]): Project[] {
+  const seen = new Set<string>();
+  const out: Project[] = [];
+  for (const p of projects) {
+    const key = norm(p.path);
+    if (key !== "" && seen.has(key)) continue;
+    if (key !== "") seen.add(key);
+    out.push(p);
+  }
+  return out;
+}
+
 /** The existing project that is a sibling of `worktreePath` (same parent dir).
  *  Used to inherit color/workspace so worktrees cluster under their repo. */
 export function parentOf(
