@@ -43,6 +43,16 @@ import {
 interface ToolbarSettingsProps {
   buttons: ToolbarButton[];
   onChangeButtons: (next: ToolbarButton[]) => void;
+  /** Section heading, e.g. "Toolbar buttons" or "Prompt buttons". */
+  heading?: string;
+  /** Sub-line under the heading. */
+  subheading?: string;
+  /** Label of the free-text field (command for the top bar, text for prompts). */
+  commandLabel?: string;
+  /** Placeholder of the free-text field. */
+  commandPlaceholder?: string;
+  /** Show the "submit with Enter" toggle (prompt buttons only). */
+  showSubmit?: boolean;
 }
 
 interface DragData {
@@ -58,6 +68,11 @@ type DropTarget =
 export function ToolbarSettings({
   buttons,
   onChangeButtons,
+  heading = "Toolbar buttons",
+  subheading = "Drag to reorder or drop into a folder. Click an item to edit it.",
+  commandLabel = "Command",
+  commandPlaceholder = "powershell command (e.g. npm run dev)",
+  showSubmit = false,
 }: ToolbarSettingsProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -179,12 +194,8 @@ export function ToolbarSettings({
     <div className="flex h-full flex-col gap-3">
       <div className="flex items-baseline justify-between">
         <div>
-          <h3 className="text-sm font-semibold tracking-tight">
-            Toolbar buttons
-          </h3>
-          <p className="text-xs text-zinc-500">
-            Drag to reorder or drop into a folder. Click an item to edit it.
-          </p>
+          <h3 className="text-sm font-semibold tracking-tight">{heading}</h3>
+          <p className="text-xs text-zinc-500">{subheading}</p>
         </div>
         <div className="flex gap-2">
           <button
@@ -228,6 +239,9 @@ export function ToolbarSettings({
             selected={selected}
             onUpdate={onUpdateItem}
             onDelete={onDeleteItem}
+            commandLabel={commandLabel}
+            commandPlaceholder={commandPlaceholder}
+            showSubmit={showSubmit}
           />
         </div>
         <DragOverlay>
@@ -518,9 +532,19 @@ interface EditorPaneProps {
   selected: ToolbarButton | null;
   onUpdate: (id: string, patch: Partial<ToolbarButton>) => void;
   onDelete: (id: string) => void;
+  commandLabel: string;
+  commandPlaceholder: string;
+  showSubmit: boolean;
 }
 
-function EditorPane({ selected, onUpdate, onDelete }: EditorPaneProps) {
+function EditorPane({
+  selected,
+  onUpdate,
+  onDelete,
+  commandLabel,
+  commandPlaceholder,
+  showSubmit,
+}: EditorPaneProps) {
   if (!selected) {
     return (
       <div className="flex flex-1 items-center justify-center rounded border border-zinc-800 bg-zinc-900/40 p-6 text-center text-xs text-zinc-500">
@@ -535,6 +559,9 @@ function EditorPane({ selected, onUpdate, onDelete }: EditorPaneProps) {
           button={selected}
           onUpdate={(patch) => onUpdate(selected.id, patch)}
           onDelete={() => onDelete(selected.id)}
+          commandLabel={commandLabel}
+          commandPlaceholder={commandPlaceholder}
+          showSubmit={showSubmit}
         />
       ) : (
         <FolderEditorPane
@@ -551,10 +578,16 @@ function ActionEditorPane({
   button,
   onUpdate,
   onDelete,
+  commandLabel,
+  commandPlaceholder,
+  showSubmit,
 }: {
   button: ActionButton;
   onUpdate: (patch: Partial<ActionButton>) => void;
   onDelete: () => void;
+  commandLabel: string;
+  commandPlaceholder: string;
+  showSubmit: boolean;
 }) {
   return (
     <>
@@ -577,15 +610,34 @@ function ActionEditorPane({
           className="w-full rounded border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-sm outline-none focus:border-zinc-600"
         />
       </FieldRow>
-      <FieldRow label="Command">
+      <FieldRow label={commandLabel}>
         <textarea
           value={button.command}
           onChange={(e) => onUpdate({ command: e.target.value })}
-          placeholder="powershell command (e.g. npm run dev)"
+          placeholder={commandPlaceholder}
           rows={5}
           className="w-full resize-y rounded border border-zinc-800 bg-zinc-950 px-2 py-1.5 font-mono text-xs outline-none focus:border-zinc-600"
         />
       </FieldRow>
+      {showSubmit && (
+        <label className="flex items-start gap-2.5 rounded border border-zinc-800 bg-zinc-950 p-2.5">
+          <input
+            type="checkbox"
+            checked={button.submit ?? false}
+            onChange={(e) => onUpdate({ submit: e.target.checked })}
+            className="mt-0.5 h-4 w-4 accent-zinc-300"
+          />
+          <span>
+            <span className="block text-xs text-zinc-200">
+              Envoyer avec Entrée
+            </span>
+            <span className="mt-0.5 block text-[11px] text-zinc-500">
+              Coché : le texte est envoyé directement. Décoché : il est juste
+              inséré dans le champ, à toi de valider.
+            </span>
+          </span>
+        </label>
+      )}
       <div className="mt-auto flex justify-end pt-2">
         <DeleteButton onClick={onDelete} />
       </div>

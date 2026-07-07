@@ -155,6 +155,13 @@ export interface ActionButton {
   icon: string;
   command: string;
   order: number;
+  /**
+   * Prompt-bar only: when true, the button's text is submitted with a trailing
+   * Enter after insertion; when false/undefined it is only typed into the field
+   * for the user to edit. Ignored by the top toolbar (which always runs its
+   * command with a trailing Enter in a fresh tab).
+   */
+  submit?: boolean;
 }
 
 export interface FolderButton {

@@ -36,6 +36,8 @@ const KEY_PROJECTS = "projects";
 const KEY_WORKSPACES = "workspaces";
 const KEY_ACTIVE_PROJECT = "activeProjectId";
 const KEY_TOOLBAR_BUTTONS = "toolbarButtons";
+const KEY_PROMPT_BUTTONS = "promptButtons";
+const KEY_PROMPT_BAR_ENABLED = "promptBarEnabled";
 const KEY_FONT = "font";
 const KEY_PALETTE_ID = "paletteId";
 const KEY_USE_WEBGPU = "useWebGPU";
@@ -77,6 +79,10 @@ export interface PersistedState {
   workspaces: Workspace[];
   activeProjectId: string | null;
   toolbarButtons: ToolbarButton[];
+  /** Bottom prompt-bar buttons: type/send text into the active Claude pane. */
+  promptButtons: ToolbarButton[];
+  /** Show the bottom prompt bar (on Claude panes only). */
+  promptBarEnabled: boolean;
   font: TerminalFont;
   paletteId: PaletteId;
   useWebGPU: boolean;
@@ -108,6 +114,8 @@ const DEFAULT_STATE: PersistedState = {
   workspaces: [],
   activeProjectId: null,
   toolbarButtons: [],
+  promptButtons: [],
+  promptBarEnabled: true,
   font: DEFAULT_TERMINAL_FONT,
   paletteId: DEFAULT_PALETTE_ID,
   useWebGPU: false,
@@ -198,7 +206,7 @@ function getStore(): Promise<Store> {
 
 function normalizeAction(b: unknown): ActionButton {
   const x = (b ?? {}) as Record<string, unknown>;
-  return {
+  const action: ActionButton = {
     id: typeof x.id === "string" ? x.id : newButtonId(),
     kind: "action",
     label: typeof x.label === "string" ? x.label : "",
@@ -206,6 +214,9 @@ function normalizeAction(b: unknown): ActionButton {
     command: typeof x.command === "string" ? x.command : "",
     order: typeof x.order === "number" ? x.order : 0,
   };
+  // Prompt-bar buttons carry a `submit` flag; the top toolbar omits it.
+  if (typeof x.submit === "boolean") action.submit = x.submit;
+  return action;
 }
 
 function normalizePaletteId(p: unknown): PaletteId {
@@ -372,6 +383,9 @@ export async function loadState(
     (await store.get<string | null>(KEY_ACTIVE_PROJECT)) ??
     DEFAULT_STATE.activeProjectId;
   const rawButtons = (await store.get<unknown[]>(KEY_TOOLBAR_BUTTONS)) ?? [];
+  const rawPromptButtons =
+    (await store.get<unknown[]>(KEY_PROMPT_BUTTONS)) ?? [];
+  const rawPromptBarEnabled = await store.get<unknown>(KEY_PROMPT_BAR_ENABLED);
   const rawFont = await store.get<unknown>(KEY_FONT);
   const rawPaletteId = await store.get<unknown>(KEY_PALETTE_ID);
   const rawUseWebGPU = await store.get<unknown>(KEY_USE_WEBGPU);
@@ -400,6 +414,13 @@ export async function loadState(
     toolbarButtons: Array.isArray(rawButtons)
       ? rawButtons.map((b) => normalizeButton(b))
       : DEFAULT_STATE.toolbarButtons,
+    promptButtons: Array.isArray(rawPromptButtons)
+      ? rawPromptButtons.map((b) => normalizeButton(b))
+      : DEFAULT_STATE.promptButtons,
+    promptBarEnabled: boolOr(
+      rawPromptBarEnabled,
+      DEFAULT_STATE.promptBarEnabled,
+    ),
     font: normalizeFont(rawFont),
     paletteId: normalizePaletteId(rawPaletteId),
     useWebGPU:
@@ -434,6 +455,8 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_WORKSPACES, state.workspaces);
   await store.set(KEY_ACTIVE_PROJECT, state.activeProjectId);
   await store.set(KEY_TOOLBAR_BUTTONS, state.toolbarButtons);
+  await store.set(KEY_PROMPT_BUTTONS, state.promptButtons);
+  await store.set(KEY_PROMPT_BAR_ENABLED, state.promptBarEnabled);
   await store.set(KEY_FONT, state.font);
   await store.set(KEY_PALETTE_ID, state.paletteId);
   await store.set(KEY_USE_WEBGPU, state.useWebGPU);

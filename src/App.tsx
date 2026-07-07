@@ -8,6 +8,7 @@ import { arrayMove } from "@dnd-kit/sortable";
 import { TabBar } from "@/components/TabBar";
 import { Sidepanel } from "@/components/Sidepanel";
 import { Toolbar } from "@/components/Toolbar";
+import { PromptBar } from "@/components/PromptBar";
 import { PaneTreeView } from "@/components/PaneTreeView";
 import { MessageNavRail } from "@/components/MessageNavRail";
 import { AddProjectDialog } from "@/components/AddProjectDialog";
@@ -100,6 +101,8 @@ export function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const { toasts, pushToast } = useToasts();
   const [toolbarButtons, setToolbarButtons] = useState<ToolbarButton[]>([]);
+  const [promptButtons, setPromptButtons] = useState<ToolbarButton[]>([]);
+  const [promptBarEnabled, setPromptBarEnabled] = useState(true);
   const [font, setFont] = useState<TerminalFont>(DEFAULT_TERMINAL_FONT);
   const [paletteId, setPaletteId] = useState<PaletteId>(DEFAULT_PALETTE_ID);
   const [useWebGPU, setUseWebGPU] = useState<boolean>(false);
@@ -151,6 +154,28 @@ export function App() {
       }
     }
     return merged;
+  }, [tabs]);
+  // Sticky set of panes that have ever looked like a Claude Code session (a
+  // status glyph in the terminal title — ✳ waiting, or a busy spinner). Once a
+  // pane qualifies it stays flagged for the app session, so the bottom prompt
+  // bar keeps showing even when Claude goes idle and the glyph disappears.
+  // In-memory only (resets each launch; launching claude re-stamps a glyph).
+  const [claudePaneIds, setClaudePaneIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  useEffect(() => {
+    setClaudePaneIds((prev) => {
+      let next: Set<string> | null = null;
+      for (const tab of tabs) {
+        for (const [paneId, pane] of Object.entries(tab.panes)) {
+          if (!prev.has(paneId) && stateFromTitle(pane.title) !== null) {
+            if (!next) next = new Set(prev);
+            next.add(paneId);
+          }
+        }
+      }
+      return next ?? prev;
+    });
   }, [tabs]);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -228,6 +253,10 @@ export function App() {
     if (!activeTabId) return null;
     return tabs.find((t) => t.id === activeTabId)?.activePaneId ?? null;
   }, [tabs, activeTabId]);
+  // The bottom prompt bar only shows when the active pane is a (sticky) Claude
+  // session — see `claudePaneIds`.
+  const activePaneIsClaude =
+    !!activePaneIdOfActiveTab && claudePaneIds.has(activePaneIdOfActiveTab);
 
   // Focus the active pane when tabs/panes switch so the user can type
   // immediately. The Terminal/TerminalWebGPU components only focus on their
@@ -303,6 +332,8 @@ export function App() {
         setWorkspaces(state.workspaces);
         setActiveProjectId(state.activeProjectId);
         setToolbarButtons(state.toolbarButtons);
+        setPromptButtons(state.promptButtons);
+        setPromptBarEnabled(state.promptBarEnabled);
         setFont(state.font);
         setPaletteId(state.paletteId);
         setUseWebGPU(state.useWebGPU);
@@ -336,6 +367,8 @@ export function App() {
         workspaces,
         activeProjectId,
         toolbarButtons,
+        promptButtons,
+        promptBarEnabled,
         font,
         paletteId,
         useWebGPU,
@@ -358,6 +391,8 @@ export function App() {
     workspaces,
     activeProjectId,
     toolbarButtons,
+    promptButtons,
+    promptBarEnabled,
     font,
     paletteId,
     useWebGPU,
@@ -808,12 +843,25 @@ export function App() {
 
   // ─── Auto-spawn first tab when activating an empty project ────
 
+  // Tracks the previously-active project so we only auto-spawn on a project
+  // *switch* (or launch), never on tab-list changes for the same project. That
+  // way closing a project's last tab leaves it empty instead of re-spawning.
+  const prevActiveProjectIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!loaded) return;
-    if (!activeProject) return;
+    if (!activeProject) {
+      prevActiveProjectIdRef.current = null;
+      return;
+    }
+    const projectChanged = prevActiveProjectIdRef.current !== activeProject.id;
+    prevActiveProjectIdRef.current = activeProject.id;
     const hasTab = tabs.some((t) => t.projectId === activeProject.id);
     if (!hasTab) {
-      void spawnTabFor(activeProject);
+      // Only when we just switched to (or launched into) this project — not
+      // when the user has just closed its last tab (same project → no spawn).
+      if (projectChanged) {
+        void spawnTabFor(activeProject);
+      }
     } else if (!activeTabIdByProject[activeProject.id]) {
       const first = tabs.find((t) => t.projectId === activeProject.id);
       if (first) {
@@ -1241,6 +1289,32 @@ export function App() {
     [activeProject, spawnTabFor],
   );
 
+  // Bottom prompt bar: type (or send) the button's text into the active Claude
+  // pane. Unlike runToolbarAction it targets the existing pane, never spawns.
+  const runPromptAction = useCallback(
+    async (button: ActionButton) => {
+      const paneId = activePaneIdOfActiveTab;
+      if (!paneId) return;
+      const pane =
+        tabs.find((t) => t.id === activeTabId)?.panes[paneId] ?? null;
+      // Claude enables bracketed paste (DEC 2004); wrap the text so embedded
+      // newlines are inserted literally instead of submitting line-by-line.
+      const bracketed = pane?.screen?.bracketed_paste ?? false;
+      const body = bracketed
+        ? `\x1b[200~${button.command}\x1b[201~`
+        : button.command;
+      const payload = button.submit ? `${body}\r` : body;
+      try {
+        const bytes = Array.from(new TextEncoder().encode(payload));
+        await invoke("send_input", { sessionId: paneId, bytes });
+        focusActivePane();
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [tabs, activeTabId, activePaneIdOfActiveTab, focusActivePane],
+  );
+
   if (!loaded) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-zinc-950 text-xs text-zinc-600">
@@ -1326,6 +1400,14 @@ export function App() {
                 : "select a project in the sidepanel"}
             </div>
           )}
+          {activeProject && visibleTabs.length === 0 && (
+            <div className="flex flex-1 flex-col items-center justify-center gap-1 text-sm text-zinc-500">
+              <span>no tab open</span>
+              <span className="text-xs text-zinc-600">
+                Ctrl+T, or the + in the tab bar, to open one
+              </span>
+            </div>
+          )}
           {activeProject &&
             visibleTabs.map((tab) => (
               <div
@@ -1363,6 +1445,13 @@ export function App() {
               </div>
             ))}
         </div>
+        {activeProject && promptBarEnabled && activePaneIsClaude && (
+          <PromptBar
+            buttons={promptButtons}
+            onRunAction={runPromptAction}
+            background={palette.bg}
+          />
+        )}
       </div>
 
       {notepadOpen && (
@@ -1493,6 +1582,10 @@ export function App() {
         onClose={() => setSettingsOpen(false)}
         buttons={toolbarButtons}
         onChangeButtons={setToolbarButtons}
+        promptButtons={promptButtons}
+        onChangePromptButtons={setPromptButtons}
+        promptBarEnabled={promptBarEnabled}
+        onChangePromptBarEnabled={setPromptBarEnabled}
         font={font}
         onChangeFont={setFont}
         paletteId={paletteId}

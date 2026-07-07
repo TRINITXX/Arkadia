@@ -130,12 +130,6 @@ export function PaneTreeView({
             />
           </div>
         )}
-        {isActive && (
-          <div
-            className="pointer-events-none absolute inset-0 z-30"
-            style={{ boxShadow: "inset 0 0 0 1.5px rgba(59,130,246,0.55)" }}
-          />
-        )}
       </div>
     );
   }

@@ -95,7 +95,7 @@ export function Toolbar({
   );
 }
 
-function ActionToolbarButton({
+export function ActionToolbarButton({
   button,
   onRunAction,
   disabled,
@@ -121,18 +121,25 @@ function ActionToolbarButton({
   );
 }
 
-function FolderToolbarButton({
+export function FolderToolbarButton({
   button,
   onRunAction,
   disabled,
+  dropup = false,
 }: {
   button: FolderButton;
   onRunAction: (b: ActionButton) => void;
   disabled: boolean;
+  /** Open the popover upward (for a bottom-anchored bar) instead of downward. */
+  dropup?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [path, setPath] = useState<FolderButton[]>([]);
-  const [pos, setPos] = useState<{ left: number; y: number } | null>(null);
+  const [pos, setPos] = useState<{
+    left: number;
+    top?: number;
+    bottom?: number;
+  } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const Icon = getIcon(button.icon);
@@ -179,7 +186,11 @@ function FolderToolbarButton({
     }
     if (buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect();
-      setPos({ left: rect.left, y: rect.bottom + 4 });
+      setPos(
+        dropup
+          ? { left: rect.left, bottom: window.innerHeight - rect.top + 4 }
+          : { left: rect.left, top: rect.bottom + 4 },
+      );
     }
     setOpen(true);
   };
@@ -200,7 +211,8 @@ function FolderToolbarButton({
   const popoverStyle: React.CSSProperties | undefined = pos
     ? {
         position: "fixed",
-        top: pos.y,
+        top: pos.top,
+        bottom: pos.bottom,
         left: Math.max(0, pos.left),
       }
     : undefined;

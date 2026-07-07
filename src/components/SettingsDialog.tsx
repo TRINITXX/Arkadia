@@ -18,6 +18,10 @@ interface SettingsDialogProps {
   onClose: () => void;
   buttons: ToolbarButton[];
   onChangeButtons: (next: ToolbarButton[]) => void;
+  promptButtons: ToolbarButton[];
+  onChangePromptButtons: (next: ToolbarButton[]) => void;
+  promptBarEnabled: boolean;
+  onChangePromptBarEnabled: (next: boolean) => void;
   font: TerminalFont;
   onChangeFont: (next: TerminalFont) => void;
   paletteId: PaletteId;
@@ -44,13 +48,17 @@ interface SettingsDialogProps {
   onChangeToolDensity: (next: ToolDensity) => void;
 }
 
-type Tab = "toolbar" | "general";
+type Tab = "toolbar" | "prompt" | "general";
 
 export function SettingsDialog({
   open,
   onClose,
   buttons,
   onChangeButtons,
+  promptButtons,
+  onChangePromptButtons,
+  promptBarEnabled,
+  onChangePromptBarEnabled,
   font,
   onChangeFont,
   paletteId,
@@ -110,6 +118,12 @@ export function SettingsDialog({
               Toolbar
             </SettingsNavItem>
             <SettingsNavItem
+              active={tab === "prompt"}
+              onClick={() => setTab("prompt")}
+            >
+              Prompt buttons
+            </SettingsNavItem>
+            <SettingsNavItem
               active={tab === "general"}
               onClick={() => setTab("general")}
             >
@@ -119,7 +133,7 @@ export function SettingsDialog({
 
           <div
             className={`flex-1 p-5 ${
-              tab === "toolbar"
+              tab === "toolbar" || tab === "prompt"
                 ? "flex flex-col overflow-hidden"
                 : "overflow-y-auto"
             }`}
@@ -128,6 +142,17 @@ export function SettingsDialog({
               <ToolbarSettings
                 buttons={buttons}
                 onChangeButtons={onChangeButtons}
+              />
+            )}
+            {tab === "prompt" && (
+              <ToolbarSettings
+                buttons={promptButtons}
+                onChangeButtons={onChangePromptButtons}
+                heading="Prompt buttons"
+                subheading="Boutons de la barre du bas : insèrent (ou envoient) leur texte dans le pane Claude actif."
+                commandLabel="Texte"
+                commandPlaceholder="texte envoyé à Claude (multi-lignes OK)"
+                showSubmit
               />
             )}
             {tab === "general" && (
@@ -150,6 +175,8 @@ export function SettingsDialog({
                 onChangeNotifWidth={onChangeNotifWidth}
                 navRailEnabled={navRailEnabled}
                 onChangeNavRailEnabled={onChangeNavRailEnabled}
+                promptBarEnabled={promptBarEnabled}
+                onChangePromptBarEnabled={onChangePromptBarEnabled}
                 messageFramesEnabled={messageFramesEnabled}
                 onChangeMessageFramesEnabled={onChangeMessageFramesEnabled}
                 autoScrollReplyEnabled={autoScrollReplyEnabled}
@@ -208,6 +235,8 @@ interface GeneralSettingsProps {
   onChangeNotifWidth: (next: number) => void;
   navRailEnabled: boolean;
   onChangeNavRailEnabled: (next: boolean) => void;
+  promptBarEnabled: boolean;
+  onChangePromptBarEnabled: (next: boolean) => void;
   messageFramesEnabled: boolean;
   onChangeMessageFramesEnabled: (next: boolean) => void;
   autoScrollReplyEnabled: boolean;
@@ -416,6 +445,8 @@ function GeneralSettings({
   onChangeNotifWidth,
   navRailEnabled,
   onChangeNavRailEnabled,
+  promptBarEnabled,
+  onChangePromptBarEnabled,
   messageFramesEnabled,
   onChangeMessageFramesEnabled,
   autoScrollReplyEnabled,
@@ -614,6 +645,12 @@ function GeneralSettings({
             onChange={onChangeNavRailEnabled}
             label="Boutons de navigation"
             hint="La barre de boutons à droite du terminal pour sauter entre les messages."
+          />
+          <SettingToggle
+            checked={promptBarEnabled}
+            onChange={onChangePromptBarEnabled}
+            label="Barre de prompts (bas)"
+            hint="La barre du bas, affichée sur les panes Claude, dont les boutons insèrent ou envoient du texte dans le champ. Configure les boutons dans l'onglet « Prompt buttons »."
           />
           <SettingToggle
             checked={messageFramesEnabled}
