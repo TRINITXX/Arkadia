@@ -38,6 +38,7 @@ import { measureCellSize } from "@/lib/cellSize";
 import { DEFAULT_CUSTOM_PALETTE, resolveActivePalette } from "@/lib/palettes";
 import { stateFromTitle, type AgentStateValue } from "@/lib/agentState";
 import { findProjectsByPath, parentOf } from "@/lib/externalAction";
+import { subscribeStable } from "@/lib/tauriEvents";
 import {
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_NOTIF_STYLE,
@@ -712,94 +713,87 @@ export function App() {
 
   // ─── Event listeners (render + closed) ─────────────────────────
 
+  // Subscribed ONCE (empty deps). The old version keyed this effect on
+  // `closePane` — whose identity changes on every `tabs` update, i.e. on every
+  // terminal-render frame (~60 Hz per active pane) — so the four listeners were
+  // torn down and re-registered every frame. `listen()` resolving *after* a
+  // cleanup leaked that listener forever ("zombie"), each one pinning a full
+  // render closure (incl. the whole `tabs` state with every RenderPayload):
+  // hours of heavy sessions grew the heap by gigabytes and every event was
+  // dispatched to thousands of dead handlers (the progressive freezes).
+  // `closePane` is read through a ref so the single subscription always calls
+  // the fresh closure.
+  const closePaneRef = useRef(closePane);
   useEffect(() => {
-    let unlistenRender: UnlistenFn | undefined;
-    let unlistenClosed: UnlistenFn | undefined;
-    let unlistenCwd: UnlistenFn | undefined;
-    let unlistenBell: UnlistenFn | undefined;
-    let active = true;
+    closePaneRef.current = closePane;
+  }, [closePane]);
 
-    async function setup() {
-      unlistenRender = await listen<RenderPayload>(
-        "terminal-render",
-        (event) => {
-          if (!active) return;
-          const paneId = event.payload.session_id;
-          const tabId = paneToTab.current.get(paneId);
-          if (!tabId) return;
-          setTabs((prev) =>
-            prev.map((t) => {
-              if (t.id !== tabId) return t;
-              const pane = t.panes[paneId];
-              if (!pane) return t;
-              return {
-                ...t,
-                panes: {
-                  ...t.panes,
-                  [paneId]: {
-                    ...pane,
-                    screen: event.payload,
-                    title: event.payload.title || pane.title,
-                  },
-                },
-              };
-            }),
-          );
-        },
-      );
-      unlistenClosed = await listen<ClosedPayload>(
-        "terminal-closed",
-        (event) => {
-          if (!active) return;
-          const paneId = event.payload.session_id;
-          const tabId = paneToTab.current.get(paneId);
-          if (!tabId) return;
-          void closePane(tabId, paneId);
-        },
-      );
-      unlistenCwd = await listen<CwdPayload>("terminal-cwd", (event) => {
-        if (!active) return;
-        const paneId = event.payload.session_id;
+  useEffect(() => {
+    const disposers = [
+      subscribeStable<RenderPayload>(listen, "terminal-render", (payload) => {
+        const paneId = payload.session_id;
         const tabId = paneToTab.current.get(paneId);
         if (!tabId) return;
         setTabs((prev) =>
           prev.map((t) => {
             if (t.id !== tabId) return t;
             const pane = t.panes[paneId];
-            if (!pane || pane.cwd === event.payload.cwd) return t;
+            if (!pane) return t;
             return {
               ...t,
               panes: {
                 ...t.panes,
-                [paneId]: { ...pane, cwd: event.payload.cwd },
+                [paneId]: {
+                  ...pane,
+                  screen: payload,
+                  title: payload.title || pane.title,
+                },
               },
             };
           }),
         );
-      });
-      unlistenBell = await listen<BellPayload>("terminal-bell", (event) => {
-        if (!active) return;
-        const paneId = event.payload.session_id;
+      }),
+      subscribeStable<ClosedPayload>(listen, "terminal-closed", (payload) => {
+        const paneId = payload.session_id;
+        const tabId = paneToTab.current.get(paneId);
+        if (!tabId) return;
+        void closePaneRef.current(tabId, paneId);
+      }),
+      subscribeStable<CwdPayload>(listen, "terminal-cwd", (payload) => {
+        const paneId = payload.session_id;
+        const tabId = paneToTab.current.get(paneId);
+        if (!tabId) return;
+        setTabs((prev) =>
+          prev.map((t) => {
+            if (t.id !== tabId) return t;
+            const pane = t.panes[paneId];
+            if (!pane || pane.cwd === payload.cwd) return t;
+            return {
+              ...t,
+              panes: {
+                ...t.panes,
+                [paneId]: { ...pane, cwd: payload.cwd },
+              },
+            };
+          }),
+        );
+      }),
+      subscribeStable<BellPayload>(listen, "terminal-bell", (payload) => {
+        const paneId = payload.session_id;
         const tabId = paneToTab.current.get(paneId);
         if (!tabId) return;
         setBellTabs((prev) =>
           prev[tabId] ? prev : { ...prev, [tabId]: true },
         );
-      });
+      }),
       // The terminal auto-scroll to the reply start is driven entirely in the
       // backend (off the Stop/PreToolUse hook, when Arkadia is foreground) — no
       // frontend listener needed. Its on/off setting is synced below.
-    }
-    void setup();
-
+    ];
     return () => {
-      active = false;
-      unlistenRender?.();
-      unlistenClosed?.();
-      unlistenCwd?.();
-      unlistenBell?.();
+      for (const dispose of disposers) dispose();
     };
-  }, [closePane]);
+  }, []);
 
   // ─── Focus a pane on request from the notification popup ────────
   // The "open in Arkadia" button emits `focus-pane` with the pane id; bring its
