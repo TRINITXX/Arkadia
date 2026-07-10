@@ -211,9 +211,11 @@ fn run_detached(command: String, cwd: String) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // DETACHED_PROCESS (0x8) | CREATE_NEW_PROCESS_GROUP (0x200): fully
-        // independent of the caller's console so a closed PTY can't kill it.
-        c.creation_flags(0x0000_0008 | 0x0000_0200);
+        // CREATE_NO_WINDOW (0x08000000) | CREATE_NEW_PROCESS_GROUP (0x200):
+        // hidden console of its own, independent of the caller's, so a closed
+        // PTY can't kill it. NOT DETACHED_PROCESS (0x8): a console-less pwsh
+        // exits 0 without ever running `-Command`.
+        c.creation_flags(0x0800_0000 | 0x0000_0200);
     }
     c.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
@@ -414,10 +416,21 @@ mod tests {
     }
 
     #[test]
-    fn run_detached_spawns_without_error() {
-        // A trivial command that exits immediately.
-        let cwd = std::env::temp_dir().to_string_lossy().to_string();
-        assert!(run_detached("exit 0".to_string(), cwd).is_ok());
+    fn run_detached_actually_runs_the_command() {
+        // Spawn success is NOT enough: with DETACHED_PROCESS a console-less
+        // pwsh exits 0 without ever running `-Command`. Assert the observable
+        // side effect instead of the spawn result.
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("ran.txt");
+        let cmd = format!("Set-Content -Path '{}' -Value ok", marker.display());
+        let cwd = dir.path().to_string_lossy().to_string();
+        assert!(run_detached(cmd, cwd).is_ok());
+        // pwsh cold-start can take a few seconds on CI-grade machines.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while !marker.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        assert!(marker.exists(), "detached pwsh never ran the command");
     }
 
     #[test]
