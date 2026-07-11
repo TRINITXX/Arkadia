@@ -41,6 +41,8 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_Graphics_Dwm",
+    # Completion chime played from Arkadia (with the popup's grace period).
+    "Win32_Media_Audio",
     # Examples only (fg_trace probe): human-input detection while tracing focus.
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_SystemInformation",

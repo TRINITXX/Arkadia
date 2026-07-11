@@ -39,6 +39,23 @@ const NOTIF_W_MAX: u32 = 560;
 const CASCADE_DX: f64 = 16.0;
 const CASCADE_DY: f64 = 32.0;
 
+/// Grace period between Claude finishing (or asking) while Arkadia is backgrounded
+/// and the notification actually appearing. If the user returns to Arkadia (or
+/// answers the pane) within this window, the popup AND its sound are cancelled —
+/// we re-check the foreground at the end of the delay, not just at the start.
+const NOTIFY_GRACE: Duration = Duration::from_secs(5);
+
+/// Debounce for the completion chime: Claude Code fires several hooks around one
+/// completion (a `Stop`, then often a `Notification`), each landing a signal, so
+/// without this the pane would chime two or three times. Collapses them into one.
+const SOUND_DEBOUNCE: Duration = Duration::from_secs(3);
+
+/// Completion chime, played by Arkadia itself (for Arkadia panes) so its timing
+/// tracks the popup's grace delay. Non-Arkadia Claude sessions keep sounding from
+/// `notify-done.ps1`. Matches the file that hook used.
+#[cfg(windows)]
+const NOTIFY_SOUND: &str = r"C:\Windows\Media\Windows Hardware Fail.wav";
+
 /// Notification style (mirrors the frontend `notifStyle` setting), stored in the
 /// queue as an `AtomicU8`.
 const STYLE_OFF: u8 = 0;
@@ -86,6 +103,10 @@ pub struct PopupQueue {
     /// Whether to auto-scroll the terminal to the reply start when Claude
     /// finishes while Arkadia is foreground (mirrors the frontend setting).
     pub auto_scroll: std::sync::atomic::AtomicBool,
+    /// Last time the completion chime played. Collapses the several hooks Claude
+    /// Code fires around one completion (Stop, then Notification) into a single
+    /// chime — see `SOUND_DEBOUNCE`.
+    pub last_sound: parking_lot::Mutex<Option<Instant>>,
 }
 
 impl Default for PopupQueue {
@@ -96,6 +117,7 @@ impl Default for PopupQueue {
             fullscreen: std::sync::atomic::AtomicBool::new(false),
             notif_width: std::sync::atomic::AtomicU32::new(NOTIF_W as u32),
             auto_scroll: std::sync::atomic::AtomicBool::new(true),
+            last_sound: parking_lot::Mutex::new(None),
         }
     }
 }
@@ -273,38 +295,78 @@ fn handle_signal(
         }
     };
 
-    // Foreground = the main window has focus, or is the front-most real window
-    // with only an always-on-top overlay (Picture-in-Picture) above it.
-    let main_focused = app
+    // If the user is looking at Arkadia right now, auto-scroll the terminal to the
+    // start of the reply immediately (nice while you're watching; done directly off
+    // the Stop/PreToolUse hook — reliable, no frontend round-trip). We do NOT scroll
+    // when backgrounded: the popup mirrors the same Claude Code screen, so scrolling
+    // would move what the popup shows. This never suppresses the notification — the
+    // chime still fires after the grace regardless of focus.
+    if main_is_foreground(app) && app.state::<PopupQueue>().auto_scroll.load(Ordering::Acquire) {
+        log_line("Arkadia foreground — scrolling terminal to reply");
+        let sessions = app.state::<crate::terminal::SessionMap>();
+        crate::terminal::scroll_pane_to_reply_top(app, &pane_id, sessions.inner());
+    }
+
+    // Always wait out the grace period, then: chime unconditionally, and show the
+    // popup only if the user is STILL away. The re-check at the END of the delay
+    // (not just now) is what makes "come back within 5s → no popup" work, while the
+    // sound plays no matter what.
+    let app = app.clone();
+    let registry = Arc::clone(registry);
+    let kind = derive_kind(sig);
+    let cwd = cwd.to_string();
+    let ts = sig.ts.unwrap_or(0);
+    log_line(&format!(
+        "pane {pane_id} — chiming in {}s; popup too unless Arkadia has focus by then",
+        NOTIFY_GRACE.as_secs()
+    ));
+    std::thread::spawn(move || {
+        std::thread::sleep(NOTIFY_GRACE);
+        show_after_grace(&app, &registry, pane_id, kind, cwd, ts);
+    });
+}
+
+/// True when Arkadia's main window is focused, or is the front-most real window
+/// with only an always-on-top overlay (PiP) above it.
+fn main_is_foreground(app: &AppHandle) -> bool {
+    let focused = app
         .get_webview_window("main")
         .and_then(|w| w.is_focused().ok())
         .unwrap_or(false);
-    if main_focused || main_is_effective_foreground(&app) {
-        // The user is looking at Arkadia → auto-scroll the terminal to the start
-        // of the reply (done directly here off the Stop/PreToolUse hook — reliable
-        // and no frontend round-trip), and don't pop up. We deliberately do NOT
-        // scroll when backgrounded: the popup mirrors the same Claude Code screen,
-        // so scrolling it would move what the popup is showing.
-        if app
-            .state::<PopupQueue>()
-            .auto_scroll
-            .load(Ordering::Acquire)
-        {
-            log_line("Arkadia foreground — scrolling terminal to reply, no popup");
-            let sessions = app.state::<crate::terminal::SessionMap>();
-            crate::terminal::scroll_pane_to_reply_top(&app, &pane_id, sessions.inner());
-        } else {
-            log_line("Arkadia foreground — auto-scroll off, no popup");
-        }
+    focused || main_is_effective_foreground(app)
+}
+
+/// Fires `NOTIFY_GRACE` after a signal. The chime ALWAYS plays (debounced) — the
+/// user wants an audible cue no matter what. The POPUP is subject to the grace:
+/// it appears only if the user is still away and notifications are on/allowed. All
+/// the style/fullscreen/enrich gates run here, at fire time, so they honor the
+/// current state — not the state when the signal first arrived.
+fn show_after_grace(
+    app: &AppHandle,
+    registry: &Arc<AgentRegistry>,
+    pane_id: String,
+    kind: String,
+    cwd: String,
+    ts: u64,
+) {
+    // Sound first, unconditionally (debounced against the multi-hook double-fire).
+    // It ignores focus, notification style and fullscreen on purpose — "quoi qu'il
+    // arrive".
+    maybe_play_sound(app);
+
+    // The popup, however, IS cancelled if the user came back (or answered the pane,
+    // which requires focusing Arkadia) during the grace window.
+    if main_is_foreground(app) {
+        log_line(&format!(
+            "grace elapsed but Arkadia has focus — chimed, no popup for pane {pane_id}"
+        ));
         return;
     }
 
-    // Backgrounded → show the notification (it has its own scroll); leave the
-    // terminal alone. Gated on the notification style setting.
     let queue = app.state::<PopupQueue>();
     let style = queue.style.load(Ordering::Acquire);
     if style == STYLE_OFF {
-        log_line("notifications disabled in settings — ignoring");
+        log_line("notifications off — chimed, no popup");
         return;
     }
 
@@ -346,9 +408,9 @@ fn handle_signal(
 
     let item = WaitingItem {
         pane_id,
-        kind: derive_kind(sig),
-        cwd: cwd.to_string(),
-        ts: sig.ts.unwrap_or(0),
+        kind,
+        cwd,
+        ts,
         project_name,
         tab_title,
     };
@@ -370,6 +432,43 @@ fn handle_signal(
     }
     sync_popups(app);
 }
+
+/// Plays the completion chime unless one already played within `SOUND_DEBOUNCE`,
+/// which collapses the several hooks Claude Code fires for one completion into a
+/// single chime.
+fn maybe_play_sound(app: &AppHandle) {
+    let queue = app.state::<PopupQueue>();
+    {
+        let mut last = queue.last_sound.lock();
+        if let Some(prev) = *last {
+            if prev.elapsed() < SOUND_DEBOUNCE {
+                log_line("chime debounced (recent sound)");
+                return;
+            }
+        }
+        *last = Some(Instant::now());
+    }
+    play_notification_sound();
+}
+
+/// Plays the completion chime synchronously: called from a throwaway grace thread,
+/// so `SND_SYNC` blocks only that disposable thread and keeps the path string alive
+/// for the whole call. Arkadia panes sound from here (with the popup's grace
+/// delay); non-Arkadia sessions still sound from `notify-done.ps1`.
+#[cfg(windows)]
+fn play_notification_sound() {
+    use windows::core::HSTRING;
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_FILENAME, SND_NODEFAULT, SND_SYNC};
+    let path = HSTRING::from(NOTIFY_SOUND);
+    // SAFETY: PlaySoundW reads the (null-terminated, valid-for-the-call) path and
+    // plays a system .wav; no owned resources are handed off.
+    unsafe {
+        let _ = PlaySoundW(&path, None, SND_FILENAME | SND_SYNC | SND_NODEFAULT);
+    }
+}
+
+#[cfg(not(windows))]
+fn play_notification_sound() {}
 
 /// True when Arkadia's main window is the front-most *real* application window —
 /// i.e. ignoring always-on-top overlays (Chrome / sfvip-player Picture-in-Picture
