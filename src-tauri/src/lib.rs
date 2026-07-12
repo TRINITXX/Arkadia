@@ -146,6 +146,7 @@ pub fn run() {
             save_screenshot,
             conversation::read_conversation,
             conversation::read_conversation_delta,
+            conversation::pane_session_id,
             popup::popup_request_state,
             popup::popup_log_ui,
             popup::popup_set_style,

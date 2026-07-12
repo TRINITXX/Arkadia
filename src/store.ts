@@ -31,6 +31,10 @@ import {
   type KvStore,
   type StoreOpener,
 } from "@/lib/durableStore";
+import {
+  normalizeSessionSnapshot,
+  type SessionSnapshot,
+} from "@/lib/sessionSnapshot";
 import { storeIsHealthy } from "@/lib/storeHealth";
 import { dedupeProjectsByPath } from "@/lib/externalAction";
 
@@ -60,6 +64,7 @@ const KEY_MODERN_VIEW_ENABLED = "modernViewEnabled";
 const KEY_TOOL_DENSITY = "toolDensity";
 const KEY_SIDEPANEL_OPEN = "sidepanelOpen";
 const KEY_SCROLLBACK_LINES = "scrollbackLines";
+const KEY_SESSION_SNAPSHOT = "sessionSnapshot";
 
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 28;
@@ -118,6 +123,8 @@ export interface PersistedState {
   sidepanelOpen: boolean;
   /** Per-pane scrollback line cap (mirrored to the Rust backend). */
   scrollbackLines: number;
+  /** Open tabs at last save, for the on-demand "restore previous session". */
+  sessionSnapshot: SessionSnapshot | null;
 }
 
 const DEFAULT_STATE: PersistedState = {
@@ -142,6 +149,7 @@ const DEFAULT_STATE: PersistedState = {
   toolDensity: DEFAULT_TOOL_DENSITY,
   sidepanelOpen: true,
   scrollbackLines: SCROLLBACK_LINES_DEFAULT,
+  sessionSnapshot: null,
 };
 
 /** Reads a boolean store key, defaulting to `fallback`. */
@@ -437,6 +445,7 @@ export async function loadState(
   const rawToolDensity = await store.get<unknown>(KEY_TOOL_DENSITY);
   const rawSidepanelOpen = await store.get<unknown>(KEY_SIDEPANEL_OPEN);
   const rawScrollbackLines = await store.get<unknown>(KEY_SCROLLBACK_LINES);
+  const rawSessionSnapshot = await store.get<unknown>(KEY_SESSION_SNAPSHOT);
 
   return {
     projects: dedupeProjectsByPath(
@@ -485,6 +494,7 @@ export async function loadState(
     toolDensity: normalizeToolDensity(rawToolDensity),
     sidepanelOpen: boolOr(rawSidepanelOpen, DEFAULT_STATE.sidepanelOpen),
     scrollbackLines: normalizeScrollbackLines(rawScrollbackLines),
+    sessionSnapshot: normalizeSessionSnapshot(rawSessionSnapshot),
   };
 }
 
@@ -511,6 +521,12 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_TOOL_DENSITY, state.toolDensity);
   await store.set(KEY_SIDEPANEL_OPEN, state.sidepanelOpen);
   await store.set(KEY_SCROLLBACK_LINES, state.scrollbackLines);
+  // Never clobber the previous session's snapshot with an empty one: after a
+  // relaunch the tabs start empty, and this key IS what "restore previous
+  // session" reads.
+  if (state.sessionSnapshot && state.sessionSnapshot.tabs.length > 0) {
+    await store.set(KEY_SESSION_SNAPSHOT, state.sessionSnapshot);
+  }
   await store.save();
   // Rotate a healthy snapshot into the backup ring (main window only). Ordered
   // after the primary save so at most one file is ever mid-write on a crash.

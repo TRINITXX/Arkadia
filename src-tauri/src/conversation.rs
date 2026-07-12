@@ -141,6 +141,20 @@ struct PaneMap {
     session_id: Option<String>,
 }
 
+/// The Claude session id the notify hook recorded for a pane, or None when the
+/// pane never ran Claude. The pane-map files survive restarts, so "restore
+/// previous session" resolves the `claude --resume` target from the OLD pane id.
+#[tauri::command]
+pub fn pane_session_id(pane_id: String) -> Option<String> {
+    let path = dirs::data_local_dir()?
+        .join("Arkadia")
+        .join("panes")
+        .join(format!("{pane_id}.json"));
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let m: PaneMap = serde_json::from_str(raw.trim_start_matches('\u{feff}')).ok()?;
+    m.session_id.filter(|s| !s.is_empty())
+}
+
 /// Resolves a pane's transcript from the hook-written map: prefer the exact
 /// `transcriptPath`; if it's stale/missing, fall back to a search by session id.
 fn transcript_from_pane_map(pane_id: &str) -> Option<PathBuf> {

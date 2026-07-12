@@ -51,6 +51,8 @@ interface SidepanelProps {
   /** Drag-reorder of the "Active" list: full list of active project ids in
    *  their new visual order (persisted as `Project.activeOrder`). */
   onReorderActive: (orderedIds: string[]) => void;
+  /** Rebuild the previous session's tabs (null = nothing to restore). */
+  onRestoreSession: (() => void) | null;
   tabs: Tab[];
   paneAgentStates: Record<string, AgentStateValue>;
   /** Projects considered "active" (received input this session + still have a
@@ -205,6 +207,7 @@ export function Sidepanel({
   onPlaceWorkspaceInRoot,
   onToggleWorkspaceCollapsed,
   onReorderActive,
+  onRestoreSession,
   tabs,
   paneAgentStates,
   activeProjectIds,
@@ -552,6 +555,15 @@ export function Sidepanel({
         </div>
       )}
       <div className="flex flex-col gap-1 p-2">
+        {onRestoreSession && (
+          <button
+            onClick={onRestoreSession}
+            title="Rouvre les onglets de la session précédente ; les panes Claude reprennent leur conversation (claude --resume)"
+            className="rounded border border-zinc-800/60 bg-transparent px-2 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+          >
+            ⟳ Restaurer la session précédente
+          </button>
+        )}
         <button
           onClick={onAdd}
           className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"

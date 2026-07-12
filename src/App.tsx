@@ -42,6 +42,11 @@ import { findProjectsByPath, parentOf } from "@/lib/externalAction";
 import { subscribeStable } from "@/lib/tauriEvents";
 import { dropFrame, getFrame, publishFrame } from "@/lib/frameStore";
 import {
+  buildSessionSnapshot,
+  materializeTree,
+  type SessionSnapshot,
+} from "@/lib/sessionSnapshot";
+import {
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_NOTIF_STYLE,
   DEFAULT_NOTIF_WIDTH,
@@ -132,6 +137,9 @@ export function App() {
   const [scrollbackLines, setScrollbackLines] = useState(
     SCROLLBACK_LINES_DEFAULT,
   );
+  // The PREVIOUS session's tab snapshot, frozen at load: the on-demand
+  // "restore previous session" target. Cleared once restored (one-shot).
+  const [lastSession, setLastSession] = useState<SessionSnapshot | null>(null);
   // Modern-view message-type filters (session-only; default all visible).
   const [convFilters, setConvFilters] =
     useState<ConvFilters>(DEFAULT_CONV_FILTERS);
@@ -365,6 +373,7 @@ export function App() {
         setToolDensity(state.toolDensity);
         setSidepanelOpen(state.sidepanelOpen);
         setScrollbackLines(state.scrollbackLines);
+        setLastSession(state.sessionSnapshot);
         setLoaded(true);
       })
       .catch((e) => {
@@ -402,6 +411,7 @@ export function App() {
         toolDensity,
         sidepanelOpen,
         scrollbackLines,
+        sessionSnapshot: buildSessionSnapshot(tabs, claudePaneIds, Date.now()),
       });
     }, 500);
     return () => clearTimeout(t);
@@ -428,6 +438,8 @@ export function App() {
     toolDensity,
     sidepanelOpen,
     scrollbackLines,
+    tabs,
+    claudePaneIds,
   ]);
 
   // The notification is triggered by the Rust backend, so mirror its style and
@@ -555,6 +567,63 @@ export function App() {
     },
     [spawnPane],
   );
+
+  // ─── Session restore ───────────────────────────────────────────
+
+  // Rebuilds the previous session's tabs (splits, cwds) on demand; panes that
+  // ran Claude relaunch it with `claude --resume` on their old conversation
+  // (resolved from the on-disk pane map via the SAVED pane id). One-shot:
+  // consumed on first use, best-effort per tab.
+  const restoreLastSession = useCallback(async () => {
+    const snap = lastSession;
+    if (!snap) return;
+    setLastSession(null);
+    let restored = 0;
+    for (const st of snap.tabs) {
+      const project = projects.find((p) => p.id === st.projectId);
+      if (!project) continue;
+      const newIds: string[] = [];
+      for (const p of st.panes) {
+        let init: string | undefined;
+        if (p.wasClaude) {
+          const sid = await invoke<string | null>("pane_session_id", {
+            paneId: p.paneId,
+          }).catch(() => null);
+          if (sid) init = `claude --resume ${sid}`;
+        }
+        const paneId = await spawnPane(p.cwd ?? project.path, init);
+        if (!paneId) break;
+        newIds.push(paneId);
+      }
+      if (newIds.length !== st.panes.length) continue;
+      const tabId = newTabId();
+      const panes: Record<string, PaneState> = {};
+      newIds.forEach((id, i) => {
+        paneToTab.current.set(id, tabId);
+        panes[id] = {
+          id,
+          title: st.panes[i].title || project.name,
+          cwd: null,
+        };
+      });
+      const tab: Tab = {
+        id: tabId,
+        projectId: st.projectId,
+        tree: materializeTree(st.tree, newIds),
+        activePaneId: newIds[st.activePane] ?? newIds[0],
+        panes,
+      };
+      setTabs((prev) => [...prev, tab]);
+      setActiveTabIdByProject((prev) => ({ ...prev, [st.projectId]: tabId }));
+      restored++;
+    }
+    pushToast(
+      restored > 0 ? "info" : "error",
+      restored > 0
+        ? `⟳ ${restored} onglet${restored > 1 ? "s" : ""} restauré${restored > 1 ? "s" : ""}`
+        : "rien à restaurer (projets disparus ?)",
+    );
+  }, [lastSession, projects, spawnPane, pushToast]);
 
   // ─── Closing ───────────────────────────────────────────────────
 
@@ -1389,6 +1458,11 @@ export function App() {
           onPlaceWorkspaceInRoot={onPlaceWorkspaceInRoot}
           onToggleWorkspaceCollapsed={onToggleWorkspaceCollapsed}
           onReorderActive={onReorderActive}
+          onRestoreSession={
+            lastSession && lastSession.tabs.length > 0
+              ? restoreLastSession
+              : null
+          }
           tabs={tabs}
           paneAgentStates={effectivePaneStates}
           activeProjectIds={activeProjectIds}
