@@ -5,6 +5,8 @@ import {
   ChevronDown,
   ChevronRight,
   NotebookPen,
+  PanelLeftClose,
+  PanelLeftOpen,
   Settings as SettingsIcon,
 } from "lucide-react";
 import type { ActionButton, FolderButton, ToolbarButton } from "@/types";
@@ -19,6 +21,8 @@ interface ToolbarProps {
   onToggleNotepad: () => void;
   modernViewEnabled: boolean;
   onToggleModernView: () => void;
+  sidepanelOpen: boolean;
+  onToggleSidepanel: () => void;
 }
 
 export function Toolbar({
@@ -30,9 +34,27 @@ export function Toolbar({
   onToggleNotepad,
   modernViewEnabled,
   onToggleModernView,
+  sidepanelOpen,
+  onToggleSidepanel,
 }: ToolbarProps) {
   return (
     <div className="flex h-9 items-center gap-1 border-b border-zinc-800 bg-zinc-950 px-2">
+      <button
+        onClick={onToggleSidepanel}
+        className="mr-1 flex size-7 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+        title={sidepanelOpen ? "Fermer le sidepanel" : "Ouvrir le sidepanel"}
+        aria-label={
+          sidepanelOpen ? "Fermer le sidepanel" : "Ouvrir le sidepanel"
+        }
+        aria-pressed={sidepanelOpen}
+        type="button"
+      >
+        {sidepanelOpen ? (
+          <PanelLeftClose size={14} />
+        ) : (
+          <PanelLeftOpen size={14} />
+        )}
+      </button>
       <div className="flex flex-1 items-center gap-1 overflow-x-auto">
         {buttons.length === 0 && (
           <span className="text-xs text-zinc-600">

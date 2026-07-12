@@ -55,6 +55,7 @@ const KEY_MESSAGE_FRAMES_ENABLED = "messageFramesEnabled";
 const KEY_AUTO_SCROLL_REPLY = "autoScrollReplyEnabled";
 const KEY_MODERN_VIEW_ENABLED = "modernViewEnabled";
 const KEY_TOOL_DENSITY = "toolDensity";
+const KEY_SIDEPANEL_OPEN = "sidepanelOpen";
 
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 28;
@@ -109,6 +110,8 @@ export interface PersistedState {
   modernViewEnabled: boolean;
   /** Default expand state of tool-call cards in the modern view. */
   toolDensity: ToolDensity;
+  /** Show the project sidepanel (toggled from the toolbar). */
+  sidepanelOpen: boolean;
 }
 
 const DEFAULT_STATE: PersistedState = {
@@ -131,6 +134,7 @@ const DEFAULT_STATE: PersistedState = {
   autoScrollReplyEnabled: true,
   modernViewEnabled: false,
   toolDensity: DEFAULT_TOOL_DENSITY,
+  sidepanelOpen: true,
 };
 
 /** Reads a boolean store key, defaulting to `fallback`. */
@@ -291,6 +295,8 @@ function normalizeProject(p: unknown): Project | null {
       typeof x.workspaceId === "string" && x.workspaceId.length > 0
         ? x.workspaceId
         : null,
+    rootOrder: typeof x.rootOrder === "number" ? x.rootOrder : undefined,
+    activeOrder: typeof x.activeOrder === "number" ? x.activeOrder : undefined,
   };
 }
 
@@ -411,6 +417,7 @@ export async function loadState(
     KEY_MODERN_VIEW_ENABLED,
   );
   const rawToolDensity = await store.get<unknown>(KEY_TOOL_DENSITY);
+  const rawSidepanelOpen = await store.get<unknown>(KEY_SIDEPANEL_OPEN);
 
   return {
     projects: dedupeProjectsByPath(
@@ -457,6 +464,7 @@ export async function loadState(
       DEFAULT_STATE.modernViewEnabled,
     ),
     toolDensity: normalizeToolDensity(rawToolDensity),
+    sidepanelOpen: boolOr(rawSidepanelOpen, DEFAULT_STATE.sidepanelOpen),
   };
 }
 
@@ -481,6 +489,7 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_AUTO_SCROLL_REPLY, state.autoScrollReplyEnabled);
   await store.set(KEY_MODERN_VIEW_ENABLED, state.modernViewEnabled);
   await store.set(KEY_TOOL_DENSITY, state.toolDensity);
+  await store.set(KEY_SIDEPANEL_OPEN, state.sidepanelOpen);
   await store.save();
   // Rotate a healthy snapshot into the backup ring (main window only). Ordered
   // after the primary save so at most one file is ever mid-write on a crash.

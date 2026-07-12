@@ -25,6 +25,7 @@ import {
   type ModernNavHandle,
 } from "@/components/ModernConversationView";
 import { loadState, saveState, newProjectId, newWorkspaceId } from "@/store";
+import { applyActiveReorder } from "@/lib/activeOrder";
 import { WorkspaceContextMenu } from "@/components/WorkspaceContextMenu";
 import { WorkspaceDialog } from "@/components/WorkspaceDialog";
 import {
@@ -123,6 +124,8 @@ export function App() {
   const [modernViewEnabled, setModernViewEnabled] = useState(false);
   const [toolDensity, setToolDensity] =
     useState<ToolDensity>(DEFAULT_TOOL_DENSITY);
+  // Show the project sidepanel (toggled from the toolbar, persisted).
+  const [sidepanelOpen, setSidepanelOpen] = useState(true);
   // Modern-view message-type filters (session-only; default all visible).
   const [convFilters, setConvFilters] =
     useState<ConvFilters>(DEFAULT_CONV_FILTERS);
@@ -222,6 +225,12 @@ export function App() {
       next.add(projectId);
       return next;
     });
+  }, []);
+
+  // Drag-reorder of the sidebar "Active" list: persist the new manual order
+  // (`activeOrder`) for the reordered projects; saveState picks it up.
+  const onReorderActive = useCallback((orderedIds: string[]) => {
+    setProjects((prev) => applyActiveReorder(prev, orderedIds));
   }, []);
 
   // Projects shown under the sidebar "Active" tab: received input this session
@@ -348,6 +357,7 @@ export function App() {
         setAutoScrollReplyEnabled(state.autoScrollReplyEnabled);
         setModernViewEnabled(state.modernViewEnabled);
         setToolDensity(state.toolDensity);
+        setSidepanelOpen(state.sidepanelOpen);
         setLoaded(true);
       })
       .catch((e) => {
@@ -383,6 +393,7 @@ export function App() {
         autoScrollReplyEnabled,
         modernViewEnabled,
         toolDensity,
+        sidepanelOpen,
       });
     }, 500);
     return () => clearTimeout(t);
@@ -407,6 +418,7 @@ export function App() {
     autoScrollReplyEnabled,
     modernViewEnabled,
     toolDensity,
+    sidepanelOpen,
   ]);
 
   // The notification is triggered by the Rust backend, so mirror its style and
@@ -1266,6 +1278,9 @@ export function App() {
       if (!activeProject) return;
       const spawned = await spawnTabFor(activeProject);
       if (!spawned) return;
+      // Running a toolbar action (ccd, ccdr, …) is deliberate user input:
+      // surface the project in the sidebar "Active" tab, like typing would.
+      markProjectInput(activeProject.id);
       // Wait for pwsh + PSReadLine to be ready, then send the command.
       setTimeout(async () => {
         try {
@@ -1280,7 +1295,7 @@ export function App() {
         }
       }, TOOLBAR_RUN_DELAY_MS);
     },
-    [activeProject, spawnTabFor],
+    [activeProject, spawnTabFor, markProjectInput],
   );
 
   // Bottom prompt bar: type (or send) the button's text into the active Claude
@@ -1331,29 +1346,32 @@ export function App() {
 
   return (
     <div className="relative flex h-screen w-screen bg-zinc-950 text-zinc-100">
-      <Sidepanel
-        projects={projects}
-        workspaces={workspaces}
-        activeProjectId={activeProjectId}
-        onActivate={setActiveProjectId}
-        onAdd={() => setAddOpen(true)}
-        onAddWorkspace={() => setWorkspaceDialog({ mode: "create" })}
-        onProjectContextMenu={(project, x, y) =>
-          setProjectMenu({ project, x, y })
-        }
-        onCloseProjectTabs={closeProjectTabs}
-        onWorkspaceContextMenu={(workspace, x, y) =>
-          setWorkspaceMenu({ workspace, x, y })
-        }
-        onMoveProject={onMoveProject}
-        onPlaceProjectInRoot={onPlaceProjectInRoot}
-        onReorderWorkspaces={onReorderWorkspaces}
-        onPlaceWorkspaceInRoot={onPlaceWorkspaceInRoot}
-        onToggleWorkspaceCollapsed={onToggleWorkspaceCollapsed}
-        tabs={tabs}
-        paneAgentStates={effectivePaneStates}
-        activeProjectIds={activeProjectIds}
-      />
+      {sidepanelOpen && (
+        <Sidepanel
+          projects={projects}
+          workspaces={workspaces}
+          activeProjectId={activeProjectId}
+          onActivate={setActiveProjectId}
+          onAdd={() => setAddOpen(true)}
+          onAddWorkspace={() => setWorkspaceDialog({ mode: "create" })}
+          onProjectContextMenu={(project, x, y) =>
+            setProjectMenu({ project, x, y })
+          }
+          onCloseProjectTabs={closeProjectTabs}
+          onWorkspaceContextMenu={(workspace, x, y) =>
+            setWorkspaceMenu({ workspace, x, y })
+          }
+          onMoveProject={onMoveProject}
+          onPlaceProjectInRoot={onPlaceProjectInRoot}
+          onReorderWorkspaces={onReorderWorkspaces}
+          onPlaceWorkspaceInRoot={onPlaceWorkspaceInRoot}
+          onToggleWorkspaceCollapsed={onToggleWorkspaceCollapsed}
+          onReorderActive={onReorderActive}
+          tabs={tabs}
+          paneAgentStates={effectivePaneStates}
+          activeProjectIds={activeProjectIds}
+        />
+      )}
 
       <div className="flex flex-1 flex-col overflow-hidden">
         <TabBar
@@ -1376,6 +1394,8 @@ export function App() {
           onToggleNotepad={() => setNotepadOpen((v) => !v)}
           modernViewEnabled={modernViewEnabled}
           onToggleModernView={() => setModernViewEnabled((v) => !v)}
+          sidepanelOpen={sidepanelOpen}
+          onToggleSidepanel={() => setSidepanelOpen((v) => !v)}
         />
 
         {error && (

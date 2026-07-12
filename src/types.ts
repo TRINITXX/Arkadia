@@ -107,6 +107,12 @@ export interface Project {
    * `Workspace.order`. Undefined → falls back to the bottom "Ungrouped" group.
    */
   rootOrder?: number;
+  /**
+   * Manual position in the sidepanel "Active" list (drag-reorder), persisted
+   * per project so it survives across sessions. Undefined = never reordered →
+   * sorts after every ordered project (see `lib/activeOrder.ts`).
+   */
+  activeOrder?: number;
 }
 
 export interface Workspace {

@@ -14,9 +14,17 @@ import {
   type DragStartEvent,
   type Modifier,
 } from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { shortenPath } from "@/store";
 import { aggregate, isActive, type AgentStateValue } from "@/lib/agentState";
+import { sortActiveProjects } from "@/lib/activeOrder";
 import type { Project, Tab, Workspace } from "@/types";
 import { AgentBadge } from "./AgentBadge";
 
@@ -40,6 +48,9 @@ interface SidepanelProps {
   onReorderWorkspaces: (oldIndex: number, newIndex: number) => void;
   onPlaceWorkspaceInRoot: (workspaceId: string, rootOrder: number) => void;
   onToggleWorkspaceCollapsed: (id: string) => void;
+  /** Drag-reorder of the "Active" list: full list of active project ids in
+   *  their new visual order (persisted as `Project.activeOrder`). */
+  onReorderActive: (orderedIds: string[]) => void;
   tabs: Tab[];
   paneAgentStates: Record<string, AgentStateValue>;
   /** Projects considered "active" (received input this session + still have a
@@ -193,6 +204,7 @@ export function Sidepanel({
   onReorderWorkspaces,
   onPlaceWorkspaceInRoot,
   onToggleWorkspaceCollapsed,
+  onReorderActive,
   tabs,
   paneAgentStates,
   activeProjectIds,
@@ -215,12 +227,11 @@ export function Sidepanel({
     }
   }, [activeProjectIds]);
 
-  // "Active" tab: flat list of active projects, sorted by name.
+  // "Active" tab: flat list of active projects — manual drag order first
+  // (persisted `activeOrder`), never-reordered ones after, by name.
   const activeProjects = useMemo(
     () =>
-      projects
-        .filter((p) => activeProjectIds.has(p.id))
-        .sort((a, b) => a.name.localeCompare(b.name)),
+      sortActiveProjects(projects.filter((p) => activeProjectIds.has(p.id))),
     [projects, activeProjectIds],
   );
   // "Inactive" tab shows the usual tree minus active projects (workspaces kept).
@@ -447,21 +458,40 @@ export function Sidepanel({
               no active project — type in a terminal to mark it active
             </div>
           ) : (
-            activeProjects.map((project) => (
-              <StaticProjectRow
-                key={project.id}
-                project={project}
-                active={project.id === activeProjectId}
-                onActivate={onActivate}
-                onContextMenu={onProjectContextMenu}
-                onCloseTabs={onCloseProjectTabs}
-                agentStates={projectAgentStates(
-                  project.id,
-                  tabs,
-                  paneAgentStates,
-                )}
-              />
-            ))
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={(event) => {
+                const { active, over } = event;
+                if (!over || active.id === over.id) return;
+                const ids = activeProjects.map((p) => p.id);
+                const from = ids.indexOf(String(active.id));
+                const to = ids.indexOf(String(over.id));
+                if (from < 0 || to < 0) return;
+                onReorderActive(arrayMove(ids, from, to));
+              }}
+            >
+              <SortableContext
+                items={activeProjects.map((p) => p.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {activeProjects.map((project) => (
+                  <ActiveProjectRow
+                    key={project.id}
+                    project={project}
+                    active={project.id === activeProjectId}
+                    onActivate={onActivate}
+                    onContextMenu={onProjectContextMenu}
+                    onCloseTabs={onCloseProjectTabs}
+                    agentStates={projectAgentStates(
+                      project.id,
+                      tabs,
+                      paneAgentStates,
+                    )}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
           )}
         </div>
       ) : (
@@ -832,8 +862,9 @@ function ProjectRowContent({
   );
 }
 
-/** Non-draggable project row used in the flat "Active" list. */
-function StaticProjectRow({
+/** Sortable project row of the flat "Active" list: drag to reorder (persisted
+ *  as `activeOrder`), click to activate, middle-click to close all tabs. */
+function ActiveProjectRow({
   project,
   active,
   onActivate,
@@ -841,12 +872,28 @@ function StaticProjectRow({
   onCloseTabs,
   agentStates,
 }: DraggableProjectRowProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: project.id });
   return (
     <div
-      style={{ borderLeftColor: project.color }}
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      style={{
+        borderLeftColor: project.color,
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
       onClick={() => onActivate(project.id)}
       onMouseDown={(e) => {
-        // Middle-click closes every tab of this project.
+        // Middle-click closes every tab of this project. (The drag sensor only
+        // activates on the primary button, so this never starts a drag.)
         if (e.button === 1) {
           e.preventDefault();
           onCloseTabs?.(project.id);
@@ -858,7 +905,7 @@ function StaticProjectRow({
       }}
       className={`group mx-1.5 mb-0.5 flex cursor-pointer items-start gap-2 rounded border-l-[3px] py-1.5 pl-2 pr-2 ${
         active ? "bg-zinc-800 text-zinc-100" : "text-zinc-300 hover:bg-zinc-900"
-      }`}
+      } ${isDragging ? "z-10 opacity-70" : ""}`}
       title={project.path}
     >
       <ProjectRowContent project={project} agentStates={agentStates} />
