@@ -2,7 +2,8 @@
 //!
 //! `termwiz` provides only the parser + primitive types (Action, Cell attrs).
 //! We implement a small TerminalState on top: visible screen as `Vec<Vec<TerminalCell>>`,
-//! scrollback as `VecDeque<Vec<TerminalCell>>` capped at 10k lines, cursor + SGR state
+//! scrollback as `VecDeque<Vec<TerminalCell>>` capped at 20k lines by default
+//! (user-configurable, see `set_scrollback_cap`), cursor + SGR state
 //! tracking, and minimal alt-screen support (so claude code's TUI works).
 //!
 //! Goals : strikethrough attribute (vt100 0.15 lacks it) + scroll into history.
@@ -20,7 +21,12 @@ use termwiz::escape::parser::Parser;
 use termwiz::escape::{Action, ControlCode, Esc, EscCode, OperatingSystemCommand};
 use unicode_width::UnicodeWidthChar;
 
-pub const SCROLLBACK_CAP: usize = 100_000;
+/// Scrollback line cap: default and user-configurable bounds (Settings →
+/// "Scrollback"). Each line holds one `TerminalCell` (own `String` + attrs) per
+/// column, so the cap directly bounds per-pane memory.
+pub const DEFAULT_SCROLLBACK_CAP: usize = 20_000;
+pub const SCROLLBACK_CAP_MIN: usize = 1_000;
+pub const SCROLLBACK_CAP_MAX: usize = 100_000;
 
 /// Underline rendering style. Wire format: 0 = none, 1 = single, 2 = double,
 /// 3 = curly, 4 = dotted, 5 = dashed. Maps to termwiz's `Underline` enum.
@@ -132,6 +138,9 @@ pub struct TerminalState {
     alt_screen: Option<Vec<Vec<TerminalCell>>>,
     on_alt: bool,
     scrollback: VecDeque<Vec<TerminalCell>>,
+    /// Max scrollback lines kept for this pane (user setting, clamped to
+    /// `SCROLLBACK_CAP_MIN..=SCROLLBACK_CAP_MAX`).
+    scrollback_cap: usize,
     parser: Parser,
     mouse_protocol: MouseProtocol,
     mouse_encoding: MouseEncoding,
@@ -180,6 +189,7 @@ impl TerminalState {
             alt_screen: None,
             on_alt: false,
             scrollback: VecDeque::new(),
+            scrollback_cap: DEFAULT_SCROLLBACK_CAP,
             parser: Parser::new(),
             mouse_protocol: MouseProtocol::None,
             mouse_encoding: MouseEncoding::Default,
@@ -226,6 +236,19 @@ impl TerminalState {
             0
         } else {
             self.scrollback.len()
+        }
+    }
+
+    pub fn scrollback_cap(&self) -> usize {
+        self.scrollback_cap
+    }
+
+    /// Sets the scrollback line cap (clamped to the supported bounds) and
+    /// immediately evicts the oldest lines if the history already exceeds it.
+    pub fn set_scrollback_cap(&mut self, cap: usize) {
+        self.scrollback_cap = cap.clamp(SCROLLBACK_CAP_MIN, SCROLLBACK_CAP_MAX);
+        while self.scrollback.len() > self.scrollback_cap {
+            self.scrollback.pop_front();
         }
     }
 
@@ -841,7 +864,7 @@ impl TerminalState {
         } else {
             let top = self.main_screen.remove(0);
             self.scrollback.push_back(top);
-            while self.scrollback.len() > SCROLLBACK_CAP {
+            while self.scrollback.len() > self.scrollback_cap {
                 self.scrollback.pop_front();
             }
             self.main_screen.push(blank_line(cols));
@@ -2352,6 +2375,32 @@ beta");
         assert_eq!(t.text_range(0, 0, 9, 2), "one
 two
 three");
+    }
+
+    #[test]
+    fn scrollback_cap_clamps_to_supported_bounds() {
+        let mut t = TerminalState::new(2, 10);
+        assert_eq!(t.scrollback_cap(), DEFAULT_SCROLLBACK_CAP);
+        t.set_scrollback_cap(10);
+        assert_eq!(t.scrollback_cap(), SCROLLBACK_CAP_MIN);
+        t.set_scrollback_cap(1_000_000);
+        assert_eq!(t.scrollback_cap(), SCROLLBACK_CAP_MAX);
+    }
+
+    #[test]
+    fn set_scrollback_cap_evicts_oldest_excess_immediately() {
+        let mut t = TerminalState::new(2, 10);
+        // 1502 lines on a 2-row screen: 1500 land in scrollback.
+        for i in 0..1502 {
+            t.advance_bytes(format!("l{i}\r\n").as_bytes());
+        }
+        assert!(t.scrollback_len() >= 1500);
+        t.set_scrollback_cap(SCROLLBACK_CAP_MIN);
+        assert_eq!(t.scrollback_len(), SCROLLBACK_CAP_MIN);
+        // The kept lines are the newest ones: the oldest survivors follow the
+        // evicted head, and later output keeps evicting at the new cap.
+        t.advance_bytes(b"tail\r\n");
+        assert_eq!(t.scrollback_len(), SCROLLBACK_CAP_MIN);
     }
 
     #[test]

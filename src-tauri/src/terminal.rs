@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -17,7 +17,7 @@ use termwiz::color::ColorAttribute;
 use crate::agent_registry::AgentRegistry;
 use crate::terminal_state::{
     encode_mouse, MessageMarker, MouseEncoding, MouseProtocol, SearchHit, TerminalCell,
-    TerminalState,
+    TerminalState, DEFAULT_SCROLLBACK_CAP, SCROLLBACK_CAP_MAX, SCROLLBACK_CAP_MIN,
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -60,6 +60,16 @@ impl Drop for Session {
 #[derive(Default)]
 pub struct SessionMap {
     sessions: Mutex<HashMap<String, Session>>,
+}
+
+/// User-configured scrollback line cap (Settings → "Scrollback"), applied to
+/// new PTYs at spawn and mirrored into live sessions by `set_scrollback_cap`.
+pub struct ScrollbackConfig(AtomicUsize);
+
+impl Default for ScrollbackConfig {
+    fn default() -> Self {
+        Self(AtomicUsize::new(DEFAULT_SCROLLBACK_CAP))
+    }
 }
 
 #[derive(Serialize, Clone, PartialEq, Eq)]
@@ -297,9 +307,14 @@ pub fn spawn_terminal(
     rows: u16,
     state: State<'_, SessionMap>,
     registry: State<'_, Arc<AgentRegistry>>,
+    scrollback: State<'_, ScrollbackConfig>,
     app: AppHandle,
     init_command: Option<String>,
 ) -> Result<String, String> {
+    // Same defensive clamp as resize_terminal: never hand a bogus frontend
+    // dimension to openpty.
+    let cols = cols.clamp(1, MAX_TERM_DIM);
+    let rows = rows.clamp(1, MAX_TERM_DIM);
     let session_id = Uuid::new_v4().to_string();
 
     let pty_system = native_pty_system();
@@ -364,7 +379,11 @@ pub fn spawn_terminal(
             .map_err(|e| format!("take writer: {e}"))?,
     ));
 
-    let term: SharedTerm = Arc::new(Mutex::new(TerminalState::new(rows, cols)));
+    let term: SharedTerm = Arc::new(Mutex::new({
+        let mut t = TerminalState::new(rows, cols);
+        t.set_scrollback_cap(scrollback.0.load(Ordering::Acquire));
+        t
+    }));
     let scroll_offset = Arc::new(AtomicU32::new(0));
 
     let dirty = Arc::new(AtomicBool::new(false));
@@ -749,6 +768,22 @@ pub fn send_input(
     w.write_all(&bytes).map_err(|e| format!("write: {e}"))?;
     w.flush().map_err(|e| format!("flush: {e}"))?;
     Ok(())
+}
+
+/// Set the scrollback line cap from the frontend Settings: remember it for
+/// future PTYs and apply it (with immediate eviction) to every live session.
+#[tauri::command]
+pub fn set_scrollback_cap(
+    lines: u32,
+    config: State<'_, ScrollbackConfig>,
+    state: State<'_, SessionMap>,
+) {
+    let cap = (lines as usize).clamp(SCROLLBACK_CAP_MIN, SCROLLBACK_CAP_MAX);
+    config.0.store(cap, Ordering::Release);
+    let sessions = state.sessions.lock();
+    for session in sessions.values() {
+        session.term.lock().set_scrollback_cap(cap);
+    }
 }
 
 #[tauri::command]

@@ -19,7 +19,7 @@ use tauri::{Emitter, Manager};
 use terminal::{
     close_terminal, get_text_range, list_message_markers, navigate_message, request_render,
     resize_terminal, scroll_reply_to_top, scroll_terminal, search_terminal, send_input,
-    send_mouse_event, spawn_terminal, SessionMap,
+    send_mouse_event, set_scrollback_cap, spawn_terminal, SessionMap,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -60,6 +60,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(SessionMap::default())
+        .manage(terminal::ScrollbackConfig::default())
         .manage(registry.clone())
         .manage(popup::PopupQueue::default())
         .setup({
@@ -124,6 +125,7 @@ pub fn run() {
             spawn_terminal,
             send_input,
             resize_terminal,
+            set_scrollback_cap,
             request_render,
             close_terminal,
             scroll_terminal,

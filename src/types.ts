@@ -262,6 +262,12 @@ export const NOTIF_WIDTH_MIN = 260;
 export const NOTIF_WIDTH_MAX = 560;
 export const DEFAULT_NOTIF_WIDTH = 360;
 
+/** Per-pane scrollback line cap — must mirror the Rust bounds in
+ *  `terminal_state.rs` (`SCROLLBACK_CAP_MIN/MAX`, `DEFAULT_SCROLLBACK_CAP`). */
+export const SCROLLBACK_LINES_MIN = 1_000;
+export const SCROLLBACK_LINES_MAX = 100_000;
+export const SCROLLBACK_LINES_DEFAULT = 20_000;
+
 /**
  * Payload forwarded from the Rust single-instance callback when Arkadia is
  * relaunched with a `--wt-*` argv (from the `/w` and `/m` skills). Mirrors the

@@ -3,6 +3,9 @@ import { customAsPalette, PALETTES } from "@/lib/palettes";
 import {
   NOTIF_WIDTH_MAX,
   NOTIF_WIDTH_MIN,
+  SCROLLBACK_LINES_DEFAULT,
+  SCROLLBACK_LINES_MAX,
+  SCROLLBACK_LINES_MIN,
   type CustomPalette,
   type EditorProtocol,
   type NotifStyle,
@@ -28,6 +31,8 @@ interface SettingsDialogProps {
   onChangePaletteId: (next: PaletteId) => void;
   useWebGPU: boolean;
   onChangeUseWebGPU: (next: boolean) => void;
+  scrollbackLines: number;
+  onChangeScrollbackLines: (next: number) => void;
   customPalette: CustomPalette;
   onChangeCustomPalette: (next: CustomPalette) => void;
   editorProtocol: EditorProtocol;
@@ -65,6 +70,8 @@ export function SettingsDialog({
   onChangePaletteId,
   useWebGPU,
   onChangeUseWebGPU,
+  scrollbackLines,
+  onChangeScrollbackLines,
   customPalette,
   onChangeCustomPalette,
   editorProtocol,
@@ -163,6 +170,8 @@ export function SettingsDialog({
                 onChangePaletteId={onChangePaletteId}
                 useWebGPU={useWebGPU}
                 onChangeUseWebGPU={onChangeUseWebGPU}
+                scrollbackLines={scrollbackLines}
+                onChangeScrollbackLines={onChangeScrollbackLines}
                 customPalette={customPalette}
                 onChangeCustomPalette={onChangeCustomPalette}
                 editorProtocol={editorProtocol}
@@ -223,6 +232,8 @@ interface GeneralSettingsProps {
   onChangePaletteId: (next: PaletteId) => void;
   useWebGPU: boolean;
   onChangeUseWebGPU: (next: boolean) => void;
+  scrollbackLines: number;
+  onChangeScrollbackLines: (next: number) => void;
   customPalette: CustomPalette;
   onChangeCustomPalette: (next: CustomPalette) => void;
   editorProtocol: EditorProtocol;
@@ -433,6 +444,8 @@ function GeneralSettings({
   onChangePaletteId,
   useWebGPU,
   onChangeUseWebGPU,
+  scrollbackLines,
+  onChangeScrollbackLines,
   customPalette,
   onChangeCustomPalette,
   editorProtocol,
@@ -566,6 +579,50 @@ function GeneralSettings({
             </span>
           </span>
         </label>
+      </section>
+
+      <section>
+        <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+          Scrollback
+        </h4>
+        <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
+          <label className="flex items-center justify-between gap-3">
+            <span>
+              <span className="block text-sm text-zinc-200">
+                {"Lignes d'historique par pane"}
+              </span>
+              <span className="mt-0.5 block text-[11px] text-zinc-500">
+                {
+                  "Nombre max de lignes gardées en mémoire par terminal (1 000 – 100 000). S'applique immédiatement, y compris aux panes ouverts."
+                }
+              </span>
+            </span>
+            <input
+              type="number"
+              min={SCROLLBACK_LINES_MIN}
+              max={SCROLLBACK_LINES_MAX}
+              step={1000}
+              value={scrollbackLines}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!Number.isNaN(v)) onChangeScrollbackLines(v);
+              }}
+              onBlur={(e) => {
+                // Re-clamp on blur so a hand-typed out-of-range value snaps back.
+                const v = parseInt(e.target.value, 10);
+                onChangeScrollbackLines(
+                  Number.isNaN(v)
+                    ? SCROLLBACK_LINES_DEFAULT
+                    : Math.min(
+                        SCROLLBACK_LINES_MAX,
+                        Math.max(SCROLLBACK_LINES_MIN, v),
+                      ),
+                );
+              }}
+              className="w-24 shrink-0 rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-sm outline-none focus:border-zinc-600"
+            />
+          </label>
+        </div>
       </section>
 
       <section>

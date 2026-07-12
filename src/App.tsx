@@ -47,6 +47,7 @@ import {
   DEFAULT_PALETTE_ID,
   DEFAULT_TERMINAL_FONT,
   DEFAULT_TOOL_DENSITY,
+  SCROLLBACK_LINES_DEFAULT,
   type ActionButton,
   type BellPayload,
   type ClosedPayload,
@@ -126,6 +127,10 @@ export function App() {
     useState<ToolDensity>(DEFAULT_TOOL_DENSITY);
   // Show the project sidepanel (toggled from the toolbar, persisted).
   const [sidepanelOpen, setSidepanelOpen] = useState(true);
+  // Per-pane scrollback line cap, mirrored to the Rust backend.
+  const [scrollbackLines, setScrollbackLines] = useState(
+    SCROLLBACK_LINES_DEFAULT,
+  );
   // Modern-view message-type filters (session-only; default all visible).
   const [convFilters, setConvFilters] =
     useState<ConvFilters>(DEFAULT_CONV_FILTERS);
@@ -358,6 +363,7 @@ export function App() {
         setModernViewEnabled(state.modernViewEnabled);
         setToolDensity(state.toolDensity);
         setSidepanelOpen(state.sidepanelOpen);
+        setScrollbackLines(state.scrollbackLines);
         setLoaded(true);
       })
       .catch((e) => {
@@ -394,6 +400,7 @@ export function App() {
         modernViewEnabled,
         toolDensity,
         sidepanelOpen,
+        scrollbackLines,
       });
     }, 500);
     return () => clearTimeout(t);
@@ -419,6 +426,7 @@ export function App() {
     modernViewEnabled,
     toolDensity,
     sidepanelOpen,
+    scrollbackLines,
   ]);
 
   // The notification is triggered by the Rust backend, so mirror its style and
@@ -427,6 +435,15 @@ export function App() {
     if (!loaded) return;
     void invoke("popup_set_style", { style: notifStyle }).catch(() => {});
   }, [loaded, notifStyle]);
+
+  // Scrollback cap lives in the Rust terminal state: applied to new PTYs and,
+  // on change, to every live session (with immediate eviction).
+  useEffect(() => {
+    if (!loaded) return;
+    void invoke("set_scrollback_cap", { lines: scrollbackLines }).catch(
+      () => {},
+    );
+  }, [loaded, scrollbackLines]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -1618,6 +1635,8 @@ export function App() {
         onChangePaletteId={setPaletteId}
         useWebGPU={useWebGPU}
         onChangeUseWebGPU={setUseWebGPU}
+        scrollbackLines={scrollbackLines}
+        onChangeScrollbackLines={setScrollbackLines}
         customPalette={customPalette}
         onChangeCustomPalette={setCustomPalette}
         editorProtocol={editorProtocol}

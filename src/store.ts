@@ -10,6 +10,9 @@ import {
   MAX_FOLDER_DEPTH,
   NOTIF_WIDTH_MAX,
   NOTIF_WIDTH_MIN,
+  SCROLLBACK_LINES_DEFAULT,
+  SCROLLBACK_LINES_MAX,
+  SCROLLBACK_LINES_MIN,
   type ActionButton,
   type CustomPalette,
   type EditorProtocol,
@@ -56,6 +59,7 @@ const KEY_AUTO_SCROLL_REPLY = "autoScrollReplyEnabled";
 const KEY_MODERN_VIEW_ENABLED = "modernViewEnabled";
 const KEY_TOOL_DENSITY = "toolDensity";
 const KEY_SIDEPANEL_OPEN = "sidepanelOpen";
+const KEY_SCROLLBACK_LINES = "scrollbackLines";
 
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 28;
@@ -112,6 +116,8 @@ export interface PersistedState {
   toolDensity: ToolDensity;
   /** Show the project sidepanel (toggled from the toolbar). */
   sidepanelOpen: boolean;
+  /** Per-pane scrollback line cap (mirrored to the Rust backend). */
+  scrollbackLines: number;
 }
 
 const DEFAULT_STATE: PersistedState = {
@@ -135,6 +141,7 @@ const DEFAULT_STATE: PersistedState = {
   modernViewEnabled: false,
   toolDensity: DEFAULT_TOOL_DENSITY,
   sidepanelOpen: true,
+  scrollbackLines: SCROLLBACK_LINES_DEFAULT,
 };
 
 /** Reads a boolean store key, defaulting to `fallback`. */
@@ -178,6 +185,17 @@ function normalizeNotifStyle(
 function normalizeNotifWidth(raw: unknown): number {
   if (typeof raw !== "number" || Number.isNaN(raw)) return DEFAULT_NOTIF_WIDTH;
   return Math.min(NOTIF_WIDTH_MAX, Math.max(NOTIF_WIDTH_MIN, Math.round(raw)));
+}
+
+/** Clamps the persisted scrollback line cap to its allowed range. */
+function normalizeScrollbackLines(raw: unknown): number {
+  if (typeof raw !== "number" || Number.isNaN(raw)) {
+    return SCROLLBACK_LINES_DEFAULT;
+  }
+  return Math.min(
+    SCROLLBACK_LINES_MAX,
+    Math.max(SCROLLBACK_LINES_MIN, Math.round(raw)),
+  );
 }
 
 /** Opens any plugin-store file as a durable-store-compatible KV handle. */
@@ -418,6 +436,7 @@ export async function loadState(
   );
   const rawToolDensity = await store.get<unknown>(KEY_TOOL_DENSITY);
   const rawSidepanelOpen = await store.get<unknown>(KEY_SIDEPANEL_OPEN);
+  const rawScrollbackLines = await store.get<unknown>(KEY_SCROLLBACK_LINES);
 
   return {
     projects: dedupeProjectsByPath(
@@ -465,6 +484,7 @@ export async function loadState(
     ),
     toolDensity: normalizeToolDensity(rawToolDensity),
     sidepanelOpen: boolOr(rawSidepanelOpen, DEFAULT_STATE.sidepanelOpen),
+    scrollbackLines: normalizeScrollbackLines(rawScrollbackLines),
   };
 }
 
@@ -490,6 +510,7 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_MODERN_VIEW_ENABLED, state.modernViewEnabled);
   await store.set(KEY_TOOL_DENSITY, state.toolDensity);
   await store.set(KEY_SIDEPANEL_OPEN, state.sidepanelOpen);
+  await store.set(KEY_SCROLLBACK_LINES, state.scrollbackLines);
   await store.save();
   // Rotate a healthy snapshot into the backup ring (main window only). Ordered
   // after the primary save so at most one file is ever mid-write on a crash.
