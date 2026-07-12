@@ -236,7 +236,7 @@ pub fn read_conversation(
 /// IPC payload; the full content still lives in the terminal/transcript.
 const TOOL_TEXT_CAP: usize = 6000;
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ConvBlock {
     /// "user" | "assistant" | "thinking" | "tool".
     pub kind: String,
@@ -289,8 +289,15 @@ fn tool_result_text(content: &Value) -> String {
 
 /// Appends the typed blocks of one transcript line to `out`. `tool_index` maps a
 /// `tool_use_id` to the index of its (already-pushed) tool block so a later
-/// `tool_result` can fill `tool_output`.
-fn append_blocks(v: &Value, out: &mut Vec<ConvBlock>, tool_index: &mut HashMap<String, usize>) {
+/// `tool_result` can fill `tool_output`. When that pairing mutates a block that
+/// was already sent to a client, `dirty_floor` drops to its index so the next
+/// delta re-sends from there.
+fn append_blocks(
+    v: &Value,
+    out: &mut Vec<ConvBlock>,
+    tool_index: &mut HashMap<String, usize>,
+    dirty_floor: &mut usize,
+) {
     let Some(typ) = v.get("type").and_then(|x| x.as_str()) else {
         return;
     };
@@ -374,6 +381,7 @@ fn append_blocks(v: &Value, out: &mut Vec<ConvBlock>, tool_index: &mut HashMap<S
                                     .map(tool_result_text)
                                     .unwrap_or_default();
                                 out[idx].tool_output = Some(cap(&text));
+                                *dirty_floor = (*dirty_floor).min(idx);
                             }
                         }
                     }
@@ -385,10 +393,74 @@ fn append_blocks(v: &Value, out: &mut Vec<ConvBlock>, tool_index: &mut HashMap<S
     }
 }
 
-/// Like `read_conversation` but returns every typed block (prose, thinking, tool
-/// calls paired with their results), oldest first — the source for the modern view.
+// ─── Incremental block reads (modern view) ──────────────────────
+
+/// Per-pane incremental parse state for `read_conversation_delta`: the typed
+/// blocks parsed so far plus the byte offset they cover, so each refresh only
+/// reads and parses what the transcript appended since the previous one.
+struct ConvCacheEntry {
+    path: PathBuf,
+    /// Byte offset consumed so far — always sits right after a `\n`, so the
+    /// next read starts at a fresh (complete) JSONL line.
+    offset: u64,
+    /// Bumped on every cache reset (new transcript, truncated file) so a
+    /// client holding blocks from the old state knows to drop them.
+    generation: u64,
+    blocks: Vec<ConvBlock>,
+    tool_index: HashMap<String, usize>,
+    /// Smallest block index mutated (tool_result pairing) since the last
+    /// delta was served; the next delta re-sends from here.
+    dirty_floor: usize,
+}
+
+impl ConvCacheEntry {
+    fn new(path: PathBuf, generation: u64) -> Self {
+        Self {
+            path,
+            offset: 0,
+            generation,
+            blocks: Vec::new(),
+            tool_index: HashMap::new(),
+            dirty_floor: 0,
+        }
+    }
+}
+
+/// Managed map pane-id → incremental parse state.
+#[derive(Default)]
+pub struct ConvCacheMap(std::sync::Mutex<HashMap<String, ConvCacheEntry>>);
+
+/// One incremental response: the client keeps its first `base` blocks and
+/// appends `blocks` after them (`base` = 0 replaces everything).
+#[derive(Serialize)]
+pub struct ConvDelta {
+    pub generation: u64,
+    pub base: usize,
+    pub blocks: Vec<ConvBlock>,
+    /// Claude session id of the transcript (the JSONL file stem), so the
+    /// frontend can ignore `agent-state-changed` events for other sessions.
+    #[serde(rename = "sessionId")]
+    pub session_id: Option<String>,
+}
+
+/// Drops a pane's cached parse state (its terminal closed).
+pub fn evict_conversation_cache(cache: &ConvCacheMap, pane_id: &str) {
+    if let Ok(mut map) = cache.0.lock() {
+        map.remove(pane_id);
+    }
+}
+
+/// Incremental variant of the old full-file read for the modern view: returns
+/// every typed block (prose, thinking, tool calls paired with their results),
+/// oldest first, but only reads/parses the bytes appended since the last call.
+/// `generation`/`have` describe what the client already holds (0/0 = nothing).
 #[tauri::command]
-pub fn read_conversation_blocks(pane_id: String) -> Result<Vec<ConvBlock>, String> {
+pub fn read_conversation_delta(
+    pane_id: String,
+    generation: u64,
+    have: usize,
+    cache: State<'_, ConvCacheMap>,
+) -> Result<ConvDelta, String> {
     // Only the exact pane→transcript map (written by the hook on this pane's first
     // turn). No cwd-based fallback on purpose: a brand-new Claude tab (or a plain
     // shell) has no map yet, so this returns nothing instead of grabbing a
@@ -396,26 +468,173 @@ pub fn read_conversation_blocks(pane_id: String) -> Result<Vec<ConvBlock>, Strin
     // previous tab's conversation until the new pane sends its first message.
     let path = transcript_from_pane_map(&pane_id)
         .ok_or("no Claude conversation found for this pane yet")?;
-    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    delta_from_path(&cache, &pane_id, path, generation, have)
+}
 
-    let mut out: Vec<ConvBlock> = Vec::new();
-    let mut tool_index: HashMap<String, usize> = HashMap::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        append_blocks(&v, &mut out, &mut tool_index);
+/// Command body, path already resolved (unit-testable without the pane map).
+fn delta_from_path(
+    cache: &ConvCacheMap,
+    pane_id: &str,
+    path: PathBuf,
+    generation: u64,
+    have: usize,
+) -> Result<ConvDelta, String> {
+    let mut map = cache.0.lock().map_err(|e| e.to_string())?;
+    let entry = map
+        .entry(pane_id.to_string())
+        .or_insert_with(|| ConvCacheEntry::new(path.clone(), 1));
+    // New transcript for this pane (fresh session / resume): start over.
+    if entry.path != path {
+        *entry = ConvCacheEntry::new(path.clone(), entry.generation + 1);
     }
-    Ok(out)
+    let file_len = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    // Shrunk file = rewritten/truncated transcript: our offset is meaningless.
+    if file_len < entry.offset {
+        *entry = ConvCacheEntry::new(path.clone(), entry.generation + 1);
+    }
+
+    if file_len > entry.offset {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+        f.seek(SeekFrom::Start(entry.offset))
+            .map_err(|e| e.to_string())?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        // Consume only complete lines; a partially-written trailing line is
+        // left for the next refresh (its bytes stay before `offset`).
+        let consumed = buf
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let text = String::from_utf8_lossy(&buf[..consumed]);
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            append_blocks(
+                &v,
+                &mut entry.blocks,
+                &mut entry.tool_index,
+                &mut entry.dirty_floor,
+            );
+        }
+        entry.offset += consumed as u64;
+    }
+
+    let base = if generation == entry.generation {
+        have.min(entry.dirty_floor).min(entry.blocks.len())
+    } else {
+        0
+    };
+    let blocks = entry.blocks[base..].to_vec();
+    entry.dirty_floor = entry.blocks.len();
+    Ok(ConvDelta {
+        generation: entry.generation,
+        base,
+        blocks,
+        session_id: path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string()),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tmp_jsonl(name: &str, content: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("arkadia-conv-{name}-{}.jsonl", Uuid::new_v4()));
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    const USER_LINE: &str = r#"{"type":"user","message":{"role":"user","content":"salut"}}"#;
+    const TOOL_LINE: &str = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#;
+    const RESULT_LINE: &str = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#;
+
+    #[test]
+    fn delta_appends_only_new_lines() {
+        let cache = ConvCacheMap::default();
+        let path = tmp_jsonl("append", &format!("{USER_LINE}\n"));
+
+        let d1 = delta_from_path(&cache, "p1", path.clone(), 0, 0).unwrap();
+        assert_eq!(d1.base, 0);
+        assert_eq!(d1.blocks.len(), 1);
+
+        // Append a tool call; the next delta only carries the new block.
+        let mut content = std::fs::read_to_string(&path).unwrap();
+        content.push_str(&format!("{TOOL_LINE}\n"));
+        std::fs::write(&path, &content).unwrap();
+
+        let d2 = delta_from_path(&cache, "p1", path.clone(), d1.generation, 1).unwrap();
+        assert_eq!(d2.generation, d1.generation);
+        assert_eq!(d2.base, 1);
+        assert_eq!(d2.blocks.len(), 1);
+        assert_eq!(d2.blocks[0].kind, "tool");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn delta_resends_mutated_tool_block() {
+        let cache = ConvCacheMap::default();
+        let path = tmp_jsonl("mutate", &format!("{USER_LINE}\n{TOOL_LINE}\n"));
+
+        let d1 = delta_from_path(&cache, "p1", path.clone(), 0, 0).unwrap();
+        assert_eq!(d1.blocks.len(), 2);
+        assert!(d1.blocks[1].tool_output.is_none());
+
+        // The tool_result lands later and mutates block #1 (already sent):
+        // the delta must re-send from index 1, not just append.
+        let mut content = std::fs::read_to_string(&path).unwrap();
+        content.push_str(&format!("{RESULT_LINE}\n"));
+        std::fs::write(&path, &content).unwrap();
+
+        let d2 = delta_from_path(&cache, "p1", path.clone(), d1.generation, 2).unwrap();
+        assert_eq!(d2.base, 1);
+        assert_eq!(d2.blocks.len(), 1);
+        assert_eq!(d2.blocks[0].tool_output.as_deref(), Some("ok"));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn delta_ignores_partial_trailing_line() {
+        let cache = ConvCacheMap::default();
+        // No trailing \n on the second line: it's still being written.
+        let path = tmp_jsonl("partial", &format!("{USER_LINE}\n{}", &TOOL_LINE[..40]));
+
+        let d1 = delta_from_path(&cache, "p1", path.clone(), 0, 0).unwrap();
+        assert_eq!(d1.blocks.len(), 1);
+
+        // The writer finishes the line: the whole tool block arrives intact.
+        let mut content = format!("{USER_LINE}\n{TOOL_LINE}\n");
+        std::fs::write(&path, &mut content).unwrap();
+        let d2 = delta_from_path(&cache, "p1", path.clone(), d1.generation, 1).unwrap();
+        assert_eq!(d2.base, 1);
+        assert_eq!(d2.blocks[0].kind, "tool");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn delta_truncated_file_bumps_generation_and_resends_all() {
+        let cache = ConvCacheMap::default();
+        let path = tmp_jsonl("trunc", &format!("{USER_LINE}\n{TOOL_LINE}\n"));
+        let d1 = delta_from_path(&cache, "p1", path.clone(), 0, 0).unwrap();
+
+        // Rewritten shorter (session restart): generation bumps, full resend.
+        std::fs::write(&path, format!("{USER_LINE}\n")).unwrap();
+        let d2 = delta_from_path(&cache, "p1", path.clone(), d1.generation, 2).unwrap();
+        assert_ne!(d2.generation, d1.generation);
+        assert_eq!(d2.base, 0);
+        assert_eq!(d2.blocks.len(), 1);
+        std::fs::remove_file(&path).ok();
+    }
 
     #[test]
     fn strips_injected_tags() {
@@ -504,8 +723,8 @@ mod tests {
             r#"{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"[Image: source: cache/2.png]"}]}}"#,
         )
         .unwrap();
-        append_blocks(&string_form, &mut out, &mut idx);
-        append_blocks(&array_form, &mut out, &mut idx);
+        append_blocks(&string_form, &mut out, &mut idx, &mut 0);
+        append_blocks(&array_form, &mut out, &mut idx, &mut 0);
         assert!(out.is_empty());
     }
 
@@ -530,8 +749,8 @@ mod tests {
             r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"file.txt"}]}}"#,
         )
         .unwrap();
-        append_blocks(&call, &mut out, &mut idx);
-        append_blocks(&result, &mut out, &mut idx);
+        append_blocks(&call, &mut out, &mut idx, &mut 0);
+        append_blocks(&result, &mut out, &mut idx, &mut 0);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].kind, "tool");
         assert_eq!(out[0].tool_name.as_deref(), Some("Bash"));
@@ -546,7 +765,7 @@ mod tests {
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"hi"}]}}"#,
         )
         .unwrap();
-        append_blocks(&v, &mut out, &mut idx);
+        append_blocks(&v, &mut out, &mut idx, &mut 0);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].kind, "thinking");
         assert_eq!(out[0].text.as_deref(), Some("hmm"));

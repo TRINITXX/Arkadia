@@ -843,11 +843,13 @@ pub fn close_terminal(
     session_id: String,
     state: State<'_, SessionMap>,
     registry: State<'_, Arc<AgentRegistry>>,
+    conv_cache: State<'_, crate::conversation::ConvCacheMap>,
 ) -> Result<(), String> {
     state.sessions.lock().remove(&session_id);
     if let Ok(uuid) = Uuid::parse_str(&session_id) {
         registry.forget_pane(uuid);
     }
+    crate::conversation::evict_conversation_cache(&conv_cache, &session_id);
     Ok(())
 }
 

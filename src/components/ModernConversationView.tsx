@@ -21,13 +21,21 @@ import { CLAUDE_TINT, USER_TINT, hexToRgba } from "@/lib/messageTint";
 import type { TerminalPalette, ToolDensity } from "@/types";
 import type { AgentStateValue } from "@/lib/agentState";
 
-/** One structured block from `read_conversation_blocks`. */
+/** One structured block from `read_conversation_delta`. */
 export interface ConvBlock {
   kind: "user" | "assistant" | "thinking" | "tool";
   text?: string;
   tool_name?: string;
   tool_input?: string;
   tool_output?: string;
+}
+
+/** Incremental response: keep the first `base` blocks, append `blocks`. */
+interface ConvDelta {
+  generation: number;
+  base: number;
+  blocks: ConvBlock[];
+  sessionId?: string | null;
 }
 
 /** Which message types the modern view shows. */
@@ -106,6 +114,9 @@ const MODERN_CSS = `
 .modern-msg .modern-copy { position: absolute; top: 6px; right: 6px; display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; color: #8a8a93; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); opacity: 0; transition: opacity .12s; cursor: pointer; }
 .modern-msg:hover .modern-copy { opacity: 1; }
 .modern-msg .modern-copy:hover { color: #e8e8ee; background: rgba(0,0,0,0.5); }
+/* Off-screen blocks skip layout/paint entirely (their height is estimated),
+   so a huge conversation costs only what's visible. */
+.modern-block { content-visibility: auto; contain-intrinsic-size: auto 90px; }
 .modern-match { outline: 1.5px solid rgba(250,204,21,0.4); outline-offset: -1px; }
 .modern-match-current { outline: 2px solid #facc15; outline-offset: -1px; }
 .modern-search { position: absolute; top: 8px; left: 8px; right: 44px; z-index: 25; display: flex; align-items: center; gap: 3px; padding: 4px 6px; border-radius: 9px; background: #16161a; border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 6px 20px rgba(0,0,0,.5); }
@@ -130,40 +141,91 @@ const MD_COMPONENTS = {
 };
 
 /**
- * Reads the structured blocks for `paneId` and keeps them live (re-reads on each
- * `agent-state-changed` event, exactly like `useConversation`). Twin hook, but
- * via `read_conversation_blocks` so tool calls and thinking are kept.
+ * Reads the structured blocks for `paneId` and keeps them live (refreshes on
+ * `agent-state-changed` events for this pane's session). Incremental: each
+ * refresh fetches only what the transcript appended since the previous one
+ * (`read_conversation_delta`), instead of re-reading the whole JSONL.
  */
 export function useConversationBlocks(paneId: string | null) {
   const [blocks, setBlocks] = useState<ConvBlock[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // What this client already holds (mirrors the backend cache contract).
+  const genRef = useRef(0);
+  const haveRef = useRef(0);
+  // Claude session id of this pane's transcript — used to ignore
+  // agent-state-changed events from other panes' sessions.
+  const sessionRef = useRef<string | null>(null);
+  // Coalesce refreshes: one in-flight delta at a time, bursts collapse into
+  // a single trailing call.
+  const inflightRef = useRef(false);
+  const pendingRef = useRef(false);
 
   const refresh = useCallback(() => {
     if (!paneId) {
+      genRef.current = 0;
+      haveRef.current = 0;
+      sessionRef.current = null;
       setBlocks([]);
       setError(null);
       return;
     }
-    void invoke<ConvBlock[]>("read_conversation_blocks", { paneId })
-      .then((b) => {
-        setBlocks(b);
-        setError(null);
+    const run = () => {
+      inflightRef.current = true;
+      void invoke<ConvDelta>("read_conversation_delta", {
+        paneId,
+        generation: genRef.current,
+        have: haveRef.current,
       })
-      .catch((e) => {
-        setBlocks([]);
-        setError(String(e));
-      });
+        .then((d) => {
+          sessionRef.current = d.sessionId ?? null;
+          genRef.current = d.generation;
+          setBlocks((prev) => {
+            const next =
+              d.base === 0 ? d.blocks : prev.slice(0, d.base).concat(d.blocks);
+            haveRef.current = next.length;
+            return next;
+          });
+          setError(null);
+        })
+        .catch((e) => {
+          genRef.current = 0;
+          haveRef.current = 0;
+          setBlocks([]);
+          setError(String(e));
+        })
+        .finally(() => {
+          inflightRef.current = false;
+          if (pendingRef.current) {
+            pendingRef.current = false;
+            run();
+          }
+        });
+    };
+    if (inflightRef.current) {
+      pendingRef.current = true;
+      return;
+    }
+    run();
   }, [paneId]);
 
   useEffect(() => {
+    // New pane: drop everything the previous pane's deltas accumulated.
+    genRef.current = 0;
+    haveRef.current = 0;
+    sessionRef.current = null;
     refresh();
   }, [refresh]);
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let active = true;
-    void listen("agent-state-changed", () => {
-      if (active) refresh();
+    void listen<{ session_id?: string }>("agent-state-changed", (e) => {
+      if (!active) return;
+      // Only this pane's session triggers a re-read; before the session is
+      // known (fresh pane) any event does, so the first turn still surfaces.
+      const sid = e.payload?.session_id;
+      if (sessionRef.current && sid && sid !== sessionRef.current) return;
+      refresh();
     }).then((fn) => {
       if (active) unlisten = fn;
       else fn();
@@ -801,7 +863,7 @@ export const ModernConversationView = memo(
                   return (
                     <div
                       key={i}
-                      className={matchCls.trim() || undefined}
+                      className={`modern-block${matchCls}`}
                       ref={(el) => {
                         if (el) msgEls.current.set(i, el);
                       }}
@@ -821,7 +883,7 @@ export const ModernConversationView = memo(
                 return (
                   <div
                     key={i}
-                    className={`modern-msg${matchCls}`}
+                    className={`modern-block modern-msg${matchCls}`}
                     ref={(el) => {
                       if (el) {
                         msgEls.current.set(i, el);

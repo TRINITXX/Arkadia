@@ -62,6 +62,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(SessionMap::default())
         .manage(terminal::ScrollbackConfig::default())
+        .manage(conversation::ConvCacheMap::default())
         .manage(registry.clone())
         .manage(popup::PopupQueue::default())
         .setup({
@@ -144,7 +145,7 @@ pub fn run() {
             resolve_path_at,
             save_screenshot,
             conversation::read_conversation,
-            conversation::read_conversation_blocks,
+            conversation::read_conversation_delta,
             popup::popup_request_state,
             popup::popup_log_ui,
             popup::popup_set_style,
