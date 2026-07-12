@@ -46,9 +46,28 @@ const CASCADE_DY: f64 = 32.0;
 const NOTIFY_GRACE: Duration = Duration::from_secs(5);
 
 /// Debounce for the completion chime: Claude Code fires several hooks around one
-/// completion (a `Stop`, then often a `Notification`), each landing a signal, so
-/// without this the pane would chime two or three times. Collapses them into one.
-const SOUND_DEBOUNCE: Duration = Duration::from_secs(3);
+/// event, each landing a signal, so without this the pane would chime two or
+/// three times. Mirrors `notify-done.ps1`: a `done` (Stop) is the primary sound
+/// and only guards against a true rapid double, while a `question` also arrives
+/// as a `Notification` hook ~8.6s after its `PreToolUse` — the 15s window
+/// collapses that pair into one chime, and a genuine idle reminder (~60s later)
+/// still gets through.
+const SOUND_DEBOUNCE_DONE: Duration = Duration::from_secs(3);
+const SOUND_DEBOUNCE_QUESTION: Duration = Duration::from_secs(15);
+
+/// Whether a chime may play `elapsed_since_last` after the previous one, for a
+/// signal of the given kind. `None` = no sound has played yet.
+fn chime_allowed(elapsed_since_last: Option<Duration>, kind: &str) -> bool {
+    let window = if kind == "question" {
+        SOUND_DEBOUNCE_QUESTION
+    } else {
+        SOUND_DEBOUNCE_DONE
+    };
+    match elapsed_since_last {
+        Some(elapsed) => elapsed >= window,
+        None => true,
+    }
+}
 
 /// Completion chime, played by Arkadia itself (for Arkadia panes) so its timing
 /// tracks the popup's grace delay. Non-Arkadia Claude sessions keep sounding from
@@ -105,7 +124,7 @@ pub struct PopupQueue {
     pub auto_scroll: std::sync::atomic::AtomicBool,
     /// Last time the completion chime played. Collapses the several hooks Claude
     /// Code fires around one completion (Stop, then Notification) into a single
-    /// chime — see `SOUND_DEBOUNCE`.
+    /// chime — see `chime_allowed`.
     pub last_sound: parking_lot::Mutex<Option<Instant>>,
 }
 
@@ -352,7 +371,7 @@ fn show_after_grace(
     // Sound first, unconditionally (debounced against the multi-hook double-fire).
     // It ignores focus, notification style and fullscreen on purpose — "quoi qu'il
     // arrive".
-    maybe_play_sound(app);
+    maybe_play_sound(app, &kind);
 
     // The popup, however, IS cancelled if the user came back (or answered the pane,
     // which requires focusing Arkadia) during the grace window.
@@ -433,18 +452,16 @@ fn show_after_grace(
     sync_popups(app);
 }
 
-/// Plays the completion chime unless one already played within `SOUND_DEBOUNCE`,
-/// which collapses the several hooks Claude Code fires for one completion into a
-/// single chime.
-fn maybe_play_sound(app: &AppHandle) {
+/// Plays the completion chime unless one already played within the kind's
+/// debounce window (see `chime_allowed`), which collapses the several hooks
+/// Claude Code fires for one completion into a single chime.
+fn maybe_play_sound(app: &AppHandle, kind: &str) {
     let queue = app.state::<PopupQueue>();
     {
         let mut last = queue.last_sound.lock();
-        if let Some(prev) = *last {
-            if prev.elapsed() < SOUND_DEBOUNCE {
-                log_line("chime debounced (recent sound)");
-                return;
-            }
+        if !chime_allowed(last.map(|prev| prev.elapsed()), kind) {
+            log_line("chime debounced (recent sound)");
+            return;
         }
         *last = Some(Instant::now());
     }
@@ -907,7 +924,30 @@ pub fn popup_open_in_main(pane_id: String, app: AppHandle, queue: State<'_, Popu
 
 #[cfg(test)]
 mod tests {
-    use super::{suppress_for_fullscreen, FullscreenKind};
+    use super::{chime_allowed, suppress_for_fullscreen, FullscreenKind};
+    use std::time::Duration;
+
+    #[test]
+    fn first_chime_always_allowed() {
+        assert!(chime_allowed(None, "done"));
+        assert!(chime_allowed(None, "question"));
+    }
+
+    #[test]
+    fn question_pair_from_pretooluse_and_notification_chimes_once() {
+        // A question lands twice: PreToolUse, then the Notification hook ~8.6s
+        // later. The second signal must stay silent.
+        assert!(!chime_allowed(Some(Duration::from_millis(8_600)), "question"));
+        // A genuine idle reminder (~60s later) still gets through.
+        assert!(chime_allowed(Some(Duration::from_secs(60)), "question"));
+    }
+
+    #[test]
+    fn done_only_guards_against_a_rapid_double() {
+        assert!(!chime_allowed(Some(Duration::from_secs(2)), "done"));
+        // A new completion 8s after the previous chime is a real event.
+        assert!(chime_allowed(Some(Duration::from_millis(8_600)), "done"));
+    }
 
     #[test]
     fn exclusive_fullscreen_is_always_suppressed() {
