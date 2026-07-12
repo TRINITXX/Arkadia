@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { measureCellSize } from "@/lib/cellSize";
+import { keyEventToBytes } from "@/lib/keymap";
+import { getFrame, usePaneFrame } from "@/lib/frameStore";
+import { useElementVisible } from "@/lib/useElementVisible";
 import { resolveColor } from "@/lib/palettes";
 import type {
   CellRun,
@@ -8,104 +11,6 @@ import type {
   TerminalFont,
   TerminalPalette,
 } from "@/types";
-
-function keyEventToBytes(e: React.KeyboardEvent): Uint8Array | null {
-  if (e.ctrlKey && !e.altKey && !e.metaKey) {
-    switch (e.key) {
-      case "ArrowLeft":
-        return new TextEncoder().encode("\x1b[1;5D");
-      case "ArrowRight":
-        return new TextEncoder().encode("\x1b[1;5C");
-      case "ArrowUp":
-        return new TextEncoder().encode("\x1b[1;5A");
-      case "ArrowDown":
-        return new TextEncoder().encode("\x1b[1;5B");
-      // Ctrl+Backspace → Ctrl+W (backward-kill-word). PSReadLine, bash readline,
-      // zsh, Claude Code all interpret 0x17 as "delete previous word".
-      case "Backspace":
-        return new Uint8Array([0x17]);
-      // Ctrl+Delete → Alt+D (kill-word forward) in readline conventions.
-      case "Delete":
-        return new TextEncoder().encode("\x1bd");
-    }
-  }
-  switch (e.key) {
-    case "Enter":
-      // Shift+Enter sends ESC+CR (a.k.a. Alt-Enter) — Claude Code and most
-      // readline-style apps interpret this as "newline without submit".
-      return new TextEncoder().encode(e.shiftKey ? "\x1b\r" : "\r");
-    case "Backspace":
-      return new Uint8Array([0x7f]);
-    case "Tab":
-      return new TextEncoder().encode(e.shiftKey ? "\x1b[Z" : "\t");
-    case "Escape":
-      return new TextEncoder().encode("\x1b");
-    case "ArrowUp":
-      return new TextEncoder().encode("\x1b[A");
-    case "ArrowDown":
-      return new TextEncoder().encode("\x1b[B");
-    case "ArrowRight":
-      return new TextEncoder().encode("\x1b[C");
-    case "ArrowLeft":
-      return new TextEncoder().encode("\x1b[D");
-    case "Home":
-      return new TextEncoder().encode("\x1b[H");
-    case "End":
-      return new TextEncoder().encode("\x1b[F");
-    case "PageUp":
-      return new TextEncoder().encode("\x1b[5~");
-    case "PageDown":
-      return new TextEncoder().encode("\x1b[6~");
-    case "Insert":
-      return new TextEncoder().encode("\x1b[2~");
-    case "Delete":
-      return new TextEncoder().encode("\x1b[3~");
-  }
-
-  if (e.key.startsWith("F") && e.key.length <= 3) {
-    const n = parseInt(e.key.slice(1), 10);
-    if (n >= 1 && n <= 4) {
-      return new TextEncoder().encode(`\x1bO${"PQRS"[n - 1]}`);
-    }
-    if (n >= 5 && n <= 12) {
-      const map: Record<number, string> = {
-        5: "15",
-        6: "17",
-        7: "18",
-        8: "19",
-        9: "20",
-        10: "21",
-        11: "23",
-        12: "24",
-      };
-      return new TextEncoder().encode(`\x1b[${map[n]}~`);
-    }
-  }
-
-  if (e.key.length === 1) {
-    if (e.ctrlKey && !e.altKey && !e.metaKey) {
-      const code = e.key.toLowerCase().charCodeAt(0);
-      if (code >= 97 && code <= 122) return new Uint8Array([code - 96]);
-      if (e.key === "@") return new Uint8Array([0x00]);
-      if (e.key === "[") return new Uint8Array([0x1b]);
-      if (e.key === "\\") return new Uint8Array([0x1c]);
-      if (e.key === "]") return new Uint8Array([0x1d]);
-      if (e.key === "^") return new Uint8Array([0x1e]);
-      if (e.key === "_") return new Uint8Array([0x1f]);
-      return null;
-    }
-    if (e.altKey && !e.ctrlKey && !e.metaKey) {
-      const enc = new TextEncoder().encode(e.key);
-      const out = new Uint8Array(enc.length + 1);
-      out[0] = 0x1b;
-      out.set(enc, 1);
-      return out;
-    }
-    return new TextEncoder().encode(e.key);
-  }
-
-  return null;
-}
 
 function runStyle(run: CellRun, palette: TerminalPalette): React.CSSProperties {
   let fg = resolveColor(run.fg, palette, "fg");
@@ -245,6 +150,10 @@ export function Terminal({
 }: TerminalProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState(false);
+  // Frames come from the external store: only THIS component re-renders per
+  // frame, and only while the pane is actually visible (hidden tab = no sub).
+  const visible = useElementVisible(ref);
+  const screen = usePaneFrame(pane.id, visible);
 
   useEffect(() => {
     if (isActive) {
@@ -256,11 +165,10 @@ export function Terminal({
   // fresh-mounted pane that missed the very first `terminal-render` event
   // still ends up rendering its initial prompt.
   useEffect(() => {
-    if (pane.screen) return;
+    if (getFrame(pane.id)) return;
     void invoke("request_render", { sessionId: pane.id }).catch(() => {
       /* session may not exist yet (race during spawn) — backend kick covers it */
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pane.id]);
 
   // Auto-resize PTY to match the visual size of the pane.
@@ -385,14 +293,14 @@ export function Terminal({
       }`}
     >
       <div className="whitespace-pre">
-        {pane.screen ? (
-          pane.screen.lines.map((runs, idx) => (
+        {screen ? (
+          screen.lines.map((runs, idx) => (
             <Row
               key={idx}
               runs={runs}
               cursorCol={
-                idx === pane.screen!.cursor_row && pane.screen!.cursor_visible
-                  ? pane.screen!.cursor_col
+                idx === screen.cursor_row && screen.cursor_visible
+                  ? screen.cursor_col
                   : null
               }
               focused={focused && isActive}

@@ -131,7 +131,6 @@ export interface PaneState {
   title: string;
   /** Live cwd reported by the shell via OSC 7 (null until the first prompt fires the hook). */
   cwd: string | null;
-  screen: RenderPayload | null;
 }
 
 export type SplitDirection = "horizontal" | "vertical";

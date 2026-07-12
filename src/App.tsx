@@ -40,6 +40,7 @@ import { DEFAULT_CUSTOM_PALETTE, resolveActivePalette } from "@/lib/palettes";
 import { stateFromTitle, type AgentStateValue } from "@/lib/agentState";
 import { findProjectsByPath, parentOf } from "@/lib/externalAction";
 import { subscribeStable } from "@/lib/tauriEvents";
+import { dropFrame, getFrame, publishFrame } from "@/lib/frameStore";
 import {
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_NOTIF_STYLE,
@@ -540,7 +541,6 @@ export function App() {
         id: paneId,
         title: project.name,
         cwd: null,
-        screen: null,
       };
       const tab: Tab = {
         id: tabId,
@@ -598,6 +598,7 @@ export function App() {
       const paneIds = collectPaneIds(target.tree);
       for (const pid of paneIds) {
         paneToTab.current.delete(pid);
+        dropFrame(pid);
         try {
           await invoke("close_terminal", { sessionId: pid });
         } catch {
@@ -638,6 +639,7 @@ export function App() {
       for (const t of projTabs) {
         for (const pid of collectPaneIds(t.tree)) {
           paneToTab.current.delete(pid);
+          dropFrame(pid);
           try {
             await invoke("close_terminal", { sessionId: pid });
           } catch {
@@ -677,6 +679,7 @@ export function App() {
       }
 
       paneToTab.current.delete(paneId);
+      dropFrame(paneId);
       try {
         await invoke("close_terminal", { sessionId: paneId });
       } catch {
@@ -709,7 +712,6 @@ export function App() {
         id: newPaneId,
         title: project.name,
         cwd: null,
-        screen: null,
       };
       setTabs((prev) =>
         prev.map((t) =>
@@ -763,24 +765,29 @@ export function App() {
         const paneId = payload.session_id;
         const tabId = paneToTab.current.get(paneId);
         if (!tabId) return;
-        setTabs((prev) =>
-          prev.map((t) => {
-            if (t.id !== tabId) return t;
-            const pane = t.panes[paneId];
-            if (!pane) return t;
-            return {
-              ...t,
-              panes: {
-                ...t.panes,
-                [paneId]: {
-                  ...pane,
-                  screen: payload,
-                  title: payload.title || pane.title,
+        // Frames live in the external frame store: only the pane's own
+        // terminal component re-renders. React state (the whole App tree)
+        // is only touched for the rare title change.
+        publishFrame(payload);
+        if (!payload.title) return;
+        setTabs((prev) => {
+          // Bail out with the SAME reference when nothing changes, so the
+          // per-frame call never re-renders the app.
+          const tab = prev.find((t) => t.id === tabId);
+          const pane = tab?.panes[paneId];
+          if (!tab || !pane || pane.title === payload.title) return prev;
+          return prev.map((t) =>
+            t.id !== tabId
+              ? t
+              : {
+                  ...t,
+                  panes: {
+                    ...t.panes,
+                    [paneId]: { ...pane, title: payload.title },
+                  },
                 },
-              },
-            };
-          }),
-        );
+          );
+        });
       }),
       subscribeStable<ClosedPayload>(listen, "terminal-closed", (payload) => {
         const paneId = payload.session_id;
@@ -1333,11 +1340,9 @@ export function App() {
         }
         return;
       }
-      const pane =
-        tabs.find((t) => t.id === activeTabId)?.panes[paneId] ?? null;
       // Claude enables bracketed paste (DEC 2004); wrap the text so embedded
       // newlines are inserted literally instead of submitting line-by-line.
-      const bracketed = pane?.screen?.bracketed_paste ?? false;
+      const bracketed = getFrame(paneId)?.bracketed_paste ?? false;
       const body = bracketed
         ? `\x1b[200~${button.command}\x1b[201~`
         : button.command;
@@ -1350,7 +1355,7 @@ export function App() {
         setError(String(e));
       }
     },
-    [tabs, activeTabId, activePaneIdOfActiveTab, focusActivePane],
+    [activePaneIdOfActiveTab, focusActivePane],
   );
 
   if (!loaded) {

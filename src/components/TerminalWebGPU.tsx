@@ -8,6 +8,9 @@ import {
 import { Renderer } from "@renderer/terminal_renderer.js";
 import { ensureWasmReady, paletteToWasm } from "@/lib/wasmRenderer";
 import { measureCellSize } from "@/lib/cellSize";
+import { keyEventToBytes } from "@/lib/keymap";
+import { getFrame, usePaneFrame } from "@/lib/frameStore";
+import { useElementVisible } from "@/lib/useElementVisible";
 import { CLAUDE_TINT, hexToRgba, USER_TINT } from "@/lib/messageTint";
 import { isChromeRow, isInputRow, isJumpPill } from "@/lib/terminalChrome";
 import {
@@ -521,101 +524,6 @@ function mouseModifiers(e: {
   return (e.shiftKey ? 1 : 0) | (e.altKey ? 2 : 0) | (e.ctrlKey ? 4 : 0);
 }
 
-function keyEventToBytes(e: React.KeyboardEvent): Uint8Array | null {
-  if (e.ctrlKey && !e.altKey && !e.metaKey) {
-    switch (e.key) {
-      case "ArrowLeft":
-        return new TextEncoder().encode("\x1b[1;5D");
-      case "ArrowRight":
-        return new TextEncoder().encode("\x1b[1;5C");
-      case "ArrowUp":
-        return new TextEncoder().encode("\x1b[1;5A");
-      case "ArrowDown":
-        return new TextEncoder().encode("\x1b[1;5B");
-      // Ctrl+Backspace → Ctrl+W (backward-kill-word). PSReadLine, bash readline,
-      // zsh, Claude Code all interpret 0x17 as "delete previous word".
-      case "Backspace":
-        return new Uint8Array([0x17]);
-      // Ctrl+Delete → Alt+D (kill-word forward) in readline conventions.
-      case "Delete":
-        return new TextEncoder().encode("\x1bd");
-    }
-  }
-  switch (e.key) {
-    case "Enter":
-      // Shift+Enter sends ESC+CR (a.k.a. Alt-Enter) — Claude Code and most
-      // readline-style apps interpret this as "newline without submit".
-      return new TextEncoder().encode(e.shiftKey ? "\x1b\r" : "\r");
-    case "Backspace":
-      return new Uint8Array([0x7f]);
-    case "Tab":
-      return new TextEncoder().encode(e.shiftKey ? "\x1b[Z" : "\t");
-    case "Escape":
-      return new TextEncoder().encode("\x1b");
-    case "ArrowUp":
-      return new TextEncoder().encode("\x1b[A");
-    case "ArrowDown":
-      return new TextEncoder().encode("\x1b[B");
-    case "ArrowRight":
-      return new TextEncoder().encode("\x1b[C");
-    case "ArrowLeft":
-      return new TextEncoder().encode("\x1b[D");
-    case "Home":
-      return new TextEncoder().encode("\x1b[H");
-    case "End":
-      return new TextEncoder().encode("\x1b[F");
-    case "PageUp":
-      return new TextEncoder().encode("\x1b[5~");
-    case "PageDown":
-      return new TextEncoder().encode("\x1b[6~");
-    case "Insert":
-      return new TextEncoder().encode("\x1b[2~");
-    case "Delete":
-      return new TextEncoder().encode("\x1b[3~");
-  }
-  if (e.key.startsWith("F") && e.key.length <= 3) {
-    const n = parseInt(e.key.slice(1), 10);
-    if (n >= 1 && n <= 4) {
-      return new TextEncoder().encode(`\x1bO${"PQRS"[n - 1]}`);
-    }
-    if (n >= 5 && n <= 12) {
-      const map: Record<number, string> = {
-        5: "15",
-        6: "17",
-        7: "18",
-        8: "19",
-        9: "20",
-        10: "21",
-        11: "23",
-        12: "24",
-      };
-      return new TextEncoder().encode(`\x1b[${map[n]}~`);
-    }
-  }
-  if (e.key.length === 1) {
-    if (e.ctrlKey && !e.altKey && !e.metaKey) {
-      const code = e.key.toLowerCase().charCodeAt(0);
-      if (code >= 97 && code <= 122) return new Uint8Array([code - 96]);
-      if (e.key === "@") return new Uint8Array([0x00]);
-      if (e.key === "[") return new Uint8Array([0x1b]);
-      if (e.key === "\\") return new Uint8Array([0x1c]);
-      if (e.key === "]") return new Uint8Array([0x1d]);
-      if (e.key === "^") return new Uint8Array([0x1e]);
-      if (e.key === "_") return new Uint8Array([0x1f]);
-      return null;
-    }
-    if (e.altKey && !e.ctrlKey && !e.metaKey) {
-      const enc = new TextEncoder().encode(e.key);
-      const out = new Uint8Array(enc.length + 1);
-      out[0] = 0x1b;
-      out.set(enc, 1);
-      return out;
-    }
-    return new TextEncoder().encode(e.key);
-  }
-  return null;
-}
-
 interface Props {
   pane: PaneState;
   isActive: boolean;
@@ -642,6 +550,11 @@ export function TerminalWebGPU({
 }: Props) {
   const outerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  // Frames come from the external store: only THIS component re-renders per
+  // frame, and a hidden pane (inactive tab) suspends its subscription — no
+  // re-render, no GPU draw — resuming on the latest frame when shown again.
+  const paneVisible = useElementVisible(outerRef);
+  const screen = usePaneFrame(pane.id, paneVisible);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<Renderer | null>(null);
   const readyRef = useRef(false);
@@ -657,10 +570,10 @@ export function TerminalWebGPU({
   const visibleHitsRef = useRef<VisibleHit[]>([]);
   // Latest payload, kept in a ref so the resize observer can repaint
   // without re-creating itself on every render.
-  const screenRef = useRef(pane.screen);
+  const screenRef = useRef(screen);
   useEffect(() => {
-    screenRef.current = pane.screen;
-  }, [pane.screen]);
+    screenRef.current = screen;
+  }, [screen]);
 
   // Live cwd kept in a ref so the (deps: []) hover effect reads the current
   // value when resolving relative paths, not the null captured at mount.
@@ -818,7 +731,7 @@ export function TerminalWebGPU({
     // Belt-and-suspenders: ask the backend to (re)emit the current screen.
     // Handles the case where the very first `terminal-render` event was emitted
     // before React had inserted this pane in its state, leaving the screen null.
-    if (!pane.screen) {
+    if (!getFrame(pane.id)) {
       void invoke("request_render", { sessionId: pane.id }).catch(() => {
         /* session may not exist yet (race during spawn) — backend kick covers it */
       });
@@ -954,10 +867,10 @@ export function TerminalWebGPU({
 
   // ─── 4. New payload from backend ───────────────────────────────
   useEffect(() => {
-    if (!pane.screen) return;
+    if (!screen) return;
     redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane.screen]);
+  }, [screen]);
 
   // ─── 5. Resize: update canvas pixels + PTY cols/rows ───────────
   useEffect(() => {
@@ -1300,14 +1213,13 @@ export function TerminalWebGPU({
     };
     r.set_selection(start.col, start.row, col, totalRow);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane.screen?.scroll_offset, pane.screen?.scroll_max]);
+  }, [screen?.scroll_offset, screen?.scroll_max]);
 
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     const { col, row } = cellAt(e.clientX, e.clientY);
     // A plain left-click landing directly on a detected link opens it — even
     // while an app captures the mouse — so paths/URLs are clickable with no
     // modifier. Shift and non-left buttons never open (selection / app behaviour).
-    const screen = pane.screen;
     const snapped = screen ? snapToWideMain(screen, col, row) : col;
     const openable = e.button === 0 && !e.shiftKey && !!screen;
     // Hyperlinks/URLs are detected synchronously; file paths come from the hover
@@ -1416,14 +1328,14 @@ export function TerminalWebGPU({
     if (!searchOpen) return;
     redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane.screen]);
+  }, [screen]);
 
   // ─── Scrollbar fade-in/out: visible when scrolled into history,
   // fades out after 1.5s of inactivity at the bottom (live).
   const lastOffsetRef = useRef(0);
   useEffect(() => {
-    const offset = pane.screen?.scroll_offset ?? 0;
-    const max = pane.screen?.scroll_max ?? 0;
+    const offset = screen?.scroll_offset ?? 0;
+    const max = screen?.scroll_max ?? 0;
     if (max === 0) {
       setScrollbarVisible(false);
       return;
@@ -1438,7 +1350,7 @@ export function TerminalWebGPU({
     } else {
       setScrollbarVisible(true);
     }
-  }, [pane.screen?.scroll_offset, pane.screen?.scroll_max]);
+  }, [screen?.scroll_offset, screen?.scroll_max]);
 
   // ─── 7. Wheel scroll into history ──────────────────────────────
   useEffect(() => {
@@ -1683,7 +1595,7 @@ export function TerminalWebGPU({
         e.preventDefault();
         // Mouse-mode: onMouseDown already encoded the right-click — swallow the
         // panel menu unless Shift bypass is held.
-        if (mouseModeActive(pane.screen) && !e.shiftKey) {
+        if (mouseModeActive(screen) && !e.shiftKey) {
           return;
         }
         if (!isActive) onActivate();
@@ -1699,10 +1611,10 @@ export function TerminalWebGPU({
       <div ref={wrapperRef} className="relative h-full w-full">
         <canvas ref={canvasRef} className="block h-full w-full" />
         {showMessageFrames && (
-          <MessageBorderOverlay screen={pane.screen} font={font} />
+          <MessageBorderOverlay screen={screen} font={font} />
         )}
         <ScrollbarOverlay
-          screen={pane.screen}
+          screen={screen}
           visible={scrollbarVisible}
           fg={palette.fg}
         />

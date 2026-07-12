@@ -9,6 +9,7 @@ import type {
 } from "@/types";
 import { footerRowCount } from "@/lib/terminalChrome";
 import { measureCellSize } from "@/lib/cellSize";
+import { usePaneFrameSelector } from "@/lib/frameStore";
 import { Terminal } from "./Terminal";
 import { TerminalWebGPU } from "./TerminalWebGPU";
 import {
@@ -24,15 +25,39 @@ import type { AgentStateValue } from "@/lib/agentState";
 const FOOTER_HEADROOM_ROWS = 1;
 
 function footerPx(
-  pane: PaneState,
+  rows: number,
   font: TerminalFont,
   useWebGPU: boolean,
 ): number {
-  const rows = footerRowCount(pane.screen);
   const { height } = measureCellSize(font.family, font.size);
   // Mirror the terminal's own bottom padding (TerminalWebGPU = 20, Terminal = 12).
   const pad = useWebGPU ? 20 : 12;
   return Math.round((rows + FOOTER_HEADROOM_ROWS) * height + pad);
+}
+
+/** The modern-view overlay, positioned above the live terminal footer. Reads
+ *  the footer row count through a frame-store selector: re-renders only when
+ *  that number changes, not on every terminal frame. */
+function ModernOverlay({
+  paneId,
+  font,
+  useWebGPU,
+  children,
+}: {
+  paneId: string;
+  font: TerminalFont;
+  useWebGPU: boolean;
+  children: React.ReactNode;
+}) {
+  const footerRows = usePaneFrameSelector(paneId, footerRowCount);
+  return (
+    <div
+      className="absolute inset-x-0 top-0 z-20"
+      style={{ bottom: footerPx(footerRows, font, useWebGPU) }}
+    >
+      {children}
+    </div>
+  );
 }
 
 interface PaneTreeViewProps {
@@ -114,10 +139,7 @@ export function PaneTreeView({
       <div className="relative h-full w-full">
         {terminal}
         {modernViewEnabled && (
-          <div
-            className="absolute inset-x-0 top-0 z-20"
-            style={{ bottom: footerPx(pane, font, useWebGPU) }}
-          >
+          <ModernOverlay paneId={pane.id} font={font} useWebGPU={useWebGPU}>
             <ModernConversationView
               ref={isActive ? modernNavRef : undefined}
               paneId={pane.id}
@@ -128,7 +150,7 @@ export function PaneTreeView({
               agentState={paneAgentStates[pane.id]}
               isActive={isActive}
             />
-          </div>
+          </ModernOverlay>
         )}
       </div>
     );
