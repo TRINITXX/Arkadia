@@ -25,15 +25,9 @@ struct RegistryInner {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentStatePayload {
     None,
-    Idle {
-        session_id: String,
-    },
-    Busy {
-        tool: Option<String>,
-    },
-    Waiting {
-        session_id: String,
-    },
+    Idle { session_id: String },
+    Busy { tool: Option<String> },
+    Waiting { session_id: String },
 }
 
 impl From<&AgentState> for AgentStatePayload {
@@ -56,9 +50,7 @@ impl From<&AgentState> for AgentStatePayload {
 /// (reported by Claude Code) can differ only by case / separators / trailing
 /// slash, so normalize both before comparing.
 fn normalize_cwd(p: &str) -> String {
-    p.replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_lowercase()
+    p.replace('/', "\\").trim_end_matches('\\').to_lowercase()
 }
 
 impl AgentRegistry {
@@ -83,7 +75,8 @@ impl AgentRegistry {
 
     pub fn observe_session(&self, cwd: &str, session_id: &str, state: AgentState) {
         let mut g = self.inner.lock();
-        g.cwd_session.insert(cwd.to_string(), session_id.to_string());
+        g.cwd_session
+            .insert(cwd.to_string(), session_id.to_string());
         g.session_state.insert(session_id.to_string(), state);
     }
 
@@ -210,7 +203,10 @@ mod tests {
             },
         );
         r.observe_session("/b", "s2", AgentState::Busy { tool: None });
-        assert!(matches!(r.project_state(&[p1, p2]), AgentStatePayload::Busy { .. }));
+        assert!(matches!(
+            r.project_state(&[p1, p2]),
+            AgentStatePayload::Busy { .. }
+        ));
     }
 
     #[test]

@@ -37,10 +37,7 @@ fn first_tool_use_name(content: &serde_json::Value) -> Option<String> {
     let arr = content.as_array()?;
     for item in arr {
         if item.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-            return item
-                .get("name")
-                .and_then(|n| n.as_str())
-                .map(String::from);
+            return item.get("name").and_then(|n| n.as_str()).map(String::from);
         }
     }
     None
@@ -96,7 +93,10 @@ pub fn parse_line(line: &str) -> Option<ParsedLine> {
         }
         _ => Entry::Other,
     };
-    Some(ParsedLine { entry, cwd: raw.cwd })
+    Some(ParsedLine {
+        entry,
+        cwd: raw.cwd,
+    })
 }
 
 #[cfg(test)]

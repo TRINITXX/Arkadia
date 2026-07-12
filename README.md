@@ -27,4 +27,4 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
-Sortie : `src-tauri/target/release/arkadia.exe` + `src-tauri/target/release/bundle/msi/Arkadia_0.1.0_x64_en-US.msi`.
+Sortie : `target/release/arkadia.exe` + `target/release/bundle/msi/Arkadia_0.1.0_x64_en-US.msi` (le `target/` du workspace, à la racine du repo).

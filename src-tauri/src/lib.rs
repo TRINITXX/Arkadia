@@ -1,9 +1,12 @@
 mod agent_registry;
 mod claude_watcher;
 mod conversation;
+// Only consumed by the release-only single-instance block below; in debug the
+// cfg removes that call site, so silence the resulting dead-code lint there.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+mod external_action;
 mod fonts;
 mod popup;
-mod external_action;
 mod screenshots;
 mod terminal;
 pub mod terminal_state;
@@ -37,21 +40,19 @@ pub fn run() {
     // instance. Must be the first plugin registered.
     #[cfg(not(debug_assertions))]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(
-            |app, argv, _cwd| {
-                // Focus the running window (previous behaviour).
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.unminimize();
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
-                // If this second launch carried a --wt-* action, forward it to
-                // the frontend, which reuses the live add/remove project paths.
-                if let Some(action) = crate::external_action::parse_external_action(&argv) {
-                    let _ = app.emit("external-action", action);
-                }
-            },
-        ));
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Focus the running window (previous behaviour).
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+            // If this second launch carried a --wt-* action, forward it to
+            // the frontend, which reuses the live add/remove project paths.
+            if let Some(action) = crate::external_action::parse_external_action(&argv) {
+                let _ = app.emit("external-action", action);
+            }
+        }));
     }
 
     builder
@@ -171,11 +172,48 @@ struct AgentEvent {
 /// Document/code types (.txt, .rs, .ts, .json, .html, .png…) stay openable.
 const EXECUTABLE_EXTS: &[&str] = &[
     // Windows native / Script Host
-    "exe", "com", "bat", "cmd", "scr", "pif", "msi", "msp", "mst", "cpl", "msc", "vbs", "vbe", "js",
-    "jse", "ws", "wsf", "wsh", "hta", "lnk", "scf", "reg", "inf", "ins", "isp", "job", "application",
-    "gadget", "url", // PowerShell
-    "ps1", "psm1", "psd1", // Cross-platform / Java / Unix shells
-    "jar", "sh", "bash", "zsh", "csh", "ksh", "command", "desktop", "run", "app",
+    "exe",
+    "com",
+    "bat",
+    "cmd",
+    "scr",
+    "pif",
+    "msi",
+    "msp",
+    "mst",
+    "cpl",
+    "msc",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "ws",
+    "wsf",
+    "wsh",
+    "hta",
+    "lnk",
+    "scf",
+    "reg",
+    "inf",
+    "ins",
+    "isp",
+    "job",
+    "application",
+    "gadget",
+    "url", // PowerShell
+    "ps1",
+    "psm1",
+    "psd1", // Cross-platform / Java / Unix shells
+    "jar",
+    "sh",
+    "bash",
+    "zsh",
+    "csh",
+    "ksh",
+    "command",
+    "desktop",
+    "run",
+    "app",
 ];
 
 /// True if the path's extension is in the executable denylist (case-insensitive).
@@ -209,7 +247,10 @@ fn open_path(path: String) -> Result<(), String> {
 fn run_detached(command: String, cwd: String) -> Result<(), String> {
     use std::process::Command;
     let mut c = Command::new("pwsh.exe");
-    c.arg("-NoProfile").arg("-Command").arg(&command).current_dir(&cwd);
+    c.arg("-NoProfile")
+        .arg("-Command")
+        .arg(&command)
+        .current_dir(&cwd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -249,7 +290,10 @@ fn resolve_against_cwd(path_part: &str, cwd: Option<&str>) -> String {
     let b = path_part.as_bytes();
     let is_abs = path_part.starts_with('/')
         || path_part.starts_with('\\')
-        || (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'));
+        || (b.len() >= 3
+            && b[0].is_ascii_alphabetic()
+            && b[1] == b':'
+            && (b[2] == b'\\' || b[2] == b'/'));
     match cwd {
         Some(cwd) if !is_abs && !cwd.is_empty() => {
             let sep = if cwd.contains('\\') { '\\' } else { '/' };
@@ -336,14 +380,14 @@ fn resolve_path_at(line: String, cwd: Option<String>, click: usize) -> Option<Re
     const OPENERS: [char; 4] = ['(', '[', '{', '\''];
     const CLOSERS: [char; 4] = [')', ']', '}', '\''];
     let mut starts = vec![win_start];
-    for i in win_start..click {
-        if chars[i] == ' ' || OPENERS.contains(&chars[i]) {
+    for (i, c) in chars.iter().enumerate().take(click).skip(win_start) {
+        if *c == ' ' || OPENERS.contains(c) {
             starts.push(i + 1);
         }
     }
     let mut ends = vec![win_end];
-    for i in (click + 1)..win_end {
-        if chars[i] == ' ' || CLOSERS.contains(&chars[i]) {
+    for (i, c) in chars.iter().enumerate().take(win_end).skip(click + 1) {
+        if *c == ' ' || CLOSERS.contains(c) {
             ends.push(i);
         }
     }
@@ -545,10 +589,7 @@ mod tests {
         );
         assert_eq!(resolve_against_cwd("~", None), home_trimmed.to_string());
         // A `~` not at the start, or `~name`, is left untouched (joined to cwd).
-        assert_eq!(
-            resolve_against_cwd("~user/x", Some("/cwd")),
-            "/cwd/~user/x"
-        );
+        assert_eq!(resolve_against_cwd("~user/x", Some("/cwd")), "/cwd/~user/x");
     }
 
     #[test]

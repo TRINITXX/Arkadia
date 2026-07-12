@@ -12,7 +12,9 @@ const ROWS: u16 = 45;
 const COLS: u16 = 140;
 
 fn row_cells(t: &TerminalState, row: u16) -> Vec<TerminalCell> {
-    (0..COLS).filter_map(|c| t.cell_at(0, row, c).cloned()).collect()
+    (0..COLS)
+        .filter_map(|c| t.cell_at(0, row, c).cloned())
+        .collect()
 }
 fn row_text(cells: &[TerminalCell]) -> String {
     let mut s = String::new();
@@ -24,7 +26,10 @@ fn row_text(cells: &[TerminalCell]) -> String {
     s.trim_end().to_string()
 }
 fn first_content(cells: &[TerminalCell]) -> Option<(usize, &TerminalCell)> {
-    cells.iter().enumerate().find(|(_, c)| !c.text.trim().is_empty())
+    cells
+        .iter()
+        .enumerate()
+        .find(|(_, c)| !c.text.trim().is_empty())
 }
 fn fg_short(fg: &termwiz::color::ColorAttribute) -> String {
     use termwiz::color::ColorAttribute::*;
@@ -32,7 +37,12 @@ fn fg_short(fg: &termwiz::color::ColorAttribute) -> String {
         Default => "Def".into(),
         PaletteIndex(i) => format!("P{i}"),
         TrueColorWithDefaultFallback(c) | TrueColorWithPaletteFallback(c, _) => {
-            format!("#{:02x}{:02x}{:02x}", (c.0 * 255.0) as u8, (c.1 * 255.0) as u8, (c.2 * 255.0) as u8)
+            format!(
+                "#{:02x}{:02x}{:02x}",
+                (c.0 * 255.0) as u8,
+                (c.1 * 255.0) as u8,
+                (c.2 * 255.0) as u8
+            )
         }
     }
 }
@@ -67,18 +77,30 @@ fn main() {
         }
         frame += 1;
         let kinds = t.visible_line_kinds(0);
-        println!("\n===== frame {frame} (on_alt={}) =====", t.is_on_alt_screen());
+        println!(
+            "\n===== frame {frame} (on_alt={}) =====",
+            t.is_on_alt_screen()
+        );
         for (r, cells) in cells_per_row.iter().enumerate() {
             let txt = row_text(cells);
             let k = kinds.get(r).copied().unwrap_or(0);
             if txt.is_empty() && k == 0 {
                 continue;
             }
-            let mark = match k { 2 => "C", 1 => "U", _ => "." };
+            let mark = match k {
+                2 => "C",
+                1 => "U",
+                _ => ".",
+            };
             let (idx, attrs) = match first_content(cells) {
                 Some((i, c)) => (
                     i as i32,
-                    format!("fg={:<8} dim={} ital={}", fg_short(&c.attrs.fg), c.attrs.dim as u8, c.attrs.italic as u8),
+                    format!(
+                        "fg={:<8} dim={} ital={}",
+                        fg_short(&c.attrs.fg),
+                        c.attrs.dim as u8,
+                        c.attrs.italic as u8
+                    ),
                 ),
                 None => (-1, "—".into()),
             };

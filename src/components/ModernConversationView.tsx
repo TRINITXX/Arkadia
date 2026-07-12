@@ -681,8 +681,12 @@ export const ModernConversationView = memo(
         [],
       );
 
-      // Reset the per-render element lists; refs re-register below.
+      // Reset the per-render element lists; refs re-register below. Deliberate
+      // render-time ref write (the lists mirror exactly what this render
+      // mounts); the incremental rework of this view will replace the pattern.
+      // eslint-disable-next-line react-hooks/refs
       navEls.current = [];
+      // eslint-disable-next-line react-hooks/refs
       msgEls.current.clear();
       const matchSet = searchOpen ? new Set(matches) : null;
       const currentVisIdx =

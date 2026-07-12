@@ -166,10 +166,7 @@ fn handle_removal(
     }
 }
 
-fn tick_all(
-    machines: &mut HashMap<String, (StateMachine, String)>,
-    updates: &Sender<StateUpdate>,
-) {
+fn tick_all(machines: &mut HashMap<String, (StateMachine, String)>, updates: &Sender<StateUpdate>) {
     let now = Instant::now();
     for (session_id, (sm, cwd)) in machines.iter_mut() {
         let prev = sm.current().clone();

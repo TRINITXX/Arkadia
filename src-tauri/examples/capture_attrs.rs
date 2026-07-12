@@ -43,7 +43,10 @@ fn row_text(cells: &[TerminalCell]) -> String {
 }
 
 fn first_content(cells: &[TerminalCell]) -> Option<(usize, &TerminalCell)> {
-    cells.iter().enumerate().find(|(_, c)| !c.text.trim().is_empty())
+    cells
+        .iter()
+        .enumerate()
+        .find(|(_, c)| !c.text.trim().is_empty())
 }
 
 fn main() {
@@ -146,7 +149,10 @@ fn main() {
             let (idx, attrs) = match first_content(&cells) {
                 Some((i, c)) => (
                     i as i32,
-                    format!("fg={:?} dim={} ital={}", c.attrs.fg, c.attrs.dim, c.attrs.italic),
+                    format!(
+                        "fg={:?} dim={} ital={}",
+                        c.attrs.fg, c.attrs.dim, c.attrs.italic
+                    ),
                 ),
                 None => (-1, "—".into()),
             };

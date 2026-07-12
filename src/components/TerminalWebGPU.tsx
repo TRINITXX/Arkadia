@@ -1494,6 +1494,11 @@ export function TerminalWebGPU({
     return () => {
       outer.removeEventListener("wheel", onWheel);
     };
+    // `redraw` is a plain function recreated every render: listing it would
+    // tear down / re-add the wheel listener per frame (the same instability
+    // class as the zombie-listener leak). Subscription effects stay keyed on
+    // stable ids only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pane.id]);
 
   // URL hover : pointer cursor + on-screen underline. Recomputed on every

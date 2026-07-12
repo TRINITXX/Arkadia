@@ -75,9 +75,9 @@ pub struct TerminalCell {
     /// Cell display width:
     /// - `1` : normal cell (one column).
     /// - `2` : main cell of a wide grapheme (CJK, emoji). The next cell to the
-    ///         right is its continuation.
+    ///   right is its continuation.
     /// - `0` : continuation cell — the right half of a width-2 grapheme. Its
-    ///         `text` is empty; the renderer skips it.
+    ///   `text` is empty; the renderer skips it.
     pub width: u8,
 }
 
@@ -300,13 +300,7 @@ impl TerminalState {
     /// row 0 — same convention as `search`). Endpoints may be passed in any
     /// order. Continuation cells of wide graphemes are skipped; trailing
     /// blanks are trimmed per line, lines are joined with '\n'.
-    pub fn text_range(
-        &self,
-        start_col: u32,
-        start_row: u32,
-        end_col: u32,
-        end_row: u32,
-    ) -> String {
+    pub fn text_range(&self, start_col: u32, start_row: u32, end_col: u32, end_row: u32) -> String {
         let ((sc, sr), (ec, er)) = if (start_row, start_col) > (end_row, end_col) {
             ((end_col, end_row), (start_col, start_row))
         } else {
@@ -379,8 +373,7 @@ impl TerminalState {
             let Some(line) = self.line_at_total(r as u32) else {
                 continue;
             };
-            if let Some(kind @ (MessageKind::User | MessageKind::Claude)) = block_head_kind(line)
-            {
+            if let Some(kind @ (MessageKind::User | MessageKind::Claude)) = block_head_kind(line) {
                 out.push(MessageMarker {
                     total_row: r as u32,
                     kind: kind.as_u8(),
@@ -409,8 +402,8 @@ impl TerminalState {
         let sb_len = self.scrollback_len();
         let total = sb_len + self.active_screen().len();
         let first = sb_len - offset; // total row of visible row 0
-        // Block state at the first visible row: replay from the nearest head
-        // at or above it. Heads are O(1) to test, so the walk up is cheap.
+                                     // Block state at the first visible row: replay from the nearest head
+                                     // at or above it. Heads are O(1) to test, so the walk up is cheap.
         let mut cur = MessageKind::None;
         // Whether we're inside a non-tinted block established by a *visible* head
         // (tool call, banner, thinking line). Distinguishes "intentional None"
@@ -482,7 +475,9 @@ impl TerminalState {
                 on_alt && self.tool_line_cache.contains(&hash_debulleted(line));
             if on_alt && line_starts_with_bullet(line) && is_tool_call_line(line) {
                 tool_to_cache.push(hash_debulleted(line));
-            } else if cur != MessageKind::None && is_known_tool_line && block_head_kind(line).is_none()
+            } else if cur != MessageKind::None
+                && is_known_tool_line
+                && block_head_kind(line).is_none()
             {
                 cur = MessageKind::None;
             }
@@ -651,7 +646,11 @@ impl TerminalState {
         if r >= rows || c >= self.cols as usize {
             return None;
         }
-        let n = if self.on_alt { 0 } else { scroll_offset as usize };
+        let n = if self.on_alt {
+            0
+        } else {
+            scroll_offset as usize
+        };
         let n = n.min(self.scrollback.len());
 
         if r < n {
@@ -702,7 +701,9 @@ impl TerminalState {
 
     fn active_screen_mut(&mut self) -> &mut Vec<Vec<TerminalCell>> {
         if self.on_alt {
-            self.alt_screen.as_mut().expect("alt screen not initialized")
+            self.alt_screen
+                .as_mut()
+                .expect("alt screen not initialized")
         } else {
             &mut self.main_screen
         }
@@ -967,11 +968,8 @@ impl TerminalState {
                 self.cursor_col = 0;
             }
             Cursor::SaveCursor => {
-                self.saved_cursor = Some((
-                    self.cursor_row,
-                    self.cursor_col,
-                    self.current_attrs.clone(),
-                ));
+                self.saved_cursor =
+                    Some((self.cursor_row, self.cursor_col, self.current_attrs.clone()));
             }
             Cursor::RestoreCursor => {
                 if let Some((r, c, a)) = self.saved_cursor.clone() {
@@ -1230,11 +1228,8 @@ impl TerminalState {
 
     fn enter_alt_screen(&mut self) {
         if !self.on_alt {
-            self.saved_cursor = Some((
-                self.cursor_row,
-                self.cursor_col,
-                self.current_attrs.clone(),
-            ));
+            self.saved_cursor =
+                Some((self.cursor_row, self.cursor_col, self.current_attrs.clone()));
             self.alt_screen = Some(blank_screen(self.rows, self.cols));
             self.on_alt = true;
             self.cursor_row = 0;
@@ -1291,11 +1286,8 @@ impl TerminalState {
                 }
             }
             Esc::Code(EscCode::DecSaveCursorPosition) => {
-                self.saved_cursor = Some((
-                    self.cursor_row,
-                    self.cursor_col,
-                    self.current_attrs.clone(),
-                ));
+                self.saved_cursor =
+                    Some((self.cursor_row, self.cursor_col, self.current_attrs.clone()));
             }
             Esc::Code(EscCode::DecRestoreCursorPosition) => {
                 if let Some((r, c, a)) = self.saved_cursor.clone() {
@@ -1408,7 +1400,10 @@ fn hash_debulleted(line: &[TerminalCell]) -> u64 {
     for cell in line {
         text.push_str(&cell.text);
     }
-    let rest = text.trim_start().trim_start_matches(['●', '⏺']).trim_start();
+    let rest = text
+        .trim_start()
+        .trim_start_matches(['●', '⏺'])
+        .trim_start();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     h.write(rest.as_bytes());
     h.finish()
@@ -1534,17 +1529,32 @@ fn orphan_claude_default(line: &[TerminalCell]) -> bool {
     let first = cell.text.trim().chars().next().unwrap_or(' ');
     !matches!(
         first,
-        '⎿' | '↳' | '∴' | '·' | '◻' | '◼' | '☐' | '☑' | '✓' | '✔' | '⏺'
-            | '✶' | '✻' | '╭' | '╮' | '╰' | '╯'
+        '⎿' | '↳'
+            | '∴'
+            | '·'
+            | '◻'
+            | '◼'
+            | '☐'
+            | '☑'
+            | '✓'
+            | '✔'
+            | '⏺'
+            | '✶'
+            | '✻'
+            | '╭'
+            | '╮'
+            | '╰'
+            | '╯'
     )
 }
 
 /// True when a white-bulleted line is a Claude Code *tool call* rather than an
 /// assistant text message. Tool calls share the white `●`/`⏺` bullet with
 /// assistant text, so they're told apart by shape. Three forms are recognized:
-///   - native:        `Bash(…)`, `Read(…)`, `mcp__server__tool(…)` — `Ident(`
-///   - MCP server:    `posthog - exec (MCP)(…)`                     — `(MCP)(`
-///   - MCP bracket:   `Claude in Chrome[navigate](…)`              — `Name[tool](`
+/// - native:        `Bash(…)`, `Read(…)`, `mcp__server__tool(…)` — `Ident(`
+/// - MCP server:    `posthog - exec (MCP)(…)`                     — `(MCP)(`
+/// - MCP bracket:   `Claude in Chrome[navigate](…)`              — `Name[tool](`
+///
 /// Real prose (words separated by spaces, then maybe a paren) never matches the
 /// native form, and the bracket form is protected by the `[tool](` structure.
 fn is_tool_call_line(line: &[TerminalCell]) -> bool {
@@ -1552,7 +1562,10 @@ fn is_tool_call_line(line: &[TerminalCell]) -> bool {
     for c in line {
         text.push_str(&c.text);
     }
-    let rest = text.trim_start().trim_start_matches(['●', '⏺']).trim_start();
+    let rest = text
+        .trim_start()
+        .trim_start_matches(['●', '⏺'])
+        .trim_start();
     // MCP "server - tool" form: the `(MCP)(` signature is unique to a tool
     // invocation — assistant prose never contains it.
     if rest.contains("(MCP)(") {
@@ -1621,9 +1634,7 @@ fn block_head_kind(line: &[TerminalCell]) -> Option<MessageKind> {
         // Colored bullets (tool calls, todos) don't match the white check; tool
         // calls that *do* render a white bullet (`● Bash(…)`) are told apart by
         // their `Name(` shape so they aren't tinted as a message.
-        "●" | "⏺"
-            if is_default_or_white_fg(&head.attrs.fg) && !is_tool_call_line(line) =>
-        {
+        "●" | "⏺" if is_default_or_white_fg(&head.attrs.fg) && !is_tool_call_line(line) => {
             MessageKind::Claude
         }
         _ => MessageKind::None,
@@ -1833,7 +1844,7 @@ pub fn wheel_message_to_top(
                 // Settled when the head sits inside the top band (we don't need the
                 // exact row — the app's wheel granularity is coarse), or once it
                 // starts oscillating past the target.
-                if (dist >= 0 && dist <= REPLY_TOP_BAND) || dist.abs() > last_dist {
+                if (0..=REPLY_TOP_BAND).contains(&dist) || dist.abs() > last_dist {
                     return true;
                 }
                 last_dist = dist.abs();
@@ -1964,7 +1975,7 @@ fn blank_cell_with_bg(attrs: &TerminalCellAttrs) -> TerminalCell {
     TerminalCell {
         text: " ".to_string(),
         attrs: TerminalCellAttrs {
-            bg: attrs.bg.clone(),
+            bg: attrs.bg,
             ..TerminalCellAttrs::default()
         },
         width: 1,
@@ -2334,7 +2345,7 @@ mod tests {
         // Cursor home + erase from (0,2) to EOL — that's the cont of 你.
         t.advance_bytes(b"\x1b[1;3H"); // CUP (1,3) = row 0, col 2 (1-based)
         t.advance_bytes(b"\x1b[K"); // EraseToEndOfLine
-        // The orphan main 你 at col 1 should now be a blank.
+                                    // The orphan main 你 at col 1 should now be a blank.
         assert_eq!(&widths(&t, 0)[..4], &[1, 1, 1, 1]);
         assert_eq!(texts(&t, 0)[0], "a");
         assert_eq!(texts(&t, 0)[1], " ");
@@ -2361,8 +2372,11 @@ mod tests {
         t.advance_bytes(b"alpha\r\nbeta");
         // From inside "alpha" to the right edge of "beta"'s row: trailing
         // blank cells must be trimmed on every line.
-        assert_eq!(t.text_range(2, 0, 19, 1), "pha
-beta");
+        assert_eq!(
+            t.text_range(2, 0, 19, 1),
+            "pha
+beta"
+        );
     }
 
     #[test]
@@ -2372,9 +2386,12 @@ beta");
         t.advance_bytes(b"one\r\ntwo\r\nthree");
         assert_eq!(t.scrollback_len(), 1);
         // total row 0 = "one" (scrollback), 1 = "two", 2 = "three" (screen).
-        assert_eq!(t.text_range(0, 0, 9, 2), "one
+        assert_eq!(
+            t.text_range(0, 0, 9, 2),
+            "one
 two
-three");
+three"
+        );
     }
 
     #[test]
@@ -2851,7 +2868,9 @@ three");
         let mut t = TerminalState::new(4, 60);
         t.advance_bytes(b"\x1b[?1049h");
         // SGR 2 (faint) + 3 (italic).
-        t.advance_bytes("\x1b[2m\x1b[3m  the key insight is the scroll cache here\x1b[0m\r\n".as_bytes());
+        t.advance_bytes(
+            "\x1b[2m\x1b[3m  the key insight is the scroll cache here\x1b[0m\r\n".as_bytes(),
+        );
         assert_eq!(t.visible_line_kinds(0)[0], 0);
     }
 
@@ -2873,7 +2892,9 @@ three");
         // Frame 2: scrolled up — the `● Bash` head and `⎿` are above the top, only
         // the white output shows. It must NOT be guessed as a Claude message.
         t.advance_bytes(b"\x1b[2J\x1b[H");
-        t.advance_bytes("    output line two detail\r\n    output line three detail\r\n".as_bytes());
+        t.advance_bytes(
+            "    output line two detail\r\n    output line three detail\r\n".as_bytes(),
+        );
         assert_eq!(&t.visible_line_kinds(0)[..2], &[0, 0]);
     }
 

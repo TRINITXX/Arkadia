@@ -68,7 +68,11 @@ fn main() {
 
     let writer = Arc::new(Mutex::new(pair.master.take_writer().expect("writer")));
     let send_wheel = |up: bool| {
-        let seq = if up { b"\x1b[<64;5;22M" } else { b"\x1b[<65;5;22M" };
+        let seq = if up {
+            b"\x1b[<64;5;22M"
+        } else {
+            b"\x1b[<65;5;22M"
+        };
         let mut w = writer.lock();
         let _ = w.write_all(seq);
         let _ = w.flush();

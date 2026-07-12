@@ -288,9 +288,12 @@ fn handle_signal(
     // Prefer the exact pane id the hook echoed from `ARKADIA_PANE_ID` — it's
     // unambiguous even with several Claude tabs in one folder. Fall back to cwd
     // matching for shells that predate this (env var not set on those PTYs).
-    let pane_id: String = match sig.pane_id.as_deref().map(str::trim).filter(|s| {
-        !s.is_empty() && uuid::Uuid::parse_str(s).is_ok()
-    }) {
+    let pane_id: String = match sig
+        .pane_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && uuid::Uuid::parse_str(s).is_ok())
+    {
         Some(pid) => {
             log_line(&format!("signal routed by pane id {pid} (direct)"));
             pid.to_string()
@@ -320,7 +323,12 @@ fn handle_signal(
     // when backgrounded: the popup mirrors the same Claude Code screen, so scrolling
     // would move what the popup shows. This never suppresses the notification — the
     // chime still fires after the grace regardless of focus.
-    if main_is_foreground(app) && app.state::<PopupQueue>().auto_scroll.load(Ordering::Acquire) {
+    if main_is_foreground(app)
+        && app
+            .state::<PopupQueue>()
+            .auto_scroll
+            .load(Ordering::Acquire)
+    {
         log_line("Arkadia foreground — scrolling terminal to reply");
         let sessions = app.state::<crate::terminal::SessionMap>();
         crate::terminal::scroll_pane_to_reply_top(app, &pane_id, sessions.inner());
@@ -413,8 +421,7 @@ fn show_after_grace(
         .and_then(|u| registry.project_name_for_pane(u))
         .unwrap_or_default();
     let sessions = app.state::<crate::terminal::SessionMap>();
-    let tab_title =
-        crate::terminal::session_title(sessions.inner(), &pane_id).unwrap_or_default();
+    let tab_title = crate::terminal::session_title(sessions.inner(), &pane_id).unwrap_or_default();
 
     // Compact style shows ONE notification at a time: while one is up for another
     // pane, drop the rest (nothing re-appears when it's closed).
@@ -423,7 +430,9 @@ fn show_after_grace(
         return;
     }
 
-    log_line(&format!("showing notification (style {style}) for pane {pane_id}"));
+    log_line(&format!(
+        "showing notification (style {style}) for pane {pane_id}"
+    ));
 
     let item = WaitingItem {
         pane_id,
@@ -649,7 +658,11 @@ fn ensure_pane_window(
     let (w, h) = popup_dims(compact, notif_w);
     let kind = if compact { "notif" } else { "popup" };
     let url = format!("index.html?window={kind}&pane={pane_id}");
-    let (min_w, min_h) = if compact { (240.0, 52.0) } else { (320.0, 160.0) };
+    let (min_w, min_h) = if compact {
+        (240.0, 52.0)
+    } else {
+        (320.0, 160.0)
+    };
     let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("Arkadia")
         .inner_size(w, h)
@@ -709,8 +722,8 @@ fn cascade_position(win: &WebviewWindow, index: usize) {
         let dy = (CASCADE_DY * scale) as i32 * index as i32;
         // Right/bottom edges keep their gap; left/top are clamped too so even a
         // popup larger than the work area still shows its top-right controls.
-        let x = (wa.position.x + wa.size.width as i32 - ww - margin - dx)
-            .max(wa.position.x + margin);
+        let x =
+            (wa.position.x + wa.size.width as i32 - ww - margin - dx).max(wa.position.x + margin);
         let y = (wa.position.y + wa.size.height as i32 - wh - bottom_gap - dy)
             .max(wa.position.y + margin);
         log_line(&format!(
@@ -882,7 +895,11 @@ pub struct PaneProject {
 pub fn set_pane_projects(entries: Vec<PaneProject>, registry: State<'_, Arc<AgentRegistry>>) {
     let parsed = entries
         .into_iter()
-        .filter_map(|e| uuid::Uuid::parse_str(&e.pane_id).ok().map(|u| (u, e.project_name)))
+        .filter_map(|e| {
+            uuid::Uuid::parse_str(&e.pane_id)
+                .ok()
+                .map(|u| (u, e.project_name))
+        })
         .collect();
     registry.set_pane_projects(parsed);
 }
@@ -937,7 +954,10 @@ mod tests {
     fn question_pair_from_pretooluse_and_notification_chimes_once() {
         // A question lands twice: PreToolUse, then the Notification hook ~8.6s
         // later. The second signal must stay silent.
-        assert!(!chime_allowed(Some(Duration::from_millis(8_600)), "question"));
+        assert!(!chime_allowed(
+            Some(Duration::from_millis(8_600)),
+            "question"
+        ));
         // A genuine idle reminder (~60s later) still gets through.
         assert!(chime_allowed(Some(Duration::from_secs(60)), "question"));
     }

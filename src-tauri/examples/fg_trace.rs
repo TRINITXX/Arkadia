@@ -120,8 +120,7 @@ fn main() {
             let hwnd = HWND(h as *mut core::ffi::c_void);
             let mut class = [0u16; 64];
             let c = GetClassNameW(hwnd, &mut class);
-            let is_tauri =
-                String::from_utf16_lossy(&class[..c.max(0) as usize]) == "Tauri Window";
+            let is_tauri = String::from_utf16_lossy(&class[..c.max(0) as usize]) == "Tauri Window";
             let mut rect = RECT::default();
             let _ = GetWindowRect(hwnd, &mut rect);
             if is_tauri && rect.right - rect.left < 1000 && rect.bottom - rect.top < 400 {
@@ -147,8 +146,14 @@ fn main() {
         }
     }
 
-    let sig_dir = dirs::data_local_dir().unwrap().join("Arkadia").join("notify");
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+    let sig_dir = dirs::data_local_dir()
+        .unwrap()
+        .join("Arkadia")
+        .join("notify");
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
     let sig = format!(r#"{{"cwd":"C:\\FAKE","kind":"done","ts":{ts},"paneId":"{pane}"}}"#);
 
     let start = Instant::now();
@@ -157,7 +162,10 @@ fn main() {
     while start.elapsed() < Duration::from_secs(8) {
         if !dropped && start.elapsed() >= Duration::from_millis(1000) {
             std::fs::write(sig_dir.join("fgtrace.json"), &sig).unwrap();
-            println!("{:5}ms  --- signal dropped ---", start.elapsed().as_millis());
+            println!(
+                "{:5}ms  --- signal dropped ---",
+                start.elapsed().as_millis()
+            );
             dropped = true;
         }
         let line = format!(

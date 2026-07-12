@@ -72,5 +72,9 @@ fn main() {
     }
     let _ = child.kill();
     std::fs::write(&out, &all).expect("write capture");
-    eprintln!("captured {} bytes ({wheel_sent} wheel-ups) -> {}", all.len(), out);
+    eprintln!(
+        "captured {} bytes ({wheel_sent} wheel-ups) -> {}",
+        all.len(),
+        out
+    );
 }

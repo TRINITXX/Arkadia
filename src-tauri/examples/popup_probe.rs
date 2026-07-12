@@ -45,7 +45,10 @@ fn main() {
 
     let noact = std::env::args().any(|a| a == "noact");
     let my_pid = std::process::id();
-    println!("probe pid={my_pid} mode={}", if noact { "NOACTIVATE" } else { "current" });
+    println!(
+        "probe pid={my_pid} mode={}",
+        if noact { "NOACTIVATE" } else { "current" }
+    );
 
     tauri::Builder::default()
         .setup(move |app| {
@@ -83,11 +86,7 @@ fn main() {
                     if let Ok(hwnd) = win.hwnd() {
                         unsafe {
                             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-                            SetWindowLongPtrW(
-                                hwnd,
-                                GWL_EXSTYLE,
-                                ex | WS_EX_NOACTIVATE.0 as isize,
-                            );
+                            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE.0 as isize);
                         }
                         println!("WS_EX_NOACTIVATE stamped");
                     }

@@ -14,7 +14,10 @@ pub struct ExternalAction {
 
 /// Reads the value following `flag` in `argv` (e.g. `--path C:\x` → `Some("C:\\x")`).
 fn value_after(argv: &[String], flag: &str) -> Option<String> {
-    argv.iter().position(|a| a == flag).and_then(|i| argv.get(i + 1)).cloned()
+    argv.iter()
+        .position(|a| a == flag)
+        .and_then(|i| argv.get(i + 1))
+        .cloned()
 }
 
 /// Parses Arkadia's external-action argv vocabulary. Returns `None` when no
@@ -52,11 +55,16 @@ mod tests {
     #[test]
     fn parses_wt_add_with_all_flags() {
         let a = parse_external_action(&argv(&[
-            "arkadia.exe", "--wt-add",
-            "--path", "C:\\wt\\vtc-mobile-side",
-            "--name", "vtc-mobile-side",
-            "--color", "#ee9b00",
-            "--run", "ccd",
+            "arkadia.exe",
+            "--wt-add",
+            "--path",
+            "C:\\wt\\vtc-mobile-side",
+            "--name",
+            "vtc-mobile-side",
+            "--color",
+            "#ee9b00",
+            "--run",
+            "ccd",
         ]))
         .expect("should parse");
         assert_eq!(a.kind, "add");
@@ -69,19 +77,30 @@ mod tests {
     #[test]
     fn parses_wt_remove_with_after() {
         let a = parse_external_action(&argv(&[
-            "arkadia.exe", "--wt-remove",
-            "--path", "C:\\wt\\x",
-            "--after", "git worktree remove --force C:\\wt\\x",
+            "arkadia.exe",
+            "--wt-remove",
+            "--path",
+            "C:\\wt\\x",
+            "--after",
+            "git worktree remove --force C:\\wt\\x",
         ]))
         .expect("should parse");
         assert_eq!(a.kind, "remove");
-        assert_eq!(a.after.as_deref(), Some("git worktree remove --force C:\\wt\\x"));
+        assert_eq!(
+            a.after.as_deref(),
+            Some("git worktree remove --force C:\\wt\\x")
+        );
     }
 
     #[test]
     fn parses_wt_notify() {
         let a = parse_external_action(&argv(&[
-            "arkadia.exe", "--wt-notify", "--level", "info", "--message", "done",
+            "arkadia.exe",
+            "--wt-notify",
+            "--level",
+            "info",
+            "--message",
+            "done",
         ]))
         .expect("should parse");
         assert_eq!(a.kind, "notify");

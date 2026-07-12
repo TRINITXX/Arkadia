@@ -300,6 +300,9 @@ fn resolve_wezterm_dir() -> Option<PathBuf> {
     None
 }
 
+// Tauri commands take each managed state as its own parameter; grouping them
+// into a struct would only obscure the injection.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn spawn_terminal(
     cwd: String,
@@ -446,7 +449,12 @@ pub fn spawn_terminal(
             }
         }
         reader_stop.store(true, Ordering::Release);
-        emit_render(&reader_app, &reader_session_id, &reader_term, &reader_scroll);
+        emit_render(
+            &reader_app,
+            &reader_session_id,
+            &reader_term,
+            &reader_scroll,
+        );
         let _ = reader_app.emit(
             "terminal-closed",
             ClosedPayload {
@@ -1046,7 +1054,7 @@ pub fn scroll_pane_to_reply_top(app: &AppHandle, session_id: &str, state: &Sessi
                 .into_iter()
                 .filter(|m| m.kind == CLAUDE_KIND)
                 .map(|m| m.total_row as i64)
-                .last();
+                .next_back();
             // Visible row v shows total row (sb - offset) + v; put the marker at
             // v = TOP_MARGIN → offset = sb + TOP_MARGIN - row.
             last.map(|row| (sb + TOP_MARGIN - row).clamp(0, sb) as u32)
@@ -1126,12 +1134,7 @@ pub fn get_text_range(
 /// Decides whether a mouse event from the frontend should be forwarded to the
 /// PTY given the active protocol. Wheel events (button >= 64) bypass protocol
 /// filtering — apps expect them as soon as any mouse mode is on.
-fn should_forward_mouse(
-    protocol: MouseProtocol,
-    button: u8,
-    motion: bool,
-    pressed: bool,
-) -> bool {
+fn should_forward_mouse(protocol: MouseProtocol, button: u8, motion: bool, pressed: bool) -> bool {
     if protocol == MouseProtocol::None {
         return false;
     }
