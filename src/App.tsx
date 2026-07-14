@@ -571,7 +571,7 @@ export function App() {
   // ─── Session restore ───────────────────────────────────────────
 
   // Rebuilds the previous session's tabs (splits, cwds) on demand; panes that
-  // ran Claude relaunch it with `claude --resume` on their old conversation
+  // ran Claude relaunch it with `ccd --resume` on their old conversation
   // (resolved from the on-disk pane map via the SAVED pane id). One-shot:
   // consumed on first use, best-effort per tab.
   const restoreLastSession = useCallback(async () => {
@@ -589,7 +589,12 @@ export function App() {
           const sid = await invoke<string | null>("pane_session_id", {
             paneId: p.paneId,
           }).catch(() => null);
-          if (sid) init = `claude --resume ${sid}`;
+          // `ccd` is the user's pwsh alias for Claude (skip-permissions +
+          // effort), and it forwards @args — so --resume passes straight
+          // through. Plain `claude` would drop those flags. Without a session
+          // id (pane map lost/pruned), start a fresh Claude rather than an
+          // empty shell.
+          init = sid ? `ccd --resume ${sid}` : "ccd";
         }
         const paneId = await spawnPane(p.cwd ?? project.path, init);
         if (!paneId) break;
@@ -615,6 +620,9 @@ export function App() {
       };
       setTabs((prev) => [...prev, tab]);
       setActiveTabIdByProject((prev) => ({ ...prev, [st.projectId]: tabId }));
+      // A restored project was in use last session: surface it in the sidebar
+      // "Active" tab right away, without waiting for a first keystroke.
+      markProjectInput(st.projectId);
       restored++;
     }
     pushToast(
@@ -623,7 +631,7 @@ export function App() {
         ? `⟳ ${restored} onglet${restored > 1 ? "s" : ""} restauré${restored > 1 ? "s" : ""}`
         : "rien à restaurer (projets disparus ?)",
     );
-  }, [lastSession, projects, spawnPane, pushToast]);
+  }, [lastSession, projects, spawnPane, pushToast, markProjectInput]);
 
   // ─── Closing ───────────────────────────────────────────────────
 
@@ -1114,6 +1122,7 @@ export function App() {
     spawnTabFor,
     onDeleteProject,
     pushToast,
+    markProjectInput,
   });
   // Refresh the ref after each commit (never during render — that trips the
   // react-hooks/refs lint rule and can miss updates) so the subscribe-once
@@ -1124,6 +1133,7 @@ export function App() {
       spawnTabFor,
       onDeleteProject,
       pushToast,
+      markProjectInput,
     };
   });
 
@@ -1132,8 +1142,13 @@ export function App() {
     let disposed = false;
     void listen<ExternalAction>("external-action", async (event) => {
       const a = event.payload;
-      const { projects, spawnTabFor, onDeleteProject, pushToast } =
-        externalActionRef.current;
+      const {
+        projects,
+        spawnTabFor,
+        onDeleteProject,
+        pushToast,
+        markProjectInput,
+      } = externalActionRef.current;
 
       if (a.kind === "notify") {
         pushToast(a.level ?? "info", a.message ?? "");
@@ -1146,6 +1161,7 @@ export function App() {
           // Idempotent: this worktree is already a project → just switch to it
           // instead of piling up duplicates on repeated /w calls.
           setActiveProjectId(existing.id);
+          markProjectInput(existing.id);
           pushToast("info", `${a.name} déjà présent — basculé`);
           return;
         }
@@ -1163,6 +1179,11 @@ export function App() {
         // (see "Auto-spawn first tab") sees a tab and skips the blank one.
         await spawnTabFor(project, a.run);
         setActiveProjectId(project.id);
+        // A worktree opened by /w is where the user is about to work, so put it
+        // in the sidebar's "Active" list right away instead of waiting for the
+        // first keystroke — otherwise the project they just asked for lands
+        // under "Inactive" and the sidebar auto-switches away from it.
+        markProjectInput(project.id);
         pushToast("info", `➕ ${a.name} ajouté`);
         return;
       }
