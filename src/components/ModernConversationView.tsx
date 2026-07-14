@@ -114,6 +114,15 @@ const MODERN_CSS = `
 .modern-msg .modern-copy { position: absolute; top: 6px; right: 6px; display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; color: #8a8a93; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); opacity: 0; transition: opacity .12s; cursor: pointer; }
 .modern-msg:hover .modern-copy { opacity: 1; }
 .modern-msg .modern-copy:hover { color: #e8e8ee; background: rgba(0,0,0,0.5); }
+/* Fenced code blocks get their own copy button, bottom-right. The wrapper (not
+   the <pre>) is the positioning context so the button doesn't ride along when
+   the code scrolls horizontally. */
+.modern-codeblock { position: relative; margin: 0 0 10px; }
+.modern-codeblock pre { margin: 0; }
+.modern-code-copy { position: absolute; bottom: 6px; right: 6px; display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; color: #8a8a93; background: rgba(20,20,24,0.88); border: 1px solid rgba(255,255,255,0.1); opacity: 0; transition: opacity .12s; cursor: pointer; }
+.modern-codeblock:hover .modern-code-copy { opacity: 1; }
+.modern-code-copy:hover { color: #e8e8ee; background: rgba(0,0,0,0.6); }
+.modern-code-copy.copied { opacity: 1; color: #86efac; border-color: rgba(134,239,172,0.4); }
 /* Off-screen blocks skip layout/paint entirely (their height is estimated),
    so a huge conversation costs only what's visible. */
 .modern-block { content-visibility: auto; contain-intrinsic-size: auto 90px; }
@@ -125,6 +134,44 @@ const MODERN_CSS = `
 .modern-search button { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 5px; color: #a6a6ae; flex-shrink: 0; }
 .modern-search button:hover { background: rgba(255,255,255,0.08); color: #e8e8ee; }
 `;
+
+/**
+ * A fenced code block with a hover-revealed "copy" button in its bottom-right
+ * corner. The text is read back from the rendered `<pre>` so whatever the
+ * highlighter put in there is what lands on the clipboard.
+ */
+function CodeBlock({ children, ...rest }: React.ComponentProps<"pre">) {
+  const preRef = useRef<HTMLPreElement>(null);
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <div className="modern-codeblock">
+      <pre ref={preRef} {...rest}>
+        {children}
+      </pre>
+      <button
+        type="button"
+        className={`modern-code-copy${copied ? " copied" : ""}`}
+        title="Copier le bloc de code"
+        aria-label="Copier le bloc de code"
+        onClick={(e) => {
+          e.stopPropagation();
+          const text = preRef.current?.textContent ?? "";
+          if (!text) return;
+          void navigator.clipboard
+            .writeText(text)
+            .then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            })
+            .catch(() => {});
+        }}
+      >
+        {copied ? <Check size={12} /> : <Copy size={12} />}
+      </button>
+    </div>
+  );
+}
 
 const MD_COMPONENTS = {
   a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
@@ -138,6 +185,7 @@ const MD_COMPONENTS = {
       {children}
     </a>
   ),
+  pre: CodeBlock,
 };
 
 /**
