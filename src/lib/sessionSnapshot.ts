@@ -1,7 +1,7 @@
 /**
  * Snapshot of the open tabs (splits, cwds, Claude sessions) persisted with the
  * store, so an on-demand "restore previous session" can rebuild them after a
- * relaunch — including `claude --resume` in the panes that ran Claude.
+ * relaunch — including `ccd --resume` in the panes that ran Claude.
  *
  * Pane ids do not survive a restart (fresh PTYs are spawned), so trees are
  * serialized with leaf INDICES into the tab's pane list, and materialized back
@@ -30,7 +30,7 @@ export interface SnapshotPane {
   cwd: string | null;
   title: string;
   /** True when the pane ever ran a Claude session (sticky) — restore relaunches
-   *  it with `claude --resume <session>`. */
+   *  it with `ccd --resume <session>`. */
   wasClaude: boolean;
 }
 
