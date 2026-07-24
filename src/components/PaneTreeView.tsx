@@ -67,6 +67,8 @@ interface PaneTreeViewProps {
   font: TerminalFont;
   palette: TerminalPalette;
   useWebGPU: boolean;
+  /** Gradient CSS to paint behind the modern view (undefined = opaque "noir"). */
+  backgroundCss?: string;
   editorProtocol: EditorProtocol;
   /** Draw the green/purple conversation frames (WebGPU renderer only). */
   showMessageFrames: boolean;
@@ -75,6 +77,8 @@ interface PaneTreeViewProps {
   toolDensity: ToolDensity;
   convFilters: ConvFilters;
   onConvFiltersChange: (next: ConvFilters) => void;
+  /** Surfaces modern-view errors (unopenable path…) in the app's toaster. */
+  onToast?: (level: "info" | "error", message: string) => void;
   /** Attached to the active pane's modern view so the nav arrows can drive it. */
   modernNavRef?: React.Ref<ModernNavHandle>;
   /** Per-pane agent state, so the modern view can show a live "working" indicator. */
@@ -94,12 +98,14 @@ export function PaneTreeView({
   font,
   palette,
   useWebGPU,
+  backgroundCss,
   editorProtocol,
   showMessageFrames,
   modernViewEnabled,
   toolDensity,
   convFilters,
   onConvFiltersChange,
+  onToast,
   modernNavRef,
   paneAgentStates,
   onActivate,
@@ -147,8 +153,10 @@ export function PaneTreeView({
               onFiltersChange={onConvFiltersChange}
               density={toolDensity}
               palette={palette}
+              backgroundCss={backgroundCss}
               agentState={paneAgentStates[pane.id]}
               isActive={isActive}
+              onToast={onToast}
             />
           </ModernOverlay>
         )}
@@ -176,12 +184,14 @@ export function PaneTreeView({
           font={font}
           palette={palette}
           useWebGPU={useWebGPU}
+          backgroundCss={backgroundCss}
           editorProtocol={editorProtocol}
           showMessageFrames={showMessageFrames}
           modernViewEnabled={modernViewEnabled}
           toolDensity={toolDensity}
           convFilters={convFilters}
           onConvFiltersChange={onConvFiltersChange}
+          onToast={onToast}
           modernNavRef={modernNavRef}
           paneAgentStates={paneAgentStates}
           onActivate={onActivate}
@@ -206,12 +216,14 @@ export function PaneTreeView({
           font={font}
           palette={palette}
           useWebGPU={useWebGPU}
+          backgroundCss={backgroundCss}
           editorProtocol={editorProtocol}
           showMessageFrames={showMessageFrames}
           modernViewEnabled={modernViewEnabled}
           toolDensity={toolDensity}
           convFilters={convFilters}
           onConvFiltersChange={onConvFiltersChange}
+          onToast={onToast}
           modernNavRef={modernNavRef}
           paneAgentStates={paneAgentStates}
           onActivate={onActivate}

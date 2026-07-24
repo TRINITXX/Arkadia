@@ -8,7 +8,7 @@ import { arrayMove } from "@dnd-kit/sortable";
 import { TabBar } from "@/components/TabBar";
 import { Sidepanel } from "@/components/Sidepanel";
 import { Toolbar } from "@/components/Toolbar";
-import { PromptBar } from "@/components/PromptBar";
+import { FloatingPromptBar } from "@/components/PromptBar";
 import { PaneTreeView } from "@/components/PaneTreeView";
 import { MessageNavRail } from "@/components/MessageNavRail";
 import { AddProjectDialog } from "@/components/AddProjectDialog";
@@ -37,6 +37,7 @@ import {
 } from "@/lib/paneTree";
 import { measureCellSize } from "@/lib/cellSize";
 import { DEFAULT_CUSTOM_PALETTE, resolveActivePalette } from "@/lib/palettes";
+import { resolveBackground } from "@/lib/backgrounds";
 import { stateFromTitle, type AgentStateValue } from "@/lib/agentState";
 import { findProjectsByPath, parentOf } from "@/lib/externalAction";
 import { subscribeStable } from "@/lib/tauriEvents";
@@ -47,6 +48,7 @@ import {
   type SessionSnapshot,
 } from "@/lib/sessionSnapshot";
 import {
+  DEFAULT_BACKGROUND_ID,
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_NOTIF_STYLE,
   DEFAULT_NOTIF_WIDTH,
@@ -55,6 +57,7 @@ import {
   DEFAULT_TOOL_DENSITY,
   SCROLLBACK_LINES_DEFAULT,
   type ActionButton,
+  type BackgroundId,
   type BellPayload,
   type ClosedPayload,
   type CustomPalette,
@@ -114,6 +117,9 @@ export function App() {
   const [promptBarEnabled, setPromptBarEnabled] = useState(true);
   const [font, setFont] = useState<TerminalFont>(DEFAULT_TERMINAL_FONT);
   const [paletteId, setPaletteId] = useState<PaletteId>(DEFAULT_PALETTE_ID);
+  const [backgroundId, setBackgroundId] = useState<BackgroundId>(
+    DEFAULT_BACKGROUND_ID,
+  );
   const [useWebGPU, setUseWebGPU] = useState<boolean>(false);
   const [customPalette, setCustomPalette] = useState<CustomPalette>(
     DEFAULT_CUSTOM_PALETTE,
@@ -148,6 +154,10 @@ export function App() {
   const palette = useMemo(
     () => resolveActivePalette(paletteId, customPalette),
     [paletteId, customPalette],
+  );
+  const background = useMemo(
+    () => resolveBackground(backgroundId),
+    [backgroundId],
   );
 
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -360,6 +370,7 @@ export function App() {
         setPromptBarEnabled(state.promptBarEnabled);
         setFont(state.font);
         setPaletteId(state.paletteId);
+        setBackgroundId(state.backgroundId);
         setUseWebGPU(state.useWebGPU);
         setCustomPalette(state.customPalette);
         setEditorProtocol(state.editorProtocol);
@@ -398,6 +409,7 @@ export function App() {
         promptBarEnabled,
         font,
         paletteId,
+        backgroundId,
         useWebGPU,
         customPalette,
         editorProtocol,
@@ -425,6 +437,7 @@ export function App() {
     promptBarEnabled,
     font,
     paletteId,
+    backgroundId,
     useWebGPU,
     customPalette,
     editorProtocol,
@@ -1457,7 +1470,11 @@ export function App() {
   }
 
   return (
-    <div className="relative flex h-screen w-screen bg-zinc-950 text-zinc-100">
+    <div
+      className="relative flex h-screen w-screen bg-zinc-950 text-zinc-100"
+      data-glass={background.glass ? "on" : "off"}
+      style={background.glass ? { background: background.css } : undefined}
+    >
       {sidepanelOpen && (
         <Sidepanel
           projects={projects}
@@ -1566,6 +1583,7 @@ export function App() {
                   font={font}
                   palette={palette}
                   useWebGPU={useWebGPU}
+                  backgroundCss={background.glass ? background.css : undefined}
                   editorProtocol={editorProtocol}
                   showMessageFrames={messageFramesEnabled}
                   modernViewEnabled={modernViewEnabled}
@@ -1573,6 +1591,7 @@ export function App() {
                   paneAgentStates={effectivePaneStates}
                   convFilters={convFilters}
                   onConvFiltersChange={setConvFilters}
+                  onToast={pushToast}
                   modernNavRef={
                     tab.id === activeTabId ? modernNavRef : undefined
                   }
@@ -1587,14 +1606,15 @@ export function App() {
                 />
               </div>
             ))}
+          {activeProject && promptBarEnabled && activePaneIsClaude && (
+            <FloatingPromptBar
+              hostRef={paneHostRef}
+              buttons={promptButtons}
+              onRunAction={runPromptAction}
+              background={palette.bg}
+            />
+          )}
         </div>
-        {activeProject && promptBarEnabled && activePaneIsClaude && (
-          <PromptBar
-            buttons={promptButtons}
-            onRunAction={runPromptAction}
-            background={palette.bg}
-          />
-        )}
       </div>
 
       {notepadOpen && (
@@ -1733,6 +1753,8 @@ export function App() {
         onChangeFont={setFont}
         paletteId={paletteId}
         onChangePaletteId={setPaletteId}
+        backgroundId={backgroundId}
+        onChangeBackgroundId={setBackgroundId}
         useWebGPU={useWebGPU}
         onChangeUseWebGPU={setUseWebGPU}
         scrollbackLines={scrollbackLines}

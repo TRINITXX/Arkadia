@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { customAsPalette, PALETTES } from "@/lib/palettes";
+import { BACKGROUNDS } from "@/lib/backgrounds";
 import {
   NOTIF_WIDTH_MAX,
   NOTIF_WIDTH_MIN,
   SCROLLBACK_LINES_DEFAULT,
   SCROLLBACK_LINES_MAX,
   SCROLLBACK_LINES_MIN,
+  type BackgroundId,
   type CustomPalette,
   type EditorProtocol,
   type NotifStyle,
@@ -29,6 +31,8 @@ interface SettingsDialogProps {
   onChangeFont: (next: TerminalFont) => void;
   paletteId: PaletteId;
   onChangePaletteId: (next: PaletteId) => void;
+  backgroundId: BackgroundId;
+  onChangeBackgroundId: (next: BackgroundId) => void;
   useWebGPU: boolean;
   onChangeUseWebGPU: (next: boolean) => void;
   scrollbackLines: number;
@@ -68,6 +72,8 @@ export function SettingsDialog({
   onChangeFont,
   paletteId,
   onChangePaletteId,
+  backgroundId,
+  onChangeBackgroundId,
   useWebGPU,
   onChangeUseWebGPU,
   scrollbackLines,
@@ -101,7 +107,7 @@ export function SettingsDialog({
       onClick={onClose}
     >
       <div
-        className="flex h-[640px] w-[760px] flex-col rounded-lg border border-zinc-800 bg-zinc-950 shadow-xl"
+        className="chrome-surface flex h-[640px] w-[760px] flex-col rounded-lg border border-zinc-800 bg-zinc-950 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-3">
@@ -168,6 +174,8 @@ export function SettingsDialog({
                 onChangeFont={onChangeFont}
                 paletteId={paletteId}
                 onChangePaletteId={onChangePaletteId}
+                backgroundId={backgroundId}
+                onChangeBackgroundId={onChangeBackgroundId}
                 useWebGPU={useWebGPU}
                 onChangeUseWebGPU={onChangeUseWebGPU}
                 scrollbackLines={scrollbackLines}
@@ -230,6 +238,8 @@ interface GeneralSettingsProps {
   onChangeFont: (next: TerminalFont) => void;
   paletteId: PaletteId;
   onChangePaletteId: (next: PaletteId) => void;
+  backgroundId: BackgroundId;
+  onChangeBackgroundId: (next: BackgroundId) => void;
   useWebGPU: boolean;
   onChangeUseWebGPU: (next: boolean) => void;
   scrollbackLines: number;
@@ -442,6 +452,8 @@ function GeneralSettings({
   onChangeFont,
   paletteId,
   onChangePaletteId,
+  backgroundId,
+  onChangeBackgroundId,
   useWebGPU,
   onChangeUseWebGPU,
   scrollbackLines,
@@ -751,6 +763,40 @@ function GeneralSettings({
                 <div className="mt-0.5 text-[11px] text-zinc-500">
                   {opt.hint}
                 </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section>
+        <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+          {"Fond de l'application"}
+        </h4>
+        <p className="mb-3 text-[11px] text-zinc-500">
+          {
+            "Dégradé appliqué au chrome (barres, panneaux, dialogues, vue moderne) avec un effet verre dépoli. « Noir » garde l'apparence opaque actuelle. Les terminaux restent opaques pour la lisibilité."
+          }
+        </p>
+        <div className="grid grid-cols-4 gap-2">
+          {BACKGROUNDS.map((bg) => {
+            const selected = bg.id === backgroundId;
+            return (
+              <button
+                key={bg.id}
+                type="button"
+                onClick={() => onChangeBackgroundId(bg.id)}
+                title={bg.name}
+                className={`flex h-16 flex-col justify-end rounded border p-2 text-left transition ${
+                  selected
+                    ? "border-zinc-300 ring-1 ring-zinc-300"
+                    : "border-zinc-800 hover:border-zinc-600"
+                }`}
+                style={{ background: bg.css }}
+              >
+                <span className="rounded bg-black/40 px-1 text-[10px] text-zinc-100">
+                  {bg.name}
+                </span>
               </button>
             );
           })}

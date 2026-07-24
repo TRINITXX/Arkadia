@@ -230,6 +230,23 @@ export interface CustomPalette {
 export const DEFAULT_PALETTE_ID: PaletteId = "wez";
 
 /**
+ * Selectable app-background preset id. "noir" is the current flat-black look
+ * (default); every other value is a blue/grey gradient with frosted-glass
+ * chrome. Preset definitions live in `@/lib/backgrounds`.
+ */
+export type BackgroundId =
+  | "noir"
+  | "midnight"
+  | "slate"
+  | "graphite"
+  | "ocean"
+  | "violet"
+  | "forest"
+  | "bordeaux";
+
+export const DEFAULT_BACKGROUND_ID: BackgroundId = "noir";
+
+/**
  * URL scheme used to open `path:line:col` matches detected in the terminal.
  * `custom` lets the user provide an arbitrary `<scheme>://file/` prefix.
  */

@@ -429,7 +429,7 @@ export function Sidepanel({
   };
 
   return (
-    <aside className="flex h-full w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950">
+    <aside className="chrome-surface flex h-full w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950">
       <div className="flex shrink-0 border-b border-zinc-800">
         <button
           type="button"

@@ -8,11 +8,13 @@
 //! and Claude's prose), filtering out tool calls/results and injected context.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tauri::State;
 use uuid::Uuid;
 
@@ -250,6 +252,18 @@ pub fn read_conversation(
 /// IPC payload; the full content still lives in the terminal/transcript.
 const TOOL_TEXT_CAP: usize = 6000;
 
+/// One image extracted from the transcript, materialized on disk so the
+/// frontend can fetch it lazily (`read_image_bytes`) instead of the delta
+/// payload carrying megabytes of base64.
+#[derive(Serialize, Clone, PartialEq, Debug)]
+pub struct ConvImage {
+    /// Absolute path of the cached file (content-addressed, always exists
+    /// once emitted).
+    pub path: String,
+    /// e.g. "image/png" — the frontend uses it for the blob type.
+    pub media_type: String,
+}
+
 #[derive(Serialize, Clone)]
 pub struct ConvBlock {
     /// "user" | "assistant" | "thinking" | "tool".
@@ -266,6 +280,128 @@ pub struct ConvBlock {
     /// The paired tool_result content (text extracted); `None` until it lands.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_output: Option<String>,
+    /// Images pasted in this turn (user blocks).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub images: Vec<ConvImage>,
+    /// Images inside the paired tool_result (screenshots, image reads).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tool_output_images: Vec<ConvImage>,
+}
+
+impl ConvBlock {
+    fn text_block(kind: &str, text: String) -> Self {
+        Self {
+            kind: kind.to_string(),
+            text: Some(text),
+            tool_name: None,
+            tool_input: None,
+            tool_output: None,
+            images: Vec::new(),
+            tool_output_images: Vec::new(),
+        }
+    }
+
+    fn tool_block(name: String, input: Option<String>) -> Self {
+        Self {
+            kind: "tool".to_string(),
+            text: None,
+            tool_name: Some(name),
+            tool_input: input,
+            tool_output: None,
+            images: Vec::new(),
+            tool_output_images: Vec::new(),
+        }
+    }
+}
+
+// ─── Image cache ────────────────────────────────────────────────────────────
+
+/// Where transcript images are materialized: `%LOCALAPPDATA%/Arkadia/imgcache`.
+fn imgcache_dir() -> Option<PathBuf> {
+    Some(dirs::data_local_dir()?.join("Arkadia").join("imgcache"))
+}
+
+fn ext_for_media_type(mt: &str) -> &'static str {
+    match mt {
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        _ => "png",
+    }
+}
+
+/// Decodes a base64 `image` block, writes it (once) to the content-addressed
+/// cache, and returns the reference. Idempotent: the same bytes always land at
+/// the same path, so re-parses (generation bumps) cost one `is_file` check.
+fn cache_image(dir: &Path, media_type: &str, b64: &str) -> Option<ConvImage> {
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    let hash = Sha256::digest(&bytes);
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    let path = dir.join(format!("{hex}.{}", ext_for_media_type(media_type)));
+    if !path.is_file() {
+        std::fs::create_dir_all(dir).ok()?;
+        // Write to a temp name then rename, so a crash never leaves a torn
+        // half-file under the final (content-addressed) name.
+        let tmp = dir.join(format!("{hex}.tmp-{}", Uuid::new_v4()));
+        std::fs::write(&tmp, &bytes).ok()?;
+        if std::fs::rename(&tmp, &path).is_err() {
+            // Lost a race with another writer of the same content: the final
+            // file exists either way; drop our temp.
+            let _ = std::fs::remove_file(&tmp);
+            if !path.is_file() {
+                return None;
+            }
+        }
+    }
+    Some(ConvImage {
+        path: path.to_string_lossy().into_owned(),
+        media_type: media_type.to_string(),
+    })
+}
+
+/// Extracts a `{"type":"image","source":{"type":"base64",...}}` block into the
+/// cache. `None` for URL sources or decode failures.
+fn cache_image_block(block: &Value, img_dir: Option<&Path>) -> Option<ConvImage> {
+    let source = block.get("source")?;
+    if source.get("type").and_then(Value::as_str) != Some("base64") {
+        return None;
+    }
+    let media_type = source
+        .get("media_type")
+        .and_then(Value::as_str)
+        .unwrap_or("image/png");
+    let data = source.get("data").and_then(Value::as_str)?;
+    cache_image(img_dir?, media_type, data)
+}
+
+/// Deletes imgcache files older than `max_age_days` (plus stray `.tmp-*` from
+/// crashed writes). Called once at startup on a background thread.
+pub fn prune_imgcache(max_age_days: u64) {
+    let Some(dir) = imgcache_dir() else { return };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let max_age = std::time::Duration::from_secs(max_age_days * 24 * 3600);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let is_tmp = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains(".tmp-"));
+        let expired = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > max_age);
+        if is_tmp || expired {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 /// Truncates `s` to `TOOL_TEXT_CAP` chars, appending a marker when cut.
@@ -278,12 +414,16 @@ fn cap(s: &str) -> String {
     }
 }
 
-/// Extracts displayable text from a `tool_result` `content` (string or array).
-fn tool_result_text(content: &Value) -> String {
+/// Extracts displayable text and cached images from a `tool_result` `content`
+/// (string or array). A decoded image is dropped from the text (its thumbnail
+/// replaces it); a failed decode falls back to the `[image]` placeholder so
+/// nothing silently vanishes.
+fn tool_result_parts(content: &Value, img_dir: Option<&Path>) -> (String, Vec<ConvImage>) {
     match content {
-        Value::String(s) => s.clone(),
+        Value::String(s) => (s.clone(), Vec::new()),
         Value::Array(arr) => {
             let mut parts = Vec::new();
+            let mut images = Vec::new();
             for block in arr {
                 match block.get("type").and_then(|x| x.as_str()) {
                     Some("text") => {
@@ -291,13 +431,16 @@ fn tool_result_text(content: &Value) -> String {
                             parts.push(t.to_string());
                         }
                     }
-                    Some("image") => parts.push("[image]".to_string()),
+                    Some("image") => match cache_image_block(block, img_dir) {
+                        Some(img) => images.push(img),
+                        None => parts.push("[image]".to_string()),
+                    },
                     _ => {}
                 }
             }
-            parts.join("\n")
+            (parts.join("\n"), images)
         }
-        _ => String::new(),
+        _ => (String::new(), Vec::new()),
     }
 }
 
@@ -311,6 +454,7 @@ fn append_blocks(
     out: &mut Vec<ConvBlock>,
     tool_index: &mut HashMap<String, usize>,
     dirty_floor: &mut usize,
+    img_dir: Option<&Path>,
 ) {
     let Some(typ) = v.get("type").and_then(|x| x.as_str()) else {
         return;
@@ -329,43 +473,36 @@ fn append_blocks(
             }
             let cleaned = clean_text(s);
             if !cleaned.is_empty() {
-                out.push(ConvBlock {
-                    kind: typ.to_string(),
-                    text: Some(cleaned),
-                    tool_name: None,
-                    tool_input: None,
-                    tool_output: None,
-                });
+                out.push(ConvBlock::text_block(typ, cleaned));
             }
         }
         Value::Array(arr) => {
+            // Index of the first text block this turn pushed, and images pasted
+            // in the turn — attached to that block (or to a text-less user
+            // block for an image-only paste) after the loop.
+            let mut first_text_idx: Option<usize> = None;
+            let mut turn_images: Vec<ConvImage> = Vec::new();
             for block in arr {
                 match block.get("type").and_then(|x| x.as_str()) {
                     Some("text") if !injected => {
                         if let Some(t) = block.get("text").and_then(|x| x.as_str()) {
                             let cleaned = clean_text(t);
                             if !cleaned.is_empty() {
-                                out.push(ConvBlock {
-                                    kind: typ.to_string(),
-                                    text: Some(cleaned),
-                                    tool_name: None,
-                                    tool_input: None,
-                                    tool_output: None,
-                                });
+                                out.push(ConvBlock::text_block(typ, cleaned));
+                                first_text_idx.get_or_insert(out.len() - 1);
                             }
+                        }
+                    }
+                    Some("image") if !injected => {
+                        if let Some(img) = cache_image_block(block, img_dir) {
+                            turn_images.push(img);
                         }
                     }
                     Some("thinking") => {
                         if let Some(t) = block.get("thinking").and_then(|x| x.as_str()) {
                             let cleaned = clean_text(t);
                             if !cleaned.is_empty() {
-                                out.push(ConvBlock {
-                                    kind: "thinking".to_string(),
-                                    text: Some(cleaned),
-                                    tool_name: None,
-                                    tool_input: None,
-                                    tool_output: None,
-                                });
+                                out.push(ConvBlock::text_block("thinking", cleaned));
                             }
                         }
                     }
@@ -376,13 +513,7 @@ fn append_blocks(
                             .unwrap_or("tool")
                             .to_string();
                         let input = block.get("input").map(|i| cap(&i.to_string()));
-                        out.push(ConvBlock {
-                            kind: "tool".to_string(),
-                            text: None,
-                            tool_name: Some(name),
-                            tool_input: input,
-                            tool_output: None,
-                        });
+                        out.push(ConvBlock::tool_block(name, input));
                         if let Some(id) = block.get("id").and_then(|x| x.as_str()) {
                             tool_index.insert(id.to_string(), out.len() - 1);
                         }
@@ -390,16 +521,29 @@ fn append_blocks(
                     Some("tool_result") => {
                         if let Some(id) = block.get("tool_use_id").and_then(|x| x.as_str()) {
                             if let Some(&idx) = tool_index.get(id) {
-                                let text = block
+                                let (text, images) = block
                                     .get("content")
-                                    .map(tool_result_text)
+                                    .map(|c| tool_result_parts(c, img_dir))
                                     .unwrap_or_default();
                                 out[idx].tool_output = Some(cap(&text));
+                                out[idx].tool_output_images = images;
                                 *dirty_floor = (*dirty_floor).min(idx);
                             }
                         }
                     }
                     _ => {}
+                }
+            }
+            if !turn_images.is_empty() {
+                match first_text_idx {
+                    Some(idx) => out[idx].images = turn_images,
+                    None => {
+                        // Image-only paste: a bubble with images and no text.
+                        let mut b = ConvBlock::text_block(typ, String::new());
+                        b.text = None;
+                        b.images = turn_images;
+                        out.push(b);
+                    }
                 }
             }
         }
@@ -485,6 +629,33 @@ pub fn read_conversation_delta(
     delta_from_path(&cache, &pane_id, path, generation, have)
 }
 
+/// Serves an image file's raw bytes over IPC (no base64/JSON inflation). Used
+/// for cached transcript images AND on-disk image paths mentioned in messages;
+/// its error is the graceful "not there / not an image" signal for the latter.
+#[tauri::command]
+pub fn read_image_bytes(path: String) -> Result<tauri::ipc::Response, String> {
+    const ALLOWED: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+    const MAX_BYTES: u64 = 25 * 1024 * 1024;
+    let p = Path::new(&path);
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or("not an image path")?;
+    if !ALLOWED.contains(&ext.as_str()) {
+        return Err("not an allowed image type".into());
+    }
+    let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("not a file".into());
+    }
+    if meta.len() > MAX_BYTES {
+        return Err("image too large".into());
+    }
+    let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 /// Command body, path already resolved (unit-testable without the pane map).
 fn delta_from_path(
     cache: &ConvCacheMap,
@@ -522,6 +693,7 @@ fn delta_from_path(
             .map(|i| i + 1)
             .unwrap_or(0);
         let text = String::from_utf8_lossy(&buf[..consumed]);
+        let img_dir = imgcache_dir();
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() {
@@ -535,6 +707,7 @@ fn delta_from_path(
                 &mut entry.blocks,
                 &mut entry.tool_index,
                 &mut entry.dirty_floor,
+                img_dir.as_deref(),
             );
         }
         entry.offset += consumed as u64;
@@ -737,8 +910,8 @@ mod tests {
             r#"{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"[Image: source: cache/2.png]"}]}}"#,
         )
         .unwrap();
-        append_blocks(&string_form, &mut out, &mut idx, &mut 0);
-        append_blocks(&array_form, &mut out, &mut idx, &mut 0);
+        append_blocks(&string_form, &mut out, &mut idx, &mut 0, None);
+        append_blocks(&array_form, &mut out, &mut idx, &mut 0, None);
         assert!(out.is_empty());
     }
 
@@ -763,8 +936,8 @@ mod tests {
             r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"file.txt"}]}}"#,
         )
         .unwrap();
-        append_blocks(&call, &mut out, &mut idx, &mut 0);
-        append_blocks(&result, &mut out, &mut idx, &mut 0);
+        append_blocks(&call, &mut out, &mut idx, &mut 0, None);
+        append_blocks(&result, &mut out, &mut idx, &mut 0, None);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].kind, "tool");
         assert_eq!(out[0].tool_name.as_deref(), Some("Bash"));
@@ -779,7 +952,7 @@ mod tests {
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"hi"}]}}"#,
         )
         .unwrap();
-        append_blocks(&v, &mut out, &mut idx, &mut 0);
+        append_blocks(&v, &mut out, &mut idx, &mut 0, None);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].kind, "thinking");
         assert_eq!(out[0].text.as_deref(), Some("hmm"));
@@ -793,6 +966,108 @@ mod tests {
             r#"[{"type":"text","text":"line one"},{"type":"image"},{"type":"text","text":"line two"}]"#,
         )
         .unwrap();
-        assert_eq!(tool_result_text(&v), "line one\n[image]\nline two");
+        // A source-less image block can't be cached → placeholder fallback.
+        let (text, images) = tool_result_parts(&v, None);
+        assert_eq!(text, "line one\n[image]\nline two");
+        assert!(images.is_empty());
+    }
+
+    // 1x1 transparent PNG.
+    const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+    fn tmp_img_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("arkadia-imgcache-{name}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn user_image_block_is_cached_and_attached() {
+        let dir = tmp_img_dir("user");
+        let mut out = Vec::new();
+        let mut idx = HashMap::new();
+        let v: Value = serde_json::from_str(&format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"{PNG_B64}"}}}},{{"type":"text","text":"regarde"}}]}}}}"#,
+        ))
+        .unwrap();
+        append_blocks(&v, &mut out, &mut idx, &mut 0, Some(&dir));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind, "user");
+        assert_eq!(out[0].text.as_deref(), Some("regarde"));
+        assert_eq!(out[0].images.len(), 1);
+        assert!(Path::new(&out[0].images[0].path).is_file());
+        assert_eq!(out[0].images[0].media_type, "image/png");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn image_only_user_turn_becomes_image_block() {
+        let dir = tmp_img_dir("only");
+        let mut out = Vec::new();
+        let mut idx = HashMap::new();
+        let v: Value = serde_json::from_str(&format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"{PNG_B64}"}}}}]}}}}"#,
+        ))
+        .unwrap();
+        append_blocks(&v, &mut out, &mut idx, &mut 0, Some(&dir));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind, "user");
+        assert!(out[0].text.is_none());
+        assert_eq!(out[0].images.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn tool_result_image_lands_without_placeholder() {
+        let dir = tmp_img_dir("result");
+        let mut out = Vec::new();
+        let mut idx = HashMap::new();
+        let mut floor = 5usize;
+        let call: Value = serde_json::from_str(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.png"}}]}}"#,
+        )
+        .unwrap();
+        let result: Value = serde_json::from_str(&format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":[{{"type":"text","text":"read ok"}},{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"{PNG_B64}"}}}}]}}]}}}}"#,
+        ))
+        .unwrap();
+        append_blocks(&call, &mut out, &mut idx, &mut floor, Some(&dir));
+        append_blocks(&result, &mut out, &mut idx, &mut floor, Some(&dir));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].tool_output.as_deref(), Some("read ok"));
+        assert_eq!(out[0].tool_output_images.len(), 1);
+        // The mutation dropped the dirty floor so the block is re-sent.
+        assert_eq!(floor, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn cache_image_is_idempotent() {
+        let dir = tmp_img_dir("idem");
+        let a = cache_image(&dir, "image/png", PNG_B64).unwrap();
+        let b = cache_image(&dir, "image/png", PNG_B64).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn undecodable_image_falls_back_to_placeholder() {
+        let dir = tmp_img_dir("bad");
+        let v: Value = serde_json::from_str(
+            r#"[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"%%%not-base64%%%"}}]"#,
+        )
+        .unwrap();
+        let (text, images) = tool_result_parts(&v, Some(&dir));
+        assert_eq!(text, "[image]");
+        assert!(images.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_image_bytes_rejects_bad_paths() {
+        assert!(read_image_bytes("C:\\x\\tool.exe".into()).is_err());
+        assert!(read_image_bytes("C:\\x\\noext".into()).is_err());
+        assert!(read_image_bytes("C:\\definitely\\missing.png".into()).is_err());
     }
 }

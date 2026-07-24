@@ -1,6 +1,8 @@
 import { Store } from "@tauri-apps/plugin-store";
 import { DEFAULT_CUSTOM_PALETTE } from "@/lib/palettes";
+import { resolveBackgroundId } from "@/lib/backgrounds";
 import {
+  DEFAULT_BACKGROUND_ID,
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_NOTIF_STYLE,
   DEFAULT_NOTIF_WIDTH,
@@ -14,6 +16,7 @@ import {
   SCROLLBACK_LINES_MAX,
   SCROLLBACK_LINES_MIN,
   type ActionButton,
+  type BackgroundId,
   type CustomPalette,
   type EditorProtocol,
   type NotifStyle,
@@ -49,6 +52,7 @@ const KEY_PROMPT_BUTTONS = "promptButtons";
 const KEY_PROMPT_BAR_ENABLED = "promptBarEnabled";
 const KEY_FONT = "font";
 const KEY_PALETTE_ID = "paletteId";
+const KEY_BACKGROUND_ID = "backgroundId";
 const KEY_USE_WEBGPU = "useWebGPU";
 const KEY_CUSTOM_PALETTE = "customPalette";
 const KEY_EDITOR_PROTOCOL = "editorProtocol";
@@ -97,6 +101,8 @@ export interface PersistedState {
   promptBarEnabled: boolean;
   font: TerminalFont;
   paletteId: PaletteId;
+  /** Selected app-background preset (gradient + frosted glass, or "noir"). */
+  backgroundId: BackgroundId;
   useWebGPU: boolean;
   customPalette: CustomPalette;
   editorProtocol: EditorProtocol;
@@ -136,6 +142,7 @@ const DEFAULT_STATE: PersistedState = {
   promptBarEnabled: true,
   font: DEFAULT_TERMINAL_FONT,
   paletteId: DEFAULT_PALETTE_ID,
+  backgroundId: DEFAULT_BACKGROUND_ID,
   useWebGPU: false,
   customPalette: DEFAULT_CUSTOM_PALETTE,
   editorProtocol: DEFAULT_EDITOR_PROTOCOL,
@@ -429,6 +436,7 @@ export async function loadState(
   const rawPromptBarEnabled = await store.get<unknown>(KEY_PROMPT_BAR_ENABLED);
   const rawFont = await store.get<unknown>(KEY_FONT);
   const rawPaletteId = await store.get<unknown>(KEY_PALETTE_ID);
+  const rawBackgroundId = await store.get<unknown>(KEY_BACKGROUND_ID);
   const rawUseWebGPU = await store.get<unknown>(KEY_USE_WEBGPU);
   const rawCustomPalette = await store.get<unknown>(KEY_CUSTOM_PALETTE);
   const rawEditorProtocol = await store.get<unknown>(KEY_EDITOR_PROTOCOL);
@@ -469,6 +477,7 @@ export async function loadState(
     ),
     font: normalizeFont(rawFont),
     paletteId: normalizePaletteId(rawPaletteId),
+    backgroundId: resolveBackgroundId(rawBackgroundId),
     useWebGPU:
       typeof rawUseWebGPU === "boolean"
         ? rawUseWebGPU
@@ -508,6 +517,7 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_PROMPT_BAR_ENABLED, state.promptBarEnabled);
   await store.set(KEY_FONT, state.font);
   await store.set(KEY_PALETTE_ID, state.paletteId);
+  await store.set(KEY_BACKGROUND_ID, state.backgroundId);
   await store.set(KEY_USE_WEBGPU, state.useWebGPU);
   await store.set(KEY_CUSTOM_PALETTE, state.customPalette);
   await store.set(KEY_EDITOR_PROTOCOL, state.editorProtocol);

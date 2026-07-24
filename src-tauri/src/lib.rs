@@ -93,6 +93,8 @@ pub fn run() {
                         }
                     });
                 }
+                // Transcript-image cache housekeeping, off the setup path.
+                std::thread::spawn(|| conversation::prune_imgcache(30));
                 let claude_root = dirs::home_dir()
                     .unwrap_or_else(|| PathBuf::from("."))
                     .join(".claude")
@@ -147,6 +149,7 @@ pub fn run() {
             conversation::read_conversation,
             conversation::read_conversation_delta,
             conversation::pane_session_id,
+            conversation::read_image_bytes,
             popup::popup_request_state,
             popup::popup_log_ui,
             popup::popup_set_style,

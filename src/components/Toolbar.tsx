@@ -38,7 +38,7 @@ export function Toolbar({
   onToggleSidepanel,
 }: ToolbarProps) {
   return (
-    <div className="flex h-9 items-center gap-1 border-b border-zinc-800 bg-zinc-950 px-2">
+    <div className="chrome-surface flex h-9 items-center gap-1 border-b border-zinc-800 bg-zinc-950 px-2">
       <button
         onClick={onToggleSidepanel}
         className="mr-1 flex size-7 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"

@@ -42,7 +42,7 @@ export function WorkspaceDialog({
       onClick={onCancel}
     >
       <div
-        className="w-[360px] rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-xl"
+        className="chrome-surface w-[360px] rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="mb-3 text-base font-semibold tracking-tight">{title}</h2>

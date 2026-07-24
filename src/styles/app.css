@@ -4,6 +4,62 @@
   --font-mono: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
 }
 
+:root {
+  /* Frosted-glass chrome (engaged by a gradient background preset, below). */
+  --glass-bg: rgba(17, 20, 28, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur: 18px;
+}
+
+/*
+ * When a gradient background preset is active, the root carries data-glass="on"
+ * and any chrome region marked `.chrome-surface` becomes translucent + blurred
+ * so the gradient shows through (the "frosted glass" look). The terminal panes
+ * are intentionally NOT marked, so they stay opaque and keep text readable.
+ * With the default "noir" preset (data-glass="off") this rule never applies,
+ * so the chrome keeps its original opaque Tailwind colors, unchanged.
+ */
+[data-glass="on"] .chrome-surface {
+  background-color: var(--glass-bg) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  border-color: var(--glass-border);
+}
+
+/*
+ * Inside a frosted bar/panel, solid opaque zinc fills (buttons, pills, active
+ * items, dropdowns…) would read as solid boxes on the glass. In glass mode we
+ * translate them into translucent white "chips" so the whole chrome is frosted,
+ * darker classes → fainter chip, hover → a touch stronger. Scoped to chrome
+ * surfaces only (the terminal is never inside one), so "noir" is untouched.
+ */
+[data-glass="on"] .chrome-surface .bg-zinc-950,
+[data-glass="on"] .chrome-surface .bg-zinc-950\/50 {
+  background-color: rgba(255, 255, 255, 0.03) !important;
+}
+[data-glass="on"] .chrome-surface .bg-zinc-900,
+[data-glass="on"] .chrome-surface .bg-zinc-900\/40,
+[data-glass="on"] .chrome-surface .bg-zinc-900\/60 {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+[data-glass="on"] .chrome-surface .bg-zinc-800,
+[data-glass="on"] .chrome-surface .bg-zinc-800\/80 {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+}
+[data-glass="on"] .chrome-surface .bg-zinc-700 {
+  background-color: rgba(255, 255, 255, 0.14) !important;
+}
+[data-glass="on"] .chrome-surface .hover\:bg-zinc-900:hover,
+[data-glass="on"] .chrome-surface .hover\:bg-zinc-900\/60:hover {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+}
+[data-glass="on"] .chrome-surface .hover\:bg-zinc-800:hover {
+  background-color: rgba(255, 255, 255, 0.14) !important;
+}
+[data-glass="on"] .chrome-surface .hover\:bg-zinc-700:hover {
+  background-color: rgba(255, 255, 255, 0.18) !important;
+}
+
 html,
 body,
 #root {

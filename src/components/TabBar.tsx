@@ -55,7 +55,7 @@ export function TabBar({
 
   return (
     <div
-      className="flex h-9 items-stretch border-b border-zinc-800 bg-zinc-950 select-none"
+      className="chrome-surface flex h-9 items-stretch border-b border-zinc-800 bg-zinc-950 select-none"
       data-tauri-drag-region
     >
       <div
