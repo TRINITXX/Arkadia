@@ -203,6 +203,9 @@ export const DEFAULT_TERMINAL_FONT: TerminalFont = {
   size: 14,
 };
 
+/** Size the toolbar's one-click "compact font" toggle switches the terminal to. */
+export const COMPACT_TERMINAL_FONT_SIZE = 10;
+
 export type PaletteId =
   | "wez"
   | "wezterm"

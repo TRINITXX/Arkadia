@@ -1,5 +1,18 @@
 import type { CellRun, RenderPayload } from "@/types";
 
+/**
+ * Row index of Claude Code's live `❯` input line (the bottom-most one), or -1
+ * when the screen has none — e.g. a plain shell, or an option selector that
+ * replaced the field. Lets an overlay align itself with the input box.
+ */
+export function inputRowIndex(screen: RenderPayload | null): number {
+  if (!screen) return -1;
+  for (let r = screen.rows - 1; r >= 0; r--) {
+    if (isInputRow(screen.lines[r] ?? [])) return r;
+  }
+  return -1;
+}
+
 /** Column of the first non-space cell of a row, or null when the row is blank. */
 export function firstContentCol(runs: CellRun[]): number | null {
   let col = 0;

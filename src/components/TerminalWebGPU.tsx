@@ -256,8 +256,7 @@ function stripUserBand(screen: RenderPayload): RenderPayload {
 
 /**
  * Blanks Claude Code's floating "Jump to bottom (ctrl+End)" pill — a centred
- * overlay that clutters the transcript. The message-nav rail + ctrl+End cover
- * its function.
+ * overlay that clutters the transcript. Ctrl+End covers its function.
  */
 function hideJumpPill(screen: RenderPayload): RenderPayload {
   let changed = false;

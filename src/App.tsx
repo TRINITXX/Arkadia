@@ -10,7 +10,6 @@ import { Sidepanel } from "@/components/Sidepanel";
 import { Toolbar } from "@/components/Toolbar";
 import { FloatingPromptBar } from "@/components/PromptBar";
 import { PaneTreeView } from "@/components/PaneTreeView";
-import { MessageNavRail } from "@/components/MessageNavRail";
 import { AddProjectDialog } from "@/components/AddProjectDialog";
 import { ProjectContextMenu } from "@/components/ProjectContextMenu";
 import { PaneContextMenu } from "@/components/PaneContextMenu";
@@ -22,7 +21,6 @@ import { Toaster, useToasts } from "@/components/Toaster";
 import {
   DEFAULT_CONV_FILTERS,
   type ConvFilters,
-  type ModernNavHandle,
 } from "@/components/ModernConversationView";
 import { loadState, saveState, newProjectId, newWorkspaceId } from "@/store";
 import { applyActiveReorder } from "@/lib/activeOrder";
@@ -48,6 +46,7 @@ import {
   type SessionSnapshot,
 } from "@/lib/sessionSnapshot";
 import {
+  COMPACT_TERMINAL_FONT_SIZE,
   DEFAULT_BACKGROUND_ID,
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_NOTIF_STYLE,
@@ -149,8 +148,6 @@ export function App() {
   // Modern-view message-type filters (session-only; default all visible).
   const [convFilters, setConvFilters] =
     useState<ConvFilters>(DEFAULT_CONV_FILTERS);
-  // Imperative handle to the active pane's modern view, so the nav arrows drive it.
-  const modernNavRef = useRef<ModernNavHandle>(null);
   const palette = useMemo(
     () => resolveActivePalette(paletteId, customPalette),
     [paletteId, customPalette],
@@ -509,6 +506,25 @@ export function App() {
       enabled: autoScrollReplyEnabled,
     }).catch(() => {});
   }, [loaded, autoScrollReplyEnabled]);
+
+  // ─── Compact-font toggle ────────────────────────────────────────
+
+  // Size to come back to when the compact toggle is switched off. Session-only:
+  // after a restart with a compact font persisted, we fall back to the default.
+  const fontSizeBeforeCompactRef = useRef<number | null>(null);
+  const compactFont = font.size === COMPACT_TERMINAL_FONT_SIZE;
+
+  const toggleCompactFont = useCallback(() => {
+    if (font.size === COMPACT_TERMINAL_FONT_SIZE) {
+      const restored =
+        fontSizeBeforeCompactRef.current ?? DEFAULT_TERMINAL_FONT.size;
+      fontSizeBeforeCompactRef.current = null;
+      setFont((f) => ({ ...f, size: restored }));
+    } else {
+      fontSizeBeforeCompactRef.current = font.size;
+      setFont((f) => ({ ...f, size: COMPACT_TERMINAL_FONT_SIZE }));
+    }
+  }, [font.size]);
 
   // ─── Pane / tab spawning ────────────────────────────────────────
 
@@ -1373,33 +1389,6 @@ export function App() {
     });
   };
 
-  // Jump to the previous/next conversation message (kind 1 = user `❯`,
-  // 2 = Claude white `●`) in the active pane. The backend owns the strategy:
-  // direct scrollback jump on the main screen, wheel-event feedback loop on
-  // the alt screen (Claude Code scrolls its own transcript).
-  const navigateMessage = useCallback(
-    async (kind: 1 | 2, dir: -1 | 1) => {
-      // In the modern view the arrows drive the structured view, not the terminal.
-      if (modernViewEnabled) {
-        modernNavRef.current?.navigate(kind, dir);
-        return;
-      }
-      const tab = tabs.find((t) => t.id === activeTabId);
-      const pane = tab ? tab.panes[tab.activePaneId] : undefined;
-      if (!pane) return;
-      try {
-        await invoke<boolean>("navigate_message", {
-          sessionId: pane.id,
-          kind,
-          dir,
-        });
-      } catch (e) {
-        setError(String(e));
-      }
-    },
-    [tabs, activeTabId, modernViewEnabled],
-  );
-
   const runToolbarAction = useCallback(
     async (button: ActionButton) => {
       if (!activeProject) return;
@@ -1530,6 +1519,8 @@ export function App() {
           onToggleModernView={() => setModernViewEnabled((v) => !v)}
           sidepanelOpen={sidepanelOpen}
           onToggleSidepanel={() => setSidepanelOpen((v) => !v)}
+          compactFont={compactFont}
+          onToggleCompactFont={toggleCompactFont}
         />
 
         {error && (
@@ -1547,12 +1538,6 @@ export function App() {
         )}
 
         <div ref={paneHostRef} className="relative flex flex-1 overflow-hidden">
-          {activeProject && navRailEnabled && (
-            <MessageNavRail
-              onNavigate={navigateMessage}
-              disabled={!activePaneIdOfActiveTab}
-            />
-          )}
           {!activeProject && (
             <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
               {projects.length === 0
@@ -1592,9 +1577,7 @@ export function App() {
                   convFilters={convFilters}
                   onConvFiltersChange={setConvFilters}
                   onToast={pushToast}
-                  modernNavRef={
-                    tab.id === activeTabId ? modernNavRef : undefined
-                  }
+                  inputRailEnabled={navRailEnabled}
                   onActivate={(paneId) => focusPane(tab.id, paneId)}
                   onUserInput={() => markProjectInput(tab.projectId)}
                   onContextMenu={(paneId, x, y) =>

@@ -9,11 +9,6 @@ import type { ToolDensity } from "@/types";
 /** 0 = not a match, 1 = a match, 2 = the current match. */
 export type MatchState = 0 | 1 | 2;
 
-/** Nav target kind: 1 = user block, 2 = assistant block, 0 = neither. */
-export function navKindOf(kind: ConvBlock["kind"]): 0 | 1 | 2 {
-  return kind === "user" ? 1 : kind === "assistant" ? 2 : 0;
-}
-
 interface BlockRowProps {
   block: ConvBlock;
   index: number;

@@ -15,8 +15,8 @@ import { TerminalWebGPU } from "./TerminalWebGPU";
 import {
   ModernConversationView,
   type ConvFilters,
-  type ModernNavHandle,
 } from "./ModernConversationView";
+import { PaneInputRail } from "./PaneInputRail";
 import type { AgentStateValue } from "@/lib/agentState";
 
 /** Pixel height of the real-terminal footer left uncovered by the modern view. */
@@ -79,8 +79,8 @@ interface PaneTreeViewProps {
   onConvFiltersChange: (next: ConvFilters) => void;
   /** Surfaces modern-view errors (unopenable path…) in the app's toaster. */
   onToast?: (level: "info" | "error", message: string) => void;
-  /** Attached to the active pane's modern view so the nav arrows can drive it. */
-  modernNavRef?: React.Ref<ModernNavHandle>;
+  /** Show the Enter / dictation buttons beside the active pane's input box. */
+  inputRailEnabled: boolean;
   /** Per-pane agent state, so the modern view can show a live "working" indicator. */
   paneAgentStates: Record<string, AgentStateValue>;
   onActivate: (paneId: string) => void;
@@ -106,7 +106,7 @@ export function PaneTreeView({
   convFilters,
   onConvFiltersChange,
   onToast,
-  modernNavRef,
+  inputRailEnabled,
   paneAgentStates,
   onActivate,
   onUserInput,
@@ -144,10 +144,17 @@ export function PaneTreeView({
     return (
       <div className="relative h-full w-full">
         {terminal}
+        {isActive && inputRailEnabled && (
+          <PaneInputRail
+            paneId={pane.id}
+            font={font}
+            useWebGPU={useWebGPU}
+            onError={(message) => onToast?.("error", message)}
+          />
+        )}
         {modernViewEnabled && (
           <ModernOverlay paneId={pane.id} font={font} useWebGPU={useWebGPU}>
             <ModernConversationView
-              ref={isActive ? modernNavRef : undefined}
               paneId={pane.id}
               filters={convFilters}
               onFiltersChange={onConvFiltersChange}
@@ -192,7 +199,7 @@ export function PaneTreeView({
           convFilters={convFilters}
           onConvFiltersChange={onConvFiltersChange}
           onToast={onToast}
-          modernNavRef={modernNavRef}
+          inputRailEnabled={inputRailEnabled}
           paneAgentStates={paneAgentStates}
           onActivate={onActivate}
           onUserInput={onUserInput}
@@ -224,7 +231,7 @@ export function PaneTreeView({
           convFilters={convFilters}
           onConvFiltersChange={onConvFiltersChange}
           onToast={onToast}
-          modernNavRef={modernNavRef}
+          inputRailEnabled={inputRailEnabled}
           paneAgentStates={paneAgentStates}
           onActivate={onActivate}
           onUserInput={onUserInput}

@@ -712,8 +712,8 @@ function GeneralSettings({
           <SettingToggle
             checked={navRailEnabled}
             onChange={onChangeNavRailEnabled}
-            label="Boutons de navigation"
-            hint="La barre de boutons à droite du terminal pour sauter entre les messages."
+            label="Boutons Entrée / dictée"
+            hint="Les deux boutons à droite du champ de saisie : envoyer le message (Entrée) et dicter à la voix (maintient la barre espace)."
           />
           <SettingToggle
             checked={promptBarEnabled}

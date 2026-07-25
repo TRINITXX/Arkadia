@@ -1,9 +1,7 @@
 import {
-  forwardRef,
   memo,
   useCallback,
   useEffect,
-  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -13,11 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ChevronDown, ChevronUp, Filter, X } from "lucide-react";
 import { CONVERSATION_CSS } from "@/components/ConversationView";
-import {
-  BlockRow,
-  navKindOf,
-  type MatchState,
-} from "@/components/modern/BlockRow";
+import { BlockRow, type MatchState } from "@/components/modern/BlockRow";
 import { HLJS_CSS, MODERN_CSS } from "@/components/modern/css";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
 import { Lightbox } from "@/components/modern/Lightbox";
@@ -80,11 +74,6 @@ export const FILTER_LABELS: { key: keyof ConvFilters; label: string }[] = [
   { key: "tools", label: "Outils" },
   { key: "results", label: "Résultats" },
 ];
-
-/** Imperative nav surface: jump to the prev/next user (1) or Claude (2) block. */
-export interface ModernNavHandle {
-  navigate: (kind: 1 | 2, dir: -1 | 1) => void;
-}
 
 /**
  * Reads the structured blocks for `paneId` and keeps them live (refreshes on
@@ -307,338 +296,330 @@ interface ModernConversationViewProps {
 
 /**
  * The structured "modern" conversation view: renders every block (prose,
- * thinking, tool cards) filtered by `filters`, live. Exposes an imperative
- * `navigate` so the message-nav arrows can jump between user/Claude blocks.
+ * thinking, tool cards) filtered by `filters`, live.
  */
-export const ModernConversationView = memo(
-  forwardRef<ModernNavHandle, ModernConversationViewProps>(
-    function ModernConversationView(
-      {
-        paneId,
-        filters,
-        onFiltersChange,
-        density,
-        palette,
-        backgroundCss,
-        agentState,
-        isActive,
-        onToast,
-      },
-      ref,
-    ) {
-      const { blocks, generation } = useConversationBlocks(paneId);
-      const scrollRef = useRef<HTMLDivElement>(null);
-      const atBottomRef = useRef(true);
-      // Every visible row's element, by visible index, for search scroll /
-      // highlight / nav. Rows register via a stable ref callback (memoized
-      // rows keep their registration; unmount clears it).
-      const rowEls = useRef<Map<number, HTMLDivElement>>(new Map());
-      // Block count at the first non-empty render of this (pane, generation):
-      // rows past it were appended live and get the entrance animation. A
-      // pane switch or a transcript reset mints a new key, so rebuilt history
-      // never animates. State adjusted during render (official derived-state
-      // pattern) — it must be right in the very render that shows the blocks.
-      const animKey = `${paneId ?? ""}:${generation}`;
-      const [anim, setAnim] = useState<{ key: string; initial: number | null }>(
-        { key: animKey, initial: null },
-      );
-      if (anim.key !== animKey) {
-        setAnim({
-          key: animKey,
-          initial: blocks.length > 0 ? blocks.length : null,
-        });
-      } else if (anim.initial === null && blocks.length > 0) {
-        setAnim({ key: animKey, initial: blocks.length });
+export const ModernConversationView = memo(function ModernConversationView({
+  paneId,
+  filters,
+  onFiltersChange,
+  density,
+  palette,
+  backgroundCss,
+  agentState,
+  isActive,
+  onToast,
+}: ModernConversationViewProps) {
+  const { blocks, generation } = useConversationBlocks(paneId);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  // Every visible row's element, by visible index, for search scroll /
+  // highlight / nav. Rows register via a stable ref callback (memoized
+  // rows keep their registration; unmount clears it).
+  const rowEls = useRef<Map<number, HTMLDivElement>>(new Map());
+  // Block count at the first non-empty render of this (pane, generation):
+  // rows past it were appended live and get the entrance animation. A
+  // pane switch or a transcript reset mints a new key, so rebuilt history
+  // never animates. State adjusted during render (official derived-state
+  // pattern) — it must be right in the very render that shows the blocks.
+  const animKey = `${paneId ?? ""}:${generation}`;
+  const [anim, setAnim] = useState<{ key: string; initial: number | null }>({
+    key: animKey,
+    initial: null,
+  });
+  if (anim.key !== animKey) {
+    setAnim({
+      key: animKey,
+      initial: blocks.length > 0 ? blocks.length : null,
+    });
+  } else if (anim.initial === null && blocks.length > 0) {
+    setAnim({ key: animKey, initial: blocks.length });
+  }
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [matchIdx, setMatchIdx] = useState(0);
+  const [lightbox, setLightbox] = useState<LightboxContent | null>(null);
+
+  const openLightbox = useCallback(
+    (content: LightboxContent) => setLightbox(content),
+    [],
+  );
+  const closeLightbox = useCallback(() => setLightbox(null), []);
+
+  const registerEl = useCallback((index: number, el: HTMLDivElement | null) => {
+    if (el) rowEls.current.set(index, el);
+    else rowEls.current.delete(index);
+  }, []);
+
+  const visible = useMemo(() => {
+    const out: { block: ConvBlock; blockIndex: number }[] = [];
+    blocks.forEach((b, i) => {
+      const show =
+        b.kind === "user"
+          ? filters.user
+          : b.kind === "assistant"
+            ? filters.assistant
+            : b.kind === "thinking"
+              ? filters.thinking
+              : filters.tools;
+      if (show) out.push({ block: b, blockIndex: i });
+    });
+    return out;
+  }, [blocks, filters]);
+
+  // Indices into `visible` whose text matches the search query.
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [] as number[];
+    const out: number[] = [];
+    visible.forEach(({ block: b }, i) => {
+      const hay =
+        b.kind === "tool"
+          ? `${b.tool_name ?? ""} ${b.tool_input ?? ""} ${b.tool_output ?? ""}`
+          : (b.text ?? "");
+      if (hay.toLowerCase().includes(q)) out.push(i);
+    });
+    return out;
+  }, [visible, query]);
+
+  const nextMatch = (dir: 1 | -1) => {
+    if (matches.length === 0) return;
+    setMatchIdx((i) => (i + dir + matches.length) % matches.length);
+  };
+
+  // Follow the conversation only when already pinned near the bottom.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [visible]);
+
+  // Where the view lands when it opens: the first Claude reply that follows
+  // your last message. Falls back to whatever comes right after it (Claude's
+  // prose filtered out), then to that message itself (no reply yet).
+  const landingIndex = useMemo(() => {
+    let lastUser = -1;
+    for (let i = visible.length - 1; i >= 0; i--) {
+      if (visible[i].block.kind === "user") {
+        lastUser = i;
+        break;
       }
-      const [searchOpen, setSearchOpen] = useState(false);
-      const [query, setQuery] = useState("");
-      const [matchIdx, setMatchIdx] = useState(0);
-      const [lightbox, setLightbox] = useState<LightboxContent | null>(null);
+    }
+    if (lastUser < 0) return -1;
+    for (let i = lastUser + 1; i < visible.length; i++) {
+      if (visible[i].block.kind === "assistant") return i;
+    }
+    return lastUser + 1 < visible.length ? lastUser + 1 : lastUser;
+  }, [visible]);
 
-      const openLightbox = useCallback(
-        (content: LightboxContent) => setLightbox(content),
-        [],
-      );
-      const closeLightbox = useCallback(() => setLightbox(null), []);
+  // Land there once, then hold the spot while the rows above keep sizing
+  // (images decoding, code highlighting): without that the transcript grows
+  // under the scroll and you get dropped in the middle of a message. Any
+  // wheel/drag from the user, or a second of quiet, releases the hold.
+  // Which pane we already landed on — a pane swap on this instance lands again.
+  const landedRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (landedRef.current === paneId || landingIndex < 0) return;
+    const el = scrollRef.current;
+    const row = rowEls.current.get(landingIndex);
+    if (!el || !row) return;
+    landedRef.current = paneId;
+    let timer = 0;
+    const ro = new ResizeObserver(() => pin());
+    const release = () => {
+      window.clearTimeout(timer);
+      ro.disconnect();
+      el.removeEventListener("wheel", release);
+      el.removeEventListener("pointerdown", release);
+    };
+    const pin = () => {
+      const max = Math.max(0, el.scrollHeight - el.clientHeight);
+      el.scrollTop = Math.min(Math.max(0, row.offsetTop - 8), max);
+      atBottomRef.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(release, 1000);
+    };
+    for (const r of rowEls.current.values()) ro.observe(r);
+    pin();
+    el.addEventListener("wheel", release, { passive: true });
+    el.addEventListener("pointerdown", release);
+    return release;
+  }, [landingIndex, paneId]);
 
-      const registerEl = useCallback(
-        (index: number, el: HTMLDivElement | null) => {
-          if (el) rowEls.current.set(index, el);
-          else rowEls.current.delete(index);
-        },
-        [],
-      );
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
 
-      const visible = useMemo(() => {
-        const out: { block: ConvBlock; blockIndex: number }[] = [];
-        blocks.forEach((b, i) => {
-          const show =
-            b.kind === "user"
-              ? filters.user
-              : b.kind === "assistant"
-                ? filters.assistant
-                : b.kind === "thinking"
-                  ? filters.thinking
-                  : filters.tools;
-          if (show) out.push({ block: b, blockIndex: i });
-        });
-        return out;
-      }, [blocks, filters]);
+  // Ctrl/Cmd+F opens search — but only on the active pane's view.
+  useEffect(() => {
+    if (!isActive || blocks.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [isActive, blocks.length]);
 
-      // Indices into `visible` whose text matches the search query.
-      const matches = useMemo(() => {
-        const q = query.trim().toLowerCase();
-        if (!q) return [] as number[];
-        const out: number[] = [];
-        visible.forEach(({ block: b }, i) => {
-          const hay =
-            b.kind === "tool"
-              ? `${b.tool_name ?? ""} ${b.tool_input ?? ""} ${b.tool_output ?? ""}`
-              : (b.text ?? "");
-          if (hay.toLowerCase().includes(q)) out.push(i);
-        });
-        return out;
-      }, [visible, query]);
+  // Scroll the current match into view.
+  useEffect(() => {
+    if (!searchOpen || matches.length === 0) return;
+    const visIdx = matches[Math.min(matchIdx, matches.length - 1)];
+    const el = rowEls.current.get(visIdx);
+    if (el) {
+      atBottomRef.current = false;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [searchOpen, matchIdx, matches]);
 
-      const nextMatch = (dir: 1 | -1) => {
-        if (matches.length === 0) return;
-        setMatchIdx((i) => (i + dir + matches.length) % matches.length);
-      };
+  const matchSet = searchOpen ? new Set(matches) : null;
+  const currentVisIdx =
+    searchOpen && matches.length
+      ? matches[Math.min(matchIdx, matches.length - 1)]
+      : -1;
 
-      // Follow the conversation only when already pinned near the bottom.
-      useLayoutEffect(() => {
-        const el = scrollRef.current;
-        if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
-      }, [visible]);
+  // No conversation for this pane (plain shell, or a Claude tab before its first
+  // message) → render see-through so the real terminal stays visible and usable.
+  const hasConversation = blocks.length > 0;
 
-      const onScroll = () => {
-        const el = scrollRef.current;
-        if (!el) return;
-        atBottomRef.current =
-          el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-      };
+  // Live activity indicator, driven by Arkadia's agent state (reliable, unlike
+  // scraping the terminal spinner): "busy" while Claude works (with the current
+  // tool), "waiting" when it needs an answer in the footer (AskUserQuestion…).
+  const working = agentState?.kind === "busy" || agentState?.kind === "waiting";
+  const workingWaiting = agentState?.kind === "waiting";
+  const workingTool =
+    agentState?.kind === "busy" ? (agentState.tool ?? null) : null;
+  const WorkingToolIcon = workingTool ? toolIcon(workingTool) : null;
+  const workingLabel =
+    agentState?.kind === "waiting"
+      ? "En attente de ta réponse ↓"
+      : agentState?.kind === "busy"
+        ? workingTool
+          ? `Claude travaille · ${workingTool}`
+          : "Claude travaille…"
+        : "";
 
-      // Ctrl/Cmd+F opens search — but only on the active pane's view.
-      useEffect(() => {
-        if (!isActive || blocks.length === 0) return;
-        const onKey = (e: KeyboardEvent) => {
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
-            e.preventDefault();
-            e.stopPropagation();
-            setSearchOpen(true);
-          }
-        };
-        window.addEventListener("keydown", onKey, true);
-        return () => window.removeEventListener("keydown", onKey, true);
-      }, [isActive, blocks.length]);
+  const initialCount = anim.initial ?? Number.POSITIVE_INFINITY;
 
-      // Scroll the current match into view.
-      useEffect(() => {
-        if (!searchOpen || matches.length === 0) return;
-        const visIdx = matches[Math.min(matchIdx, matches.length - 1)];
-        const el = rowEls.current.get(visIdx);
-        if (el) {
-          atBottomRef.current = false;
-          el.scrollIntoView({ block: "center", behavior: "smooth" });
-        }
-      }, [searchOpen, matchIdx, matches]);
-
-      // The nav arrows need each row's kind: mirror `visible` in a ref so the
-      // imperative handle reads the latest without re-creating itself.
-      const visibleRef = useRef(visible);
-      useEffect(() => {
-        visibleRef.current = visible;
-      }, [visible]);
-
-      useImperativeHandle(
-        ref,
-        () => ({
-          navigate(kind, dir) {
-            const el = scrollRef.current;
-            if (!el) return;
-            const tops: number[] = [];
-            for (const [i, rowEl] of rowEls.current) {
-              const entry = visibleRef.current[i];
-              if (entry && navKindOf(entry.block.kind) === kind) {
-                tops.push(rowEl.offsetTop);
+  return (
+    <div
+      className={`reading-root flex h-full w-full flex-col ${
+        hasConversation ? "" : "pointer-events-none"
+      }`}
+      style={{
+        // A gradient preset paints the app gradient here (the view is an
+        // overlay ON TOP of the opaque terminal, so a translucent bg would
+        // reveal the terminal, not the gradient). "noir" keeps palette.bg.
+        background: hasConversation
+          ? (backgroundCss ?? palette.bg)
+          : "transparent",
+        color: palette.fg,
+      }}
+    >
+      <style>
+        {CONVERSATION_CSS}
+        {MODERN_CSS}
+        {HLJS_CSS}
+      </style>
+      {hasConversation && (
+        <FilterPopover filters={filters} onChange={onFiltersChange} />
+      )}
+      {hasConversation && searchOpen && (
+        <div className="modern-search">
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setMatchIdx(0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                nextMatch(e.shiftKey ? -1 : 1);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setSearchOpen(false);
+                setQuery("");
               }
-            }
-            tops.sort((a, b) => a - b);
-            if (tops.length === 0) return;
-            const cur = el.scrollTop;
-            let target: number | undefined;
-            if (dir > 0) {
-              target = tops.find((t) => t > cur + 4);
-            } else {
-              const before = tops.filter((t) => t < cur - 4);
-              target = before.length ? before[before.length - 1] : undefined;
-            }
-            if (target !== undefined) {
-              atBottomRef.current = false;
-              el.scrollTo({ top: target, behavior: "smooth" });
-            }
-          },
-        }),
-        [],
-      );
-
-      const matchSet = searchOpen ? new Set(matches) : null;
-      const currentVisIdx =
-        searchOpen && matches.length
-          ? matches[Math.min(matchIdx, matches.length - 1)]
-          : -1;
-
-      // No conversation for this pane (plain shell, or a Claude tab before its first
-      // message) → render see-through so the real terminal stays visible and usable.
-      const hasConversation = blocks.length > 0;
-
-      // Live activity indicator, driven by Arkadia's agent state (reliable, unlike
-      // scraping the terminal spinner): "busy" while Claude works (with the current
-      // tool), "waiting" when it needs an answer in the footer (AskUserQuestion…).
-      const working =
-        agentState?.kind === "busy" || agentState?.kind === "waiting";
-      const workingWaiting = agentState?.kind === "waiting";
-      const workingTool =
-        agentState?.kind === "busy" ? (agentState.tool ?? null) : null;
-      const WorkingToolIcon = workingTool ? toolIcon(workingTool) : null;
-      const workingLabel =
-        agentState?.kind === "waiting"
-          ? "En attente de ta réponse ↓"
-          : agentState?.kind === "busy"
-            ? workingTool
-              ? `Claude travaille · ${workingTool}`
-              : "Claude travaille…"
-            : "";
-
-      const initialCount = anim.initial ?? Number.POSITIVE_INFINITY;
-
-      return (
-        <div
-          className={`reading-root flex h-full w-full flex-col ${
-            hasConversation ? "" : "pointer-events-none"
-          }`}
-          style={{
-            // A gradient preset paints the app gradient here (the view is an
-            // overlay ON TOP of the opaque terminal, so a translucent bg would
-            // reveal the terminal, not the gradient). "noir" keeps palette.bg.
-            background: hasConversation
-              ? (backgroundCss ?? palette.bg)
-              : "transparent",
-            color: palette.fg,
-          }}
-        >
-          <style>
-            {CONVERSATION_CSS}
-            {MODERN_CSS}
-            {HLJS_CSS}
-          </style>
-          {hasConversation && (
-            <FilterPopover filters={filters} onChange={onFiltersChange} />
-          )}
-          {hasConversation && searchOpen && (
-            <div className="modern-search">
-              <input
-                autoFocus
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  setMatchIdx(0);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    nextMatch(e.shiftKey ? -1 : 1);
-                  } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    setSearchOpen(false);
-                    setQuery("");
-                  }
-                }}
-                placeholder="Rechercher…"
-              />
-              <span className="count">
-                {matches.length
-                  ? `${Math.min(matchIdx, matches.length - 1) + 1}/${matches.length}`
-                  : "0"}
-              </span>
-              <button
-                type="button"
-                onClick={() => nextMatch(-1)}
-                title="Précédent"
-              >
-                <ChevronUp size={13} />
-              </button>
-              <button
-                type="button"
-                onClick={() => nextMatch(1)}
-                title="Suivant"
-              >
-                <ChevronDown size={13} />
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchOpen(false);
-                  setQuery("");
-                }}
-                title="Fermer"
-              >
-                <X size={13} />
-              </button>
-            </div>
-          )}
-
-          {!hasConversation ? null : visible.length === 0 ? (
-            <div className="modern-empty">tout est masqué par les filtres</div>
-          ) : (
-            <div
-              ref={scrollRef}
-              onScroll={onScroll}
-              className="modern-scroll min-h-0 flex-1 overflow-y-auto px-3 py-3"
-            >
-              {visible.map(({ block: b, blockIndex }, i) => (
-                <BlockRow
-                  key={i}
-                  block={b}
-                  index={i}
-                  speakerChange={i > 0 && visible[i - 1].block.kind !== b.kind}
-                  density={density}
-                  showResults={filters.results}
-                  matchState={
-                    (matchSet?.has(i)
-                      ? i === currentVisIdx
-                        ? 2
-                        : 1
-                      : 0) as MatchState
-                  }
-                  animate={blockIndex >= initialCount}
-                  registerEl={registerEl}
-                  onOpen={openLightbox}
-                  onToast={onToast}
-                />
-              ))}
-            </div>
-          )}
-          {hasConversation && working && (
-            <div
-              className={`modern-working${workingWaiting ? " waiting" : ""}`}
-            >
-              {workingWaiting ? (
-                <span className="dot" />
-              ) : (
-                <span className="spin" />
-              )}
-              {WorkingToolIcon && (
-                <span className="tool-ico">
-                  <WorkingToolIcon size={12} />
-                </span>
-              )}
-              {workingLabel}
-            </div>
-          )}
-          {lightbox && <Lightbox content={lightbox} onClose={closeLightbox} />}
+            }}
+            placeholder="Rechercher…"
+          />
+          <span className="count">
+            {matches.length
+              ? `${Math.min(matchIdx, matches.length - 1) + 1}/${matches.length}`
+              : "0"}
+          </span>
+          <button type="button" onClick={() => nextMatch(-1)} title="Précédent">
+            <ChevronUp size={13} />
+          </button>
+          <button type="button" onClick={() => nextMatch(1)} title="Suivant">
+            <ChevronDown size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSearchOpen(false);
+              setQuery("");
+            }}
+            title="Fermer"
+          >
+            <X size={13} />
+          </button>
         </div>
-      );
-    },
-  ),
-);
+      )}
+
+      {!hasConversation ? null : visible.length === 0 ? (
+        <div className="modern-empty">tout est masqué par les filtres</div>
+      ) : (
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="modern-scroll min-h-0 flex-1 overflow-y-auto px-3 py-3"
+        >
+          {visible.map(({ block: b, blockIndex }, i) => (
+            <BlockRow
+              key={i}
+              block={b}
+              index={i}
+              speakerChange={i > 0 && visible[i - 1].block.kind !== b.kind}
+              density={density}
+              showResults={filters.results}
+              matchState={
+                (matchSet?.has(i)
+                  ? i === currentVisIdx
+                    ? 2
+                    : 1
+                  : 0) as MatchState
+              }
+              animate={blockIndex >= initialCount}
+              registerEl={registerEl}
+              onOpen={openLightbox}
+              onToast={onToast}
+            />
+          ))}
+        </div>
+      )}
+      {hasConversation && working && (
+        <div className={`modern-working${workingWaiting ? " waiting" : ""}`}>
+          {workingWaiting ? (
+            <span className="dot" />
+          ) : (
+            <span className="spin" />
+          )}
+          {WorkingToolIcon && (
+            <span className="tool-ico">
+              <WorkingToolIcon size={12} />
+            </span>
+          )}
+          {workingLabel}
+        </div>
+      )}
+      {lightbox && <Lightbox content={lightbox} onClose={closeLightbox} />}
+    </div>
+  );
+});
