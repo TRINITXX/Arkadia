@@ -17,6 +17,7 @@ import { RenameDialog } from "@/components/RenameDialog";
 import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { NotepadPanel } from "@/components/NotepadPanel";
+import { SessionsOverlay } from "@/components/SessionsOverlay";
 import { Toaster, useToasts } from "@/components/Toaster";
 import {
   DEFAULT_CONV_FILTERS,
@@ -34,10 +35,12 @@ import {
   updateTreeRatio,
 } from "@/lib/paneTree";
 import { measureCellSize } from "@/lib/cellSize";
+import { focusPaneElement } from "@/lib/paneFocus";
 import { DEFAULT_CUSTOM_PALETTE, resolveActivePalette } from "@/lib/palettes";
 import { resolveBackground } from "@/lib/backgrounds";
 import { stateFromTitle, type AgentStateValue } from "@/lib/agentState";
 import { findProjectsByPath, parentOf } from "@/lib/externalAction";
+import { resolveProjectTarget, type ClaudeSession } from "@/lib/sessionsIndex";
 import { subscribeStable } from "@/lib/tauriEvents";
 import { dropFrame, getFrame, publishFrame } from "@/lib/frameStore";
 import {
@@ -310,12 +313,7 @@ export function App() {
   // prompt). rAF defers until the layout settles after the panel unmounts.
   const focusActivePane = useCallback(() => {
     if (!activePaneIdOfActiveTab) return;
-    requestAnimationFrame(() => {
-      const el = document.querySelector<HTMLElement>(
-        `[data-pane-id="${activePaneIdOfActiveTab}"]`,
-      );
-      el?.focus();
-    });
+    focusPaneElement(activePaneIdOfActiveTab);
   }, [activePaneIdOfActiveTab]);
 
   // Refocus the active pane when the OS window regains focus (alt-tab,
@@ -573,8 +571,11 @@ export function App() {
     async (
       project: Project,
       initCommand?: string,
+      /** Start the pane here instead of the project root — a resumed session
+       *  must run in its own cwd, which may be a subfolder of the project. */
+      cwd?: string,
     ): Promise<{ tabId: string; paneId: string } | null> => {
-      const paneId = await spawnPane(project.path, initCommand);
+      const paneId = await spawnPane(cwd ?? project.path, initCommand);
       if (!paneId) return null;
       const tabId = newTabId();
       paneToTab.current.set(paneId, tabId);
@@ -661,6 +662,77 @@ export function App() {
         : "rien à restaurer (projets disparus ?)",
     );
   }, [lastSession, projects, spawnPane, pushToast, markProjectInput]);
+
+  // ─── Sessions overlay (browse / resume any past conversation) ──
+
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+  // Claude session id → the pane already running it, so the overlay offers
+  // "go to the tab" instead of starting a second Claude on one transcript.
+  const [livePaneBySession, setLivePaneBySession] = useState<
+    Record<string, string>
+  >({});
+
+  // Rebuilt on each open: the hook-written pane map is the only place the pane
+  // → session mapping lives, and panes come and go while the overlay is closed.
+  useEffect(() => {
+    if (!sessionsOpen) return;
+    let cancelled = false;
+    const paneIds = tabs.flatMap((t) => Object.keys(t.panes));
+    void Promise.all(
+      paneIds.map(async (paneId) => {
+        const sid = await invoke<string | null>("pane_session_id", {
+          paneId,
+        }).catch(() => null);
+        return sid ? ([sid, paneId] as const) : null;
+      }),
+    ).then((pairs) => {
+      if (cancelled) return;
+      setLivePaneBySession(Object.fromEntries(pairs.filter((p) => p !== null)));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionsOpen, tabs]);
+
+  // Reopens a past conversation: a tab in the project that owns its folder
+  // (created on the spot when none does), with the pane started in the
+  // session's own cwd — `--resume` only finds a transcript under the project
+  // directory encoded from the *current* cwd.
+  const resumeSession = useCallback(
+    async (session: ClaudeSession) => {
+      const target = resolveProjectTarget(projects, session.cwd);
+      let project: Project | undefined;
+      if (target.kind === "existing") {
+        project = projects.find((p) => p.id === target.projectId);
+      } else {
+        const parent = parentOf(projects, target.path);
+        project = {
+          id: newProjectId(),
+          name: target.name,
+          path: target.path,
+          color: parent?.color ?? "#a8a8a8",
+          order: projects.length,
+          workspaceId: parent?.workspaceId ?? null,
+        };
+        setProjects((prev) => [...prev, project as Project]);
+      }
+      if (!project) return;
+      // `ccd` is the user's pwsh alias for Claude (skip-permissions + effort)
+      // and forwards its args, so --resume passes straight through.
+      const spawned = await spawnTabFor(
+        project,
+        `ccd --resume ${session.id}`,
+        session.cwd,
+      );
+      if (!spawned) return;
+      setActiveProjectId(project.id);
+      // The project is where the user is about to work: surface it in the
+      // sidebar's "Active" list now, not on the first keystroke.
+      markProjectInput(project.id);
+      pushToast("info", `⟳ ${session.title}`);
+    },
+    [projects, spawnTabFor, markProjectInput, pushToast],
+  );
 
   // ─── Closing ───────────────────────────────────────────────────
 
@@ -937,6 +1009,33 @@ export function App() {
     };
   }, []);
 
+  // Brings a pane all the way forward: its project, then its tab, then the pane
+  // itself (unlike `focusPane`, which only moves focus inside an already-visible
+  // tab). Shared by the notification popup's "open in Arkadia" and by the
+  // sessions overlay when the session it lists is already running somewhere.
+  const revealPane = useCallback((paneId: string) => {
+    const tabId = paneToTab.current.get(paneId);
+    if (!tabId) return;
+    setTabs((cur) => {
+      const tab = cur.find((t) => t.id === tabId);
+      if (!tab) return cur;
+      setActiveProjectId(tab.projectId);
+      setActiveTabIdByProject((prev) => ({
+        ...prev,
+        [tab.projectId]: tabId,
+      }));
+      return cur.map((t) =>
+        t.id === tabId ? { ...t, activePaneId: paneId } : t,
+      );
+    });
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(
+        `[data-pane-id="${paneId}"]`,
+      );
+      el?.focus();
+    });
+  }, []);
+
   // ─── Focus a pane on request from the notification popup ────────
   // The "open in Arkadia" button emits `focus-pane` with the pane id; bring its
   // project + tab forward and focus the pane so the user lands on the
@@ -946,27 +1045,7 @@ export function App() {
     let active = true;
     void listen<string>("focus-pane", (event) => {
       if (!active) return;
-      const paneId = event.payload;
-      const tabId = paneToTab.current.get(paneId);
-      if (!tabId) return;
-      setTabs((cur) => {
-        const tab = cur.find((t) => t.id === tabId);
-        if (!tab) return cur;
-        setActiveProjectId(tab.projectId);
-        setActiveTabIdByProject((prev) => ({
-          ...prev,
-          [tab.projectId]: tabId,
-        }));
-        return cur.map((t) =>
-          t.id === tabId ? { ...t, activePaneId: paneId } : t,
-        );
-      });
-      requestAnimationFrame(() => {
-        const el = document.querySelector<HTMLElement>(
-          `[data-pane-id="${paneId}"]`,
-        );
-        el?.focus();
-      });
+      revealPane(event.payload);
     }).then((fn) => {
       if (active) unlisten = fn;
       else fn();
@@ -975,7 +1054,7 @@ export function App() {
       active = false;
       unlisten?.();
     };
-  }, []);
+  }, [revealPane]);
 
   // ─── Auto-spawn first tab when activating an empty project ────
 
@@ -1490,6 +1569,7 @@ export function App() {
               ? restoreLastSession
               : null
           }
+          onOpenSessions={() => setSessionsOpen(true)}
           tabs={tabs}
           paneAgentStates={effectivePaneStates}
           activeProjectIds={activeProjectIds}
@@ -1616,6 +1696,16 @@ export function App() {
         open={addOpen}
         onCancel={() => setAddOpen(false)}
         onSubmit={onAddProject}
+      />
+
+      <SessionsOverlay
+        open={sessionsOpen}
+        onClose={() => setSessionsOpen(false)}
+        onResume={resumeSession}
+        livePaneBySession={livePaneBySession}
+        onFocusPane={revealPane}
+        density={toolDensity}
+        palette={palette}
       />
 
       {projectMenu && (

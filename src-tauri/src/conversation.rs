@@ -56,7 +56,7 @@ fn strip_tag(mut s: String, tag: &str) -> String {
     s
 }
 
-fn clean_text(text: &str) -> String {
+pub(crate) fn clean_text(text: &str) -> String {
     let mut s = text.to_string();
     for tag in INJECTED_TAGS {
         s = strip_tag(s, tag);
@@ -69,7 +69,7 @@ fn clean_text(text: &str) -> String {
 /// prompts — rather than something the user actually typed. Those turns must
 /// not render as user bubbles. (Their `tool_result` blocks, if any, are still
 /// processed; in practice tool results never carry the flag.)
-fn is_injected_user_turn(v: &Value) -> bool {
+pub(crate) fn is_injected_user_turn(v: &Value) -> bool {
     v.get("isMeta").and_then(Value::as_bool).unwrap_or(false)
 }
 
@@ -627,6 +627,45 @@ pub fn read_conversation_delta(
     let path = transcript_from_pane_map(&pane_id)
         .ok_or("no Claude conversation found for this pane yet")?;
     delta_from_path(&cache, &pane_id, path, generation, have)
+}
+
+/// Same incremental read, for a transcript that belongs to no live pane — the
+/// sessions overlay reading an arbitrary conversation off disk. Only one such
+/// transcript is kept parsed at a time: the blocks of a 90 MB session would
+/// otherwise pile up in memory as the user browses the list.
+///
+/// `(async)` because the first call on a session parses the whole file (up to
+/// tens of MB), which would otherwise block the main thread — unlike the pane
+/// variant, which only ever digests the bytes appended since its last call.
+#[tauri::command(async)]
+pub fn read_transcript_delta(
+    session_id: String,
+    path: String,
+    generation: u64,
+    have: usize,
+    cache: State<'_, ConvCacheMap>,
+) -> Result<ConvDelta, String> {
+    let p = PathBuf::from(&path);
+    if !p.is_file() {
+        return Err("transcript introuvable".into());
+    }
+    let key = format!("{TRANSCRIPT_KEY_PREFIX}{session_id}");
+    if let Ok(mut map) = cache.0.lock() {
+        map.retain(|k, _| !k.starts_with(TRANSCRIPT_KEY_PREFIX) || k == &key);
+    }
+    delta_from_path(&cache, &key, p, generation, have)
+}
+
+/// Namespaces overlay reads inside the pane-keyed cache (pane ids are UUIDs, so
+/// the prefix can't collide) and makes them easy to evict as a group.
+const TRANSCRIPT_KEY_PREFIX: &str = "transcript:";
+
+/// Drops the overlay's parsed transcript (it closed) — panes keep theirs.
+#[tauri::command]
+pub fn evict_transcript_cache(cache: State<'_, ConvCacheMap>) {
+    if let Ok(mut map) = cache.0.lock() {
+        map.retain(|k, _| !k.starts_with(TRANSCRIPT_KEY_PREFIX));
+    }
 }
 
 /// Serves an image file's raw bytes over IPC (no base64/JSON inflation). Used

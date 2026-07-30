@@ -76,12 +76,30 @@ export const FILTER_LABELS: { key: keyof ConvFilters; label: string }[] = [
 ];
 
 /**
- * Reads the structured blocks for `paneId` and keeps them live (refreshes on
- * `agent-state-changed` events for this pane's session). Incremental: each
- * refresh fetches only what the transcript appended since the previous one
- * (`read_conversation_delta`), instead of re-reading the whole JSONL.
+ * Where the blocks come from: a live pane (resolved to its transcript through
+ * the hook-written pane map, and kept live) or a transcript read straight off
+ * disk — the sessions overlay previewing a conversation that no process owns.
  */
-export function useConversationBlocks(paneId: string | null) {
+export type ConvSource =
+  | { kind: "pane"; paneId: string }
+  | { kind: "transcript"; sessionId: string; path: string };
+
+/** Identity of a source, for effects that must restart when it changes. */
+function sourceKey(source: ConvSource | null): string {
+  if (!source) return "";
+  return source.kind === "pane"
+    ? `pane:${source.paneId}`
+    : `transcript:${source.sessionId}`;
+}
+
+/**
+ * Reads the structured blocks of `source`. A pane source stays live (refreshes
+ * on `agent-state-changed` events for its session); a transcript source is read
+ * once, since no process is appending to it while the overlay shows it.
+ * Incremental either way: each refresh fetches only what was appended since the
+ * previous one, instead of re-reading the whole JSONL.
+ */
+export function useConversationBlocks(source: ConvSource | null) {
   const [blocks, setBlocks] = useState<ConvBlock[]>([]);
   // Backend cache generation of `blocks` — bumps when the transcript was
   // reset/rewritten, so consumers can tell "rebuilt history" from "append".
@@ -99,7 +117,7 @@ export function useConversationBlocks(paneId: string | null) {
   const pendingRef = useRef(false);
 
   const refresh = useCallback(() => {
-    if (!paneId) {
+    if (!source) {
       genRef.current = 0;
       haveRef.current = 0;
       sessionRef.current = null;
@@ -109,8 +127,15 @@ export function useConversationBlocks(paneId: string | null) {
     }
     const run = () => {
       inflightRef.current = true;
-      void invoke<ConvDelta>("read_conversation_delta", {
-        paneId,
+      const [cmd, args] =
+        source.kind === "pane"
+          ? (["read_conversation_delta", { paneId: source.paneId }] as const)
+          : ([
+              "read_transcript_delta",
+              { sessionId: source.sessionId, path: source.path },
+            ] as const);
+      void invoke<ConvDelta>(cmd, {
+        ...args,
         generation: genRef.current,
         have: haveRef.current,
       })
@@ -146,10 +171,12 @@ export function useConversationBlocks(paneId: string | null) {
       return;
     }
     run();
-  }, [paneId]);
+    // `source` must be referentially stable per conversation — callers build it
+    // with useMemo, so this only re-runs on an actual source change.
+  }, [source]);
 
   useEffect(() => {
-    // New pane: drop everything the previous pane's deltas accumulated.
+    // New source: drop everything the previous one's deltas accumulated.
     genRef.current = 0;
     haveRef.current = 0;
     sessionRef.current = null;
@@ -159,6 +186,8 @@ export function useConversationBlocks(paneId: string | null) {
   }, [refresh]);
 
   useEffect(() => {
+    // A transcript read off disk has no live writer: nothing to follow.
+    if (source?.kind !== "pane") return;
     let unlisten: UnlistenFn | undefined;
     let active = true;
     void listen<{ session_id?: string }>("agent-state-changed", (e) => {
@@ -176,7 +205,7 @@ export function useConversationBlocks(paneId: string | null) {
       active = false;
       unlisten?.();
     };
-  }, [refresh]);
+  }, [refresh, source]);
 
   return { blocks, generation, error, refresh };
 }
@@ -276,6 +305,12 @@ function FilterPopover({
 
 interface ModernConversationViewProps {
   paneId: string | null;
+  /**
+   * Read this transcript off disk instead of resolving `paneId`'s — the
+   * sessions overlay previewing a conversation no live pane owns. Takes
+   * precedence over `paneId` when set.
+   */
+  transcript?: { sessionId: string; path: string } | null;
   filters: ConvFilters;
   onFiltersChange: (next: ConvFilters) => void;
   density: ToolDensity;
@@ -300,6 +335,7 @@ interface ModernConversationViewProps {
  */
 export const ModernConversationView = memo(function ModernConversationView({
   paneId,
+  transcript,
   filters,
   onFiltersChange,
   density,
@@ -309,7 +345,20 @@ export const ModernConversationView = memo(function ModernConversationView({
   isActive,
   onToast,
 }: ModernConversationViewProps) {
-  const { blocks, generation } = useConversationBlocks(paneId);
+  const source = useMemo<ConvSource | null>(
+    () =>
+      transcript
+        ? {
+            kind: "transcript",
+            sessionId: transcript.sessionId,
+            path: transcript.path,
+          }
+        : paneId
+          ? { kind: "pane", paneId }
+          : null,
+    [transcript, paneId],
+  );
+  const { blocks, generation } = useConversationBlocks(source);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
   // Every visible row's element, by visible index, for search scroll /
@@ -321,7 +370,7 @@ export const ModernConversationView = memo(function ModernConversationView({
   // pane switch or a transcript reset mints a new key, so rebuilt history
   // never animates. State adjusted during render (official derived-state
   // pattern) — it must be right in the very render that shows the blocks.
-  const animKey = `${paneId ?? ""}:${generation}`;
+  const animKey = `${sourceKey(source)}:${generation}`;
   const [anim, setAnim] = useState<{ key: string; initial: number | null }>({
     key: animKey,
     initial: null,
@@ -414,14 +463,16 @@ export const ModernConversationView = memo(function ModernConversationView({
   // (images decoding, code highlighting): without that the transcript grows
   // under the scroll and you get dropped in the middle of a message. Any
   // wheel/drag from the user, or a second of quiet, releases the hold.
-  // Which pane we already landed on — a pane swap on this instance lands again.
+  // Which conversation we already landed on — swapping the source on this
+  // instance (pane change, another session previewed) lands again.
   const landedRef = useRef<string | null>(null);
   useLayoutEffect(() => {
-    if (landedRef.current === paneId || landingIndex < 0) return;
+    const key = sourceKey(source);
+    if (landedRef.current === key || landingIndex < 0) return;
     const el = scrollRef.current;
     const row = rowEls.current.get(landingIndex);
     if (!el || !row) return;
-    landedRef.current = paneId;
+    landedRef.current = key;
     let timer = 0;
     const ro = new ResizeObserver(() => pin());
     const release = () => {
@@ -443,7 +494,7 @@ export const ModernConversationView = memo(function ModernConversationView({
     el.addEventListener("wheel", release, { passive: true });
     el.addEventListener("pointerdown", release);
     return release;
-  }, [landingIndex, paneId]);
+  }, [landingIndex, source]);
 
   const onScroll = () => {
     const el = scrollRef.current;

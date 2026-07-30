@@ -6,8 +6,10 @@ mod conversation;
 #[cfg_attr(debug_assertions, allow(dead_code))]
 mod external_action;
 mod fonts;
+mod photos;
 mod popup;
 mod screenshots;
+mod sessions;
 mod terminal;
 pub mod terminal_state;
 
@@ -63,6 +65,7 @@ pub fn run() {
         .manage(SessionMap::default())
         .manage(terminal::ScrollbackConfig::default())
         .manage(conversation::ConvCacheMap::default())
+        .manage(sessions::SessionIndex::default())
         .manage(registry.clone())
         .manage(popup::PopupQueue::default())
         .setup({
@@ -148,8 +151,13 @@ pub fn run() {
             save_screenshot,
             conversation::read_conversation,
             conversation::read_conversation_delta,
+            conversation::read_transcript_delta,
+            conversation::evict_transcript_cache,
             conversation::pane_session_id,
             conversation::read_image_bytes,
+            sessions::list_claude_sessions,
+            sessions::search_claude_sessions,
+            photos::list_recent_photos,
             popup::popup_request_state,
             popup::popup_log_ui,
             popup::popup_set_style,

@@ -1,51 +1,11 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Image as ImageIcon } from "lucide-react";
+import { fetchImageUrl } from "@/lib/imageUrlCache";
 
 /** What the lightbox displays. */
 export type LightboxContent =
   | { kind: "image"; url: string }
   | { kind: "svg"; html: string };
-
-const MIME_FOR_EXT: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  bmp: "image/bmp",
-  svg: "image/svg+xml",
-};
-
-// Module-level cache path → object URL (or null for a failed probe), LRU-ish
-// capped: oldest entries revoked when full. Failures are cached too, so a
-// non-existent path mentioned in prose is probed exactly once.
-const urlCache = new Map<string, Promise<string | null>>();
-const URL_CACHE_MAX = 80;
-
-function fetchImageUrl(
-  path: string,
-  mediaType?: string,
-): Promise<string | null> {
-  const cached = urlCache.get(path);
-  if (cached) return cached;
-  const promise = invoke<ArrayBuffer>("read_image_bytes", { path })
-    .then((buf) => {
-      const ext = path.split(".").pop()?.toLowerCase() ?? "";
-      const type = mediaType ?? MIME_FOR_EXT[ext] ?? "image/png";
-      return URL.createObjectURL(new Blob([buf], { type }));
-    })
-    .catch(() => null);
-  if (urlCache.size >= URL_CACHE_MAX) {
-    const [oldestKey, oldest] = urlCache.entries().next().value!;
-    urlCache.delete(oldestKey);
-    void oldest.then((url) => {
-      if (url) URL.revokeObjectURL(url);
-    });
-  }
-  urlCache.set(path, promise);
-  return promise;
-}
 
 interface ImageThumbProps {
   path: string;

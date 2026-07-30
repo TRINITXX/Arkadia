@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CornerDownLeft, Mic, Square } from "lucide-react";
+import { CornerDownLeft, Images, Mic, Square } from "lucide-react";
+import { PhotoPicker } from "@/components/PhotoPicker";
 import { measureCellSize } from "@/lib/cellSize";
 import { usePaneFrameSelector } from "@/lib/frameStore";
+import { focusPaneElement } from "@/lib/paneFocus";
+import { quotePathsForPrompt } from "@/lib/photoPrompt";
 import { inputRowIndex } from "@/lib/terminalChrome";
 import type { TerminalFont } from "@/types";
 
@@ -27,10 +30,12 @@ interface PaneInputRailProps {
 }
 
 /**
- * Two keyboard-free actions for the active pane, pinned in the dead margin at
- * the exact height of Claude Code's input box: send the typed prompt (Enter),
- * and hold/release space for voice dictation (click to start, click to stop).
- * Hidden whenever the pane shows no `❯` input line.
+ * Three keyboard-free actions for the active pane, pinned in the dead margin at
+ * the exact height of Claude Code's input box: pick photos from the camera roll,
+ * hold/release space for voice dictation (click to start, click to stop), and
+ * send the typed prompt (Enter). Hidden whenever the pane shows no `❯` input
+ * line — except while dictating, when Claude Code replaces that line with its
+ * recording UI.
  */
 export function PaneInputRail({
   paneId,
@@ -40,6 +45,8 @@ export function PaneInputRail({
 }: PaneInputRailProps) {
   const rowIdx = usePaneFrameSelector(paneId, inputRowIndex);
   const [talking, setTalking] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const railRef = useRef<HTMLDivElement>(null);
   // Interval writing the repeated spaces + the runaway stop, so both survive
   // re-renders and get cleared on unmount / pane change.
   const repeatRef = useRef(0);
@@ -65,6 +72,32 @@ export function PaneInputRail({
   // A pane switch (or the rail unmounting) must never leave spaces flowing.
   useEffect(() => stopTalking, [stopTalking, paneId]);
 
+  const closePicker = useCallback(() => {
+    setPicking(false);
+    focusPaneElement(paneId);
+  }, [paneId]);
+
+  // Click anywhere outside the rail dismisses the picker. The test covers the
+  // whole rail, not just the panel, so clicking the photo button while it is
+  // open doesn't close it here and reopen it on the click that follows.
+  useEffect(() => {
+    if (!picking) return;
+    const onDown = (e: MouseEvent) => {
+      if (!railRef.current?.contains(e.target as Node)) closePicker();
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [picking, closePicker]);
+
+  const insertPhotos = useCallback(
+    (paths: string[]) => {
+      const text = quotePathsForPrompt(paths);
+      if (text) send(Array.from(new TextEncoder().encode(text)));
+      closePicker();
+    },
+    [send, closePicker],
+  );
+
   // Last known input row. While dictating, Claude Code may replace the `❯` line
   // with its recording UI — the buttons then hold their spot instead of
   // vanishing, so the one that stops the dictation stays reachable.
@@ -84,7 +117,9 @@ export function PaneInputRail({
     capRef.current = window.setTimeout(stopTalking, MAX_TALK_MS);
   };
 
-  const row = rowIdx >= 0 ? rowIdx : talking ? lastRow : -1;
+  // While dictating or picking, hold the last known spot rather than vanishing
+  // mid-interaction on a frame that momentarily has no `❯`.
+  const row = rowIdx >= 0 ? rowIdx : talking || picking ? lastRow : -1;
   if (row < 0) return null;
 
   const { height: cellH } = measureCellSize(font.family, font.size);
@@ -92,11 +127,28 @@ export function PaneInputRail({
 
   return (
     <div
+      ref={railRef}
       className="pointer-events-none absolute right-1 z-40 flex items-center gap-1"
       style={{ top: pad + row * cellH, height: cellH }}
       // Keep the terminal focused: the click acts on it, it must not steal it.
+      // (The picker panel stops this from reaching here — it wants the focus.)
       onMouseDown={(e) => e.preventDefault()}
     >
+      {picking && <PhotoPicker onInsert={insertPhotos} onClose={closePicker} />}
+      <button
+        type="button"
+        onClick={() => (picking ? closePicker() : setPicking(true))}
+        title="Insérer des photos"
+        aria-label="Insérer des photos"
+        aria-pressed={picking}
+        className={`pointer-events-auto flex size-6 items-center justify-center rounded transition-colors ${
+          picking
+            ? "bg-[rgba(56,189,248,0.28)] text-sky-200"
+            : "bg-[rgba(56,189,248,0.10)] text-zinc-400 hover:bg-[rgba(56,189,248,0.20)] hover:text-zinc-100"
+        }`}
+      >
+        <Images size={12} />
+      </button>
       <button
         type="button"
         onClick={toggleTalking}

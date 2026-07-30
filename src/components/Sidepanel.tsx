@@ -21,7 +21,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, History } from "lucide-react";
 import { shortenPath } from "@/store";
 import { aggregate, isActive, type AgentStateValue } from "@/lib/agentState";
 import { sortActiveProjects } from "@/lib/activeOrder";
@@ -53,6 +53,8 @@ interface SidepanelProps {
   onReorderActive: (orderedIds: string[]) => void;
   /** Rebuild the previous session's tabs (null = nothing to restore). */
   onRestoreSession: (() => void) | null;
+  /** Open the cross-project browser of past Claude sessions. */
+  onOpenSessions: () => void;
   tabs: Tab[];
   paneAgentStates: Record<string, AgentStateValue>;
   /** Projects considered "active" (received input this session + still have a
@@ -208,6 +210,7 @@ export function Sidepanel({
   onToggleWorkspaceCollapsed,
   onReorderActive,
   onRestoreSession,
+  onOpenSessions,
   tabs,
   paneAgentStates,
   activeProjectIds,
@@ -555,6 +558,14 @@ export function Sidepanel({
         </div>
       )}
       <div className="flex flex-col gap-1 p-2">
+        <button
+          onClick={onOpenSessions}
+          title="Retrouver n'importe quelle session Claude, tous dossiers confondus : lecture, recherche, reprise"
+          className="flex items-center gap-1.5 rounded border border-zinc-800/60 bg-transparent px-2 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+        >
+          <History size={13} className="shrink-0" />
+          Sessions récentes
+        </button>
         {onRestoreSession && (
           <button
             onClick={onRestoreSession}
