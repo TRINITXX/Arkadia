@@ -31,20 +31,27 @@ export function fetchImageUrl(
 /**
  * Same, but served by the backend's downscaled JPEG. Use it wherever the image
  * is displayed small: the camera roll's full-resolution captures cost ~14 MB of
- * decoded bitmap each, against ~6 KB for a thumbnail.
+ * decoded bitmap each, against ~15 KB for a thumbnail.
+ *
+ * `version` should be the photo's mtime, so a file edited in place gets a fresh
+ * entry instead of the thumbnail of its previous content.
  */
-export function fetchThumbnailUrl(path: string): Promise<string | null> {
-  return fetchVia("photo_thumbnail", path, "image/jpeg");
+export function fetchThumbnailUrl(
+  path: string,
+  version?: number,
+): Promise<string | null> {
+  return fetchVia("photo_thumbnail", path, "image/jpeg", version);
 }
 
 function fetchVia(
   command: string,
   path: string,
   mediaType?: string,
+  version?: number,
 ): Promise<string | null> {
   // Namespaced by command: the full image and the thumbnail of one path are two
   // different blobs and must not share an entry.
-  const key = `${command} ${path}`;
+  const key = `${command} ${path} ${version ?? ""}`;
   const cached = urlCache.get(key);
   if (cached) return cached;
   const promise = invoke<ArrayBuffer>(command, { path })

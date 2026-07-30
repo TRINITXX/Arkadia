@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Image as ImageIcon, Loader2 } from "lucide-react";
 import { fetchThumbnailUrl } from "@/lib/imageUrlCache";
+import { subscribeStable } from "@/lib/tauriEvents";
 
 /** Mirrors `PhotoEntry` in `src-tauri/src/photos.rs`. */
 interface PhotoEntry {
@@ -12,6 +14,9 @@ interface PhotoEntry {
 
 /** Tiles per row. The backend returns exactly 10, so the grid is 5×2. */
 const COLS = 5;
+
+/** Backend signal that the roll gained, lost or changed a listable photo. */
+const ROLL_CHANGED = "photos-changed";
 
 /**
  * A listing started on hover, and how long it stays usable. Hovering the button
@@ -27,9 +32,16 @@ export function prefetchPhotos() {
   if (prefetched && Date.now() - prefetched.at < PREFETCH_TTL_MS) return;
   const roll = invoke<PhotoEntry[]>("list_recent_photos");
   void roll
-    .then((list) => list.forEach((p) => void fetchThumbnailUrl(p.path)))
+    .then((list) =>
+      list.forEach((p) => void fetchThumbnailUrl(p.path, p.mtime)),
+    )
     .catch(() => {});
   prefetched = { at: Date.now(), roll };
+}
+
+/** Drops a prefetch the watcher has just made obsolete. */
+function invalidatePrefetch() {
+  prefetched = null;
 }
 
 /** Consumes a fresh-enough prefetch, or starts a listing of its own. */
@@ -63,12 +75,24 @@ export function PhotoPicker({ onInsert, onClose }: PhotoPickerProps) {
   // Insertion order is the display order of the badges, so this is a list.
   const [selected, setSelected] = useState<string[]>([]);
   const [cursor, setCursor] = useState(0);
+  // Bumped by the watcher; the first pass consumes the hover prefetch, later
+  // ones always go back to the backend for a genuinely current roll.
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let active = true;
-    takeRoll()
+    const roll =
+      reloadKey === 0 ? takeRoll() : invoke<PhotoEntry[]>("list_recent_photos");
+    roll
       .then((list) => {
-        if (active) setPhotos(list);
+        if (!active) return;
+        setPhotos(list);
+        setError(null);
+        // A refresh can drop a photo that was picked, or shorten the grid under
+        // the cursor.
+        const paths = new Set(list.map((p) => p.path));
+        setSelected((prev) => prev.filter((p) => paths.has(p)));
+        setCursor((c) => Math.min(c, Math.max(0, list.length - 1)));
       })
       .catch((e) => {
         if (active) setError(String(e));
@@ -76,7 +100,18 @@ export function PhotoPicker({ onInsert, onClose }: PhotoPickerProps) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [reloadKey]);
+
+  // iCloud dropping a new photo in refreshes the grid in place. Disposed on
+  // unmount, so closing and reopening never stacks a second listener.
+  useEffect(
+    () =>
+      subscribeStable(listen, ROLL_CHANGED, () => {
+        invalidatePrefetch();
+        setReloadKey((k) => k + 1);
+      }),
+    [],
+  );
 
   // Grab focus once mounted so the shortcuts below reach us rather than the PTY.
   useEffect(() => {
@@ -137,7 +172,7 @@ export function PhotoPicker({ onInsert, onClose }: PhotoPickerProps) {
         </p>
       ) : photos.length === 0 ? (
         <p className="px-1 py-8 text-center text-xs text-zinc-500">
-          Aucune photo lisible (JPEG, PNG, GIF, WebP) dans le dossier.
+          Aucune photo (HEIC, JPEG, PNG, GIF, WebP) dans le dossier.
         </p>
       ) : (
         <div className="grid grid-cols-5 gap-1.5">
@@ -189,7 +224,7 @@ function PhotoTile({ photo, rank, atCursor, onPick }: PhotoTileProps) {
 
   useEffect(() => {
     let active = true;
-    void fetchThumbnailUrl(photo.path).then((u) => {
+    void fetchThumbnailUrl(photo.path, photo.mtime).then((u) => {
       if (!active) return;
       if (u) setUrl(u);
       else setFailed(true);
@@ -197,7 +232,7 @@ function PhotoTile({ photo, rank, atCursor, onPick }: PhotoTileProps) {
     return () => {
       active = false;
     };
-  }, [photo.path]);
+  }, [photo.path, photo.mtime]);
 
   const picked = rank >= 0;
   return (

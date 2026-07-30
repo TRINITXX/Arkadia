@@ -1,9 +1,13 @@
 //! The newest photos of the iCloud camera roll, for the input rail's picker.
 //!
-//! Only the formats Claude actually accepts as images are listed — JPEG, PNG,
-//! GIF and WebP. The roll is mostly HEIC, DNG and video, none of which the model
-//! can read and none of which a webview can decode into a thumbnail, so they are
-//! filtered out rather than shown as dead tiles.
+//! HEIC is listed alongside the web formats. The Claude API itself only takes
+//! JPEG, PNG, GIF and WebP, but Claude Code is an agent: handed a `.HEIC` path
+//! it converts the file with ImageMagick before reading it. Filtering the roll's
+//! native format out would hide most of what the user actually wants to send.
+//!
+//! Neither can a webview decode HEIC, so thumbnails for it are produced here
+//! through the same ImageMagick already on the machine, while everything else
+//! goes through the `image` crate.
 //!
 //! Listing is cheap despite the folder holding thousands of files: on Windows a
 //! directory entry already carries its last-write time, so `metadata()` here
@@ -12,17 +16,22 @@
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use image::codecs::jpeg::JpegEncoder;
+use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Camera roll, relative to the home directory.
 const ROLL: [&str; 3] = ["Pictures", "iCloud Photos", "Photos"];
-/// Extensions Claude can read (see the Vision docs); matched case-insensitively.
-const EXTS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
+/// Extensions the picker lists, matched case-insensitively.
+const EXTS: [&str; 7] = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif"];
+/// Of those, the ones the `image` crate can't decode — delegated to ImageMagick.
+const EXTERNAL: [&str; 2] = ["heic", "heif"];
 /// How many the picker shows. The grid is 5×2 and there is no paging.
 const LIMIT: usize = 10;
 
@@ -38,13 +47,16 @@ pub struct PhotoEntry {
 }
 
 #[tauri::command(async)]
-pub fn list_recent_photos() -> Result<Vec<PhotoEntry>, String> {
+pub fn list_recent_photos(app: AppHandle) -> Result<Vec<PhotoEntry>, String> {
     let dir = dirs::home_dir()
         .map(|h| ROLL.iter().fold(h, |p, seg| p.join(seg)))
         .ok_or("no home directory")?;
     if !dir.is_dir() {
         return Err(format!("no photo folder at {}", dir.display()));
     }
+    // First listing arms the watcher, so the picker never has to be told to
+    // refresh once iCloud drops a new photo in.
+    ensure_roll_watcher(&app, dir.clone());
     Ok(scan(&dir, LIMIT))
 }
 
@@ -164,6 +176,9 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn encode_thumbnail(src: &Path) -> Result<Vec<u8>, String> {
+    if needs_external_decoder(src) {
+        return magick_thumbnail(src);
+    }
     let img = image::open(src).map_err(|e| format!("decode: {e}"))?;
     // `thumbnail` pre-samples before filtering, so the cost tracks the output
     // size rather than the source's 3.6 megapixels.
@@ -177,6 +192,105 @@ fn encode_thumbnail(src: &Path) -> Result<Vec<u8>, String> {
         ))
         .map_err(|e| format!("encode: {e}"))?;
     Ok(out)
+}
+
+fn needs_external_decoder(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .is_some_and(|e| EXTERNAL.contains(&e.as_str()))
+}
+
+/// Shells out to ImageMagick for the formats the `image` crate can't read, and
+/// takes the JPEG back on stdout so no temp file is involved. `-auto-orient`
+/// applies the EXIF rotation phone cameras rely on.
+fn magick_thumbnail(src: &Path) -> Result<Vec<u8>, String> {
+    let bounds = format!("{THUMB_EDGE}x{THUMB_EDGE}");
+    let quality = THUMB_QUALITY.to_string();
+    let mut cmd = Command::new("magick");
+    cmd.arg(src).args([
+        "-auto-orient",
+        "-thumbnail",
+        &bounds,
+        "-quality",
+        &quality,
+        "jpg:-",
+    ]);
+    #[cfg(windows)]
+    {
+        // CREATE_NO_WINDOW: never flash a console over the app.
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd
+        .output()
+        .map_err(|e| format!("ImageMagick not available: {e}"))?;
+    if !out.status.success() {
+        let why = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("ImageMagick failed: {}", why.trim()));
+    }
+    if out.stdout.is_empty() {
+        return Err("ImageMagick produced no image".into());
+    }
+    Ok(out.stdout)
+}
+
+// ─── Watching the roll ──────────────────────────────────────────────────────
+
+/// Emitted when the roll gains, loses or changes a listable photo.
+pub const ROLL_CHANGED: &str = "photos-changed";
+/// iCloud writes a temp file and renames it, so one new photo lands as a burst
+/// of events; hold off until it settles rather than refreshing several times.
+const DEBOUNCE: Duration = Duration::from_millis(700);
+/// Ceiling on that hold-off, so a long sync still refreshes as it goes.
+const MAX_COALESCE: Duration = Duration::from_secs(3);
+
+static WATCHING: AtomicBool = AtomicBool::new(false);
+
+/// Watches the roll for the process's lifetime. Idempotent: only the first call
+/// spawns anything, and the watcher has no shutdown path because the folder is
+/// fixed and the thread is meant to outlive every picker.
+fn ensure_roll_watcher(app: &AppHandle, dir: PathBuf) {
+    if WATCHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let (tx, rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
+        let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[photos] watcher unavailable: {e}");
+                WATCHING.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+        // Non-recursive: the roll is flat, and iCloud's own sub-folders would
+        // only add noise.
+        if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
+            eprintln!("[photos] cannot watch {}: {e}", dir.display());
+            WATCHING.store(false, Ordering::SeqCst);
+            return;
+        }
+        while let Ok(first) = rx.recv() {
+            if !touches_a_listed_photo(&first) {
+                continue;
+            }
+            // Swallow the rest of the burst before telling the frontend.
+            let deadline = Instant::now() + MAX_COALESCE;
+            while Instant::now() < deadline && rx.recv_timeout(DEBOUNCE).is_ok() {}
+            let _ = app.emit(ROLL_CHANGED, ());
+        }
+        WATCHING.store(false, Ordering::SeqCst);
+    });
+}
+
+fn touches_a_listed_photo(event: &notify::Result<Event>) -> bool {
+    let Ok(event) = event else { return false };
+    matches!(
+        event.kind,
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+    ) && event.paths.iter().any(|p| is_readable_image(p))
 }
 
 #[cfg(test)]
@@ -205,17 +319,30 @@ mod tests {
     }
 
     #[test]
-    fn keeps_only_formats_claude_reads() {
+    fn lists_stills_including_heic_and_drops_the_rest() {
         let tmp = tempfile::tempdir().unwrap();
-        for name in ["a.png", "b.JPG", "c.jpeg", "d.gif", "e.webp"] {
+        for name in ["a.png", "b.JPG", "c.jpeg", "d.gif", "e.webp", "f.HEIC", "g.heif"] {
             touch(tmp.path(), name, 10);
         }
-        for name in ["f.HEIC", "g.dng", "h.mov", "i.mp4", "desktop.ini", "noext"] {
+        // Raw and video: Claude Code has no path to read these, so they'd only
+        // ever be dead tiles.
+        for name in ["h.dng", "i.mov", "j.mp4", "desktop.ini", "noext"] {
             touch(tmp.path(), name, 10);
         }
         let mut names: Vec<_> = scan(tmp.path(), 50).into_iter().map(|p| p.name).collect();
         names.sort();
-        assert_eq!(names, ["a.png", "b.JPG", "c.jpeg", "d.gif", "e.webp"]);
+        assert_eq!(
+            names,
+            ["a.png", "b.JPG", "c.jpeg", "d.gif", "e.webp", "f.HEIC", "g.heif"]
+        );
+    }
+
+    #[test]
+    fn only_heic_takes_the_external_decoder() {
+        assert!(needs_external_decoder(Path::new("a.HEIC")));
+        assert!(needs_external_decoder(Path::new("a.heif")));
+        assert!(!needs_external_decoder(Path::new("a.png")));
+        assert!(!needs_external_decoder(Path::new("a.jpg")));
     }
 
     #[test]
@@ -269,5 +396,22 @@ mod tests {
         let src = tmp.path().join("clip.mov");
         File::create(&src).unwrap();
         assert!(encode_thumbnail(&src).is_err());
+    }
+
+    #[test]
+    fn watcher_ignores_events_about_other_files() {
+        let ev = |path: &str| {
+            Ok(Event {
+                kind: EventKind::Create(notify::event::CreateKind::File),
+                paths: vec![PathBuf::from(path)],
+                attrs: Default::default(),
+            })
+        };
+        assert!(touches_a_listed_photo(&ev("C:\\roll\\IMG_1.HEIC")));
+        assert!(touches_a_listed_photo(&ev("C:\\roll\\IMG_2.PNG")));
+        // iCloud's own churn: partial downloads and sidecars must not refresh.
+        assert!(!touches_a_listed_photo(&ev("C:\\roll\\IMG_3.icloud")));
+        assert!(!touches_a_listed_photo(&ev("C:\\roll\\clip.mov")));
+        assert!(!touches_a_listed_photo(&ev("C:\\roll\\desktop.ini")));
     }
 }
