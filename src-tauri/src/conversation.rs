@@ -671,7 +671,11 @@ pub fn evict_transcript_cache(cache: State<'_, ConvCacheMap>) {
 /// Serves an image file's raw bytes over IPC (no base64/JSON inflation). Used
 /// for cached transcript images AND on-disk image paths mentioned in messages;
 /// its error is the graceful "not there / not an image" signal for the latter.
-#[tauri::command]
+///
+/// `async` so the read runs off the main thread: a screen full of thumbnails
+/// fires these concurrently, and a sync command would serialize them all onto
+/// the thread that also has to paint.
+#[tauri::command(async)]
 pub fn read_image_bytes(path: String) -> Result<tauri::ipc::Response, String> {
     const ALLOWED: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
     const MAX_BYTES: u64 = 25 * 1024 * 1024;

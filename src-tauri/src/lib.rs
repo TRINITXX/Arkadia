@@ -158,6 +158,7 @@ pub fn run() {
             sessions::list_claude_sessions,
             sessions::search_claude_sessions,
             photos::list_recent_photos,
+            photos::photo_thumbnail,
             popup::popup_request_state,
             popup::popup_log_ui,
             popup::popup_set_style,

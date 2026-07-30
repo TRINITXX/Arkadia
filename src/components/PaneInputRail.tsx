@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CornerDownLeft, Images, Mic, Square } from "lucide-react";
-import { PhotoPicker } from "@/components/PhotoPicker";
+import { PhotoPicker, prefetchPhotos } from "@/components/PhotoPicker";
 import { measureCellSize } from "@/lib/cellSize";
 import { usePaneFrameSelector } from "@/lib/frameStore";
 import { focusPaneElement } from "@/lib/paneFocus";
@@ -138,6 +138,9 @@ export function PaneInputRail({
       <button
         type="button"
         onClick={() => (picking ? closePicker() : setPicking(true))}
+        // Warm the listing and its thumbnails while the pointer travels, so the
+        // panel usually has something to paint the moment it opens.
+        onMouseEnter={prefetchPhotos}
         title="Insérer des photos"
         aria-label="Insérer des photos"
         aria-pressed={picking}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Image as ImageIcon, Loader2 } from "lucide-react";
-import { fetchImageUrl } from "@/lib/imageUrlCache";
+import { fetchThumbnailUrl } from "@/lib/imageUrlCache";
 
 /** Mirrors `PhotoEntry` in `src-tauri/src/photos.rs`. */
 interface PhotoEntry {
@@ -12,6 +12,35 @@ interface PhotoEntry {
 
 /** Tiles per row. The backend returns exactly 10, so the grid is 5×2. */
 const COLS = 5;
+
+/**
+ * A listing started on hover, and how long it stays usable. Hovering the button
+ * buys the roughly one round-trip of listing plus the thumbnail generation that
+ * would otherwise run after the click; the age cap keeps a hover that never
+ * became a click from serving a stale roll ten minutes later.
+ */
+let prefetched: { at: number; roll: Promise<PhotoEntry[]> } | null = null;
+const PREFETCH_TTL_MS = 30_000;
+
+/** Lists the roll and warms every thumbnail. Safe to call repeatedly. */
+export function prefetchPhotos() {
+  if (prefetched && Date.now() - prefetched.at < PREFETCH_TTL_MS) return;
+  const roll = invoke<PhotoEntry[]>("list_recent_photos");
+  void roll
+    .then((list) => list.forEach((p) => void fetchThumbnailUrl(p.path)))
+    .catch(() => {});
+  prefetched = { at: Date.now(), roll };
+}
+
+/** Consumes a fresh-enough prefetch, or starts a listing of its own. */
+function takeRoll(): Promise<PhotoEntry[]> {
+  const hit =
+    prefetched && Date.now() - prefetched.at < PREFETCH_TTL_MS
+      ? prefetched.roll
+      : null;
+  prefetched = null;
+  return hit ?? invoke<PhotoEntry[]>("list_recent_photos");
+}
 
 interface PhotoPickerProps {
   /** Types the paths into the pane and closes; empty selections never reach it. */
@@ -37,7 +66,7 @@ export function PhotoPicker({ onInsert, onClose }: PhotoPickerProps) {
 
   useEffect(() => {
     let active = true;
-    invoke<PhotoEntry[]>("list_recent_photos")
+    takeRoll()
       .then((list) => {
         if (active) setPhotos(list);
       })
@@ -160,7 +189,7 @@ function PhotoTile({ photo, rank, atCursor, onPick }: PhotoTileProps) {
 
   useEffect(() => {
     let active = true;
-    void fetchImageUrl(photo.path).then((u) => {
+    void fetchThumbnailUrl(photo.path).then((u) => {
       if (!active) return;
       if (u) setUrl(u);
       else setFailed(true);

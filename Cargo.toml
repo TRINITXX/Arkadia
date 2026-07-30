@@ -12,6 +12,11 @@ authors = ["TRINITX"]
 license = "MIT"
 repository = "https://github.com/TRINITXX/arkadia"
 
+# Image decoding is 26× slower unoptimized (measured: 405ms vs 15ms to shrink a
+# 1290×2796 screenshot), which makes thumbnails feel broken under `tauri dev`.
+[profile.dev.package.image]
+opt-level = 3
+
 [profile.release]
 codegen-units = 1
 lto = true

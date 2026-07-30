@@ -25,9 +25,29 @@ export function fetchImageUrl(
   path: string,
   mediaType?: string,
 ): Promise<string | null> {
-  const cached = urlCache.get(path);
+  return fetchVia("read_image_bytes", path, mediaType);
+}
+
+/**
+ * Same, but served by the backend's downscaled JPEG. Use it wherever the image
+ * is displayed small: the camera roll's full-resolution captures cost ~14 MB of
+ * decoded bitmap each, against ~6 KB for a thumbnail.
+ */
+export function fetchThumbnailUrl(path: string): Promise<string | null> {
+  return fetchVia("photo_thumbnail", path, "image/jpeg");
+}
+
+function fetchVia(
+  command: string,
+  path: string,
+  mediaType?: string,
+): Promise<string | null> {
+  // Namespaced by command: the full image and the thumbnail of one path are two
+  // different blobs and must not share an entry.
+  const key = `${command} ${path}`;
+  const cached = urlCache.get(key);
   if (cached) return cached;
-  const promise = invoke<ArrayBuffer>("read_image_bytes", { path })
+  const promise = invoke<ArrayBuffer>(command, { path })
     .then((buf) => {
       const ext = path.split(".").pop()?.toLowerCase() ?? "";
       const type = mediaType ?? MIME_FOR_EXT[ext] ?? "image/png";
@@ -41,6 +61,6 @@ export function fetchImageUrl(
       if (url) URL.revokeObjectURL(url);
     });
   }
-  urlCache.set(path, promise);
+  urlCache.set(key, promise);
   return promise;
 }
