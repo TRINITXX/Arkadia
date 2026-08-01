@@ -7,6 +7,7 @@ import {
   DEFAULT_NOTIF_STYLE,
   DEFAULT_NOTIF_WIDTH,
   DEFAULT_PALETTE_ID,
+  DEFAULT_SESSIONS_GROUPING,
   DEFAULT_TERMINAL_FONT,
   DEFAULT_TOOL_DENSITY,
   MAX_FOLDER_DEPTH,
@@ -22,6 +23,7 @@ import {
   type NotifStyle,
   type PaletteId,
   type Project,
+  type SessionsGrouping,
   type TerminalFont,
   type ToolbarButton,
   type ToolDensity,
@@ -66,6 +68,7 @@ const KEY_MESSAGE_FRAMES_ENABLED = "messageFramesEnabled";
 const KEY_AUTO_SCROLL_REPLY = "autoScrollReplyEnabled";
 const KEY_MODERN_VIEW_ENABLED = "modernViewEnabled";
 const KEY_TOOL_DENSITY = "toolDensity";
+const KEY_SESSIONS_GROUPING = "sessionsGrouping";
 const KEY_SIDEPANEL_OPEN = "sidepanelOpen";
 const KEY_SCROLLBACK_LINES = "scrollbackLines";
 const KEY_SESSION_SNAPSHOT = "sessionSnapshot";
@@ -87,6 +90,7 @@ const VALID_EDITOR_PROTOCOLS: EditorProtocol[] = [
   "fleet",
 ];
 const VALID_TOOL_DENSITIES: ToolDensity[] = ["compact", "preview", "full"];
+const VALID_SESSIONS_GROUPINGS: SessionsGrouping[] = ["date", "project"];
 const VALID_NOTIF_STYLES: NotifStyle[] = ["off", "mirror", "compact"];
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
@@ -125,6 +129,8 @@ export interface PersistedState {
   modernViewEnabled: boolean;
   /** Default expand state of tool-call cards in the modern view. */
   toolDensity: ToolDensity;
+  /** Layout of the "recent sessions" overlay: flat by date, or one section per project. */
+  sessionsGrouping: SessionsGrouping;
   /** Show the project sidepanel (toggled from the toolbar). */
   sidepanelOpen: boolean;
   /** Per-pane scrollback line cap (mirrored to the Rust backend). */
@@ -154,6 +160,7 @@ const DEFAULT_STATE: PersistedState = {
   autoScrollReplyEnabled: true,
   modernViewEnabled: false,
   toolDensity: DEFAULT_TOOL_DENSITY,
+  sessionsGrouping: DEFAULT_SESSIONS_GROUPING,
   sidepanelOpen: true,
   scrollbackLines: SCROLLBACK_LINES_DEFAULT,
   sessionSnapshot: null,
@@ -173,6 +180,17 @@ function normalizeToolDensity(raw: unknown): ToolDensity {
     return raw as ToolDensity;
   }
   return DEFAULT_TOOL_DENSITY;
+}
+
+/** Validates a persisted sessions-overlay grouping, falling back to the default. */
+function normalizeSessionsGrouping(raw: unknown): SessionsGrouping {
+  if (
+    typeof raw === "string" &&
+    (VALID_SESSIONS_GROUPINGS as string[]).includes(raw)
+  ) {
+    return raw as SessionsGrouping;
+  }
+  return DEFAULT_SESSIONS_GROUPING;
 }
 
 /**
@@ -451,6 +469,7 @@ export async function loadState(
     KEY_MODERN_VIEW_ENABLED,
   );
   const rawToolDensity = await store.get<unknown>(KEY_TOOL_DENSITY);
+  const rawSessionsGrouping = await store.get<unknown>(KEY_SESSIONS_GROUPING);
   const rawSidepanelOpen = await store.get<unknown>(KEY_SIDEPANEL_OPEN);
   const rawScrollbackLines = await store.get<unknown>(KEY_SCROLLBACK_LINES);
   const rawSessionSnapshot = await store.get<unknown>(KEY_SESSION_SNAPSHOT);
@@ -501,6 +520,7 @@ export async function loadState(
       DEFAULT_STATE.modernViewEnabled,
     ),
     toolDensity: normalizeToolDensity(rawToolDensity),
+    sessionsGrouping: normalizeSessionsGrouping(rawSessionsGrouping),
     sidepanelOpen: boolOr(rawSidepanelOpen, DEFAULT_STATE.sidepanelOpen),
     scrollbackLines: normalizeScrollbackLines(rawScrollbackLines),
     sessionSnapshot: normalizeSessionSnapshot(rawSessionSnapshot),
@@ -529,6 +549,7 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_AUTO_SCROLL_REPLY, state.autoScrollReplyEnabled);
   await store.set(KEY_MODERN_VIEW_ENABLED, state.modernViewEnabled);
   await store.set(KEY_TOOL_DENSITY, state.toolDensity);
+  await store.set(KEY_SESSIONS_GROUPING, state.sessionsGrouping);
   await store.set(KEY_SIDEPANEL_OPEN, state.sidepanelOpen);
   await store.set(KEY_SCROLLBACK_LINES, state.scrollbackLines);
   // Never clobber the previous session's snapshot with an empty one: after a

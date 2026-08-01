@@ -774,6 +774,140 @@ fn delta_from_path(
     })
 }
 
+// ─── Last code block (input-rail copy button) ───────────────────
+
+/// How much of the transcript's tail the rail's copy button scans. A megabyte
+/// covers many turns; going further would mean re-reading tens of megabytes on
+/// every click to reach a block that is long out of sight anyway.
+const TAIL_SCAN_BYTES: u64 = 1024 * 1024;
+
+/// `(fence char, run length)` when `line` (already left-trimmed) opens or closes
+/// a fenced block — three or more backticks/tildes.
+fn fence_marker(line: &str) -> Option<(char, usize)> {
+    let ch = line.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let len = line.chars().take_while(|c| *c == ch).count();
+    (len >= 3).then_some((ch, len))
+}
+
+/// The content of the last fenced code block in `text` (fence lines excluded),
+/// or `None`. A closing fence repeats the opener's character at least as many
+/// times and carries nothing else; an unclosed fence runs to the end of the
+/// text, as CommonMark (and therefore the modern view) renders it.
+fn last_fenced_block(text: &str) -> Option<String> {
+    let mut last: Option<String> = None;
+    let mut open: Option<(char, usize)> = None;
+    let mut buf: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let fence = fence_marker(trimmed);
+        match open {
+            None => {
+                if let Some(f) = fence {
+                    open = Some(f);
+                    buf.clear();
+                }
+            }
+            Some((ch, len)) => {
+                let closes = fence.is_some_and(|(fch, flen)| {
+                    fch == ch && flen >= len && trimmed.trim_end().chars().all(|c| c == ch)
+                });
+                if closes {
+                    last = Some(buf.join("\n"));
+                    open = None;
+                } else {
+                    buf.push(line);
+                }
+            }
+        }
+    }
+    if open.is_some() {
+        last = Some(buf.join("\n"));
+    }
+    last.map(|s| s.trim_end().to_string())
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// The prose of an assistant turn: its `text` blocks, cleaned and joined.
+/// `thinking` and `tool_use` payloads are left out on purpose — they are the
+/// blocks the modern view hides behind its filters.
+fn assistant_prose(content: &Value) -> String {
+    match content {
+        Value::String(s) => clean_text(s),
+        Value::Array(arr) => arr
+            .iter()
+            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .map(clean_text)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        _ => String::new(),
+    }
+}
+
+/// Walks the transcript lines backwards and returns the last fenced code block
+/// Claude wrote in prose — the user's own messages, thinking and tool cards are
+/// skipped, matching what the modern view shows with its default filters.
+fn last_assistant_code_block(jsonl: &str) -> Option<String> {
+    for line in jsonl.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
+            continue;
+        };
+        if let Some(code) = last_fenced_block(&assistant_prose(content)) {
+            return Some(code);
+        }
+    }
+    None
+}
+
+/// The last `max` bytes of `path`, starting at the first complete line: we seek
+/// into the middle of the file, so the line we land on is usually half a JSON
+/// object and has to go.
+fn read_tail(path: &Path, max: u64) -> Result<String, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let len = f.metadata().map_err(|e| e.to_string())?.len();
+    let start = len.saturating_sub(max);
+    f.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    if start == 0 {
+        return Ok(text);
+    }
+    Ok(match text.find('\n') {
+        Some(i) => text[i + 1..].to_string(),
+        None => String::new(),
+    })
+}
+
+/// The last code block Claude wrote in this pane's conversation, for the input
+/// rail's copy button — the modern view's fence-copy without opening it.
+///
+/// Deliberately does NOT go through `ConvCacheMap`: that cache resets its dirty
+/// floor for whoever asks last, so querying it from a second client could make
+/// the modern view miss an update. `Ok(None)` = nothing in the scanned tail.
+///
+/// `(async)` because it reads up to a megabyte off disk, which has no business
+/// on the thread that paints.
+#[tauri::command(async)]
+pub fn read_last_code_block(pane_id: String) -> Result<Option<String>, String> {
+    let path = transcript_from_pane_map(&pane_id)
+        .ok_or("no Claude conversation found for this pane yet")?;
+    let tail = read_tail(&path, TAIL_SCAN_BYTES)?;
+    Ok(last_assistant_code_block(&tail))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1112,5 +1246,77 @@ mod tests {
         assert!(read_image_bytes("C:\\x\\tool.exe".into()).is_err());
         assert!(read_image_bytes("C:\\x\\noext".into()).is_err());
         assert!(read_image_bytes("C:\\definitely\\missing.png".into()).is_err());
+    }
+
+    // ─── last code block ───
+
+    #[test]
+    fn fenced_block_takes_the_last_one() {
+        let text =
+            "intro\n```sh\nnpm run dev\n```\nentre\n```ts\nconst a = 1;\nconst b = 2;\n```\nfin";
+        assert_eq!(
+            last_fenced_block(text).as_deref(),
+            Some("const a = 1;\nconst b = 2;")
+        );
+    }
+
+    #[test]
+    fn fenced_block_keeps_inner_shorter_fences() {
+        // A ```` fence quoting markdown that itself contains a ``` block: the
+        // inner run is shorter, so it must not close the outer one.
+        let text = "````md\ntexte\n```js\nx\n```\nfin\n````";
+        assert_eq!(
+            last_fenced_block(text).as_deref(),
+            Some("texte\n```js\nx\n```\nfin")
+        );
+    }
+
+    #[test]
+    fn unclosed_fence_runs_to_the_end() {
+        assert_eq!(
+            last_fenced_block("bla\n```py\nprint(1)\nprint(2)").as_deref(),
+            Some("print(1)\nprint(2)")
+        );
+    }
+
+    #[test]
+    fn no_fence_and_empty_fence_yield_nothing() {
+        assert!(last_fenced_block("juste de la prose `inline`").is_none());
+        assert!(last_fenced_block("```\n\n```").is_none());
+    }
+
+    #[test]
+    fn last_code_block_skips_user_thinking_and_tools() {
+        let jsonl = [
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"voici\n```sh\nold\n```"}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"et puis\n```sh\ncargo test\n```"}]}}"#,
+            // Everything below must be ignored, so `cargo test` stays the answer.
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"```sh\npensee\n```"}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Bash","input":{"command":"```sh\noutil\n```"}}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"moi\n```sh\nmoi\n```"}}"#,
+        ]
+        .join("\n");
+        assert_eq!(
+            last_assistant_code_block(&jsonl).as_deref(),
+            Some("cargo test")
+        );
+    }
+
+    #[test]
+    fn last_code_block_is_none_without_any_fence() {
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"pas de code ici"}]}}"#;
+        assert!(last_assistant_code_block(jsonl).is_none());
+    }
+
+    #[test]
+    fn tail_starts_at_a_complete_line() {
+        let path = tmp_jsonl("tail", "premiere ligne coupee\ndeuxieme\ntroisieme\n");
+        // A window smaller than the file lands mid-line: that half line goes.
+        let tail = read_tail(&path, 20).unwrap();
+        assert!(!tail.contains("premiere"));
+        assert!(tail.contains("troisieme"));
+        // A window larger than the file keeps everything.
+        assert!(read_tail(&path, 10_000).unwrap().contains("premiere"));
+        std::fs::remove_file(&path).ok();
     }
 }

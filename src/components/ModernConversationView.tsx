@@ -12,6 +12,14 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ChevronDown, ChevronUp, Filter, X } from "lucide-react";
 import { CONVERSATION_CSS } from "@/components/ConversationView";
 import { BlockRow, type MatchState } from "@/components/modern/BlockRow";
+import {
+  clearOccurrences,
+  collectOccurrences,
+  paintOccurrences,
+  type Occurrence,
+  type Row,
+} from "@/lib/domHighlight";
+import { queryTerms } from "@/lib/searchTerms";
 import { HLJS_CSS, MODERN_CSS } from "@/components/modern/css";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
 import { Lightbox } from "@/components/modern/Lightbox";
@@ -325,8 +333,23 @@ interface ModernConversationViewProps {
   agentState?: AgentStateValue;
   /** Only the active pane's view captures Ctrl+F to open search. */
   isActive: boolean;
+  /**
+   * Search driven from outside — the sessions overlay, whose single field owns
+   * both the list and this view. While set, it replaces the view's own Ctrl+F
+   * query and the owner renders the counter and the arrows.
+   */
+  search?: ExternalSearch | null;
   /** Surfaces errors (unopenable file path…) in the app's toaster. */
   onToast?: ToastFn;
+}
+
+/** The owner drives the query and which occurrence is current; we report how
+ *  many there are. */
+export interface ExternalSearch {
+  query: string;
+  /** Index into the occurrences, clamped by us before use. */
+  index: number;
+  onTotalChange: (total: number) => void;
 }
 
 /**
@@ -343,6 +366,7 @@ export const ModernConversationView = memo(function ModernConversationView({
   backgroundCss,
   agentState,
   isActive,
+  search,
   onToast,
 }: ModernConversationViewProps) {
   const source = useMemo<ConvSource | null>(
@@ -415,24 +439,84 @@ export const ModernConversationView = memo(function ModernConversationView({
     return out;
   }, [blocks, filters]);
 
-  // Indices into `visible` whose text matches the search query.
-  const matches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return [] as number[];
-    const out: number[] = [];
-    visible.forEach(({ block: b }, i) => {
-      const hay =
-        b.kind === "tool"
-          ? `${b.tool_name ?? ""} ${b.tool_input ?? ""} ${b.tool_output ?? ""}`
-          : (b.text ?? "");
-      if (hay.toLowerCase().includes(q)) out.push(i);
+  // The query in force: the overlay's field when it drives us, else our own.
+  const activeQuery = search ? search.query : query;
+  const terms = useMemo(() => queryTerms(activeQuery), [activeQuery]);
+  const searching = search !== null && search !== undefined ? true : searchOpen;
+
+  // Which visible rows may hold a match: prose only — what the user and Claude
+  // actually said. Tool inputs and outputs match on nearly every session and
+  // drown the real hits, and the backend excludes them too, so the counter here
+  // can never exceed what made the session surface in the first place.
+  const proseRows = useMemo(
+    () =>
+      visible
+        .map(({ block: b }, i) => ({ kind: b.kind, index: i }))
+        .filter((r) => r.kind === "user" || r.kind === "assistant"),
+    [visible],
+  );
+
+  // Occurrences live in the rendered DOM, not in the block data: highlighting a
+  // word inside markdown that hljs has already coloured means painting ranges,
+  // not rewriting HTML. Recomputed whenever the text on screen changes.
+  const [occurrences, setOccurrences] = useState<Occurrence[]>([]);
+  const recount = useCallback(() => {
+    if (!searching || terms.length === 0) {
+      setOccurrences((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
+    const rows: Row[] = [];
+    for (const r of proseRows) {
+      const el = rowEls.current.get(r.index);
+      if (el) rows.push({ index: r.index, el });
+    }
+    setOccurrences(collectOccurrences(rows, terms));
+  }, [searching, terms, proseRows]);
+
+  // Markdown, syntax colouring, images and mermaid all land after the first
+  // paint, and a delta appends rows live. Watching the subtree covers every one
+  // of those without having to enumerate them; the frame delay coalesces the
+  // burst a single render produces.
+  useLayoutEffect(() => {
+    recount();
+    const el = scrollRef.current;
+    if (!el || !searching) return;
+    let raf = 0;
+    const observer = new MutationObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(recount);
     });
-    return out;
-  }, [visible, query]);
+    observer.observe(el, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
+  }, [recount, searching]);
+
+  const total = occurrences.length;
+  const rawIdx = search ? search.index : matchIdx;
+  const currentIdx = total === 0 ? -1 : ((rawIdx % total) + total) % total;
+  const current = currentIdx < 0 ? null : occurrences[currentIdx];
+
+  // Report the count upward so the overlay can render "3/12" in its own header.
+  const onTotalChange = search?.onTotalChange;
+  useEffect(() => {
+    onTotalChange?.(total);
+  }, [onTotalChange, total]);
+
+  // Paint, and repaint as the cursor moves between occurrences.
+  useLayoutEffect(() => {
+    paintOccurrences(occurrences, current);
+  }, [occurrences, current]);
+  useEffect(() => clearOccurrences, []);
 
   const nextMatch = (dir: 1 | -1) => {
-    if (matches.length === 0) return;
-    setMatchIdx((i) => (i + dir + matches.length) % matches.length);
+    if (total === 0) return;
+    setMatchIdx((i) => (i + dir + total) % total);
   };
 
   // Follow the conversation only when already pinned near the bottom.
@@ -516,22 +600,26 @@ export const ModernConversationView = memo(function ModernConversationView({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [isActive, blocks.length]);
 
-  // Scroll the current match into view.
+  // Bring the current occurrence into view — the word itself, not just the
+  // message holding it: a long reply can push its own match off-screen.
   useEffect(() => {
-    if (!searchOpen || matches.length === 0) return;
-    const visIdx = matches[Math.min(matchIdx, matches.length - 1)];
-    const el = rowEls.current.get(visIdx);
-    if (el) {
-      atBottomRef.current = false;
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
-  }, [searchOpen, matchIdx, matches]);
+    if (!current) return;
+    const anchor =
+      current.range.startContainer.parentElement ??
+      rowEls.current.get(current.rowIndex);
+    if (!anchor) return;
+    atBottomRef.current = false;
+    anchor.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [current]);
 
-  const matchSet = searchOpen ? new Set(matches) : null;
-  const currentVisIdx =
-    searchOpen && matches.length
-      ? matches[Math.min(matchIdx, matches.length - 1)]
-      : -1;
+  // The tinted block survives alongside the word-level paint: it is what lets
+  // you spot dense passages while scrolling, which a few coloured letters
+  // cannot do on their own.
+  const matchSet = useMemo(
+    () => new Set(occurrences.map((o) => o.rowIndex)),
+    [occurrences],
+  );
+  const currentVisIdx = current ? current.rowIndex : -1;
 
   // No conversation for this pane (plain shell, or a Claude tab before its first
   // message) → render see-through so the real terminal stays visible and usable.
@@ -579,7 +667,9 @@ export const ModernConversationView = memo(function ModernConversationView({
       {hasConversation && (
         <FilterPopover filters={filters} onChange={onFiltersChange} />
       )}
-      {hasConversation && searchOpen && (
+      {/* The overlay's single field owns the query when it drives us, so the
+          in-view bar stays out of the way — Ctrl+F there searches the list. */}
+      {hasConversation && searchOpen && !search && (
         <div className="modern-search">
           <input
             autoFocus
@@ -601,9 +691,7 @@ export const ModernConversationView = memo(function ModernConversationView({
             placeholder="Rechercher…"
           />
           <span className="count">
-            {matches.length
-              ? `${Math.min(matchIdx, matches.length - 1) + 1}/${matches.length}`
-              : "0"}
+            {total ? `${currentIdx + 1}/${total}` : "0"}
           </span>
           <button type="button" onClick={() => nextMatch(-1)} title="Précédent">
             <ChevronUp size={13} />
@@ -641,7 +729,7 @@ export const ModernConversationView = memo(function ModernConversationView({
               density={density}
               showResults={filters.results}
               matchState={
-                (matchSet?.has(i)
+                (matchSet.has(i)
                   ? i === currentVisIdx
                     ? 2
                     : 1

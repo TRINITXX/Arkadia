@@ -25,6 +25,7 @@ import { ChevronDown, ChevronRight, History } from "lucide-react";
 import { shortenPath } from "@/store";
 import { aggregate, isActive, type AgentStateValue } from "@/lib/agentState";
 import { sortActiveProjects } from "@/lib/activeOrder";
+import { stripStatusGlyph } from "@/lib/notifLabel";
 import type { Project, Tab, Workspace } from "@/types";
 import { AgentBadge } from "./AgentBadge";
 
@@ -38,6 +39,8 @@ interface SidepanelProps {
   onProjectContextMenu: (project: Project, x: number, y: number) => void;
   /** Middle-click on a project row in the "Active" list closes all its tabs. */
   onCloseProjectTabs: (projectId: string) => void;
+  /** Middle-click on a tab listed under an active project closes that tab. */
+  onCloseTab: (tabId: string) => void;
   onWorkspaceContextMenu: (workspace: Workspace, x: number, y: number) => void;
   onMoveProject: (
     projectId: string,
@@ -55,8 +58,12 @@ interface SidepanelProps {
   onRestoreSession: (() => void) | null;
   /** Open the cross-project browser of past Claude sessions. */
   onOpenSessions: () => void;
+  /** Jump to a tab of any project from the "Active" list (activates both). */
+  onActivateTab: (projectId: string, tabId: string) => void;
   tabs: Tab[];
   paneAgentStates: Record<string, AgentStateValue>;
+  /** Current tab of each project — the one highlighted in its group. */
+  activeTabIdByProject: Record<string, string>;
   /** Projects considered "active" (received input this session + still have a
    *  tab open). Shown flat under the "Active" tab, hidden from "Inactive". */
   activeProjectIds: ReadonlySet<string>;
@@ -142,12 +149,15 @@ type DropData =
   | WorkspaceGapDropData
   | DragData;
 
-// One badge per tab, in tab-bar order (`tabs` array order — drag-reordering
-// the tabs reorders the badges too). A tab's state is the aggregate of its
-// panes (splits); only tabs with an active Claude session (busy/waiting)
-// contribute — idle tabs render no badge at all.
+// One entry per tab, in tab-bar order (`tabs` array order — drag-reordering
+// the tabs reorders them too). A tab's state is the aggregate of its panes
+// (splits); only tabs with an active Claude session (busy/waiting) show up —
+// idle tabs are left out entirely.
 interface TabAgentState {
   tabId: string;
+  /** Title of the tab's active pane, minus the status glyph Claude Code stamps
+   *  in — the badge next to it already says waiting vs. busy. */
+  title: string;
   state: AgentStateValue;
 }
 
@@ -164,7 +174,13 @@ function projectAgentStates(
         (paneId) => paneAgentStates[paneId] ?? { kind: "none" },
       ),
     );
-    if (isActive(tabState)) states.push({ tabId: tab.id, state: tabState });
+    if (!isActive(tabState)) continue;
+    states.push({
+      tabId: tab.id,
+      title:
+        stripStatusGlyph(tab.panes[tab.activePaneId]?.title ?? "") || "pwsh",
+      state: tabState,
+    });
   }
   return states;
 }
@@ -202,6 +218,7 @@ export function Sidepanel({
   onAddWorkspace,
   onProjectContextMenu,
   onCloseProjectTabs,
+  onCloseTab,
   onWorkspaceContextMenu,
   onMoveProject,
   onPlaceProjectInRoot,
@@ -211,8 +228,10 @@ export function Sidepanel({
   onReorderActive,
   onRestoreSession,
   onOpenSessions,
+  onActivateTab,
   tabs,
   paneAgentStates,
+  activeTabIdByProject,
   activeProjectIds,
 }: SidepanelProps) {
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null);
@@ -482,13 +501,16 @@ export function Sidepanel({
                 strategy={verticalListSortingStrategy}
               >
                 {activeProjects.map((project) => (
-                  <ActiveProjectRow
+                  <ActiveProjectGroup
                     key={project.id}
                     project={project}
                     active={project.id === activeProjectId}
                     onActivate={onActivate}
                     onContextMenu={onProjectContextMenu}
                     onCloseTabs={onCloseProjectTabs}
+                    onCloseTab={onCloseTab}
+                    onActivateTab={onActivateTab}
+                    currentTabId={activeTabIdByProject[project.id] ?? null}
                     agentStates={projectAgentStates(
                       project.id,
                       tabs,
@@ -561,7 +583,7 @@ export function Sidepanel({
         <button
           onClick={onOpenSessions}
           title="Retrouver n'importe quelle session Claude, tous dossiers confondus : lecture, recherche, reprise"
-          className="flex items-center gap-1.5 rounded border border-zinc-800/60 bg-transparent px-2 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+          className="flex items-center justify-center gap-1.5 rounded border border-zinc-800/60 bg-transparent px-2 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
         >
           <History size={13} className="shrink-0" />
           Sessions récentes
@@ -885,16 +907,31 @@ function ProjectRowContent({
   );
 }
 
-/** Sortable project row of the flat "Active" list: drag to reorder (persisted
- *  as `activeOrder`), click to activate, middle-click to close all tabs. */
-function ActiveProjectRow({
+interface ActiveProjectGroupProps extends DraggableProjectRowProps {
+  onActivateTab: (projectId: string, tabId: string) => void;
+  /** Middle-click on one of the listed tabs closes just that tab. */
+  onCloseTab: (tabId: string) => void;
+  /** Tab currently shown for this project, highlighted in the list. */
+  currentTabId: string | null;
+}
+
+/** Entry of the flat "Active" list: the project name as a quiet header, its
+ *  tabs with a live Claude session listed underneath as clickable children.
+ *  The project's color bar runs along the whole group. Drag the header to
+ *  reorder (persisted as `activeOrder`), middle-click it to close all tabs —
+ *  or middle-click a single child to close just that tab. A project down to
+ *  one tab merges header and child into a single click target. */
+function ActiveProjectGroup({
   project,
   active,
   onActivate,
   onContextMenu,
   onCloseTabs,
+  onCloseTab,
+  onActivateTab,
+  currentTabId,
   agentStates,
-}: DraggableProjectRowProps) {
+}: ActiveProjectGroupProps) {
   const {
     attributes,
     listeners,
@@ -903,35 +940,125 @@ function ActiveProjectRow({
     transition,
     isDragging,
   } = useSortable({ id: project.id });
+
+  // A project with a single tab gets one hit area covering both its name and
+  // that tab: two zones one line apart are a needlessly precise target when
+  // they do the same thing. From two tabs on, each child needs its own zone.
+  const solo = agentStates.length === 1 ? agentStates[0] : null;
+  const soloCurrent = solo !== null && active && solo.tabId === currentTabId;
+
+  const closeAllOnMiddleClick = (e: React.MouseEvent) => {
+    // The drag sensor only activates on the primary button, so this never
+    // starts a drag.
+    if (e.button === 1) {
+      e.preventDefault();
+      onCloseTabs?.(project.id);
+    }
+  };
+  const openContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    onContextMenu(project, e.clientX, e.clientY);
+  };
+
+  if (solo) {
+    return (
+      <div
+        ref={setNodeRef}
+        style={{
+          borderLeftColor: project.color,
+          transform: CSS.Transform.toString(transform),
+          transition,
+        }}
+        className={`mx-1.5 mb-2 rounded-r border-l-[3px] pl-1.5 pr-1 ${
+          isDragging ? "z-10 opacity-70" : ""
+        }`}
+      >
+        <div
+          {...attributes}
+          {...listeners}
+          onClick={() => onActivateTab(project.id, solo.tabId)}
+          onMouseDown={closeAllOnMiddleClick}
+          onContextMenu={openContextMenu}
+          className={`cursor-pointer rounded px-1.5 py-1 ${
+            soloCurrent
+              ? "bg-zinc-800 text-zinc-100"
+              : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+          }`}
+          title={`${solo.title}\n${project.path}`}
+        >
+          <div className="truncate text-[13px]">{project.name}</div>
+          <div className="mt-[1px] flex items-center gap-2 text-xs">
+            <AgentBadge state={solo.state} size={8} inline />
+            <span className="min-w-0 flex-1 truncate">{solo.title}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={setNodeRef}
-      {...attributes}
-      {...listeners}
       style={{
         borderLeftColor: project.color,
         transform: CSS.Transform.toString(transform),
         transition,
       }}
-      onClick={() => onActivate(project.id)}
-      onMouseDown={(e) => {
-        // Middle-click closes every tab of this project. (The drag sensor only
-        // activates on the primary button, so this never starts a drag.)
-        if (e.button === 1) {
-          e.preventDefault();
-          onCloseTabs?.(project.id);
-        }
-      }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onContextMenu(project, e.clientX, e.clientY);
-      }}
-      className={`group mx-1.5 mb-0.5 flex cursor-pointer items-start gap-2 rounded border-l-[3px] py-1.5 pl-2 pr-2 ${
-        active ? "bg-zinc-800 text-zinc-100" : "text-zinc-300 hover:bg-zinc-900"
-      } ${isDragging ? "z-10 opacity-70" : ""}`}
-      title={project.path}
+      className={`group mx-1.5 mb-2 rounded-r border-l-[3px] pl-1.5 pr-1 ${
+        isDragging ? "z-10 opacity-70" : ""
+      }`}
     >
-      <ProjectRowContent project={project} agentStates={agentStates} />
+      {/* Header — the drag handle, so clicking a child tab never starts a drag. */}
+      <div
+        {...attributes}
+        {...listeners}
+        onClick={() => onActivate(project.id)}
+        onMouseDown={closeAllOnMiddleClick}
+        onContextMenu={openContextMenu}
+        className={`flex cursor-pointer items-center rounded px-1.5 py-1 text-[13px] ${
+          active
+            ? "text-zinc-100"
+            : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+        }`}
+        title={project.path}
+      >
+        <span className="min-w-0 flex-1 truncate">{project.name}</span>
+      </div>
+      {agentStates.length > 0 && (
+        <div className="flex flex-col pb-0.5">
+          {agentStates.map(({ tabId, title, state }) => (
+            <button
+              key={tabId}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onActivateTab(project.id, tabId);
+              }}
+              onMouseDown={(e) => {
+                // Middle-click closes just this tab (same gesture as the tab
+                // bar). Stopped here so it never reaches the group header,
+                // which would close the whole project.
+                if (e.button === 1) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onCloseTab(tabId);
+                }
+              }}
+              className={`flex items-center gap-2 rounded px-1.5 py-[3px] text-left text-xs ${
+                // Only the visible project highlights its current tab — doing it
+                // in every group would light up half the panel.
+                active && tabId === currentTabId
+                  ? "bg-zinc-800 text-zinc-100"
+                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+              }`}
+              title={title}
+            >
+              <AgentBadge state={state} size={8} inline />
+              <span className="min-w-0 flex-1 truncate">{title}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

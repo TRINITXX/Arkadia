@@ -8,6 +8,7 @@
  * logic over a list of live, resumable conversations.
  */
 
+import { matchesAllTerms, queryTerms } from "@/lib/searchTerms";
 import type { Project } from "@/types";
 
 /** One session, as `list_claude_sessions` returns it. */
@@ -29,16 +30,35 @@ export interface ClaudeSession {
 export interface SessionMatch {
   id: string;
   excerpt: string;
+  /** Term occurrences in the session's prose — the row's "12×" badge. */
+  count: number;
 }
 
 /** A session as the list renders it: the entry plus why it is being shown. */
 export interface ListedSession extends ClaudeSession {
   /** Set when the session surfaced through the content search. */
   excerpt?: string;
+  /** Occurrences behind the badge; absent when the session matched on title. */
+  count?: number;
 }
 
 export interface SessionGroup {
   label: string;
+  sessions: ListedSession[];
+}
+
+/** One project section of the list, in the "by project" layout. */
+export interface ProjectGroup {
+  /** Stable key: the sidepanel project id, or the normalised cwd when there is none. */
+  key: string;
+  name: string;
+  /** Sidepanel colour; null for a folder that has no project (rendered grey). */
+  color: string | null;
+  /** Folder behind the section — the project's path, or the sessions' cwd. */
+  path: string;
+  /** Newest session in the section: shown on the header and drives the order. */
+  mtime: number;
+  /** Sessions of this project, newest first. */
   sessions: ListedSession[];
 }
 
@@ -63,12 +83,9 @@ export function filterByMeta(
   sessions: ClaudeSession[],
   query: string,
 ): ClaudeSession[] {
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = queryTerms(query);
   if (terms.length === 0) return sessions;
-  return sessions.filter((s) => {
-    const hay = `${s.title}\n${s.cwd}`.toLowerCase();
-    return terms.every((t) => hay.includes(t));
-  });
+  return sessions.filter((s) => matchesAllTerms(`${s.title}\n${s.cwd}`, terms));
 }
 
 /**
@@ -83,12 +100,17 @@ export function mergeSearchResults(
   contentMatches: SessionMatch[],
 ): ListedSession[] {
   const metaIds = new Set(metaMatches.map((s) => s.id));
-  const excerpts = new Map(contentMatches.map((m) => [m.id, m.excerpt]));
-  const out: ListedSession[] = metaMatches.map((s) => ({ ...s }));
+  const hits = new Map(contentMatches.map((m) => [m.id, m]));
+  // A title match keeps its place at the top, but still shows the badge when
+  // the content scan also found occurrences inside it.
+  const out: ListedSession[] = metaMatches.map((s) => {
+    const hit = hits.get(s.id);
+    return hit ? { ...s, count: hit.count } : { ...s };
+  });
   for (const s of sessions) {
     if (metaIds.has(s.id)) continue;
-    const excerpt = excerpts.get(s.id);
-    if (excerpt !== undefined) out.push({ ...s, excerpt });
+    const hit = hits.get(s.id);
+    if (hit) out.push({ ...s, excerpt: hit.excerpt, count: hit.count });
   }
   return out;
 }
@@ -133,6 +155,48 @@ export function groupByRecency(
     groups[idx].sessions.push(s);
   }
   return groups.filter((g) => g.sessions.length > 0);
+}
+
+/**
+ * Sections the list by project rather than by date: every session is attached
+ * to the sidepanel project owning its folder (see `resolveProjectTarget`, so a
+ * subfolder or a worktree lands under its parent project), and a folder with no
+ * project at all becomes a section of its own.
+ *
+ * Sections are ordered by their freshest session, and so are the sessions
+ * inside each one — the input's order is not relied upon, since the search
+ * merge deliberately floats title matches to the top.
+ */
+export function groupByProject(
+  sessions: ListedSession[],
+  projects: Project[],
+): ProjectGroup[] {
+  const byId = new Map(projects.map((p) => [p.id, p]));
+  const groups = new Map<string, ProjectGroup>();
+  for (const s of sessions) {
+    const target = resolveProjectTarget(projects, s.cwd);
+    const project =
+      target.kind === "existing" ? byId.get(target.projectId) : undefined;
+    const key = project ? project.id : norm(s.cwd);
+    const group = groups.get(key);
+    if (group) {
+      group.sessions.push(s);
+      if (s.mtime > group.mtime) group.mtime = s.mtime;
+      continue;
+    }
+    groups.set(key, {
+      key,
+      name: project ? project.name : baseName(s.cwd),
+      color: project ? project.color : null,
+      path: project ? project.path : s.cwd,
+      mtime: s.mtime,
+      sessions: [s],
+    });
+  }
+  const out = [...groups.values()];
+  for (const g of out) g.sessions.sort((a, b) => b.mtime - a.mtime);
+  out.sort((a, b) => b.mtime - a.mtime);
+  return out;
 }
 
 const MONTHS = [

@@ -55,6 +55,7 @@ import {
   DEFAULT_NOTIF_STYLE,
   DEFAULT_NOTIF_WIDTH,
   DEFAULT_PALETTE_ID,
+  DEFAULT_SESSIONS_GROUPING,
   DEFAULT_TERMINAL_FONT,
   DEFAULT_TOOL_DENSITY,
   SCROLLBACK_LINES_DEFAULT,
@@ -71,6 +72,7 @@ import {
   type PaneState,
   type Project,
   type RenderPayload,
+  type SessionsGrouping,
   type SplitDirection,
   type Tab,
   type TerminalFont,
@@ -139,6 +141,10 @@ export function App() {
   const [modernViewEnabled, setModernViewEnabled] = useState(false);
   const [toolDensity, setToolDensity] =
     useState<ToolDensity>(DEFAULT_TOOL_DENSITY);
+  // Layout of the "recent sessions" overlay: flat by date, or by project.
+  const [sessionsGrouping, setSessionsGrouping] = useState<SessionsGrouping>(
+    DEFAULT_SESSIONS_GROUPING,
+  );
   // Show the project sidepanel (toggled from the toolbar, persisted).
   const [sidepanelOpen, setSidepanelOpen] = useState(true);
   // Per-pane scrollback line cap, mirrored to the Rust backend.
@@ -377,6 +383,7 @@ export function App() {
         setAutoScrollReplyEnabled(state.autoScrollReplyEnabled);
         setModernViewEnabled(state.modernViewEnabled);
         setToolDensity(state.toolDensity);
+        setSessionsGrouping(state.sessionsGrouping);
         setSidepanelOpen(state.sidepanelOpen);
         setScrollbackLines(state.scrollbackLines);
         setLastSession(state.sessionSnapshot);
@@ -416,6 +423,7 @@ export function App() {
         autoScrollReplyEnabled,
         modernViewEnabled,
         toolDensity,
+        sessionsGrouping,
         sidepanelOpen,
         scrollbackLines,
         sessionSnapshot: buildSessionSnapshot(tabs, claudePaneIds, Date.now()),
@@ -444,6 +452,7 @@ export function App() {
     autoScrollReplyEnabled,
     modernViewEnabled,
     toolDensity,
+    sessionsGrouping,
     sidepanelOpen,
     scrollbackLines,
     tabs,
@@ -1166,6 +1175,18 @@ export function App() {
     });
   };
 
+  // Jump straight to a tab from the sidepanel, whichever project owns it.
+  const onActivateProjectTab = (projectId: string, tabId: string) => {
+    setActiveProjectId(projectId);
+    setActiveTabIdByProject((prev) => ({ ...prev, [projectId]: tabId }));
+    setBellTabs((prev) => {
+      if (!prev[tabId]) return prev;
+      const copy = { ...prev };
+      delete copy[tabId];
+      return copy;
+    });
+  };
+
   const onAddProject = (data: {
     name: string;
     path: string;
@@ -1555,6 +1576,7 @@ export function App() {
             setProjectMenu({ project, x, y })
           }
           onCloseProjectTabs={closeProjectTabs}
+          onCloseTab={closeTab}
           onWorkspaceContextMenu={(workspace, x, y) =>
             setWorkspaceMenu({ workspace, x, y })
           }
@@ -1570,8 +1592,10 @@ export function App() {
               : null
           }
           onOpenSessions={() => setSessionsOpen(true)}
+          onActivateTab={onActivateProjectTab}
           tabs={tabs}
           paneAgentStates={effectivePaneStates}
+          activeTabIdByProject={activeTabIdByProject}
           activeProjectIds={activeProjectIds}
         />
       )}
@@ -1704,6 +1728,9 @@ export function App() {
         onResume={resumeSession}
         livePaneBySession={livePaneBySession}
         onFocusPane={revealPane}
+        projects={projects}
+        grouping={sessionsGrouping}
+        onGroupingChange={setSessionsGrouping}
         density={toolDensity}
         palette={palette}
       />

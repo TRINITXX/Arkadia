@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { quotePathsForPrompt } from "./photoPrompt";
+import { quotePathsForPrompt } from "./pickerPrompt";
 
 const ROLL = "C:\\Users\\T\\Pictures\\iCloud Photos\\Photos";
 

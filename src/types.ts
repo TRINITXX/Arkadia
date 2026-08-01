@@ -267,6 +267,15 @@ export type ToolDensity = "compact" | "preview" | "full";
 export const DEFAULT_TOOL_DENSITY: ToolDensity = "preview";
 
 /**
+ * How the "recent sessions" overlay lays its results out:
+ * `date` = one flat list in recency buckets, `project` = one section per
+ * project, each holding its own sessions newest first.
+ */
+export type SessionsGrouping = "date" | "project";
+
+export const DEFAULT_SESSIONS_GROUPING: SessionsGrouping = "date";
+
+/**
  * Style of the background notification shown when Claude finishes / asks while
  * Arkadia is backgrounded:
  * `off` = no notification, `mirror` = full terminal-mirror popup (`PopupApp`),

@@ -1,23 +1,27 @@
-//! The newest photos of the iCloud camera roll, for the input rail's picker.
+//! The newest files of the two folders the input rail's picker offers: the
+//! iCloud camera roll, and the downloads folder.
 //!
-//! HEIC is listed alongside the web formats. The Claude API itself only takes
-//! JPEG, PNG, GIF and WebP, but Claude Code is an agent: handed a `.HEIC` path
-//! it converts the file with ImageMagick before reading it. Filtering the roll's
-//! native format out would hide most of what the user actually wants to send.
+//! The roll is filtered to stills and gets thumbnails; downloads are listed
+//! whole, because what lands there is arbitrary — an installer, a CSV, a log, an
+//! extracted folder — and a preview would mean nothing for most of it.
 //!
-//! Neither can a webview decode HEIC, so thumbnails for it are produced here
-//! through the same ImageMagick already on the machine, while everything else
-//! goes through the `image` crate.
+//! HEIC is listed among the stills. The Claude API itself only takes JPEG, PNG,
+//! GIF and WebP, but Claude Code is an agent: handed a `.HEIC` path it converts
+//! the file with ImageMagick before reading it. Filtering the roll's native
+//! format out would hide most of what the user actually wants to send. Neither
+//! can a webview decode HEIC, so its thumbnails go through that same
+//! ImageMagick, while everything else goes through the `image` crate.
 //!
-//! Listing is cheap despite the folder holding thousands of files: on Windows a
+//! Listing stays cheap despite the roll holding thousands of files: on Windows a
 //! directory entry already carries its last-write time, so `metadata()` here
 //! reads what `read_dir` cached instead of issuing a syscall per file.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use image::codecs::jpeg::JpegEncoder;
@@ -28,78 +32,135 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// Camera roll, relative to the home directory.
 const ROLL: [&str; 3] = ["Pictures", "iCloud Photos", "Photos"];
-/// Extensions the picker lists, matched case-insensitively.
+/// Where downloads land on this machine, preferred over the OS default below.
+const DOWNLOADS: &str = r"D:\Downloads";
+/// Still-image extensions, matched case-insensitively.
 const EXTS: [&str; 7] = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif"];
 /// Of those, the ones the `image` crate can't decode — delegated to ImageMagick.
 const EXTERNAL: [&str; 2] = ["heic", "heif"];
-/// How many the picker shows. The grid is 5×2 and there is no paging.
+/// How many entries each tab shows. There is no paging.
 const LIMIT: usize = 10;
 
-/// One tile in the picker.
+/// Which folder the picker is listing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Source {
+    Photos,
+    Downloads,
+}
+
+impl Source {
+    fn parse(key: &str) -> Result<Self, String> {
+        match key {
+            "photos" => Ok(Self::Photos),
+            "downloads" => Ok(Self::Downloads),
+            other => Err(format!("unknown source `{other}`")),
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Photos => "photos",
+            Self::Downloads => "downloads",
+        }
+    }
+
+    fn root(self) -> Option<PathBuf> {
+        match self {
+            Self::Photos => dirs::home_dir().map(|h| ROLL.iter().fold(h, |p, seg| p.join(seg))),
+            // The user's downloads live off the system drive; fall back to the
+            // OS folder so this still resolves to something sane elsewhere.
+            Self::Downloads => {
+                let configured = PathBuf::from(DOWNLOADS);
+                if configured.is_dir() {
+                    Some(configured)
+                } else {
+                    dirs::download_dir()
+                }
+            }
+        }
+    }
+
+    /// Whether an entry belongs in this tab. Downloads take everything —
+    /// including folders, since an extracted archive is a perfectly good thing
+    /// to hand to Claude.
+    fn accepts(self, path: &Path) -> bool {
+        match self {
+            Self::Photos => is_still_image(path),
+            Self::Downloads => true,
+        }
+    }
+}
+
+/// One row or tile in the picker.
 #[derive(Serialize, Clone, PartialEq, Debug)]
-pub struct PhotoEntry {
+pub struct FileEntry {
     /// Absolute path — what gets typed into the prompt.
     pub path: String,
-    /// File name, for the tooltip.
+    /// File name, shown in the list and in the tile's tooltip.
     pub name: String,
     /// Last write, ms since the epoch — the list's sort key.
     pub mtime: u64,
+    /// Bytes; 0 for a directory, whose size would need a full walk to know.
+    pub size: u64,
+    pub is_dir: bool,
 }
 
 #[tauri::command(async)]
-pub fn list_recent_photos(app: AppHandle) -> Result<Vec<PhotoEntry>, String> {
-    let dir = dirs::home_dir()
-        .map(|h| ROLL.iter().fold(h, |p, seg| p.join(seg)))
-        .ok_or("no home directory")?;
+pub fn list_recent_files(app: AppHandle, source: String) -> Result<Vec<FileEntry>, String> {
+    let source = Source::parse(&source)?;
+    let dir = source.root().ok_or("no such folder on this machine")?;
     if !dir.is_dir() {
-        return Err(format!("no photo folder at {}", dir.display()));
+        return Err(format!("no folder at {}", dir.display()));
     }
-    // First listing arms the watcher, so the picker never has to be told to
-    // refresh once iCloud drops a new photo in.
-    ensure_roll_watcher(&app, dir.clone());
-    Ok(scan(&dir, LIMIT))
+    // First listing arms the watcher, so the tab never has to be told to refresh
+    // once something new lands in the folder.
+    ensure_watcher(&app, source, dir.clone());
+    Ok(scan(&dir, LIMIT, source))
 }
 
-/// Command body (unit-testable without a home directory).
-fn scan(dir: &Path, limit: usize) -> Vec<PhotoEntry> {
+/// Command body (unit-testable without the real folders).
+fn scan(dir: &Path, limit: usize, source: Source) -> Vec<FileEntry> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut found: Vec<(u64, PathBuf)> = entries
+    let mut found: Vec<(u64, PathBuf, u64, bool)> = entries
         .flatten()
-        .filter(|e| is_readable_image(&e.path()))
+        .filter(|e| source.accepts(&e.path()))
         .filter_map(|e| {
             let meta = e.metadata().ok()?;
-            if !meta.is_file() {
-                return None;
-            }
             let mtime = meta
                 .modified()
                 .ok()?
                 .duration_since(UNIX_EPOCH)
                 .ok()?
                 .as_millis() as u64;
-            Some((mtime, e.path()))
+            let is_dir = meta.is_dir();
+            if !is_dir && !meta.is_file() {
+                return None;
+            }
+            Some((mtime, e.path(), if is_dir { 0 } else { meta.len() }, is_dir))
         })
         .collect();
     // Newest first; ties broken by path so the order never flickers between two
-    // photos written in the same millisecond.
+    // entries written in the same millisecond.
     found.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     found.truncate(limit);
     found
         .into_iter()
-        .map(|(mtime, path)| PhotoEntry {
+        .map(|(mtime, path, size, is_dir)| FileEntry {
             name: path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             path: path.to_string_lossy().into_owned(),
             mtime,
+            size,
+            is_dir,
         })
         .collect()
 }
 
-fn is_readable_image(path: &Path) -> bool {
+fn is_still_image(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
@@ -127,8 +188,8 @@ const THUMB_QUALITY: u8 = 80;
 #[tauri::command(async)]
 pub fn photo_thumbnail(app: AppHandle, path: String) -> Result<tauri::ipc::Response, String> {
     let src = PathBuf::from(&path);
-    if !is_readable_image(&src) {
-        return Err("not a readable image".into());
+    if !is_still_image(&src) {
+        return Err("not a still image".into());
     }
     let meta = fs::metadata(&src).map_err(|e| e.to_string())?;
     if !meta.is_file() {
@@ -146,10 +207,7 @@ pub fn photo_thumbnail(app: AppHandle, path: String) -> Result<tauri::ipc::Respo
         .app_data_dir()
         .map_err(|e| format!("app data dir: {e}"))?
         .join("thumbs");
-    let cached = dir.join(format!(
-        "{}.jpg",
-        cache_key(&path, stamp, meta.len())
-    ));
+    let cached = dir.join(format!("{}.jpg", cache_key(&path, stamp, meta.len())));
     if let Ok(bytes) = fs::read(&cached) {
         return Ok(tauri::ipc::Response::new(bytes));
     }
@@ -235,62 +293,75 @@ fn magick_thumbnail(src: &Path) -> Result<Vec<u8>, String> {
     Ok(out.stdout)
 }
 
-// ─── Watching the roll ──────────────────────────────────────────────────────
+// ─── Watching the folders ───────────────────────────────────────────────────
 
-/// Emitted when the roll gains, loses or changes a listable photo.
-pub const ROLL_CHANGED: &str = "photos-changed";
-/// iCloud writes a temp file and renames it, so one new photo lands as a burst
-/// of events; hold off until it settles rather than refreshing several times.
+/// Emitted when a watched folder gains, loses or changes a listed entry. The
+/// payload is the source's key, so a tab only refreshes on its own news.
+pub const FILES_CHANGED: &str = "recent-files-changed";
+/// iCloud writes a temp file and renames it, and a browser writes a `.part`
+/// before the real name, so one arrival lands as a burst of events; hold off
+/// until it settles rather than refreshing several times.
 const DEBOUNCE: Duration = Duration::from_millis(700);
 /// Ceiling on that hold-off, so a long sync still refreshes as it goes.
 const MAX_COALESCE: Duration = Duration::from_secs(3);
 
-static WATCHING: AtomicBool = AtomicBool::new(false);
+fn watched() -> &'static Mutex<HashSet<PathBuf>> {
+    static WATCHED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    WATCHED.get_or_init(|| Mutex::new(HashSet::new()))
+}
 
-/// Watches the roll for the process's lifetime. Idempotent: only the first call
-/// spawns anything, and the watcher has no shutdown path because the folder is
-/// fixed and the thread is meant to outlive every picker.
-fn ensure_roll_watcher(app: &AppHandle, dir: PathBuf) {
-    if WATCHING.swap(true, Ordering::SeqCst) {
-        return;
+/// Watches one folder for the process's lifetime. Idempotent per folder: only
+/// the first call for a given directory spawns anything, and there is no
+/// shutdown path because the folders are fixed and the thread is meant to
+/// outlive every picker.
+fn ensure_watcher(app: &AppHandle, source: Source, dir: PathBuf) {
+    {
+        let Ok(mut seen) = watched().lock() else { return };
+        if !seen.insert(dir.clone()) {
+            return;
+        }
     }
     let app = app.clone();
     std::thread::spawn(move || {
+        let give_up = |dir: &PathBuf| {
+            if let Ok(mut seen) = watched().lock() {
+                seen.remove(dir);
+            }
+        };
         let (tx, rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
         let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("[photos] watcher unavailable: {e}");
-                WATCHING.store(false, Ordering::SeqCst);
-                return;
+                eprintln!("[picker] watcher unavailable: {e}");
+                return give_up(&dir);
             }
         };
-        // Non-recursive: the roll is flat, and iCloud's own sub-folders would
-        // only add noise.
+        // Non-recursive: both folders are browsed flat, and their sub-folders
+        // would only add noise (an extracted archive being written, iCloud's
+        // own bookkeeping).
         if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
-            eprintln!("[photos] cannot watch {}: {e}", dir.display());
-            WATCHING.store(false, Ordering::SeqCst);
-            return;
+            eprintln!("[picker] cannot watch {}: {e}", dir.display());
+            return give_up(&dir);
         }
         while let Ok(first) = rx.recv() {
-            if !touches_a_listed_photo(&first) {
+            if !touches_a_listed_entry(&first, source) {
                 continue;
             }
             // Swallow the rest of the burst before telling the frontend.
             let deadline = Instant::now() + MAX_COALESCE;
             while Instant::now() < deadline && rx.recv_timeout(DEBOUNCE).is_ok() {}
-            let _ = app.emit(ROLL_CHANGED, ());
+            let _ = app.emit(FILES_CHANGED, source.key());
         }
-        WATCHING.store(false, Ordering::SeqCst);
+        give_up(&dir);
     });
 }
 
-fn touches_a_listed_photo(event: &notify::Result<Event>) -> bool {
+fn touches_a_listed_entry(event: &notify::Result<Event>, source: Source) -> bool {
     let Ok(event) = event else { return false };
     matches!(
         event.kind,
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-    ) && event.paths.iter().any(|p| is_readable_image(p))
+    ) && event.paths.iter().any(|p| source.accepts(p))
 }
 
 #[cfg(test)]
@@ -314,14 +385,19 @@ mod tests {
         touch(tmp.path(), "new.png", 10);
         touch(tmp.path(), "mid.jpg", 100);
 
-        let names: Vec<_> = scan(tmp.path(), 10).into_iter().map(|p| p.name).collect();
+        let names: Vec<_> = scan(tmp.path(), 10, Source::Photos)
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
         assert_eq!(names, ["new.png", "mid.jpg", "old.png"]);
     }
 
     #[test]
-    fn lists_stills_including_heic_and_drops_the_rest() {
+    fn photos_list_stills_including_heic_and_drop_the_rest() {
         let tmp = tempfile::tempdir().unwrap();
-        for name in ["a.png", "b.JPG", "c.jpeg", "d.gif", "e.webp", "f.HEIC", "g.heif"] {
+        for name in [
+            "a.png", "b.JPG", "c.jpeg", "d.gif", "e.webp", "f.HEIC", "g.heif",
+        ] {
             touch(tmp.path(), name, 10);
         }
         // Raw and video: Claude Code has no path to read these, so they'd only
@@ -329,7 +405,10 @@ mod tests {
         for name in ["h.dng", "i.mov", "j.mp4", "desktop.ini", "noext"] {
             touch(tmp.path(), name, 10);
         }
-        let mut names: Vec<_> = scan(tmp.path(), 50).into_iter().map(|p| p.name).collect();
+        let mut names: Vec<_> = scan(tmp.path(), 50, Source::Photos)
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
         names.sort();
         assert_eq!(
             names,
@@ -338,11 +417,31 @@ mod tests {
     }
 
     #[test]
-    fn only_heic_takes_the_external_decoder() {
-        assert!(needs_external_decoder(Path::new("a.HEIC")));
-        assert!(needs_external_decoder(Path::new("a.heif")));
-        assert!(!needs_external_decoder(Path::new("a.png")));
-        assert!(!needs_external_decoder(Path::new("a.jpg")));
+    fn downloads_take_everything_folders_included() {
+        let tmp = tempfile::tempdir().unwrap();
+        touch(tmp.path(), "setup.exe", 30);
+        touch(tmp.path(), "notes.md", 20);
+        touch(tmp.path(), "noext", 10);
+        fs::create_dir(tmp.path().join("extracted")).unwrap();
+
+        let got = scan(tmp.path(), 50, Source::Downloads);
+        let mut names: Vec<_> = got.iter().map(|e| e.name.clone()).collect();
+        names.sort();
+        assert_eq!(names, ["extracted", "noext", "notes.md", "setup.exe"]);
+        assert!(got.iter().find(|e| e.name == "extracted").unwrap().is_dir);
+        assert!(!got.iter().find(|e| e.name == "setup.exe").unwrap().is_dir);
+    }
+
+    #[test]
+    fn reports_size_for_files_and_zero_for_folders() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("payload.bin"), vec![0u8; 4096]).unwrap();
+        fs::create_dir(tmp.path().join("dir")).unwrap();
+
+        let got = scan(tmp.path(), 10, Source::Downloads);
+        assert_eq!(got.iter().find(|e| e.name == "payload.bin").unwrap().size, 4096);
+        // A directory's real size would need a full walk; the UI shows none.
+        assert_eq!(got.iter().find(|e| e.name == "dir").unwrap().size, 0);
     }
 
     #[test]
@@ -351,7 +450,7 @@ mod tests {
         for i in 0..25 {
             touch(tmp.path(), &format!("img{i:02}.png"), 1000 - i);
         }
-        let got = scan(tmp.path(), LIMIT);
+        let got = scan(tmp.path(), LIMIT, Source::Photos);
         assert_eq!(got.len(), LIMIT);
         // Highest index == smallest age == newest.
         assert_eq!(got[0].name, "img24.png");
@@ -359,7 +458,17 @@ mod tests {
 
     #[test]
     fn missing_folder_yields_nothing() {
-        assert!(scan(Path::new("C:\\definitely\\missing\\roll"), 10).is_empty());
+        let missing = Path::new("C:\\definitely\\missing\\roll");
+        assert!(scan(missing, 10, Source::Photos).is_empty());
+        assert!(scan(missing, 10, Source::Downloads).is_empty());
+    }
+
+    #[test]
+    fn source_keys_round_trip_and_reject_junk() {
+        assert_eq!(Source::parse("photos").unwrap(), Source::Photos);
+        assert_eq!(Source::parse("downloads").unwrap(), Source::Downloads);
+        assert_eq!(Source::parse(Source::Photos.key()).unwrap(), Source::Photos);
+        assert!(Source::parse("bookmarks").is_err());
     }
 
     #[test]
@@ -391,7 +500,15 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_refuses_what_the_picker_never_lists() {
+    fn only_heic_takes_the_external_decoder() {
+        assert!(needs_external_decoder(Path::new("a.HEIC")));
+        assert!(needs_external_decoder(Path::new("a.heif")));
+        assert!(!needs_external_decoder(Path::new("a.png")));
+        assert!(!needs_external_decoder(Path::new("a.jpg")));
+    }
+
+    #[test]
+    fn thumbnail_refuses_what_the_roll_never_lists() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("clip.mov");
         File::create(&src).unwrap();
@@ -399,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn watcher_ignores_events_about_other_files() {
+    fn each_watcher_only_wakes_for_its_own_folder() {
         let ev = |path: &str| {
             Ok(Event {
                 kind: EventKind::Create(notify::event::CreateKind::File),
@@ -407,11 +524,14 @@ mod tests {
                 attrs: Default::default(),
             })
         };
-        assert!(touches_a_listed_photo(&ev("C:\\roll\\IMG_1.HEIC")));
-        assert!(touches_a_listed_photo(&ev("C:\\roll\\IMG_2.PNG")));
+        assert!(touches_a_listed_entry(&ev("C:\\roll\\IMG_1.HEIC"), Source::Photos));
+        assert!(touches_a_listed_entry(&ev("C:\\roll\\IMG_2.PNG"), Source::Photos));
         // iCloud's own churn: partial downloads and sidecars must not refresh.
-        assert!(!touches_a_listed_photo(&ev("C:\\roll\\IMG_3.icloud")));
-        assert!(!touches_a_listed_photo(&ev("C:\\roll\\clip.mov")));
-        assert!(!touches_a_listed_photo(&ev("C:\\roll\\desktop.ini")));
+        assert!(!touches_a_listed_entry(&ev("C:\\roll\\IMG_3.icloud"), Source::Photos));
+        assert!(!touches_a_listed_entry(&ev("C:\\roll\\clip.mov"), Source::Photos));
+        // Downloads accept anything, including the browser's partial writes —
+        // that is what the debounce is for.
+        assert!(touches_a_listed_entry(&ev("D:\\dl\\setup.exe"), Source::Downloads));
+        assert!(touches_a_listed_entry(&ev("D:\\dl\\x.crdownload"), Source::Downloads));
     }
 }

@@ -1,4 +1,5 @@
 mod agent_registry;
+mod ai_search;
 mod claude_watcher;
 mod conversation;
 // Only consumed by the release-only single-instance block below; in debug the
@@ -66,6 +67,7 @@ pub fn run() {
         .manage(terminal::ScrollbackConfig::default())
         .manage(conversation::ConvCacheMap::default())
         .manage(sessions::SessionIndex::default())
+        .manage(ai_search::AiSearchState::default())
         .manage(registry.clone())
         .manage(popup::PopupQueue::default())
         .setup({
@@ -155,9 +157,15 @@ pub fn run() {
             conversation::evict_transcript_cache,
             conversation::pane_session_id,
             conversation::read_image_bytes,
+            conversation::read_last_code_block,
             sessions::list_claude_sessions,
             sessions::search_claude_sessions,
-            photos::list_recent_photos,
+            ai_search::ai_search_plan,
+            ai_search::ai_search_candidates,
+            ai_search::ai_search_answer,
+            ai_search::ai_search_forget,
+            ai_search::search_terms,
+            photos::list_recent_files,
             photos::photo_thumbnail,
             popup::popup_request_state,
             popup::popup_log_ui,

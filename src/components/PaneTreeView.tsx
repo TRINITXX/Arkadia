@@ -149,7 +149,7 @@ export function PaneTreeView({
             paneId={pane.id}
             font={font}
             useWebGPU={useWebGPU}
-            onError={(message) => onToast?.("error", message)}
+            onToast={onToast}
           />
         )}
         {modernViewEnabled && (

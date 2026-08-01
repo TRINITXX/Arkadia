@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
@@ -61,11 +62,16 @@ pub struct SessionEntry {
     pub mtime: u64,
 }
 
-/// A content-search hit: which session, and the text around the match.
+/// A content-search hit: which session, the text around the match, and how
+/// often the terms occur in its prose.
 #[derive(Serialize, Clone, PartialEq, Debug)]
 pub struct SessionMatch {
     pub id: String,
     pub excerpt: String,
+    /// Total term occurrences across the session's prose — the row's "12×"
+    /// badge. Counted the same way the reader counts what it highlights, so
+    /// the two numbers never contradict each other.
+    pub count: usize,
 }
 
 /// What we parsed out of one transcript (cached against its size+mtime).
@@ -248,6 +254,11 @@ fn one_line(s: &str) -> String {
     truncate_chars(line, TITLE_CAP)
 }
 
+/// `truncate_chars`, for callers outside this module.
+pub fn truncate_for_ui(s: &str, cap: usize) -> String {
+    truncate_chars(s, cap)
+}
+
 fn truncate_chars(s: &str, cap: usize) -> String {
     if s.chars().count() <= cap {
         return s.to_string();
@@ -284,6 +295,21 @@ fn parse_transcript(path: &Path, len: u64) -> Option<Parsed> {
     }
 }
 
+/// True for the directory the AI search runs its headless calls from.
+///
+/// Those calls write transcripts like any other session, and they contain the
+/// query along with the passages that were read. Listing them would mean every
+/// search plants a session matching itself, ready to surface — and outrank the
+/// real answer — the next time the same words are typed. Measured: it happened
+/// on the very first run.
+fn is_ai_workspace(cwd: &str) -> bool {
+    let Some(ws) = crate::ai_search::workspace_dir() else {
+        return false;
+    };
+    let norm = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
+    norm(Path::new(cwd)) == norm(&ws)
+}
+
 /// Rebuilds the listing, reusing cached parses for untouched transcripts and
 /// dropping cache entries whose file is gone.
 fn scan(index: &SessionIndex) -> Vec<SessionEntry> {
@@ -309,7 +335,7 @@ fn scan(index: &SessionIndex) -> Vec<SessionEntry> {
         if let Some(p) = &parsed {
             // Re-checked on every scan, never cached: a worktree can be
             // recreated at the same path (and `--resume` would work again).
-            if Path::new(&p.cwd).is_dir() {
+            if Path::new(&p.cwd).is_dir() && !is_ai_workspace(&p.cwd) {
                 out.push(SessionEntry {
                     id: path
                         .file_stem()
@@ -408,30 +434,130 @@ fn prose_of(v: &Value) -> Option<String> {
     (!cleaned.is_empty()).then_some(cleaned)
 }
 
-/// First prose hit in one transcript, streamed line by line so a 90 MB file
-/// never lands in memory at once.
-fn prose_hit(path: &Path, needle: &str) -> Option<String> {
+/// The query split into the terms a message must ALL contain, lowercased and
+/// deduplicated. Empty when the query is too short to be worth a scan.
+pub fn query_terms(query: &str) -> Vec<String> {
+    let q = query.trim().to_lowercase();
+    if q.chars().count() < MIN_QUERY {
+        return Vec::new();
+    }
+    let mut terms: Vec<String> = Vec::new();
+    for t in q.split_whitespace() {
+        let t = t.to_string();
+        if !terms.contains(&t) {
+            terms.push(t);
+        }
+    }
+    terms
+}
+
+/// Bounds a scan to messages written inside a window — what the AI stage's
+/// "hier soir" becomes. Each message is judged on its own `timestamp`, never on
+/// the file's mtime: a session reopened this morning still answers for what it
+/// said last night.
+#[derive(Clone, Copy, Default)]
+pub struct TimeWindow {
+    pub after: Option<DateTime<Utc>>,
+    pub before: Option<DateTime<Utc>>,
+}
+
+impl TimeWindow {
+    pub fn parse(after: Option<&str>, before: Option<&str>) -> Self {
+        Self {
+            after: after.and_then(parse_stamp),
+            before: before.and_then(parse_stamp),
+        }
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.after.is_none() && self.before.is_none()
+    }
+
+    /// A line's `timestamp` against the window. An unstamped line is kept when
+    /// the window is open and dropped otherwise — we cannot vouch for it.
+    fn admits(&self, v: &Value) -> bool {
+        if self.is_open() {
+            return true;
+        }
+        self.admits_stamp(v.get("timestamp").and_then(Value::as_str).and_then(parse_stamp))
+    }
+
+    fn admits_stamp(&self, stamp: Option<DateTime<Utc>>) -> bool {
+        if self.is_open() {
+            return true;
+        }
+        let Some(ts) = stamp else { return false };
+        self.after.is_none_or(|a| ts >= a) && self.before.is_none_or(|b| ts <= b)
+    }
+}
+
+/// RFC3339, with or without a zone — a bare local-looking stamp from the model
+/// is read as UTC, which is the frame the transcripts themselves use.
+fn parse_stamp(s: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(naive.and_utc());
+        }
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(s, fmt) {
+            return Some(date.and_hms_opt(0, 0, 0)?.and_utc());
+        }
+    }
+    None
+}
+
+/// Non-overlapping occurrences of every term in an already-lowercased text.
+fn count_terms(hay_lower: &str, terms: &[String]) -> usize {
+    terms.iter().map(|t| hay_lower.matches(t.as_str()).count()).sum()
+}
+
+/// What one transcript yields for a query.
+struct ProseHit {
+    excerpt: String,
+    count: usize,
+}
+
+/// Scans a transcript's prose, streamed line by line so a 90 MB file never
+/// lands in memory at once.
+///
+/// A session surfaces when a SINGLE message holds every term — scattering them
+/// across an hours-long conversation is not a match. The count, though, tallies
+/// every term occurrence in the prose: it drives the row badge and the reader's
+/// highlight, which paint each term wherever it appears.
+fn prose_scan(path: &Path, terms: &[String], window: &TimeWindow) -> Option<ProseHit> {
     let file = std::fs::File::open(path).ok()?;
     let mut reader = BufReader::with_capacity(64 * 1024, file);
     let mut line: Vec<u8> = Vec::with_capacity(8 * 1024);
-    let needle_bytes = needle.as_bytes();
+    let bytes: Vec<&[u8]> = terms.iter().map(|t| t.as_bytes()).collect();
+    let mut excerpt: Option<String> = None;
+    let mut count = 0usize;
     loop {
         line.clear();
         match reader.read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => return None,
+            Ok(0) | Err(_) => break,
             Ok(_) => {}
         }
-        if !contains_ci(&line, needle_bytes) {
+        // Cheap reject before the JSON parse: a line holding none of the terms
+        // can neither match nor add to the count.
+        if !bytes.iter().any(|b| contains_ci(&line, b)) {
             continue;
         }
         let Ok(v) = serde_json::from_slice::<Value>(&line) else {
             continue;
         };
+        if !window.admits(&v) {
+            continue;
+        }
         let Some(text) = prose_of(&v) else { continue };
-        if let Some(x) = excerpt_around(&text, needle) {
-            return Some(x);
+        let lower = text.to_lowercase();
+        count += count_terms(&lower, terms);
+        if excerpt.is_none() && terms.iter().all(|t| lower.contains(t.as_str())) {
+            excerpt = excerpt_around(&text, &terms[0]);
         }
     }
+    excerpt.map(|excerpt| ProseHit { excerpt, count })
 }
 
 /// Sessions whose conversation (prose only) contains `query`, with the matching
@@ -444,9 +570,162 @@ pub fn search_claude_sessions(query: String, index: State<'_, SessionIndex>) -> 
 
 /// Command body (unit-testable without a Tauri `State`).
 fn search(index: &SessionIndex, query: &str) -> Vec<SessionMatch> {
-    let needle = query.trim().to_lowercase();
-    if needle.chars().count() < MIN_QUERY {
+    let terms = query_terms(query);
+    if terms.is_empty() {
         return Vec::new();
+    }
+    let entries = scan(index);
+    scan_entries(&entries, &terms, &TimeWindow::default())
+        .into_iter()
+        .map(|(e, hit)| SessionMatch {
+            id: e.id.clone(),
+            excerpt: hit.excerpt,
+            count: hit.count,
+        })
+        .collect()
+}
+
+// ─── AI stage: candidate gathering ──────────────────────────────────────────
+
+/// Sessions handed to the reader, and how many chunks each carries.
+const MAX_AI_SESSIONS: usize = 40;
+/// Messages kept per session — enough to answer, bounded so one chatty session
+/// cannot eat the whole budget.
+const MAX_CHUNKS: usize = 12;
+/// Longest single message handed over, in chars.
+const CHUNK_CAP: usize = 800;
+
+/// One session offered to the reader: what it is, and the passages to read.
+#[derive(Serialize, Clone, PartialEq, Debug)]
+pub struct AiCandidate {
+    pub id: String,
+    pub title: String,
+    pub cwd: String,
+    pub mtime: u64,
+    /// Term occurrences in the session's prose — also the row badge.
+    pub count: usize,
+    /// Matching messages, each with its immediate neighbours for context,
+    /// in conversation order.
+    pub chunks: Vec<String>,
+}
+
+/// What `gather_ai_candidates` returns.
+#[derive(Serialize, Clone, PartialEq, Debug)]
+pub struct AiCandidates {
+    pub kept: Vec<AiCandidate>,
+    /// Sessions that matched in total. The UI renders "lu 40 sur 1370" from
+    /// this: asking the model to report its own perimeter proved unreliable,
+    /// so the number never passes through it.
+    pub total: usize,
+}
+
+/// A prose message, as gathered for the reader.
+struct Msg {
+    stamp: Option<DateTime<Utc>>,
+    role: &'static str,
+    text: String,
+}
+
+/// Every prose message of a transcript, in order. Unlike `prose_scan` this
+/// keeps the messages themselves — the reader needs the words, not a verdict.
+fn prose_messages(path: &Path) -> Vec<Msg> {
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut line: Vec<u8> = Vec::with_capacity(8 * 1024);
+    let mut out = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let Ok(v) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+        };
+        let Some(text) = prose_of(&v) else { continue };
+        let role = match v.get("type").and_then(Value::as_str) {
+            Some("user") => "utilisateur",
+            _ => "claude",
+        };
+        out.push(Msg {
+            stamp: v.get("timestamp").and_then(Value::as_str).and_then(parse_stamp),
+            role,
+            text,
+        });
+    }
+    out
+}
+
+/// The passages of one session worth reading, or `None` when nothing matches.
+///
+/// The AI stage matches on ANY term, not all of them: its terms are synonyms of
+/// one idea (`identifiant`, `credentials`, `token`) and no message ever holds
+/// them together. Breadth is deliberate here — the ranking below is what keeps
+/// the noise out, not the matching rule.
+fn ai_chunks(path: &Path, terms: &[String], window: &TimeWindow) -> Option<(usize, usize, Vec<String>)> {
+    let msgs = prose_messages(path);
+    if msgs.is_empty() {
+        return None;
+    }
+    let mut hits = Vec::new();
+    let mut count = 0usize;
+    for (i, m) in msgs.iter().enumerate() {
+        if !window.admits_stamp(m.stamp) {
+            continue;
+        }
+        let lower = m.text.to_lowercase();
+        let n = count_terms(&lower, terms);
+        if n == 0 {
+            continue;
+        }
+        count += n;
+        hits.push(i);
+    }
+    if hits.is_empty() {
+        return None;
+    }
+    // Matching messages plus their immediate neighbours: "les voilà : admin@x"
+    // is unreadable without the question that preceded it.
+    let mut keep: Vec<usize> = hits
+        .iter()
+        .flat_map(|&i| [i.saturating_sub(1), i, i + 1])
+        .filter(|&j| j < msgs.len())
+        .collect();
+    keep.sort_unstable();
+    keep.dedup();
+    let chunks = keep
+        .into_iter()
+        .take(MAX_CHUNKS)
+        .map(|j| {
+            let m = &msgs[j];
+            let when = m
+                .stamp
+                .map(|t| t.format("%d/%m %H:%M").to_string())
+                .unwrap_or_else(|| "?".into());
+            format!("[{when} {}] {}", m.role, truncate_chars(&m.text, CHUNK_CAP))
+        })
+        .collect();
+    Some((count, msgs.len(), chunks))
+}
+
+/// Candidates for the reader, ranked and capped.
+///
+/// Ranking is `occurrences / sqrt(messages)`. Plain recency handed the reader
+/// the app's own freshly written transcripts; plain density handed it two-line
+/// stubs scoring 100%; raw occurrence count handed it whichever session was
+/// simply the longest. The square root damps length without erasing it.
+pub fn gather_ai_candidates(
+    index: &SessionIndex,
+    terms: &[String],
+    window: &TimeWindow,
+) -> AiCandidates {
+    if terms.is_empty() {
+        return AiCandidates {
+            kept: Vec::new(),
+            total: 0,
+        };
     }
     let entries = scan(index);
     let threads = std::thread::available_parallelism()
@@ -454,19 +733,70 @@ fn search(index: &SessionIndex, query: &str) -> Vec<SessionMatch> {
         .unwrap_or(3)
         .min(8);
     let chunk = entries.len().div_ceil(threads).max(1);
-    let out: Mutex<Vec<SessionMatch>> = Mutex::new(Vec::new());
+    let out: Mutex<Vec<(f64, AiCandidate)>> = Mutex::new(Vec::new());
     std::thread::scope(|s| {
         for part in entries.chunks(chunk) {
-            let needle = &needle;
             let out = &out;
             s.spawn(move || {
                 let mut local = Vec::new();
                 for e in part {
-                    if let Some(excerpt) = prose_hit(Path::new(&e.path), needle) {
-                        local.push(SessionMatch {
+                    let Some((count, msgs, chunks)) = ai_chunks(Path::new(&e.path), terms, window)
+                    else {
+                        continue;
+                    };
+                    let score = count as f64 / (msgs.max(1) as f64).sqrt();
+                    local.push((
+                        score,
+                        AiCandidate {
                             id: e.id.clone(),
-                            excerpt,
-                        });
+                            title: e.title.clone(),
+                            cwd: e.cwd.clone(),
+                            mtime: e.mtime,
+                            count,
+                            chunks,
+                        },
+                    ));
+                }
+                if let Ok(mut o) = out.lock() {
+                    o.append(&mut local);
+                }
+            });
+        }
+    });
+    let mut ranked = out.into_inner().unwrap_or_default();
+    let total = ranked.len();
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    AiCandidates {
+        kept: ranked
+            .into_iter()
+            .take(MAX_AI_SESSIONS)
+            .map(|(_, c)| c)
+            .collect(),
+        total,
+    }
+}
+
+/// Runs `prose_scan` over `entries` in parallel, keeping the ones that matched.
+/// Shared by the plain content search and the AI stage's candidate gathering.
+fn scan_entries<'a>(
+    entries: &'a [SessionEntry],
+    terms: &[String],
+    window: &TimeWindow,
+) -> Vec<(&'a SessionEntry, ProseHit)> {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get().saturating_sub(1).max(1))
+        .unwrap_or(3)
+        .min(8);
+    let chunk = entries.len().div_ceil(threads).max(1);
+    let out: Mutex<Vec<(&SessionEntry, ProseHit)>> = Mutex::new(Vec::new());
+    std::thread::scope(|s| {
+        for part in entries.chunks(chunk) {
+            let out = &out;
+            s.spawn(move || {
+                let mut local = Vec::new();
+                for e in part {
+                    if let Some(hit) = prose_scan(Path::new(&e.path), terms, window) {
+                        local.push((e, hit));
                     }
                 }
                 if let Ok(mut o) = out.lock() {
@@ -584,9 +914,9 @@ mod tests {
             "prose.jsonl",
             &[r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"le WORKTREE n'apparaît pas dans la liste"}]}}"#],
         );
-        assert!(prose_hit(&tool, "worktree").is_none());
-        let hit = prose_hit(&prose, "worktree").unwrap();
-        assert!(hit.contains("WORKTREE"), "excerpt was {hit}");
+        assert!(hit_of(&tool, "worktree").is_none());
+        let hit = hit_of(&prose, "worktree").unwrap();
+        assert!(hit.excerpt.contains("WORKTREE"), "excerpt was {}", hit.excerpt);
     }
 
     #[test]
@@ -599,7 +929,122 @@ mod tests {
                 r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"skill mentionnant worktree"}}"#,
             ],
         );
-        assert!(prose_hit(&p, "worktree").is_none());
+        assert!(hit_of(&p, "worktree").is_none());
+    }
+
+    /// `prose_scan` for a whole-query string, over an open window.
+    fn hit_of(path: &Path, query: &str) -> Option<ProseHit> {
+        prose_scan(path, &query_terms(query), &TimeWindow::default())
+    }
+
+    fn assistant_line(text: &str, stamp: Option<&str>) -> String {
+        let ts = stamp.map(|s| format!(r#""timestamp":"{s}","#)).unwrap_or_default();
+        format!(
+            r#"{{"type":"assistant",{ts}"message":{{"role":"assistant","content":[{{"type":"text","text":"{text}"}}]}}}}"#
+        )
+    }
+
+    #[test]
+    fn every_term_must_land_in_one_message() {
+        let dir = tmp_dir();
+        let together = write(
+            &dir,
+            "together.jsonl",
+            &[&assistant_line("les identifiants supabase sont dans .env", None)],
+        );
+        let scattered = write(
+            &dir,
+            "scattered.jsonl",
+            &[
+                &assistant_line("passe-moi les identifiants", None),
+                &assistant_line("le bug vient de supabase", None),
+            ],
+        );
+        assert!(hit_of(&together, "identifiants supabase").is_some());
+        assert!(
+            hit_of(&scattered, "identifiants supabase").is_none(),
+            "terms spread across two messages must not match"
+        );
+        // Either term alone still finds the scattered session.
+        assert!(hit_of(&scattered, "supabase").is_some());
+    }
+
+    #[test]
+    fn counts_every_term_occurrence_in_the_prose() {
+        let dir = tmp_dir();
+        let p = write(
+            &dir,
+            "c.jsonl",
+            &[
+                &assistant_line("identifiants supabase créés", None),
+                // No "supabase" here, so this message is not a match on its own,
+                // but its occurrences still feed the badge.
+                &assistant_line("les identifiants ont expiré, identifiants perdus", None),
+            ],
+        );
+        let hit = hit_of(&p, "identifiants supabase").unwrap();
+        // 3 × "identifiants" + 1 × "supabase"
+        assert_eq!(hit.count, 4);
+    }
+
+    #[test]
+    fn the_window_judges_each_message_not_the_file() {
+        let dir = tmp_dir();
+        let p = write(
+            &dir,
+            "w.jsonl",
+            &[
+                &assistant_line("les identifiants admin", Some("2026-07-30T21:58:00.000Z")),
+                &assistant_line("identifiants du matin", Some("2026-07-31T09:12:00.000Z")),
+            ],
+        );
+        let evening = TimeWindow::parse(Some("2026-07-30T18:00:00"), Some("2026-07-31T06:00:00"));
+        let terms = query_terms("identifiants");
+        let hit = prose_scan(&p, &terms, &evening).unwrap();
+        assert_eq!(hit.count, 1, "only the evening message counts");
+        assert!(hit.excerpt.contains("admin"));
+
+        // An unstamped message cannot be vouched for, so a bounded window drops it.
+        let undated = write(&dir, "u.jsonl", &[&assistant_line("identifiants", None)]);
+        assert!(prose_scan(&undated, &terms, &evening).is_none());
+        assert!(prose_scan(&undated, &terms, &TimeWindow::default()).is_some());
+    }
+
+    #[test]
+    fn query_terms_dedupes_and_rejects_a_too_short_query() {
+        assert_eq!(query_terms("  Worktree   WORKTREE  merge "), ["worktree", "merge"]);
+        assert!(query_terms("a").is_empty());
+        assert!(query_terms("   ").is_empty());
+    }
+
+    /// The AI search writes a transcript per call, holding the query and the
+    /// passages it read. Listing those would let each search plant a session
+    /// that matches itself and outranks the real answer next time — observed on
+    /// the first run, before the exclusion existed.
+    /// `cargo test --lib -- --ignored --nocapture ai_workspace_stays_out`.
+    #[test]
+    #[ignore]
+    fn ai_workspace_stays_out() {
+        let ws = crate::ai_search::workspace_dir().expect("workspace");
+        let on_disk = std::fs::read_dir(&ws)
+            .map(|_| ())
+            .and_then(|_| {
+                let root = projects_root().unwrap();
+                Ok(transcript_paths(&root)
+                    .into_iter()
+                    .filter(|p| {
+                        std::fs::read_to_string(p)
+                            .map(|s| s.contains(&ws.to_string_lossy().replace('\\', "\\\\")))
+                            .unwrap_or(false)
+                    })
+                    .count())
+            })
+            .unwrap_or(0);
+        let listed = scan(&SessionIndex::default());
+        let leaked = listed.iter().filter(|s| is_ai_workspace(&s.cwd)).count();
+        println!("{on_disk} transcripts ecrits par la recherche IA · {leaked} listes");
+        assert!(on_disk > 0, "run real_plan_call first, or there is nothing to prove");
+        assert_eq!(leaked, 0, "the AI search's own transcripts reached the list");
     }
 
     /// Manual diagnostic against the real `~/.claude/projects` (machine-

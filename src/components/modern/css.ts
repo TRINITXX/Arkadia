@@ -67,8 +67,16 @@ export const MODERN_CSS = `
 /* Off-screen blocks skip layout/paint entirely (their height is estimated),
    so a huge conversation costs only what's visible. */
 .modern-block { content-visibility: auto; contain-intrinsic-size: auto 90px; }
+/* The block outline marks WHICH messages hold matches — readable while
+   scrolling, when a few coloured letters are not. The ranges below mark the
+   words themselves. Both are wanted; they answer different questions. */
 .modern-match { outline: 1.5px solid rgba(250,204,21,0.4); outline-offset: -1px; }
 .modern-match-current { outline: 2px solid #facc15; outline-offset: -1px; }
+/* Painted through CSS.highlights, so the markdown and the syntax colouring
+   underneath are left completely untouched. Only a handful of properties are
+   allowed on ::highlight(); background and color are among them. */
+::highlight(arkadia-match) { background: rgba(250,204,21,0.32); color: #fff8dc; }
+::highlight(arkadia-match-current) { background: #facc15; color: #1c1917; }
 .modern-search { position: absolute; top: 8px; left: 8px; right: 44px; z-index: 25; display: flex; align-items: center; gap: 3px; padding: 4px 6px; border-radius: 9px; background: #16161a; border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 6px 20px rgba(0,0,0,.5); }
 .modern-search input { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: #e8e8ee; font-size: 12.5px; }
 .modern-search .count { font-size: 11px; color: #8a8a93; padding: 0 4px; white-space: nowrap; }

@@ -3,6 +3,7 @@ import {
   baseName,
   filterByMeta,
   formatWhen,
+  groupByProject,
   groupByRecency,
   mergeSearchResults,
   resolveProjectTarget,
@@ -78,8 +79,8 @@ describe("mergeSearchResults", () => {
       all,
       [all[0]],
       [
-        { id: "a", excerpt: "…worktree…" },
-        { id: "c", excerpt: "…le worktree est nettoyé…" },
+        { id: "a", excerpt: "…worktree…", count: 3 },
+        { id: "c", excerpt: "…le worktree est nettoyé…", count: 7 },
       ],
     );
     expect(merged.map((x) => x.id)).toEqual(["a", "c"]);
@@ -88,20 +89,38 @@ describe("mergeSearchResults", () => {
     expect(merged[1].excerpt).toBe("…le worktree est nettoyé…");
   });
 
+  it("gives a title match its badge when the content scan found occurrences too", () => {
+    const merged = mergeSearchResults(
+      all,
+      [all[0]],
+      [{ id: "a", excerpt: "…worktree…", count: 12 }],
+    );
+    expect(merged[0].count).toBe(12);
+  });
+
+  it("leaves the badge off a title match the content scan never saw", () => {
+    const merged = mergeSearchResults(all, [all[1]], []);
+    expect(merged[0].count).toBeUndefined();
+  });
+
   it("preserves recency order among content matches", () => {
     const merged = mergeSearchResults(
       all,
       [],
       [
-        { id: "c", excerpt: "x" },
-        { id: "b", excerpt: "y" },
+        { id: "c", excerpt: "x", count: 1 },
+        { id: "b", excerpt: "y", count: 1 },
       ],
     );
     expect(merged.map((x) => x.id)).toEqual(["b", "c"]);
   });
 
   it("ignores hits for sessions absent from the listing", () => {
-    const merged = mergeSearchResults(all, [], [{ id: "ghost", excerpt: "x" }]);
+    const merged = mergeSearchResults(
+      all,
+      [],
+      [{ id: "ghost", excerpt: "x", count: 4 }],
+    );
     expect(merged).toHaveLength(0);
   });
 });
@@ -209,6 +228,95 @@ describe("resolveProjectTarget", () => {
       name: "b",
       path: "C:\\a\\b",
     });
+  });
+});
+
+describe("groupByProject", () => {
+  const ark: Project = {
+    ...p("ark", "Arkadia", "C:\\Users\\T\\Desktop\\Claude Desktop\\Arkadia"),
+    color: "#38bdf8",
+  };
+  const vtc = p("vtc", "VTC-Planner", "C:\\Users\\T\\Desktop\\VTC-Planner");
+  const projects = [ark, vtc];
+
+  it("pulls subfolders and worktrees under their parent project", () => {
+    const groups = groupByProject(
+      [
+        s("a", "root", "C:\\Users\\T\\Desktop\\Claude Desktop\\Arkadia", NOW),
+        s(
+          "b",
+          "rust side",
+          "C:\\Users\\T\\Desktop\\Claude Desktop\\Arkadia\\src-tauri",
+          NOW - 1000,
+        ),
+        s(
+          "c",
+          "worktree",
+          "C:\\Users\\T\\Desktop\\VTC-Planner\\.claude-worktrees\\dynamic-riding-marble",
+          NOW - 2000,
+        ),
+      ],
+      projects,
+    );
+    expect(groups.map((g) => [g.key, g.sessions.map((x) => x.id)])).toEqual([
+      ["ark", ["a", "b"]],
+      ["vtc", ["c"]],
+    ]);
+  });
+
+  it("takes the name and colour from the sidepanel project", () => {
+    const [group] = groupByProject(
+      [s("a", "t", "C:\\Users\\T\\Desktop\\Claude Desktop\\Arkadia", NOW)],
+      projects,
+    );
+    expect(group.name).toBe("Arkadia");
+    expect(group.color).toBe("#38bdf8");
+    expect(group.path).toBe(ark.path);
+  });
+
+  it("gives a folder with no project its own colourless section", () => {
+    const [group] = groupByProject(
+      [s("a", "t", "C:\\Users\\T\\Desktop\\Qwitt", NOW)],
+      projects,
+    );
+    expect(group.name).toBe("Qwitt");
+    expect(group.color).toBeNull();
+    expect(group.path).toBe("C:\\Users\\T\\Desktop\\Qwitt");
+  });
+
+  it("folds one folder's sessions together whatever the path's casing", () => {
+    const groups = groupByProject(
+      [
+        s("a", "t", "C:\\Users\\T\\Desktop\\Qwitt", NOW),
+        s("b", "t", "c:\\users\\t\\desktop\\qwitt", NOW - 1000),
+        s("c", "t", "C:\\Users\\T\\Desktop\\Autre", NOW - 2000),
+      ],
+      projects,
+    );
+    expect(groups.map((g) => g.sessions.length)).toEqual([2, 1]);
+  });
+
+  it("orders sections, and sessions inside them, newest first", () => {
+    // Input order deliberately scrambled: the search merge floats title
+    // matches above older content matches, and grouping must not inherit that.
+    const groups = groupByProject(
+      [
+        s("old-ark", "t", ark.path, NOW - 5 * DAY),
+        s("fresh-vtc", "t", vtc.path, NOW),
+        s("fresh-ark", "t", ark.path, NOW - 1000),
+      ],
+      projects,
+    );
+    expect(groups.map((g) => g.key)).toEqual(["vtc", "ark"]);
+    expect(groups[1].sessions.map((x) => x.id)).toEqual([
+      "fresh-ark",
+      "old-ark",
+    ]);
+    expect(groups[1].mtime).toBe(NOW - 1000);
+  });
+
+  it("returns nothing for an empty list", () => {
+    expect(groupByProject([], projects)).toEqual([]);
   });
 });
 
