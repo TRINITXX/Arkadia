@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   closestCenter,
   DndContext,
@@ -22,10 +23,15 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, ChevronRight, History } from "lucide-react";
-import { shortenPath } from "@/store";
 import { aggregate, isActive, type AgentStateValue } from "@/lib/agentState";
 import { sortActiveProjects } from "@/lib/activeOrder";
 import { stripStatusGlyph } from "@/lib/notifLabel";
+import {
+  nextSidebarSessionCount,
+  recentSessionsByProject,
+  toggleSidebarSessionProject,
+  type ClaudeSession,
+} from "@/lib/sessionsIndex";
 import type { Project, Tab, Workspace } from "@/types";
 import { AgentBadge } from "./AgentBadge";
 
@@ -58,6 +64,8 @@ interface SidepanelProps {
   onRestoreSession: (() => void) | null;
   /** Open the cross-project browser of past Claude sessions. */
   onOpenSessions: () => void;
+  /** Preview this transcript in the main terminal area. */
+  onOpenSession: (session: ClaudeSession) => void;
   /** Jump to a tab of any project from the "Active" list (activates both). */
   onActivateTab: (projectId: string, tabId: string) => void;
   tabs: Tab[];
@@ -228,6 +236,7 @@ export function Sidepanel({
   onReorderActive,
   onRestoreSession,
   onOpenSessions,
+  onOpenSession,
   onActivateTab,
   tabs,
   paneAgentStates,
@@ -236,6 +245,62 @@ export function Sidepanel({
 }: SidepanelProps) {
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null);
   const [view, setView] = useState<"active" | "inactive">("inactive");
+  const [indexedSessions, setIndexedSessions] = useState<ClaudeSession[]>([]);
+  const [openSessionProjectId, setOpenSessionProjectId] = useState<
+    string | null
+  >(null);
+  const [loadingSessionProjectId, setLoadingSessionProjectId] = useState<
+    string | null
+  >(null);
+  const sessionLoadSeq = useRef(0);
+  const [shownByProject, setShownByProject] = useState<Record<string, number>>(
+    {},
+  );
+
+  // Keep Inactive cheap: the session index is not touched until a project row
+  // is explicitly opened. A second click closes it; opening another project
+  // replaces it, so the default list always stays compact.
+  const activateInactiveProject = (projectId: string) => {
+    const nextOpenId = toggleSidebarSessionProject(
+      openSessionProjectId,
+      projectId,
+    );
+    setOpenSessionProjectId(nextOpenId);
+    onActivate(projectId);
+
+    const seq = ++sessionLoadSeq.current;
+    if (!nextOpenId) {
+      setLoadingSessionProjectId(null);
+      return;
+    }
+
+    setShownByProject((prev) => ({ ...prev, [projectId]: 2 }));
+    setLoadingSessionProjectId(projectId);
+    void invoke<ClaudeSession[]>("list_claude_sessions")
+      .then((sessions) => {
+        if (seq === sessionLoadSeq.current) setIndexedSessions(sessions);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (seq === sessionLoadSeq.current) setLoadingSessionProjectId(null);
+      });
+  };
+
+  const sessionsByProject = useMemo(
+    () => recentSessionsByProject(indexedSessions, projects),
+    [indexedSessions, projects],
+  );
+
+  const showMoreProjectSessions = (projectId: string, total: number) => {
+    setShownByProject((prev) => ({
+      ...prev,
+      [projectId]: nextSidebarSessionCount(prev[projectId] ?? 2, total),
+    }));
+  };
+
+  const showLessProjectSessions = (projectId: string) => {
+    setShownByProject((prev) => ({ ...prev, [projectId]: 2 }));
+  };
 
   // Auto-switch to the Active tab when a project transitions inactive→active
   // (the user typed in one of its terminals). Never switches back the other way.
@@ -418,10 +483,17 @@ export function Sidepanel({
         }
         onWorkspaceContextMenu={onWorkspaceContextMenu}
         onProjectContextMenu={onProjectContextMenu}
-        onActivate={onActivate}
+        onActivate={activateInactiveProject}
         activeProjectId={activeProjectId}
         tabs={tabs}
         paneAgentStates={paneAgentStates}
+        sessionsByProject={sessionsByProject}
+        shownByProject={shownByProject}
+        onShowMoreProjectSessions={showMoreProjectSessions}
+        onShowLessProjectSessions={showLessProjectSessions}
+        onOpenSession={onOpenSession}
+        openSessionProjectId={openSessionProjectId}
+        loadingSessionProjectId={loadingSessionProjectId}
       />
     );
   };
@@ -431,9 +503,21 @@ export function Sidepanel({
       <DraggableProjectRow
         project={project}
         active={project.id === activeProjectId}
-        onActivate={onActivate}
+        onActivate={activateInactiveProject}
         onContextMenu={onProjectContextMenu}
         agentStates={projectAgentStates(project.id, tabs, paneAgentStates)}
+        sessions={sessionsByProject[project.id] ?? []}
+        shown={shownByProject[project.id] ?? 2}
+        onShowMore={() =>
+          showMoreProjectSessions(
+            project.id,
+            sessionsByProject[project.id]?.length ?? 0,
+          )
+        }
+        onShowLess={() => showLessProjectSessions(project.id)}
+        onOpenSession={onOpenSession}
+        sessionsVisible={openSessionProjectId === project.id}
+        sessionsLoading={loadingSessionProjectId === project.id}
       />
     </div>
   );
@@ -628,6 +712,13 @@ interface WorkspaceSectionProps {
   activeProjectId: string | null;
   tabs: Tab[];
   paneAgentStates: Record<string, AgentStateValue>;
+  sessionsByProject: Record<string, ClaudeSession[]>;
+  shownByProject: Record<string, number>;
+  onShowMoreProjectSessions: (projectId: string, total: number) => void;
+  onShowLessProjectSessions: (projectId: string) => void;
+  onOpenSession: (session: ClaudeSession) => void;
+  openSessionProjectId: string | null;
+  loadingSessionProjectId: string | null;
 }
 
 function WorkspaceSection({
@@ -644,6 +735,13 @@ function WorkspaceSection({
   activeProjectId,
   tabs,
   paneAgentStates,
+  sessionsByProject,
+  shownByProject,
+  onShowMoreProjectSessions,
+  onShowLessProjectSessions,
+  onOpenSession,
+  openSessionProjectId,
+  loadingSessionProjectId,
 }: WorkspaceSectionProps) {
   const isGrouped = !!workspace;
   return (
@@ -676,6 +774,18 @@ function WorkspaceSection({
                 onActivate={onActivate}
                 onContextMenu={onProjectContextMenu}
                 agentStates={projectAgentStates(p.id, tabs, paneAgentStates)}
+                sessions={sessionsByProject[p.id] ?? []}
+                shown={shownByProject[p.id] ?? 2}
+                onShowMore={() =>
+                  onShowMoreProjectSessions(
+                    p.id,
+                    sessionsByProject[p.id]?.length ?? 0,
+                  )
+                }
+                onShowLess={() => onShowLessProjectSessions(p.id)}
+                onOpenSession={onOpenSession}
+                sessionsVisible={openSessionProjectId === p.id}
+                sessionsLoading={loadingSessionProjectId === p.id}
               />
             </Fragment>
           ))}
@@ -822,6 +932,13 @@ interface DraggableProjectRowProps {
   /** Middle-click closes all of the project's tabs. Only wired in the Active list. */
   onCloseTabs?: (projectId: string) => void;
   agentStates: TabAgentState[];
+  sessions?: ClaudeSession[];
+  shown?: number;
+  onShowMore?: () => void;
+  onShowLess?: () => void;
+  onOpenSession?: (session: ClaudeSession) => void;
+  sessionsVisible?: boolean;
+  sessionsLoading?: boolean;
 }
 
 function DraggableProjectRow({
@@ -830,6 +947,13 @@ function DraggableProjectRow({
   onActivate,
   onContextMenu,
   agentStates,
+  sessions = [],
+  shown = 2,
+  onShowMore,
+  onShowLess,
+  onOpenSession,
+  sessionsVisible = false,
+  sessionsLoading = false,
 }: DraggableProjectRowProps) {
   const dragData: ProjectDragData = {
     type: "project",
@@ -868,7 +992,7 @@ function DraggableProjectRow({
         e.preventDefault();
         onContextMenu(project, e.clientX, e.clientY);
       }}
-      className={`group mx-1.5 mb-0.5 flex cursor-pointer items-start gap-2 rounded border-l-[3px] py-1.5 pl-2 pr-2 ${
+      className={`group mx-1.5 mb-0.5 cursor-pointer rounded border-l-[3px] py-1.5 pl-2 pr-2 ${
         active ? "bg-zinc-800 text-zinc-100" : "text-zinc-300 hover:bg-zinc-900"
       } ${isDragging ? "opacity-40" : ""} ${
         isOver ? "ring-1 ring-zinc-600" : ""
@@ -876,11 +1000,54 @@ function DraggableProjectRow({
       title={project.path}
     >
       <ProjectRowContent project={project} agentStates={agentStates} />
+      {sessionsVisible && (
+        <div className="mt-1 flex flex-col gap-0.5 pb-0.5 pl-1">
+          {sessionsLoading ? (
+            <div className="px-1.5 py-1 text-[10px] text-zinc-600">
+              Chargement…
+            </div>
+          ) : sessions.length === 0 ? (
+            <div className="px-1.5 py-1 text-[10px] text-zinc-600">
+              Aucune discussion
+            </div>
+          ) : (
+            sessions.slice(0, shown).map((session) => (
+              <button
+                key={session.id}
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenSession?.(session);
+                }}
+                title={session.title}
+                className="truncate rounded px-1.5 py-1 text-left text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+              >
+                {session.title}
+              </button>
+            ))
+          )}
+          {!sessionsLoading && sessions.length > 2 && (
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (shown < sessions.length) onShowMore?.();
+                else onShowLess?.();
+              }}
+              className="self-start rounded px-1.5 py-0.5 text-[10px] text-sky-500 hover:bg-zinc-800 hover:text-sky-300"
+            >
+              {shown < sessions.length ? "Voir plus" : "Voir moins"}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-/** Inner content shared by the draggable (Inactive) and static (Active) rows. */
+/** Project header used by the draggable Inactive rows. */
 function ProjectRowContent({
   project,
   agentStates,
@@ -889,12 +1056,9 @@ function ProjectRowContent({
   agentStates: TabAgentState[];
 }) {
   return (
-    <>
+    <div className="flex items-start gap-2">
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm">{project.name}</div>
-        <div className="truncate font-mono text-[10px] text-zinc-500">
-          {shortenPath(project.path)}
-        </div>
       </div>
       {agentStates.length > 0 && (
         <span className="mt-1 flex max-w-[84px] shrink-0 flex-wrap items-center justify-end gap-1">
@@ -903,7 +1067,7 @@ function ProjectRowContent({
           ))}
         </span>
       )}
-    </>
+    </div>
   );
 }
 

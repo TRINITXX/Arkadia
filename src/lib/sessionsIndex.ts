@@ -199,6 +199,43 @@ export function groupByProject(
   return out;
 }
 
+/**
+ * Sessions available under each existing sidepanel project, newest first.
+ * Unmatched folders are intentionally omitted: the Inactive sidebar only has
+ * rows for projects that already exist, unlike the full sessions overlay.
+ */
+export function recentSessionsByProject(
+  sessions: ClaudeSession[],
+  projects: Project[],
+): Record<string, ClaudeSession[]> {
+  const out: Record<string, ClaudeSession[]> = {};
+  for (const session of sessions) {
+    const target = resolveProjectTarget(projects, session.cwd);
+    if (target.kind !== "existing") continue;
+    (out[target.projectId] ??= []).push(session);
+  }
+  for (const projectSessions of Object.values(out)) {
+    projectSessions.sort((a, b) => b.mtime - a.mtime);
+  }
+  return out;
+}
+
+/** Initial sidebar page and every subsequent "Voir plus" step are two rows. */
+export function nextSidebarSessionCount(
+  shown: number | undefined,
+  total: number,
+): number {
+  return Math.min(total, (shown ?? 0) + 2);
+}
+
+/** One Inactive project may expose its discussions at a time. */
+export function toggleSidebarSessionProject(
+  openProjectId: string | null,
+  clickedProjectId: string,
+): string | null {
+  return openProjectId === clickedProjectId ? null : clickedProjectId;
+}
+
 const MONTHS = [
   "janv.",
   "févr.",

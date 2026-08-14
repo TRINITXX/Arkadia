@@ -6,6 +6,9 @@ import {
   groupByProject,
   groupByRecency,
   mergeSearchResults,
+  nextSidebarSessionCount,
+  toggleSidebarSessionProject,
+  recentSessionsByProject,
   resolveProjectTarget,
   type ClaudeSession,
 } from "./sessionsIndex";
@@ -317,6 +320,66 @@ describe("groupByProject", () => {
 
   it("returns nothing for an empty list", () => {
     expect(groupByProject([], projects)).toEqual([]);
+  });
+});
+
+describe("recentSessionsByProject", () => {
+  const ark = p(
+    "ark",
+    "Arkadia",
+    "C:\\Users\\T\\Desktop\\Claude Desktop\\Arkadia",
+  );
+  const vtc = p("vtc", "VTC-Planner", "C:\\Users\\T\\Desktop\\VTC-Planner");
+
+  it("attaches subfolder sessions to their project and orders them newest first", () => {
+    const byProject = recentSessionsByProject(
+      [
+        s("ark-old", "old", ark.path, NOW - DAY),
+        s("vtc", "vtc", vtc.path, NOW - 2000),
+        s("ark-new", "new", `${ark.path}\\src-tauri`, NOW),
+      ],
+      [ark, vtc],
+    );
+
+    expect(byProject.ark.map((session) => session.id)).toEqual([
+      "ark-new",
+      "ark-old",
+    ]);
+    expect(byProject.vtc.map((session) => session.id)).toEqual(["vtc"]);
+  });
+
+  it("does not expose sessions that belong to no sidebar project", () => {
+    const byProject = recentSessionsByProject(
+      [s("other", "other", "C:\\Users\\T\\Desktop\\Other", NOW)],
+      [ark],
+    );
+
+    expect(byProject).toEqual({});
+  });
+});
+
+describe("nextSidebarSessionCount", () => {
+  it("starts at two and reveals two more discussions per request", () => {
+    expect(nextSidebarSessionCount(undefined, 7)).toBe(2);
+    expect(nextSidebarSessionCount(2, 7)).toBe(4);
+    expect(nextSidebarSessionCount(4, 7)).toBe(6);
+  });
+
+  it("never exceeds the number of available discussions", () => {
+    expect(nextSidebarSessionCount(6, 7)).toBe(7);
+    expect(nextSidebarSessionCount(undefined, 1)).toBe(1);
+    expect(nextSidebarSessionCount(undefined, 0)).toBe(0);
+  });
+});
+
+describe("toggleSidebarSessionProject", () => {
+  it("opens the clicked project and keeps every other project closed", () => {
+    expect(toggleSidebarSessionProject(null, "arkadia")).toBe("arkadia");
+    expect(toggleSidebarSessionProject("arkadia", "vtc")).toBe("vtc");
+  });
+
+  it("closes the project when its header is clicked again", () => {
+    expect(toggleSidebarSessionProject("arkadia", "arkadia")).toBeNull();
   });
 });
 

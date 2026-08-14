@@ -21,6 +21,7 @@ import { SessionsOverlay } from "@/components/SessionsOverlay";
 import { Toaster, useToasts } from "@/components/Toaster";
 import {
   DEFAULT_CONV_FILTERS,
+  ModernConversationView,
   type ConvFilters,
 } from "@/components/ModernConversationView";
 import { loadState, saveState, newProjectId, newWorkspaceId } from "@/store";
@@ -675,6 +676,11 @@ export function App() {
   // ─── Sessions overlay (browse / resume any past conversation) ──
 
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  // Read-only transcript shown directly in the main terminal area. Its message
+  // body is parsed only after the user clicks a lightweight sidebar index row.
+  const [sessionPreview, setSessionPreview] = useState<ClaudeSession | null>(
+    null,
+  );
   // Claude session id → the pane already running it, so the overlay offers
   // "go to the tab" instead of starting a second Claude on one transcript.
   const [livePaneBySession, setLivePaneBySession] = useState<
@@ -1569,7 +1575,10 @@ export function App() {
           projects={projects}
           workspaces={workspaces}
           activeProjectId={activeProjectId}
-          onActivate={setActiveProjectId}
+          onActivate={(projectId) => {
+            setSessionPreview(null);
+            setActiveProjectId(projectId);
+          }}
           onAdd={() => setAddOpen(true)}
           onAddWorkspace={() => setWorkspaceDialog({ mode: "create" })}
           onProjectContextMenu={(project, x, y) =>
@@ -1592,7 +1601,11 @@ export function App() {
               : null
           }
           onOpenSessions={() => setSessionsOpen(true)}
-          onActivateTab={onActivateProjectTab}
+          onOpenSession={setSessionPreview}
+          onActivateTab={(projectId, tabId) => {
+            setSessionPreview(null);
+            onActivateProjectTab(projectId, tabId);
+          }}
           tabs={tabs}
           paneAgentStates={effectivePaneStates}
           activeTabIdByProject={activeTabIdByProject}
@@ -1605,7 +1618,10 @@ export function App() {
           tabs={visibleTabs}
           activeTabId={activeTabId}
           bellTabs={bellTabs}
-          onActivate={onActivateTab}
+          onActivate={(tabId) => {
+            setSessionPreview(null);
+            onActivateTab(tabId);
+          }}
           onClose={closeTab}
           onSpawn={() => activeProject && spawnTabFor(activeProject)}
           onReorder={onReorderTabs}
@@ -1642,14 +1658,57 @@ export function App() {
         )}
 
         <div ref={paneHostRef} className="relative flex flex-1 overflow-hidden">
-          {!activeProject && (
+          {sessionPreview ? (
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="flex shrink-0 items-center gap-3 border-b border-zinc-800 px-4 py-2.5">
+                <div className="min-w-0 flex-1 truncate text-sm text-zinc-100">
+                  {sessionPreview.title}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const session = sessionPreview;
+                    setSessionPreview(null);
+                    void resumeSession(session);
+                  }}
+                  className="shrink-0 rounded border border-sky-600/50 bg-sky-600/15 px-2.5 py-1.5 text-xs text-sky-300 hover:bg-sky-600/25"
+                >
+                  Reprendre
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSessionPreview(null)}
+                  className="shrink-0 rounded border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                >
+                  Fermer
+                </button>
+              </div>
+              <div className="min-h-0 flex-1">
+                <ModernConversationView
+                  key={sessionPreview.id}
+                  paneId={null}
+                  transcript={{
+                    sessionId: sessionPreview.id,
+                    path: sessionPreview.path,
+                  }}
+                  filters={convFilters}
+                  onFiltersChange={setConvFilters}
+                  density={toolDensity}
+                  palette={palette}
+                  backgroundCss={background.glass ? background.css : undefined}
+                  isActive
+                  onToast={pushToast}
+                />
+              </div>
+            </div>
+          ) : !activeProject ? (
             <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
               {projects.length === 0
                 ? "no project yet — add one in the sidepanel"
                 : "select a project in the sidepanel"}
             </div>
-          )}
-          {activeProject && visibleTabs.length === 0 && (
+          ) : null}
+          {!sessionPreview && activeProject && visibleTabs.length === 0 && (
             <div className="flex flex-1 flex-col items-center justify-center gap-1 text-sm text-zinc-500">
               <span>no tab open</span>
               <span className="text-xs text-zinc-600">
@@ -1657,7 +1716,8 @@ export function App() {
               </span>
             </div>
           )}
-          {activeProject &&
+          {!sessionPreview &&
+            activeProject &&
             visibleTabs.map((tab) => (
               <div
                 key={tab.id}
@@ -1693,14 +1753,17 @@ export function App() {
                 />
               </div>
             ))}
-          {activeProject && promptBarEnabled && activePaneIsClaude && (
-            <FloatingPromptBar
-              hostRef={paneHostRef}
-              buttons={promptButtons}
-              onRunAction={runPromptAction}
-              background={palette.bg}
-            />
-          )}
+          {!sessionPreview &&
+            activeProject &&
+            promptBarEnabled &&
+            activePaneIsClaude && (
+              <FloatingPromptBar
+                hostRef={paneHostRef}
+                buttons={promptButtons}
+                onRunAction={runPromptAction}
+                background={palette.bg}
+              />
+            )}
         </div>
       </div>
 
