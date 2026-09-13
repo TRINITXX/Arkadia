@@ -46,6 +46,24 @@ pub(crate) fn wire_main_window(app: &tauri::AppHandle, window: &tauri::WebviewWi
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // A panic on the main thread ends the process with nothing in the log
+    // (stderr is a sink in a windows-subsystem build); write it there first.
+    std::panic::set_hook(Box::new(|info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("?").to_string();
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        popup::log_line(&format!("[panic] thread={name} at {loc}: {msg}"));
+    }));
+
     let registry: Arc<AgentRegistry> = Arc::new(AgentRegistry::default());
 
     // `mut` is only used by the release-only single-instance block below.
@@ -193,16 +211,32 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
+        .run(|app, event| match &event {
             // `code: None` is the runtime noticing that its last window is
             // gone. During a watchdog rebuild that is expected and transient;
             // letting it through quits the app right after "window rebuilt".
-            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event {
-                if app.state::<uiwatch::UiHealth>().is_rebuilding() {
-                    popup::log_line("[uiwatch] exit requested with no window - refused, rebuild in progress");
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                let rebuilding = app.state::<uiwatch::UiHealth>().is_rebuilding();
+                popup::log_line(&format!(
+                    "[run] exit requested (code={code:?}, rebuilding={rebuilding})"
+                ));
+                if code.is_none() && rebuilding {
+                    popup::log_line("[run] exit refused - rebuild in progress");
                     api.prevent_exit();
                 }
             }
+            tauri::RunEvent::Exit => popup::log_line("[run] exiting"),
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } => popup::log_line(&format!("[run] window destroyed: {label}")),
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { .. },
+                ..
+            } => popup::log_line(&format!("[run] close requested: {label}")),
+            _ => {}
         });
 }
 

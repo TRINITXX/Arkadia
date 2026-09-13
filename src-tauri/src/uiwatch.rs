@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Manager, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// Silence after which the webview is declared wedged. Well above any legitimate
 /// stall: a busy frame or a long GC pause costs tens of milliseconds, not seconds.
@@ -37,6 +37,10 @@ const LABEL_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Attempt count meaning "stopped trying until the page comes back on its own".
 const GAVE_UP: u32 = u32::MAX;
+
+/// Hidden placeholder window kept alive across the rebuild so the runtime
+/// never sees an empty window map (which it answers with an exit request).
+const KEEPALIVE_LABEL: &str = "uiwatch-keepalive";
 
 /// What the watchdog should do next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,15 +236,44 @@ fn rebuild_main_window(app: &AppHandle) {
     let health = app.state::<UiHealth>();
     health.set_rebuilding(true);
 
+    // Belt and braces with the flag above: a hidden window that exists for the
+    // whole rebuild, so there is never a moment with zero windows at all.
+    match WebviewWindowBuilder::new(
+        app,
+        KEEPALIVE_LABEL,
+        WebviewUrl::External("about:blank".parse().expect("static url")),
+    )
+    .visible(false)
+    .skip_taskbar(true)
+    .inner_size(1.0, 1.0)
+    .build()
+    {
+        Ok(_) => crate::popup::log_line("[uiwatch] keepalive window up"),
+        Err(e) => crate::popup::log_line(&format!(
+            "[uiwatch] keepalive window failed: {e} - continuing without it"
+        )),
+    }
+
+    let t0 = Instant::now();
     if let Some(old) = app.get_webview_window("main") {
-        let _ = old.destroy();
+        match old.destroy() {
+            Ok(()) => crate::popup::log_line("[uiwatch] destroy posted for 'main'"),
+            Err(e) => crate::popup::log_line(&format!("[uiwatch] destroy failed: {e}")),
+        }
+    } else {
+        crate::popup::log_line("[uiwatch] 'main' already gone before destroy");
     }
 
     // `destroy` only posts the teardown to the event loop; the label stays taken
     // until that runs. Building right away fails with "a webview with label
     // `main` already exists" — which is exactly what happened on the first real
     // wedge this watchdog caught.
-    if !wait_for_label_release(app, "main", LABEL_RELEASE_TIMEOUT) {
+    if wait_for_label_release(app, "main", LABEL_RELEASE_TIMEOUT) {
+        crate::popup::log_line(&format!(
+            "[uiwatch] 'main' released after {}ms",
+            t0.elapsed().as_millis()
+        ));
+    } else {
         crate::popup::log_line("[uiwatch] 'main' still registered, rebuilding anyway");
     }
 
@@ -249,10 +282,14 @@ fn rebuild_main_window(app: &AppHandle) {
     for attempt in 1..=2 {
         match WebviewWindowBuilder::from_config(app, &cfg).and_then(|b| b.build()) {
             Ok(win) => {
-                health.set_rebuilding(false);
                 crate::wire_main_window(app, &win);
                 let _ = win.set_focus();
-                crate::popup::log_line("[uiwatch] window rebuilt");
+                crate::popup::log_line(&format!(
+                    "[uiwatch] window rebuilt ({}ms since destroy)",
+                    t0.elapsed().as_millis()
+                ));
+                health.set_rebuilding(false);
+                close_keepalive(app);
                 return;
             }
             Err(e) => {
@@ -264,7 +301,14 @@ fn rebuild_main_window(app: &AppHandle) {
         }
     }
     health.set_rebuilding(false);
+    close_keepalive(app);
     crate::popup::log_line("[uiwatch] could not rebuild the window - app left without one");
+}
+
+fn close_keepalive(app: &AppHandle) {
+    if let Some(k) = app.get_webview_window(KEEPALIVE_LABEL) {
+        let _ = k.close();
+    }
 }
 
 /// Polls until `label` is free, or the timeout expires. Returns whether it was
