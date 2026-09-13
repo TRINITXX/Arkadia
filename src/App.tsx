@@ -49,6 +49,7 @@ import {
   materializeTree,
   type SessionSnapshot,
 } from "@/lib/sessionSnapshot";
+import { planReattach } from "@/lib/paneReattach";
 import {
   COMPACT_TERMINAL_FONT_SIZE,
   DEFAULT_BACKGROUND_ID,
@@ -357,12 +358,25 @@ export function App() {
     };
   }, [activePaneIdOfActiveTab]);
 
+  // ─── Liveness ───────────────────────────────────────────────────
+
+  // Proof of life for the Rust watchdog. When the WebGPU renderer deadlocks the
+  // GPU channel this timer stops firing along with the rest of the main thread,
+  // which is precisely the signal it waits for to repair the window from
+  // outside — nothing in here could do it (see src-tauri/src/uiwatch.rs).
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void invoke("ui_heartbeat").catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
   // ─── Persistence ────────────────────────────────────────────────
 
   useEffect(() => {
     let cancelled = false;
     loadState()
-      .then((state) => {
+      .then(async (state) => {
         if (cancelled) return;
         setProjects(state.projects);
         setWorkspaces(state.workspaces);
@@ -387,7 +401,49 @@ export function App() {
         setSessionsGrouping(state.sessionsGrouping);
         setSidepanelOpen(state.sidepanelOpen);
         setScrollbackLines(state.scrollbackLines);
-        setLastSession(state.sessionSnapshot);
+
+        // The Rust side outlives a webview reload — the freeze watchdog forces
+        // one — and pane ids ARE its session ids, so the tabs are rebuilt on
+        // the PTYs still running: scrollback and inferior processes come back
+        // untouched, and no session is left orphaned emitting frames nobody
+        // reads. After a real relaunch the list is empty and the snapshot falls
+        // through to the manual "restore" button, unchanged.
+        const liveIds = await invoke<string[]>("list_live_panes").catch(
+          () => [] as string[],
+        );
+        if (cancelled) return;
+        const plan = planReattach(state.sessionSnapshot, liveIds);
+        if (plan.tabs.length > 0) {
+          const rebuilt: Tab[] = [];
+          const activeByProject: Record<string, string> = {};
+          const claude = new Set<string>();
+          const touched = new Set<string>();
+          for (const t of plan.tabs) {
+            const tabId = newTabId();
+            const panes: Record<string, PaneState> = {};
+            for (const pane of t.panes) {
+              paneToTab.current.set(pane.id, tabId);
+              panes[pane.id] = pane;
+            }
+            rebuilt.push({
+              id: tabId,
+              projectId: t.projectId,
+              tree: t.tree,
+              activePaneId: t.activePaneId,
+              panes,
+            });
+            activeByProject[t.projectId] = tabId;
+            for (const id of t.claudePaneIds) claude.add(id);
+            touched.add(t.projectId);
+          }
+          setTabs(rebuilt);
+          setActiveTabIdByProject((prev) => ({ ...prev, ...activeByProject }));
+          setClaudePaneIds((prev) => new Set([...prev, ...claude]));
+          // These projects were in use a second ago: keep them in the sidebar
+          // "Active" list without waiting for a fresh keystroke.
+          setActiveInputProjectIds((prev) => new Set([...prev, ...touched]));
+        }
+        setLastSession(plan.leftover);
         setLoaded(true);
       })
       .catch((e) => {

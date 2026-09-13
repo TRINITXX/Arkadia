@@ -28,3 +28,6 @@ src-tauri/target/
 
 # Visual brainstorming companion (mockups)
 .superpowers/
+
+# Secondary cargo target dir used for verification builds
+target-verify/

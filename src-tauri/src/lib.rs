@@ -13,6 +13,7 @@ mod screenshots;
 mod sessions;
 mod terminal;
 pub mod terminal_state;
+mod uiwatch;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,10 +24,25 @@ use fonts::get_font_data;
 use screenshots::save_screenshot;
 use tauri::{Emitter, Manager};
 use terminal::{
-    close_terminal, get_text_range, list_message_markers, navigate_message, request_render,
-    resize_terminal, scroll_reply_to_top, scroll_terminal, search_terminal, send_input,
-    send_mouse_event, set_scrollback_cap, spawn_terminal, SessionMap,
+    close_terminal, get_text_range, list_live_panes, list_message_markers, navigate_message,
+    request_render, resize_terminal, scroll_reply_to_top, scroll_terminal, search_terminal,
+    send_input, send_mouse_event, set_scrollback_cap, spawn_terminal, SessionMap,
 };
+
+/// Window-level wiring that must be re-applied every time the main window is
+/// created — the freeze watchdog rebuilds it from scratch (see `uiwatch`), and
+/// a rebuilt window would otherwise lose these handlers.
+pub(crate) fn wire_main_window(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    let _ = window.maximize();
+    // When the user alt-tabs back to Arkadia, dismiss any pending background
+    // notification — they're now looking at the app.
+    let ah = app.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Focused(true) = event {
+            crate::popup::dismiss_all(&ah);
+        }
+    });
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -70,20 +86,13 @@ pub fn run() {
         .manage(ai_search::AiSearchState::default())
         .manage(registry.clone())
         .manage(popup::PopupQueue::default())
+        .manage(uiwatch::UiHealth::default())
         .setup({
             let registry = registry.clone();
             move |app| {
                 let app_handle = app.handle().clone();
                 if let Some(window) = app_handle.get_webview_window("main") {
-                    let _ = window.maximize();
-                    // When the user alt-tabs back to Arkadia, dismiss any pending
-                    // background notification — they're now looking at the app.
-                    let ah = app_handle.clone();
-                    window.on_window_event(move |event| {
-                        if let tauri::WindowEvent::Focused(true) = event {
-                            crate::popup::dismiss_all(&ah);
-                        }
-                    });
+                    wire_main_window(&app_handle, &window);
                 }
 
                 // Background-notification popup: watch the hook signal dir and
@@ -98,6 +107,9 @@ pub fn run() {
                         }
                     });
                 }
+                // Nothing inside a wedged webview can repair it, so the
+                // watchdog lives out here (see `uiwatch`).
+                uiwatch::spawn_watchdog(app.handle().clone());
                 // Transcript-image cache housekeeping, off the setup path.
                 std::thread::spawn(|| conversation::prune_imgcache(30));
                 let claude_root = dirs::home_dir()
@@ -136,6 +148,8 @@ pub fn run() {
             resize_terminal,
             set_scrollback_cap,
             request_render,
+            list_live_panes,
+            uiwatch::ui_heartbeat,
             close_terminal,
             scroll_terminal,
             scroll_reply_to_top,
@@ -177,8 +191,19 @@ pub fn run() {
             popup::popup_dismiss,
             popup::popup_open_in_main,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // `code: None` is the runtime noticing that its last window is
+            // gone. During a watchdog rebuild that is expected and transient;
+            // letting it through quits the app right after "window rebuilt".
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event {
+                if app.state::<uiwatch::UiHealth>().is_rebuilding() {
+                    popup::log_line("[uiwatch] exit requested with no window - refused, rebuild in progress");
+                    api.prevent_exit();
+                }
+            }
+        });
 }
 
 #[derive(serde::Serialize, Clone)]

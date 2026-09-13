@@ -9,7 +9,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use termwiz::color::ColorAttribute;
@@ -469,9 +469,18 @@ pub fn spawn_terminal(
     let flush_scroll = scroll_offset.clone();
     let flush_session_id = session_id.clone();
     let flush_app = app.clone();
+    // Grabbed once here rather than looked up on every 16 ms tick.
+    let flush_wedged = app.state::<crate::uiwatch::UiHealth>().wedged_flag();
     thread::spawn(move || {
         while !flush_stop.load(Ordering::Acquire) {
             thread::sleep(FRAME_INTERVAL);
+            // A wedged webview never drains its event queue, so emitting into
+            // it only grows the backlog — measured at +7 MB/s in the renderer
+            // until the app was killed. `dirty` is deliberately left set: the
+            // first frame after recovery then carries the whole screen.
+            if flush_wedged.load(Ordering::Acquire) {
+                continue;
+            }
             if flush_dirty.swap(false, Ordering::AcqRel) {
                 emit_render(&flush_app, &flush_session_id, &flush_term, &flush_scroll);
             }
@@ -836,6 +845,15 @@ pub fn request_render(
         .ok_or_else(|| format!("unknown session {session_id}"))?;
     emit_render(&app, &session_id, &session.term, &session.scroll_offset);
     Ok(())
+}
+
+/// Session ids of every PTY still alive in this process. The webview can be
+/// reloaded without the Rust side restarting (crash recovery), and pane ids are
+/// stable across that reload — so the frontend re-attaches to these terminals,
+/// scrollback included, instead of spawning fresh ones and orphaning them.
+#[tauri::command]
+pub fn list_live_panes(state: State<'_, SessionMap>) -> Vec<String> {
+    state.sessions.lock().keys().cloned().collect()
 }
 
 #[tauri::command]
