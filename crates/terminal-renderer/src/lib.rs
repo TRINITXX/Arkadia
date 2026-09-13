@@ -10,6 +10,7 @@ mod payload;
 mod pipeline;
 
 use serde_wasm_bindgen::from_value;
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -29,6 +30,93 @@ const ATLAS_SIZE_F: f32 = 1024.0;
 #[wasm_bindgen(start)]
 pub fn _start() {
     console_error_panic_hook::set_once();
+}
+
+/// The one GPU context of the page, shared by every pane.
+///
+/// Each pane used to own its own instance, adapter and device, created on
+/// mount and torn down on unmount — so a project switch (all tabs of the old
+/// project unmount, the new one's mount) or the watchdog's window rebuild
+/// destroyed and created several devices within a second. Every freeze
+/// caught so far sat right after such a burst, with the page main thread and
+/// the GPU process both idle. Device teardown in the GPU process waits for
+/// the queue to go idle; one device that is never destroyed keeps that path
+/// out of the picture entirely. Panes only own a surface (their canvas), an
+/// atlas and a pipeline.
+#[derive(Clone)]
+struct SharedGpu {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    lost: Arc<AtomicBool>,
+}
+
+thread_local! {
+    static SHARED_GPU: RefCell<Option<SharedGpu>> = const { RefCell::new(None) };
+}
+
+/// Returns the page's GPU context, creating it on first use or after the
+/// previous one was lost. Callers are expected to serialise first-time
+/// creation (the JS side queues `Renderer.new` calls) so concurrent mounts do
+/// not each request their own device.
+async fn shared_gpu() -> Result<SharedGpu, JsValue> {
+    if let Some(gpu) = SHARED_GPU.with(|c| c.borrow().clone()) {
+        if !gpu.lost.load(Ordering::Acquire) {
+            return Ok(gpu);
+        }
+        web_sys::console::warn_1(&JsValue::from_str(
+            "[arkadia] shared WebGPU device was lost - creating a new one",
+        ));
+    }
+
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::BROWSER_WEBGPU;
+    let instance = wgpu::Instance::new(desc);
+
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::None,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        })
+        .await
+        .map_err(|e| JsValue::from_str(&format!("request_adapter: {e}")))?;
+
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("arkadia-device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                .using_resolution(adapter.limits()),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+        })
+        .await
+        .map_err(|e| JsValue::from_str(&format!("request_device: {e}")))?;
+
+    let lost = Arc::new(AtomicBool::new(false));
+    {
+        let lost = lost.clone();
+        device.set_device_lost_callback(move |reason, msg| {
+            web_sys::console::warn_1(&JsValue::from_str(&format!(
+                "[arkadia] WebGPU device lost ({reason:?}): {msg}"
+            )));
+            lost.store(true, Ordering::Release);
+        });
+    }
+
+    let gpu = SharedGpu {
+        instance,
+        adapter,
+        device,
+        queue,
+        lost,
+    };
+    SHARED_GPU.with(|c| *c.borrow_mut() = Some(gpu.clone()));
+    web_sys::console::log_1(&JsValue::from_str("[arkadia] shared WebGPU device ready"));
+    Ok(gpu)
 }
 
 #[wasm_bindgen]
@@ -112,46 +200,17 @@ impl Renderer {
         canvas.set_width(width);
         canvas.set_height(height);
 
-        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        desc.backends = wgpu::Backends::BROWSER_WEBGPU;
-        let instance = wgpu::Instance::new(desc);
+        let SharedGpu {
+            instance,
+            adapter,
+            device,
+            queue,
+            lost,
+        } = shared_gpu().await?;
 
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
             .map_err(|e| JsValue::from_str(&format!("create_surface: {e}")))?;
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .map_err(|e| JsValue::from_str(&format!("request_adapter: {e}")))?;
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("arkadia-device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                memory_hints: wgpu::MemoryHints::Performance,
-                trace: wgpu::Trace::Off,
-            })
-            .await
-            .map_err(|e| JsValue::from_str(&format!("request_device: {e}")))?;
-
-        let lost = Arc::new(AtomicBool::new(false));
-        {
-            let lost = lost.clone();
-            device.set_device_lost_callback(move |reason, msg| {
-                web_sys::console::warn_1(&JsValue::from_str(&format!(
-                    "[arkadia] WebGPU device lost ({reason:?}): {msg}"
-                )));
-                lost.store(true, Ordering::Release);
-            });
-        }
 
         let caps = surface.get_capabilities(&adapter);
         let format = caps

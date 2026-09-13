@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   _resetPresenterForTests,
+  queueRendererCreate,
   registerPresenter,
   unregisterPresenter,
   type Presentable,
@@ -95,5 +96,26 @@ describe("gpuPresenter", () => {
     expect(lost).toBe(1);
     expect(r.presents).toBe(0);
     expect(raf.scheduled).toBe(0);
+  });
+
+  it("creates renderers one after another, even when one creation fails", async () => {
+    const order: string[] = [];
+    const slow = queueRendererCreate(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      order.push("a");
+      return "a";
+    });
+    const failing = queueRendererCreate(async () => {
+      order.push("b");
+      throw new Error("no gpu");
+    });
+    const after = queueRendererCreate(async () => {
+      order.push("c");
+      return "c";
+    });
+    await expect(slow).resolves.toBe("a");
+    await expect(failing).rejects.toThrow("no gpu");
+    await expect(after).resolves.toBe("c");
+    expect(order).toEqual(["a", "b", "c"]);
   });
 });

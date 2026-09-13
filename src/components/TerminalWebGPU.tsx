@@ -7,7 +7,11 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { Renderer } from "@renderer/terminal_renderer.js";
 import { ensureWasmReady, paletteToWasm } from "@/lib/wasmRenderer";
-import { registerPresenter, unregisterPresenter } from "@/lib/gpuPresenter";
+import {
+  queueRendererCreate,
+  registerPresenter,
+  unregisterPresenter,
+} from "@/lib/gpuPresenter";
 import { measureCellSize } from "@/lib/cellSize";
 import { keyEventToBytes } from "@/lib/keymap";
 import { getFrame, usePaneFrame } from "@/lib/frameStore";
@@ -746,7 +750,7 @@ export function TerminalWebGPU({
       const canvas = canvasRef.current;
       if (!canvas) return;
       try {
-        const renderer = await Renderer.new(canvas);
+        const renderer = await queueRendererCreate(() => Renderer.new(canvas));
         if (cancelled) {
           renderer.free();
           return;

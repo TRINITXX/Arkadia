@@ -74,3 +74,18 @@ export function _resetPresenterForTests(s: RafLike): void {
   rafId = null;
   scheduler = s;
 }
+
+// ─── Renderer creation, one at a time ─────────────────────────────────────
+//
+// All panes share one GPU device (see `shared_gpu` in the wasm crate). The
+// first `Renderer.new` creates it; the others must wait for that rather than
+// each request their own. Serialising also spreads a burst of mounts (project
+// switch, window rebuild) over successive frames instead of one big one.
+let createChain: Promise<unknown> = Promise.resolve();
+
+/** Runs `create` after every previously queued creation has settled. */
+export function queueRendererCreate<T>(create: () => Promise<T>): Promise<T> {
+  const run = createChain.then(create, create);
+  createChain = run.catch(() => undefined);
+  return run;
+}
