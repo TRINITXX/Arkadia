@@ -31,3 +31,6 @@ src-tauri/target/
 
 # Secondary cargo target dir used for verification builds
 target-verify/
+
+# Playwright MCP session artifacts
+.playwright-mcp/

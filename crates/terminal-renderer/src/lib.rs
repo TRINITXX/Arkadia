@@ -10,6 +10,9 @@ mod payload;
 mod pipeline;
 
 use serde_wasm_bindgen::from_value;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
@@ -53,6 +56,13 @@ pub struct Renderer {
     selection_color: [f32; 4],
     last_payload: Option<RenderPayload>,
     focused: bool,
+    /// Instances changed since the last present. Every mutation only marks
+    /// this; the actual swap-chain acquire + submit happens in `present`,
+    /// once per animation frame, driven from JS.
+    dirty: bool,
+    /// Set by the device-lost callback; the JS side polls `is_lost` and
+    /// rebuilds the renderer on a fresh device.
+    lost: Arc<AtomicBool>,
 }
 
 /// Selection endpoints. Columns are viewport columns; rows are *total* rows:
@@ -132,6 +142,17 @@ impl Renderer {
             .await
             .map_err(|e| JsValue::from_str(&format!("request_device: {e}")))?;
 
+        let lost = Arc::new(AtomicBool::new(false));
+        {
+            let lost = lost.clone();
+            device.set_device_lost_callback(move |reason, msg| {
+                web_sys::console::warn_1(&JsValue::from_str(&format!(
+                    "[arkadia] WebGPU device lost ({reason:?}): {msg}"
+                )));
+                lost.store(true, Ordering::Release);
+            });
+        }
+
         let caps = surface.get_capabilities(&adapter);
         let format = caps
             .formats
@@ -200,6 +221,8 @@ impl Renderer {
             selection_color,
             last_payload: None,
             focused: true,
+            dirty: false,
+            lost,
         })
     }
 
@@ -305,7 +328,8 @@ impl Renderer {
             from_value(payload).map_err(|e| JsValue::from_str(&format!("payload parse: {e}")))?;
         self.build_instances(&payload);
         self.last_payload = Some(payload);
-        self.render()
+        self.render();
+        Ok(())
     }
 
     /// Sets the selection. Rows are *total* rows (0 = oldest scrollback
@@ -338,7 +362,7 @@ impl Renderer {
         };
         self.build_instances(&payload);
         self.last_payload = Some(payload);
-        let _ = self.render();
+        self.render();
     }
 
     fn build_instances(&mut self, payload: &RenderPayload) {
@@ -460,7 +484,34 @@ impl Renderer {
         self.pipeline.update_uniforms(&self.queue, &uniforms);
     }
 
-    pub fn render(&mut self) -> Result<(), JsValue> {
+    /// Marks the frame as needing a present. Nothing touches the swap chain
+    /// here: acquiring a surface texture from arbitrary tasks (a PTY frame, a
+    /// mousemove, a selection change) lets the page run ahead of the
+    /// compositor, and the WebGPU canvas model only promises one presented
+    /// texture per animation frame. `present` is called from a single
+    /// requestAnimationFrame loop on the JS side.
+    fn render(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Whether `present` has something to draw.
+    pub fn needs_present(&self) -> bool {
+        self.dirty && !self.lost.load(Ordering::Acquire)
+    }
+
+    /// Whether the GPU device went away. The renderer is unusable from then
+    /// on; the caller frees it and builds a new one.
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
+    }
+
+    /// Acquires the swap-chain texture, submits the frame and presents it.
+    /// Call once per animation frame at most; a no-op when nothing changed.
+    pub fn present(&mut self) -> Result<(), JsValue> {
+        if !self.needs_present() {
+            return Ok(());
+        }
+        self.dirty = false;
         if !self.instances.is_empty() {
             self.pipeline
                 .write_instances(&self.device, &self.queue, &self.instances);
@@ -470,12 +521,14 @@ impl Renderer {
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
+                self.dirty = true; // draw it on the next frame instead
                 return Ok(());
             }
             wgpu::CurrentSurfaceTexture::Timeout
             | wgpu::CurrentSurfaceTexture::Occluded
             | wgpu::CurrentSurfaceTexture::Lost
             | wgpu::CurrentSurfaceTexture::Validation => {
+                self.dirty = true;
                 return Ok(());
             }
         };

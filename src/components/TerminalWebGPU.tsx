@@ -7,6 +7,7 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { Renderer } from "@renderer/terminal_renderer.js";
 import { ensureWasmReady, paletteToWasm } from "@/lib/wasmRenderer";
+import { registerPresenter, unregisterPresenter } from "@/lib/gpuPresenter";
 import { measureCellSize } from "@/lib/cellSize";
 import { keyEventToBytes } from "@/lib/keymap";
 import { getFrame, usePaneFrame } from "@/lib/frameStore";
@@ -558,6 +559,9 @@ export function TerminalWebGPU({
   const rendererRef = useRef<Renderer | null>(null);
   const readyRef = useRef(false);
   const [rendererVersion, setRendererVersion] = useState(0);
+  // Bumped when the GPU device is lost: re-runs the creation effect below so
+  // the pane comes back on a fresh device instead of staying blank for good.
+  const [gpuGeneration, setGpuGeneration] = useState(0);
   const focusedRef = useRef(false);
   const [scrollbarVisible, setScrollbarVisible] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -749,6 +753,7 @@ export function TerminalWebGPU({
         }
         rendererRef.current = renderer;
         readyRef.current = true;
+        registerPresenter(renderer, () => setGpuGeneration((g) => g + 1));
         renderer.set_palette(paletteToWasm(palette));
         const dpr = window.devicePixelRatio || 1;
         // Rasterize at the device-pixel size so the atlas glyphs match the
@@ -793,11 +798,12 @@ export function TerminalWebGPU({
     return () => {
       cancelled = true;
       readyRef.current = false;
+      if (rendererRef.current) unregisterPresenter(rendererRef.current);
       rendererRef.current?.free();
       rendererRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane.id]);
+  }, [pane.id, gpuGeneration]);
 
   // ─── 2. Palette change ──────────────────────────────────────────
   useEffect(() => {
