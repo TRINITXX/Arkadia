@@ -12,7 +12,7 @@ import {
 } from "@/components/modern/ImageThumb";
 import { highlightHtml, langForPath } from "@/components/modern/highlight";
 import { toolIcon } from "@/components/modern/toolIcons";
-import { findImagePaths } from "@/lib/imagePaths";
+import { toolImages } from "@/lib/imageGallery";
 import type { ConvBlock } from "@/components/ModernConversationView";
 import type { ToolDensity } from "@/types";
 
@@ -256,6 +256,8 @@ interface ToolCardProps {
   block: ConvBlock;
   density: ToolDensity;
   showResults: boolean;
+  /** The session's working directory, for relative image paths. */
+  baseDir?: string | null;
   onOpen: (content: LightboxContent) => void;
   onToast?: ToastFn;
 }
@@ -264,6 +266,7 @@ export const ToolCard = memo(function ToolCard({
   block,
   density,
   showResults,
+  baseDir,
   onOpen,
   onToast,
 }: ToolCardProps) {
@@ -271,7 +274,6 @@ export const ToolCard = memo(function ToolCard({
   const input = useMemo(() => parseInput(block.tool_input), [block.tool_input]);
   const summary = toolSummary(input);
   const output = showResults ? (block.tool_output ?? "") : "";
-  const outputImages = showResults ? (block.tool_output_images ?? []) : [];
   const name = block.tool_name ?? "tool";
   const stat = toolStat(name, input);
   const Icon = toolIcon(name);
@@ -282,18 +284,11 @@ export const ToolCard = memo(function ToolCard({
   // The header path (Read/Grep on a file…) opens with the OS default app.
   const headerPath = clickablePath(summary);
 
-  // On-disk image paths mentioned in the input/output (source c): only when
-  // the transcript itself carried no images for this call.
-  const pathThumbs = useMemo(() => {
-    if (outputImages.length > 0) return [];
-    const candidates = new Set<string>();
-    for (const key of ["file_path", "path"]) {
-      const v = str(input, key);
-      if (v) for (const p of findImagePaths(v, 1)) candidates.add(p);
-    }
-    if (output) for (const p of findImagePaths(output)) candidates.add(p);
-    return [...candidates].slice(0, 4).map((path) => ({ path }));
-  }, [input, output, outputImages.length]);
+  // The tool_result's images, else on-disk image paths from input/output.
+  const images = useMemo(
+    () => toolImages(block, showResults, baseDir),
+    [block, showResults, baseDir],
+  );
 
   return (
     <div className="modern-tool">
@@ -336,25 +331,14 @@ export const ToolCard = memo(function ToolCard({
               onOpen={onOpen}
               onToast={onToast}
             />
-            {(output.length > 0 ||
-              outputImages.length > 0 ||
-              pathThumbs.length > 0) && (
+            {(output.length > 0 || images.length > 0) && (
               <div
                 className="modern-tool-out"
                 style={{ marginTop: 8, paddingTop: 6 }}
               >
                 <span className="lbl">résultat</span>
                 {output.length > 0 && <pre>{output}</pre>}
-                <ThumbStrip
-                  paths={[
-                    ...outputImages.map((img) => ({
-                      path: img.path,
-                      mediaType: img.media_type,
-                    })),
-                    ...pathThumbs,
-                  ]}
-                  onOpen={onOpen}
-                />
+                <ThumbStrip paths={images} onOpen={onOpen} />
               </div>
             )}
           </div>

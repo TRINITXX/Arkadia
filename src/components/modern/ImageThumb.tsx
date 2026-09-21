@@ -4,8 +4,8 @@ import { fetchImageUrl } from "@/lib/imageUrlCache";
 
 /** What the lightbox displays. */
 export type LightboxContent =
-  | { kind: "image"; url: string }
-  | { kind: "svg"; html: string };
+  /** `path` places the image in the conversation gallery (arrow navigation). */
+  { kind: "image"; url: string; path?: string } | { kind: "svg"; html: string };
 
 interface ImageThumbProps {
   path: string;
@@ -67,7 +67,7 @@ export const ImageThumb = memo(function ImageThumb({
       title={path}
       onClick={(e) => {
         e.stopPropagation();
-        onOpen({ kind: "image", url });
+        onOpen({ kind: "image", url, path });
       }}
     />
   );

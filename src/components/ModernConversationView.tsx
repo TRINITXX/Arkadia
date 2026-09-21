@@ -24,6 +24,7 @@ import { HLJS_CSS, MODERN_CSS } from "@/components/modern/css";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
 import { Lightbox } from "@/components/modern/Lightbox";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
+import { galleryImages } from "@/lib/imageGallery";
 import { toolIcon } from "@/components/modern/toolIcons";
 import type { TerminalPalette, ToolDensity } from "@/types";
 import type { AgentStateValue } from "@/lib/agentState";
@@ -53,6 +54,8 @@ interface ConvDelta {
   base: number;
   blocks: ConvBlock[];
   sessionId?: string | null;
+  /** The session's working directory (latest `cwd` in the transcript). */
+  cwd?: string | null;
 }
 
 /** Which message types the modern view shows. */
@@ -113,6 +116,7 @@ export function useConversationBlocks(source: ConvSource | null) {
   // reset/rewritten, so consumers can tell "rebuilt history" from "append".
   const [generation, setGeneration] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [cwd, setCwd] = useState<string | null>(null);
   // What this client already holds (mirrors the backend cache contract).
   const genRef = useRef(0);
   const haveRef = useRef(0);
@@ -131,6 +135,7 @@ export function useConversationBlocks(source: ConvSource | null) {
       sessionRef.current = null;
       setBlocks([]);
       setError(null);
+      setCwd(null);
       return;
     }
     const run = () => {
@@ -149,6 +154,7 @@ export function useConversationBlocks(source: ConvSource | null) {
       })
         .then((d) => {
           sessionRef.current = d.sessionId ?? null;
+          setCwd(d.cwd ?? null);
           genRef.current = d.generation;
           setGeneration(d.generation);
           setBlocks((prev) => {
@@ -215,7 +221,7 @@ export function useConversationBlocks(source: ConvSource | null) {
     };
   }, [refresh, source]);
 
-  return { blocks, generation, error, refresh };
+  return { blocks, generation, error, cwd, refresh };
 }
 
 function FilterPopover({
@@ -382,7 +388,7 @@ export const ModernConversationView = memo(function ModernConversationView({
           : null,
     [transcript, paneId],
   );
-  const { blocks, generation } = useConversationBlocks(source);
+  const { blocks, generation, cwd } = useConversationBlocks(source);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
   // Every visible row's element, by visible index, for search scroll /
@@ -438,6 +444,17 @@ export const ModernConversationView = memo(function ModernConversationView({
     });
     return out;
   }, [blocks, filters]);
+
+  // What the lightbox arrows walk: every image currently on screen.
+  const gallery = useMemo(
+    () =>
+      galleryImages(
+        visible.map((v) => v.block),
+        filters.results,
+        cwd,
+      ),
+    [visible, filters.results, cwd],
+  );
 
   // The query in force: the overlay's field when it drives us, else our own.
   const activeQuery = search ? search.query : query;
@@ -728,6 +745,7 @@ export const ModernConversationView = memo(function ModernConversationView({
               speakerChange={i > 0 && visible[i - 1].block.kind !== b.kind}
               density={density}
               showResults={filters.results}
+              baseDir={cwd}
               matchState={
                 (matchSet.has(i)
                   ? i === currentVisIdx
@@ -758,7 +776,13 @@ export const ModernConversationView = memo(function ModernConversationView({
           {workingLabel}
         </div>
       )}
-      {lightbox && <Lightbox content={lightbox} onClose={closeLightbox} />}
+      {lightbox && (
+        <Lightbox
+          content={lightbox}
+          gallery={gallery}
+          onClose={closeLightbox}
+        />
+      )}
     </div>
   );
 });

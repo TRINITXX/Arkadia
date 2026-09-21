@@ -94,6 +94,12 @@ export const MODERN_CSS = `
 .modern-lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 12px 48px rgba(0,0,0,.6); animation: modern-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
 .modern-lightbox .svgbox { max-width: 92vw; max-height: 92vh; overflow: auto; background: #16161a; border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 18px; animation: modern-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
 .modern-lightbox .svgbox svg { max-width: none; }
+.modern-lightbox { overflow: hidden; touch-action: none; user-select: none; }
+.modern-lightbox .lb-zoom { display: flex; align-items: center; justify-content: center; transform-origin: center; }
+.modern-lightbox .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 50%; color: #e8e8ee; background: rgba(20,20,24,0.72); border: 1px solid rgba(255,255,255,0.14); cursor: pointer; transition: background .12s; }
+.modern-lightbox .lb-nav:hover { background: rgba(40,40,48,0.9); }
+.modern-lightbox .lb-nav.prev { left: 18px; }
+.modern-lightbox .lb-nav.next { right: 18px; }
 @keyframes modern-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes modern-pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
 

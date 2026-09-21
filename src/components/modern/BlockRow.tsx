@@ -16,6 +16,8 @@ interface BlockRowProps {
   speakerChange: boolean;
   density: ToolDensity;
   showResults: boolean;
+  /** The session's working directory, for relative image paths. */
+  baseDir?: string | null;
   matchState: MatchState;
   /** Play the entrance animation (blocks appended live, never initial load). */
   animate: boolean;
@@ -36,6 +38,7 @@ export const BlockRow = memo(function BlockRow({
   speakerChange,
   density,
   showResults,
+  baseDir,
   matchState,
   animate,
   registerEl,
@@ -63,11 +66,17 @@ export const BlockRow = memo(function BlockRow({
           block={block}
           density={density}
           showResults={showResults}
+          baseDir={baseDir}
           onOpen={onOpen}
           onToast={onToast}
         />
       ) : (
-        <MessageBubble block={block} onOpen={onOpen} onToast={onToast} />
+        <MessageBubble
+          block={block}
+          baseDir={baseDir}
+          onOpen={onOpen}
+          onToast={onToast}
+        />
       )}
     </div>
   );

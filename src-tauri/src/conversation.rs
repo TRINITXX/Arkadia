@@ -569,6 +569,9 @@ struct ConvCacheEntry {
     /// Smallest block index mutated (tool_result pairing) since the last
     /// delta was served; the next delta re-sends from here.
     dirty_floor: usize,
+    /// Working directory of the latest line that carried one — what relative
+    /// paths in the conversation (`.screenshots/x.png`) are relative to.
+    cwd: Option<String>,
 }
 
 impl ConvCacheEntry {
@@ -580,6 +583,7 @@ impl ConvCacheEntry {
             blocks: Vec::new(),
             tool_index: HashMap::new(),
             dirty_floor: 0,
+            cwd: None,
         }
     }
 }
@@ -599,6 +603,8 @@ pub struct ConvDelta {
     /// frontend can ignore `agent-state-changed` events for other sessions.
     #[serde(rename = "sessionId")]
     pub session_id: Option<String>,
+    /// The session's working directory, for resolving relative paths.
+    pub cwd: Option<String>,
 }
 
 /// Drops a pane's cached parse state (its terminal closed).
@@ -745,6 +751,11 @@ fn delta_from_path(
             let Ok(v) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
+            if let Some(cwd) = v.get("cwd").and_then(Value::as_str) {
+                if !cwd.is_empty() {
+                    entry.cwd = Some(cwd.to_string());
+                }
+            }
             append_blocks(
                 &v,
                 &mut entry.blocks,
@@ -771,6 +782,7 @@ fn delta_from_path(
             .file_stem()
             .and_then(|s| s.to_str())
             .map(|s| s.to_string()),
+        cwd: entry.cwd.clone(),
     })
 }
 
@@ -964,6 +976,24 @@ mod tests {
         assert_eq!(d2.base, 1);
         assert_eq!(d2.blocks.len(), 1);
         assert_eq!(d2.blocks[0].tool_output.as_deref(), Some("ok"));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn delta_reports_latest_cwd() {
+        let cache = ConvCacheMap::default();
+        let line = |cwd: &str| {
+            format!(
+                r#"{{"type":"user","cwd":"{cwd}","message":{{"role":"user","content":"salut"}}}}"#
+            )
+        };
+        let path = tmp_jsonl(
+            "cwd",
+            // JSON-escaped backslashes: the lines hold `C:\\a`, i.e. `C:\a`.
+            &format!("{}\n{}\n", line("C:\\\\a"), line("C:\\\\b")),
+        );
+        let d = delta_from_path(&cache, "p1", path.clone(), 0, 0).unwrap();
+        assert_eq!(d.cwd.as_deref(), Some("C:\\b"));
         std::fs::remove_file(&path).ok();
     }
 

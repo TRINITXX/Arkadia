@@ -8,7 +8,7 @@ import {
   ThumbStrip,
   type LightboxContent,
 } from "@/components/modern/ImageThumb";
-import { findImagePaths } from "@/lib/imagePaths";
+import { messageImages } from "@/lib/imageGallery";
 import { CLAUDE_TINT, USER_TINT, hexToRgba } from "@/lib/messageTint";
 import type { ConvBlock } from "@/components/ModernConversationView";
 
@@ -47,6 +47,8 @@ function CopyButton({ text }: { text: string }) {
 
 interface MessageBubbleProps {
   block: ConvBlock;
+  /** The session's working directory, for relative image paths. */
+  baseDir?: string | null;
   onOpen: (content: LightboxContent) => void;
   onToast?: ToastFn;
 }
@@ -54,6 +56,7 @@ interface MessageBubbleProps {
 /** A user / assistant / thinking bubble: role header, markdown body, images. */
 export const MessageBubble = memo(function MessageBubble({
   block,
+  baseDir,
   onOpen,
   onToast,
 }: MessageBubbleProps) {
@@ -61,15 +64,7 @@ export const MessageBubble = memo(function MessageBubble({
   const text = block.text ?? "";
 
   // Transcript images (pasted) + on-disk image paths mentioned in the text.
-  const thumbs = useMemo(() => {
-    const out: { path: string; mediaType?: string }[] = (
-      block.images ?? []
-    ).map((img) => ({ path: img.path, mediaType: img.media_type }));
-    if (out.length === 0 && text) {
-      for (const path of findImagePaths(text)) out.push({ path });
-    }
-    return out;
-  }, [block.images, text]);
+  const thumbs = useMemo(() => messageImages(block, baseDir), [block, baseDir]);
 
   return (
     <div
