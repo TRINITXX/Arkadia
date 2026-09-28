@@ -87,6 +87,15 @@ export const MODERN_CSS = `
    doesn't jump when the real image lands. */
 .modern-thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .modern-thumb { max-height: 240px; max-width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); cursor: zoom-in; display: block; }
+/* A path mentioned in prose, rendered as the image itself: caption (the file
+   name, click to expand the full path) above a bounded thumbnail. Inline-level
+   elements only — this lives inside a <p>/<li>. */
+.modern-inline-img { display: block; margin: 6px 0 10px; }
+.modern-inline-img .cap { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 10.5px; color: #8a8a93; cursor: pointer; }
+.modern-inline-img .cap:hover { color: #c9c9d2; text-decoration: underline; text-underline-offset: 2px; }
+.modern-inline-img img { display: block; margin-top: 3px; max-height: 260px; max-width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); cursor: zoom-in; }
+/* Before the bytes land (or when the file is gone): the path, as written. */
+.modern-inline-pending { word-break: break-all; }
 .modern-thumb-ph { display: flex; align-items: center; justify-content: center; width: 160px; height: 120px; border: 1px dashed rgba(255,255,255,0.16); border-radius: 8px; color: #6f6f78; }
 
 /* Lightbox (images + mermaid SVG zoom). */

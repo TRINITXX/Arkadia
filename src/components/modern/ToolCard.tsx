@@ -183,11 +183,13 @@ function HighlightedCode({
 function ToolInputView({
   name,
   input,
+  baseDir,
   onOpen,
   onToast,
 }: {
   name: string;
   input: Record<string, unknown>;
+  baseDir?: string | null;
   onOpen: (content: LightboxContent) => void;
   onToast?: ToastFn;
 }) {
@@ -236,6 +238,7 @@ function ToolInputView({
         <div className="reading-md">
           <MarkdownContent
             text={str(input, "plan") ?? ""}
+            baseDir={baseDir}
             onOpen={onOpen}
             onToast={onToast}
           />
@@ -328,6 +331,7 @@ export const ToolCard = memo(function ToolCard({
             <ToolInputView
               name={name}
               input={input}
+              baseDir={baseDir}
               onOpen={onOpen}
               onToast={onToast}
             />

@@ -62,6 +62,50 @@ export function findImagePaths(
   return out;
 }
 
+/** A run of text, or one image path mention (`path` = resolved, `text` = as written). */
+export interface PathSegment {
+  text: string;
+  path?: string;
+}
+
+/**
+ * `text` cut around the image paths it mentions, so a renderer can swap each
+ * mention for the image itself and leave the prose alone. Segments cover the
+ * whole input, in order; a text with no mention yields a single segment.
+ */
+export function splitImagePaths(
+  text: string,
+  baseDir?: string | null,
+): PathSegment[] {
+  const hits: { at: number; raw: string; path: string }[] = [];
+  for (const m of text.matchAll(IMG_PATH_RE)) {
+    hits.push({ at: m.index, raw: m[0], path: m[0] });
+  }
+  if (baseDir) {
+    for (const m of text.matchAll(REL_IMG_PATH_RE)) {
+      hits.push({
+        at: m.index,
+        raw: m[0],
+        path: resolveRelative(baseDir, m[0]),
+      });
+    }
+    hits.sort((a, b) => a.at - b.at);
+  }
+  const out: PathSegment[] = [];
+  let cursor = 0;
+  for (const hit of hits) {
+    // A relative match inside an absolute one (or the reverse) is already covered.
+    if (hit.at < cursor) continue;
+    if (hit.at > cursor) out.push({ text: text.slice(cursor, hit.at) });
+    out.push({ text: hit.raw, path: hit.path });
+    cursor = hit.at + hit.raw.length;
+  }
+  if (cursor < text.length || out.length === 0) {
+    out.push({ text: text.slice(cursor) });
+  }
+  return out;
+}
+
 /** `rel` joined onto `baseDir` with Windows separators; `./` is dropped. */
 export function resolveRelative(baseDir: string, rel: string): string {
   const base = baseDir.replace(/[\\/]+$/, "");

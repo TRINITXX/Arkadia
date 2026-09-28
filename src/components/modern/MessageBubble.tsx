@@ -8,7 +8,7 @@ import {
   ThumbStrip,
   type LightboxContent,
 } from "@/components/modern/ImageThumb";
-import { messageImages } from "@/lib/imageGallery";
+import { messageStripImages } from "@/lib/imageGallery";
 import { CLAUDE_TINT, USER_TINT, hexToRgba } from "@/lib/messageTint";
 import type { ConvBlock } from "@/components/ModernConversationView";
 
@@ -63,8 +63,12 @@ export const MessageBubble = memo(function MessageBubble({
   const role = ROLE[block.kind] ?? ROLE.assistant;
   const text = block.text ?? "";
 
-  // Transcript images (pasted) + on-disk image paths mentioned in the text.
-  const thumbs = useMemo(() => messageImages(block, baseDir), [block, baseDir]);
+  // Pasted images (and paths left verbatim in a fence): the other mentions
+  // render as images inside the markdown, where they are written.
+  const thumbs = useMemo(
+    () => messageStripImages(block, baseDir),
+    [block, baseDir],
+  );
 
   return (
     <div
@@ -93,7 +97,12 @@ export const MessageBubble = memo(function MessageBubble({
               : undefined
           }
         >
-          <MarkdownContent text={text} onOpen={onOpen} onToast={onToast} />
+          <MarkdownContent
+            text={text}
+            baseDir={baseDir}
+            onOpen={onOpen}
+            onToast={onToast}
+          />
         </div>
       )}
       <ThumbStrip paths={thumbs} onOpen={onOpen} />

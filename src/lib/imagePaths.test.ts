@@ -1,5 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { findImagePaths, isImagePath } from "./imagePaths";
+import { findImagePaths, isImagePath, splitImagePaths } from "./imagePaths";
+
+describe("splitImagePaths", () => {
+  it("cuts the prose around each mention, resolving relative ones", () => {
+    expect(
+      splitImagePaths("voir C:\\a\\x.png et .shots/y.png ok", "C:\\p"),
+    ).toEqual([
+      { text: "voir " },
+      { text: "C:\\a\\x.png", path: "C:\\a\\x.png" },
+      { text: " et " },
+      { text: ".shots/y.png", path: "C:\\p\\.shots\\y.png" },
+      { text: " ok" },
+    ]);
+  });
+
+  it("returns the text untouched when nothing matches", () => {
+    expect(splitImagePaths("rien ici")).toEqual([{ text: "rien ici" }]);
+  });
+
+  it("covers the whole input, mention first or last", () => {
+    const text = "C:\\a\\x.png suivi";
+    const segments = splitImagePaths(text);
+    expect(segments.map((s) => s.text).join("")).toBe(text);
+    expect(segments[0].path).toBe("C:\\a\\x.png");
+  });
+});
 
 describe("isImagePath", () => {
   it("accepts absolute Windows image paths", () => {

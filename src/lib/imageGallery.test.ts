@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { galleryImages, messageImages, toolImages } from "./imageGallery";
+import {
+  galleryImages,
+  messageImages,
+  messageStripImages,
+  toolImages,
+} from "./imageGallery";
+
+describe("messageStripImages", () => {
+  it("leaves out paths rendered inline, keeps those inside a fence", () => {
+    const text = "voir C:\\a\\x.png\n\n```\ncp C:\\a\\y.png .\n```\n";
+    expect(messageStripImages({ kind: "assistant", text })).toEqual([
+      { path: "C:\\a\\y.png" },
+    ]);
+  });
+
+  it("still shows pasted images", () => {
+    expect(
+      messageStripImages({
+        kind: "user",
+        text: "C:\\a\\x.png",
+        images: [{ path: "C:\\cache\\1.png", media_type: "image/png" }],
+      }),
+    ).toEqual([{ path: "C:\\cache\\1.png", mediaType: "image/png" }]);
+  });
+});
 
 describe("messageImages", () => {
   it("prefers pasted images over paths in the text", () => {

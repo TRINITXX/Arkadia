@@ -63,6 +63,35 @@ export function toolImages(
   return [...candidates].map((path) => ({ path }));
 }
 
+/**
+ * What a message's thumbnail strip still has to show, now that prose mentions
+ * render as images where they are written: the turn's pasted images, plus the
+ * paths that sit inside a fenced code block, which is left verbatim.
+ */
+export function messageStripImages(
+  block: ConvBlock,
+  baseDir?: string | null,
+): ImageRef[] {
+  const pasted = (block.images ?? []).map((img) => ({
+    path: img.path,
+    mediaType: img.media_type,
+  }));
+  if (pasted.length > 0 || !block.text) return pasted;
+  const inline = new Set(
+    findImagePaths(withoutFences(block.text), undefined, baseDir).map((p) =>
+      p.toLowerCase(),
+    ),
+  );
+  return findImagePaths(block.text, undefined, baseDir)
+    .filter((p) => !inline.has(p.toLowerCase()))
+    .map((path) => ({ path }));
+}
+
+/** `text` with its fenced code blocks removed (an unclosed fence is kept). */
+function withoutFences(text: string): string {
+  return text.replace(/^ *(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ *\1[^\n]*$/gm, "");
+}
+
 /** Every image of `blocks`, in reading order, each path once (first wins). */
 export function galleryImages(
   blocks: ConvBlock[],

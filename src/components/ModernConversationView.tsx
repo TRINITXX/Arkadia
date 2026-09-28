@@ -391,6 +391,8 @@ export const ModernConversationView = memo(function ModernConversationView({
   const { blocks, generation, cwd } = useConversationBlocks(source);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
+  // Last offset seen while on screen, restored when a hidden tab comes back.
+  const savedTopRef = useRef(0);
   // Every visible row's element, by visible index, for search scroll /
   // highlight / nav. Rows register via a stable ref callback (memoized
   // rows keep their registration; unmount clears it).
@@ -599,8 +601,10 @@ export const ModernConversationView = memo(function ModernConversationView({
 
   const onScroll = () => {
     const el = scrollRef.current;
-    if (!el) return;
+    // A hidden (display:none) view reports zero sizes: nothing to learn there.
+    if (!el || el.clientHeight === 0) return;
     atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    savedTopRef.current = el.scrollTop;
   };
 
   // Ctrl/Cmd+F opens search — but only on the active pane's view.
@@ -641,6 +645,28 @@ export const ModernConversationView = memo(function ModernConversationView({
   // No conversation for this pane (plain shell, or a Claude tab before its first
   // message) → render see-through so the real terminal stays visible and usable.
   const hasConversation = blocks.length > 0;
+
+  // An inactive tab is display:none, which throws the scroll offset away:
+  // coming back to it showed the top of the conversation. Put it back — at the
+  // bottom when it was following, else where it was left. The observer runs
+  // after layout and before paint, so the top never flashes.
+  const hasScroller = hasConversation && visible.length > 0;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    let wasHidden = el.clientHeight === 0;
+    const ro = new ResizeObserver(() => {
+      const hidden = el.clientHeight === 0;
+      if (wasHidden && !hidden) {
+        el.scrollTop = atBottomRef.current
+          ? el.scrollHeight
+          : savedTopRef.current;
+      }
+      wasHidden = hidden;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hasScroller]);
 
   // Live activity indicator, driven by Arkadia's agent state (reliable, unlike
   // scraping the terminal spinner): "busy" while Claude works (with the current
