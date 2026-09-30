@@ -6,6 +6,9 @@ export const MODERN_CSS = `
 .modern-msg-head { display: flex; align-items: center; gap: 6px; min-height: 18px; }
 .modern-msg-head .role-ico { display: flex; flex-shrink: 0; }
 .modern-msg-head .role-lbl { font-size: 10.5px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
+/* When the message was sent, right of the role label: dim enough to read as
+   metadata, never competing with the prose. */
+.modern-msg-head .role-time { font-size: 10px; color: #6f6f78; font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .modern-msg-body { margin-top: 4px; }
 
 .modern-tool { border: 1px solid rgba(56,189,248,0.35); border-radius: 9px; overflow: hidden; background: rgba(56,189,248,0.04); }

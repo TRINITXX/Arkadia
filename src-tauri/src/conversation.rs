@@ -286,6 +286,10 @@ pub struct ConvBlock {
     /// Images inside the paired tool_result (screenshots, image reads).
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub tool_output_images: Vec<ConvImage>,
+    /// ISO-8601 UTC instant of the transcript line this block came from, as
+    /// Claude Code wrote it; `None` for a line without a `timestamp`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ts: Option<String>,
 }
 
 impl ConvBlock {
@@ -298,6 +302,7 @@ impl ConvBlock {
             tool_output: None,
             images: Vec::new(),
             tool_output_images: Vec::new(),
+            ts: None,
         }
     }
 
@@ -310,6 +315,7 @@ impl ConvBlock {
             tool_output: None,
             images: Vec::new(),
             tool_output_images: Vec::new(),
+            ts: None,
         }
     }
 }
@@ -466,6 +472,13 @@ fn append_blocks(
     let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
         return;
     };
+    // Every block this line pushes is stamped with the line's instant, so the
+    // reading view can show when each message was sent.
+    let ts = v
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let first_pushed = out.len();
     match content {
         Value::String(s) => {
             if injected {
@@ -548,6 +561,11 @@ fn append_blocks(
             }
         }
         _ => {}
+    }
+    if let Some(ts) = ts {
+        for b in &mut out[first_pushed..] {
+            b.ts = Some(ts.clone());
+        }
     }
 }
 

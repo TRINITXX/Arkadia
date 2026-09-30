@@ -10,6 +10,7 @@ import {
 } from "@/components/modern/ImageThumb";
 import { messageStripImages } from "@/lib/imageGallery";
 import { CLAUDE_TINT, USER_TINT, hexToRgba } from "@/lib/messageTint";
+import { messageTime, messageTimeFull } from "@/lib/messageTime";
 import type { ConvBlock } from "@/components/ModernConversationView";
 
 const ROLE: Record<string, { tint: string; label: string; Icon: typeof User }> =
@@ -62,6 +63,7 @@ export const MessageBubble = memo(function MessageBubble({
 }: MessageBubbleProps) {
   const role = ROLE[block.kind] ?? ROLE.assistant;
   const text = block.text ?? "";
+  const sentAt = messageTime(block.ts);
 
   // Pasted images (and paths left verbatim in a fence): the other mentions
   // render as images inside the markdown, where they are written.
@@ -86,6 +88,14 @@ export const MessageBubble = memo(function MessageBubble({
         <span className="role-lbl" style={{ color: hexToRgba(role.tint, 0.9) }}>
           {role.label}
         </span>
+        {sentAt && (
+          <span
+            className="role-time"
+            title={messageTimeFull(block.ts) ?? undefined}
+          >
+            {sentAt}
+          </span>
+        )}
         <CopyButton text={text} />
       </div>
       {text && (

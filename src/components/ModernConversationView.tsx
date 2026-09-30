@@ -46,6 +46,8 @@ export interface ConvBlock {
   images?: ConvImage[];
   /** Images inside the paired tool_result (screenshots, image reads). */
   tool_output_images?: ConvImage[];
+  /** ISO-8601 UTC instant of the transcript line this block came from. */
+  ts?: string;
 }
 
 /** Incremental response: keep the first `base` blocks, append `blocks`. */
