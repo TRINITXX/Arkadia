@@ -544,37 +544,20 @@ export const ModernConversationView = memo(function ModernConversationView({
     if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [visible]);
 
-  // Where the view lands when it opens: the first Claude reply that follows
-  // your last message. Falls back to whatever comes right after it (Claude's
-  // prose filtered out), then to that message itself (no reply yet).
-  const landingIndex = useMemo(() => {
-    let lastUser = -1;
-    for (let i = visible.length - 1; i >= 0; i--) {
-      if (visible[i].block.kind === "user") {
-        lastUser = i;
-        break;
-      }
-    }
-    if (lastUser < 0) return -1;
-    for (let i = lastUser + 1; i < visible.length; i++) {
-      if (visible[i].block.kind === "assistant") return i;
-    }
-    return lastUser + 1 < visible.length ? lastUser + 1 : lastUser;
-  }, [visible]);
-
-  // Land there once, then hold the spot while the rows above keep sizing
-  // (images decoding, code highlighting): without that the transcript grows
-  // under the scroll and you get dropped in the middle of a message. Any
-  // wheel/drag from the user, or a second of quiet, releases the hold.
+  // The view opens at the bottom of the conversation. Land there once, then
+  // hold it while the rows keep sizing (images decoding, code highlighting):
+  // without that the transcript grows under the scroll and you get dropped
+  // above the end. Any wheel/drag from the user, or a second of quiet,
+  // releases the hold.
   // Which conversation we already landed on — swapping the source on this
   // instance (pane change, another session previewed) lands again.
   const landedRef = useRef<string | null>(null);
+  const hasRows = visible.length > 0;
   useLayoutEffect(() => {
     const key = sourceKey(source);
-    if (landedRef.current === key || landingIndex < 0) return;
+    if (landedRef.current === key || !hasRows) return;
     const el = scrollRef.current;
-    const row = rowEls.current.get(landingIndex);
-    if (!el || !row) return;
+    if (!el) return;
     landedRef.current = key;
     let timer = 0;
     const ro = new ResizeObserver(() => pin());
@@ -585,10 +568,8 @@ export const ModernConversationView = memo(function ModernConversationView({
       el.removeEventListener("pointerdown", release);
     };
     const pin = () => {
-      const max = Math.max(0, el.scrollHeight - el.clientHeight);
-      el.scrollTop = Math.min(Math.max(0, row.offsetTop - 8), max);
-      atBottomRef.current =
-        el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
       window.clearTimeout(timer);
       timer = window.setTimeout(release, 1000);
     };
@@ -597,7 +578,7 @@ export const ModernConversationView = memo(function ModernConversationView({
     el.addEventListener("wheel", release, { passive: true });
     el.addEventListener("pointerdown", release);
     return release;
-  }, [landingIndex, source]);
+  }, [hasRows, source]);
 
   const onScroll = () => {
     const el = scrollRef.current;

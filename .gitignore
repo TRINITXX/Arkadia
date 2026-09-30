@@ -34,3 +34,6 @@ target-verify/
 
 # Playwright MCP session artifacts
 .playwright-mcp/
+
+# Local screenshots / visual proofs
+.screenshots/

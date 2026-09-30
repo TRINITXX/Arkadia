@@ -90,12 +90,26 @@ export const MODERN_CSS = `
 /* A path mentioned in prose, rendered as the image itself: caption (the file
    name, click to expand the full path) above a bounded thumbnail. Inline-level
    elements only — this lives inside a <p>/<li>. */
-.modern-inline-img { display: block; margin: 6px 0 10px; }
-.modern-inline-img .cap { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 10.5px; color: #8a8a93; cursor: pointer; }
+.modern-inline-img { display: inline-block; max-width: 100%; margin: 4px 0 6px; vertical-align: top; }
+/* Zero width keeps the file name out of the shrink-to-fit width (the image
+   sets it, not the caption); the 100% minimum then stretches it back. */
+.modern-inline-img .cap { display: block; width: 0; min-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 10px; color: #8a8a93; cursor: pointer; }
 .modern-inline-img .cap:hover { color: #c9c9d2; text-decoration: underline; text-underline-offset: 2px; }
-.modern-inline-img img { display: block; margin-top: 3px; max-height: 260px; max-width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); cursor: zoom-in; }
+.modern-inline-img img { display: block; margin-top: 3px; max-height: 170px; max-width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); cursor: zoom-in; }
 /* Before the bytes land (or when the file is gone): the path, as written. */
 .modern-inline-pending { word-break: break-all; }
+
+/* A run of image mentions (a list of captures, stacked paragraphs) laid out as
+   one wrapping strip: a dozen screenshots then cost a few rows, not a dozen
+   screens of scrolling. */
+.modern-gallery { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; margin: 6px 0 10px; padding: 0; list-style: none; }
+.modern-gallery-cell { flex: 0 0 auto; max-width: 220px; margin: 0; font-size: 10.5px; line-height: 1.45; color: #9a9aa2; }
+/* In a strip the cell is only as wide as its thumbnail, so the file name wraps
+   over two lines instead of being cut after four characters, and whatever the
+   sentence added about that capture sits under it rather than beside it. */
+.modern-gallery-cell .modern-inline-img { display: block; margin: 0; }
+.modern-gallery-cell .modern-inline-img img { max-height: 150px; }
+.modern-gallery-cell .cap { white-space: normal; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .modern-thumb-ph { display: flex; align-items: center; justify-content: center; width: 160px; height: 120px; border: 1px dashed rgba(255,255,255,0.16); border-radius: 8px; color: #6f6f78; }
 
 /* Lightbox (images + mermaid SVG zoom). */

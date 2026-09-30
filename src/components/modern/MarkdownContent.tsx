@@ -1,12 +1,4 @@
-import {
-  Children,
-  Fragment,
-  isValidElement,
-  memo,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { isValidElement, memo, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { Check, Copy, SquareArrowOutUpRight } from "lucide-react";
@@ -18,13 +10,16 @@ import {
   InlineImage,
   type LightboxContent,
 } from "@/components/modern/ImageThumb";
+import {
+  IMAGE_LABEL_PROP,
+  IMAGE_PATH_PROP,
+  rehypeInlineImages,
+  type HastNode,
+} from "@/lib/rehypeInlineImages";
 import { splitImagePaths } from "@/lib/imagePaths";
 
 export type ToastFn = (level: "info" | "error", message: string) => void;
 
-// Only explicitly-tagged fences highlight; auto-detection would run on every
-// untagged block for little value.
-const REHYPE_PLUGINS = [[rehypeHighlight, { detect: false }]] as never[];
 const REMARK_PLUGINS = [remarkGfm];
 
 /**
@@ -85,29 +80,6 @@ export function openPath(path: string, onToast?: ToastFn) {
 }
 
 /**
- * Text children with every image path mention swapped for the image itself,
- * rendered where it was written. Other children (bold, links…) pass through.
- */
-function inlineImages(
-  children: React.ReactNode,
-  onOpen: (content: LightboxContent) => void,
-  baseDir?: string | null,
-): React.ReactNode {
-  return Children.map(children, (child) => {
-    if (typeof child !== "string") return child;
-    const segments = splitImagePaths(child, baseDir);
-    if (segments.length === 1 && !segments[0].path) return child;
-    return segments.map((seg, i) =>
-      seg.path ? (
-        <InlineImage key={i} path={seg.path} label={seg.text} onOpen={onOpen} />
-      ) : (
-        <Fragment key={i}>{seg.text}</Fragment>
-      ),
-    );
-  });
-}
-
-/**
  * The markdown component overrides, bound to the lightbox/toast callbacks:
  * external links open in the browser, fences get a copy button, ```mermaid
  * renders as a diagram, image paths render as images, and inline code that is
@@ -119,15 +91,23 @@ function buildComponents(
   baseDir?: string | null,
 ): Components {
   return {
-    p: ({ node: _node, children, ...rest }) => (
-      <p {...rest}>{inlineImages(children, onOpen, baseDir)}</p>
-    ),
-    li: ({ node: _node, children, ...rest }) => (
-      <li {...rest}>{inlineImages(children, onOpen, baseDir)}</li>
-    ),
-    td: ({ node: _node, children, ...rest }) => (
-      <td {...rest}>{inlineImages(children, onOpen, baseDir)}</td>
-    ),
+    // The marker the plugin above leaves behind. Every other span — the
+    // highlighter's code tokens — passes straight through.
+    span: ({ node, children, ...rest }) => {
+      const props = (node as HastNode | undefined)?.properties;
+      const path = props?.[IMAGE_PATH_PROP];
+      if (typeof path === "string") {
+        const label = props?.[IMAGE_LABEL_PROP];
+        return (
+          <InlineImage
+            path={path}
+            label={typeof label === "string" ? label : path}
+            onOpen={onOpen}
+          />
+        );
+      }
+      return <span {...rest}>{children}</span>;
+    },
     a: ({ href, children }) => (
       <a
         onClick={(e) => {
@@ -211,10 +191,20 @@ export const MarkdownContent = memo(function MarkdownContent({
     () => buildComponents(onOpen, onToast, baseDir),
     [onOpen, onToast, baseDir],
   );
+  // Only explicitly-tagged fences highlight; auto-detection would run on every
+  // untagged block for little value.
+  const rehypePlugins = useMemo(
+    () =>
+      [
+        [rehypeHighlight, { detect: false }],
+        [rehypeInlineImages, { source: text, baseDir }],
+      ] as never[],
+    [text, baseDir],
+  );
   return (
     <Markdown
       remarkPlugins={REMARK_PLUGINS}
-      rehypePlugins={REHYPE_PLUGINS}
+      rehypePlugins={rehypePlugins}
       components={components}
     >
       {text}
