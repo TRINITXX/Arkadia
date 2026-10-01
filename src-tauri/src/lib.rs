@@ -484,30 +484,93 @@ fn resolve_path_at(line: String, cwd: Option<String>, click: usize) -> Option<Re
     }
     pairs.sort_by_key(|&(s, e)| std::cmp::Reverse(e - s));
 
-    for (s, e) in pairs {
-        let sub = &chars[s..e];
-        if !sub.iter().any(|&c| c == '/' || c == '\\') {
-            continue; // not path-like
-        }
-        let (path_len, line_no, col_no) = strip_line_col(sub);
-        let path_part: String = sub[..path_len].iter().collect();
-        let path_part = path_part.trim();
-        if path_part.is_empty() {
-            continue;
-        }
-        let abs = resolve_against_cwd(path_part, cwd.as_deref());
-        let p = std::path::Path::new(&abs);
-        if p.exists() && !is_executable_ext(p) {
-            return Some(ResolvedPath {
-                start: s,
-                end: e,
-                abs_path: abs,
-                line: line_no,
-                col: col_no,
-            });
+    // 4. Second pass only when nothing matched as written: repair separators a
+    //    Markdown escape swallowed, so a path that really exists always wins.
+    for repair in [false, true] {
+        for &(s, e) in &pairs {
+            let sub = &chars[s..e];
+            if !sub.iter().any(|&c| c == '/' || c == '\\') {
+                continue; // not path-like
+            }
+            let (path_len, line_no, col_no) = strip_line_col(sub);
+            let path_part: String = sub[..path_len].iter().collect();
+            let path_part = path_part.trim();
+            if path_part.is_empty() {
+                continue;
+            }
+            let mut abs = resolve_against_cwd(path_part, cwd.as_deref());
+            if repair {
+                match restore_eaten_dot_separators(&abs) {
+                    Some(fixed) => abs = fixed,
+                    None => continue,
+                }
+            }
+            let p = std::path::Path::new(&abs);
+            if p.exists() && !is_executable_ext(p) {
+                return Some(ResolvedPath {
+                    start: s,
+                    end: e,
+                    abs_path: abs,
+                    line: line_no,
+                    col: col_no,
+                });
+            }
         }
     }
     None
+}
+
+/// Markdown renderers (Claude Code's included) read `\.` as an escaped dot and
+/// drop the backslash, so `C:\repo\.screenshots\x.mp4` is displayed as
+/// `C:\repo.screenshots\x.mp4`. Walks the absolute `abs` component by component
+/// and re-inserts a separator before a dot wherever that is the only way to
+/// reach an existing entry. `None` when no such spelling exists on disk.
+fn restore_eaten_dot_separators(abs: &str) -> Option<String> {
+    fn walk(prefix: &str, head: &str, rest: &[&str], sep: char) -> Option<String> {
+        // Split points: the whole component first, then before each inner dot.
+        let splits = std::iter::once(head.len())
+            .chain(head.match_indices('.').map(|(i, _)| i).filter(|&i| i > 0));
+        for i in splits {
+            let (dir, tail) = head.split_at(i);
+            let next = if prefix.ends_with(['\\', '/']) {
+                format!("{prefix}{dir}")
+            } else {
+                format!("{prefix}{sep}{dir}")
+            };
+            let p = std::path::Path::new(&next);
+            let found = if !tail.is_empty() {
+                p.is_dir().then(|| walk(&next, tail, rest, sep)).flatten()
+            } else if let Some((first, more)) = rest.split_first() {
+                p.is_dir().then(|| walk(&next, first, more, sep)).flatten()
+            } else {
+                p.exists().then_some(next)
+            };
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
+    }
+
+    let b = abs.as_bytes();
+    let root_len = if b.len() >= 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b[2] == b'\\' || b[2] == b'/')
+    {
+        3
+    } else if abs.starts_with('/') {
+        1
+    } else {
+        return None;
+    };
+    let sep = if abs.contains('\\') { '\\' } else { '/' };
+    let comps: Vec<&str> = abs[root_len..]
+        .split(['\\', '/'])
+        .filter(|c| !c.is_empty())
+        .collect();
+    let (first, more) = comps.split_first()?;
+    walk(&abs[..root_len], first, more, sep)
 }
 
 #[tauri::command]
@@ -686,6 +749,39 @@ mod tests {
         let r = r.expect("should resolve ~ path");
         // Compare as paths so a mixed `/` vs `\` separator doesn't fail on Windows.
         assert_eq!(std::path::Path::new(&r.abs_path), file.as_path());
+    }
+
+    #[test]
+    fn resolves_path_whose_dot_dir_separator_was_eaten_by_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("repo").join(".screenshots");
+        fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("video_v1.mp4");
+        fs::write(&file, "x").unwrap();
+        // `\.screenshots` rendered as Markdown loses its backslash.
+        let shown = file
+            .to_string_lossy()
+            .replace("repo\\.screenshots", "repo.screenshots");
+        let line = format!("  {shown}");
+        let click = click_at(&line, "video_v1", 2);
+        let r = resolve_path_at(line, None, click).expect("should resolve");
+        assert_eq!(std::path::Path::new(&r.abs_path), file.as_path());
+    }
+
+    #[test]
+    fn prefers_existing_dotted_name_over_separator_repair() {
+        let dir = tempfile::tempdir().unwrap();
+        // Both `repo.screenshots\x.png` and `repo\.screenshots\x.png` exist.
+        for parent in ["repo.screenshots", "repo\\.screenshots"] {
+            let d = dir.path().join(parent);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("x.png"), "x").unwrap();
+        }
+        let literal = dir.path().join("repo.screenshots").join("x.png");
+        let line = literal.to_string_lossy().to_string();
+        let click = click_at(&line, "x.png", 1);
+        let r = resolve_path_at(line, None, click).expect("should resolve");
+        assert_eq!(std::path::Path::new(&r.abs_path), literal.as_path());
     }
 
     #[test]
