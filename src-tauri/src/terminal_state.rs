@@ -373,7 +373,8 @@ impl TerminalState {
             let Some(line) = self.line_at_total(r as u32) else {
                 continue;
             };
-            if let Some(kind @ (MessageKind::User | MessageKind::Claude)) = block_head_kind(line) {
+            let next = self.line_at_total(r as u32 + 1);
+            if let Some((kind, _)) = marker_head(line, next) {
                 out.push(MessageMarker {
                     total_row: r as u32,
                     kind: kind.as_u8(),
@@ -615,11 +616,13 @@ impl TerminalState {
     /// each paired with a content hash of its head line so the alt-screen
     /// navigation loop can track a target line across app-driven redraws.
     pub fn visible_markers_with_hash(&self, kind: u8) -> Vec<(u16, u64)> {
+        let screen = self.active_screen();
         let mut out = Vec::new();
-        for (row, line) in self.active_screen().iter().enumerate() {
-            if let Some(k) = block_head_kind(line) {
+        for (row, line) in screen.iter().enumerate() {
+            let next = screen.get(row + 1).map(|l| l.as_slice());
+            if let Some((k, hash)) = marker_head(line, next) {
                 if k.as_u8() == kind {
-                    out.push((row as u16, hash_line(line)));
+                    out.push((row as u16, hash));
                 }
             }
         }
@@ -1642,6 +1645,40 @@ fn block_head_kind(line: &[TerminalCell]) -> Option<MessageKind> {
     Some(kind)
 }
 
+/// A user/Claude message head, with the hash that identifies it across
+/// redraws. Besides Claude Code's own heads (`❯` band, white `●` at column 0),
+/// it recognizes a message a display mod drew in a heavy frame (`┏━┓`, then
+/// `┃ … ┃` rows): the `●` then sits inside the frame, so the top rule is the
+/// head, and its first row says whose message it is (`❯` = the user's). Every
+/// top rule of a given width reads the same, so a frame is hashed by that row.
+fn marker_head(line: &[TerminalCell], next: Option<&[TerminalCell]>) -> Option<(MessageKind, u64)> {
+    if let Some(kind @ (MessageKind::User | MessageKind::Claude)) = block_head_kind(line) {
+        return Some((kind, hash_line(line)));
+    }
+    let top: String = line.iter().map(|c| c.text.as_str()).collect();
+    let top = top.trim();
+    let is_top_rule = top.len() > 2
+        && top.starts_with('┏')
+        && top.ends_with('┓')
+        && top
+            .trim_start_matches('┏')
+            .trim_end_matches('┓')
+            .chars()
+            .all(|c| c == '━');
+    if !is_top_rule {
+        return None;
+    }
+    let next = next?;
+    let first: String = next.iter().map(|c| c.text.as_str()).collect();
+    let body = first.trim().strip_prefix('┃')?.trim_start();
+    let kind = if body.starts_with('❯') {
+        MessageKind::User
+    } else {
+        MessageKind::Claude
+    };
+    Some((kind, hash_line(next)))
+}
+
 /// Alt-screen message navigation: the running TUI (Claude Code) owns
 /// scrolling, so we emit wheel events via `send_wheel(up)` and watch the
 /// redrawn grid until a marker line of `kind` reaches the vertical center.
@@ -2490,6 +2527,30 @@ three"
         let claude = t.visible_markers_with_hash(2);
         assert_eq!(claude.len(), 1);
         assert_eq!(claude[0].0, 2);
+    }
+
+    #[test]
+    fn message_markers_framed_by_a_display_mod() {
+        // A Claude Code display mod draws each message in a heavy frame: the
+        // `●` sits inside it (column 2) and only on a reply's first block. The
+        // frame's top rule is the head; its first row tells whose message it is.
+        let mut t = TerminalState::new(12, 30);
+        t.advance_bytes(b"\x1b[?1049h");
+        t.advance_bytes(
+            "\x1b[38;2;31;159;80m┏━━━━━━━━━━┓\x1b[0m\r\n┃ ❯ hello  ┃\r\n┗━━━━━━━━━━┛\r\n  $ Bash  run tests\r\n\x1b[38;2;134;72;197m┏━━━━━━━━━━┓\x1b[0m\r\n┃ ● first  ┃\r\n┗━━━━━━━━━━┛\r\n┏━━━━━━━━━━┓\r\n┃   second ┃\r\n┗━━━━━━━━━━┛\r\n"
+                .as_bytes(),
+        );
+        let markers: Vec<(u32, u8)> = t
+            .message_markers()
+            .iter()
+            .map(|m| (m.total_row, m.kind))
+            .collect();
+        assert_eq!(markers, vec![(0, 1), (4, 2), (7, 2)]);
+        // Identical top rules must not share a tracking hash: each one is
+        // hashed by its first content row.
+        let claude = t.visible_markers_with_hash(2);
+        assert_eq!(claude.iter().map(|m| m.0).collect::<Vec<_>>(), vec![4, 7]);
+        assert_ne!(claude[0].1, claude[1].1);
     }
 
     #[test]
