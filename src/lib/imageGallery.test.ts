@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   galleryImages,
+  galleryPathOf,
   messageImages,
   messageStripImages,
   toolImages,
@@ -70,5 +71,15 @@ describe("galleryImages", () => {
         false,
       ).map((r) => r.path),
     ).toEqual(["C:\\a\\1.png", "C:\\a\\2.png", "C:\\a\\3.png"]);
+  });
+});
+
+describe("galleryPathOf", () => {
+  it("finds the gallery's own spelling whatever the case and slashes", () => {
+    const gallery = [{ path: "C:/Repo/.screenshots/Vue_v1.png" }];
+    expect(galleryPathOf(gallery, "c:\\repo\\.screenshots\\vue_v1.png")).toBe(
+      "C:/Repo/.screenshots/Vue_v1.png",
+    );
+    expect(galleryPathOf(gallery, "C:\\repo\\other.png")).toBeNull();
   });
 });

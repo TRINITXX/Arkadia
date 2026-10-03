@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import {
@@ -26,6 +27,19 @@ import {
   type ClickableMatch,
   type PathMatch,
 } from "@/lib/urlDetect";
+import { isImagePath } from "@/lib/imagePaths";
+import {
+  galleryPathOf,
+  loadPaneGallery,
+  type ImageRef,
+} from "@/lib/imageGallery";
+import { fetchImageUrl } from "@/lib/imageUrlCache";
+import {
+  ImageHoverPreview,
+  useImageHoverPreview,
+} from "@/components/ImageHoverPreview";
+import { Lightbox } from "@/components/modern/Lightbox";
+import type { LightboxContent } from "@/components/modern/ImageThumb";
 import type {
   CellColor,
   CellRun,
@@ -619,6 +633,36 @@ export function TerminalWebGPU({
   const autoScrollDeltaRef = useRef(0);
   const hoveredUrlRef = useRef<HoverRange | null>(null);
   const pendingClickRef = useRef<ClickableMatch | null>(null);
+  // Hovering an image path previews it; clicking the path or the preview
+  // opens it full screen, the arrows walking the conversation's images.
+  const {
+    preview: imagePreview,
+    api: imagePreviewApi,
+    elRef: imagePreviewElRef,
+  } = useImageHoverPreview();
+  const [lightbox, setLightbox] = useState<{
+    content: LightboxContent;
+    gallery: ImageRef[];
+  } | null>(null);
+  const openImage = async (path: string) => {
+    imagePreviewApi.hide();
+    const [url, gallery] = await Promise.all([
+      fetchImageUrl(path),
+      loadPaneGallery(pane.id),
+    ]);
+    if (!url) {
+      void invoke("open_path", { path }).catch(() => {});
+      return;
+    }
+    setLightbox({
+      content: {
+        kind: "image",
+        url,
+        path: galleryPathOf(gallery, path) ?? path,
+      },
+      gallery,
+    });
+  };
   // When the running TUI has mouse tracking on and the user presses a button
   // without Shift, we forward the press to the PTY and keep the originating
   // button here so that the matching mouseup/mousemove can route too.
@@ -954,6 +998,7 @@ export function TerminalWebGPU({
   }, [isActive]);
 
   const onKeyDown = async (e: React.KeyboardEvent<HTMLDivElement>) => {
+    imagePreviewApi.hide();
     const r = rendererRef.current;
 
     // Ctrl+F: open search overlay.
@@ -1151,7 +1196,14 @@ export function TerminalWebGPU({
           redraw();
         }
         try {
-          if (match.kind === "path") {
+          if (
+            match.kind === "path" &&
+            isImagePath(match.absPath) &&
+            !e.ctrlKey
+          ) {
+            // Images open in-app (Ctrl+click keeps the OS viewer).
+            await openImage(match.absPath);
+          } else if (match.kind === "path") {
             // Open with the OS default app; absPath was already resolved +
             // filesystem-validated by the backend `resolve_path_at`.
             await invoke("open_path", { path: match.absPath });
@@ -1225,6 +1277,7 @@ export function TerminalWebGPU({
   }, [screen?.scroll_offset, screen?.scroll_max]);
 
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    imagePreviewApi.hide();
     const { col, row } = cellAt(e.clientX, e.clientY);
     // A plain left-click landing directly on a detected link opens it — even
     // while an app captures the mouse — so paths/URLs are clickable with no
@@ -1376,6 +1429,8 @@ export function TerminalWebGPU({
     };
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY === 0) return;
+      // The preview hangs from a row that is about to move.
+      imagePreviewApi.hide();
       e.preventDefault();
       // Mouse-mode passthrough: encode wheel up/down as buttons 64/65 at the
       // cursor's current cell. One PTY event per wheel notch (no batching).
@@ -1459,6 +1514,20 @@ export function TerminalWebGPU({
             }
           : null,
       );
+      if (match?.kind === "path" && isImagePath(match.absPath)) {
+        const rect = wrapperRef.current?.getBoundingClientRect();
+        const { w, h } = cellRef.current;
+        imagePreviewApi.hover(
+          match.absPath,
+          rect && {
+            left: rect.left + match.startCol * w,
+            top: rect.top + match.row * h,
+            bottom: rect.top + (match.row + 1) * h,
+          },
+        );
+      } else {
+        imagePreviewApi.hover(null);
+      }
       const wantPointer = !!match;
       if (wantPointer !== cursorIsPointer) {
         outer.style.cursor = wantPointer ? "pointer" : "";
@@ -1574,7 +1643,14 @@ export function TerminalWebGPU({
         .catch(() => {});
     };
 
-    const onMove = (e: MouseEvent) => computeHover(e.clientX, e.clientY);
+    const onMove = (e: MouseEvent) => {
+      // On the image preview: keep the hovered path; re-evaluate on leaving.
+      if (imagePreviewElRef.current?.contains(e.target as Node)) {
+        lastCell = "";
+        return;
+      }
+      computeHover(e.clientX, e.clientY);
+    };
 
     window.addEventListener("mousemove", onMove);
     return () => {
@@ -1585,71 +1661,95 @@ export function TerminalWebGPU({
   }, []);
 
   return (
-    <div
-      ref={outerRef}
-      tabIndex={0}
-      data-pane-id={pane.id}
-      onFocus={() => {
-        focusedRef.current = true;
-        rendererRef.current?.set_focused(true);
-        if (!isActive) onActivate();
-      }}
-      onBlur={() => {
-        focusedRef.current = false;
-        rendererRef.current?.set_focused(false);
-      }}
-      onKeyDown={onKeyDown}
-      onMouseDown={onMouseDown}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        // Mouse-mode: onMouseDown already encoded the right-click — swallow the
-        // panel menu unless Shift bypass is held.
-        if (mouseModeActive(screen) && !e.shiftKey) {
-          return;
-        }
-        if (!isActive) onActivate();
-        onContextMenu(e.clientX, e.clientY);
-      }}
-      style={{
-        backgroundColor: palette.bg,
-        outline: "none",
-        padding: 20,
-      }}
-      className="relative h-full w-full overflow-hidden"
-    >
-      <div ref={wrapperRef} className="relative h-full w-full">
-        <canvas ref={canvasRef} className="block h-full w-full" />
-        {showMessageFrames && (
-          <MessageBorderOverlay screen={screen} font={font} />
-        )}
-        <ScrollbarOverlay
-          screen={screen}
-          visible={scrollbarVisible}
-          fg={palette.fg}
+    <>
+      <div
+        ref={outerRef}
+        tabIndex={0}
+        data-pane-id={pane.id}
+        onFocus={() => {
+          focusedRef.current = true;
+          rendererRef.current?.set_focused(true);
+          if (!isActive) onActivate();
+        }}
+        onBlur={() => {
+          focusedRef.current = false;
+          rendererRef.current?.set_focused(false);
+        }}
+        onKeyDown={onKeyDown}
+        onMouseDown={onMouseDown}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          // Mouse-mode: onMouseDown already encoded the right-click — swallow the
+          // panel menu unless Shift bypass is held.
+          if (mouseModeActive(screen) && !e.shiftKey) {
+            return;
+          }
+          if (!isActive) onActivate();
+          onContextMenu(e.clientX, e.clientY);
+        }}
+        style={{
+          backgroundColor: palette.bg,
+          outline: "none",
+          padding: 20,
+        }}
+        className="relative h-full w-full overflow-hidden"
+      >
+        <div ref={wrapperRef} className="relative h-full w-full">
+          <canvas ref={canvasRef} className="block h-full w-full" />
+          {showMessageFrames && (
+            <MessageBorderOverlay screen={screen} font={font} />
+          )}
+          <ScrollbarOverlay
+            screen={screen}
+            visible={scrollbarVisible}
+            fg={palette.fg}
+          />
+          {searchOpen && (
+            <SearchOverlay
+              query={searchQuery}
+              onChange={setSearchQuery}
+              hitCount={searchHitCount}
+              currentIdx={searchCurrent1}
+              onNext={() => gotoHit(currentHitIdxRef.current + 1)}
+              onPrev={() => gotoHit(currentHitIdxRef.current - 1)}
+              onClose={() => {
+                setSearchOpen(false);
+                setSearchQuery("");
+                allHitsRef.current = [];
+                currentHitIdxRef.current = -1;
+                setSearchHitCount(0);
+                setSearchCurrent1(0);
+                redraw();
+                outerRef.current?.focus();
+              }}
+              palette={palette}
+            />
+          )}
+        </div>
+      </div>
+      {imagePreview && (
+        <ImageHoverPreview
+          preview={imagePreview}
+          elRef={imagePreviewElRef}
+          onEnter={imagePreviewApi.keep}
+          onOpen={(path) => void openImage(path)}
         />
-        {searchOpen && (
-          <SearchOverlay
-            query={searchQuery}
-            onChange={setSearchQuery}
-            hitCount={searchHitCount}
-            currentIdx={searchCurrent1}
-            onNext={() => gotoHit(currentHitIdxRef.current + 1)}
-            onPrev={() => gotoHit(currentHitIdxRef.current - 1)}
+      )}
+      {/* Portaled out of the pane: its clicks must not reach the terminal's
+        mouse handlers, nor its box be clipped by the pane. */}
+      {lightbox &&
+        createPortal(
+          <Lightbox
+            content={lightbox.content}
+            gallery={lightbox.gallery}
             onClose={() => {
-              setSearchOpen(false);
-              setSearchQuery("");
-              allHitsRef.current = [];
-              currentHitIdxRef.current = -1;
-              setSearchHitCount(0);
-              setSearchCurrent1(0);
-              redraw();
+              setLightbox(null);
               outerRef.current?.focus();
             }}
-            palette={palette}
-          />
+          />,
+          document.body,
         )}
-      </div>
-    </div>
+    </>
   );
 }
 

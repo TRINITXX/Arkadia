@@ -115,20 +115,6 @@ export const MODERN_CSS = `
 .modern-gallery-cell .cap { white-space: normal; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .modern-thumb-ph { display: flex; align-items: center; justify-content: center; width: 160px; height: 120px; border: 1px dashed rgba(255,255,255,0.16); border-radius: 8px; color: #6f6f78; }
 
-/* Lightbox (images + mermaid SVG zoom). */
-.modern-lightbox { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); cursor: zoom-out; animation: modern-fade .16s ease-out both; }
-.modern-lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 12px 48px rgba(0,0,0,.6); animation: modern-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
-.modern-lightbox .svgbox { max-width: 92vw; max-height: 92vh; overflow: auto; background: #16161a; border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 18px; animation: modern-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
-.modern-lightbox .svgbox svg { max-width: none; }
-.modern-lightbox { overflow: hidden; touch-action: none; user-select: none; }
-.modern-lightbox .lb-zoom { display: flex; align-items: center; justify-content: center; transform-origin: center; }
-.modern-lightbox .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 50%; color: #e8e8ee; background: rgba(20,20,24,0.72); border: 1px solid rgba(255,255,255,0.14); cursor: pointer; transition: background .12s; }
-.modern-lightbox .lb-nav:hover { background: rgba(40,40,48,0.9); }
-.modern-lightbox .lb-nav.prev { left: 18px; }
-.modern-lightbox .lb-nav.next { right: 18px; }
-@keyframes modern-fade { from { opacity: 0; } to { opacity: 1; } }
-@keyframes modern-pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
-
 /* Entrance for blocks appended live (never on initial load). transform +
    opacity only. */
 @keyframes modern-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -145,7 +131,7 @@ export const MODERN_CSS = `
 .modern-path .ext-ico { display: inline-flex; margin-left: 3px; vertical-align: -1px; opacity: 0.7; }
 
 @media (prefers-reduced-motion: reduce) {
-  .modern-enter, .modern-lightbox, .modern-lightbox img, .modern-lightbox .svgbox { animation-duration: .01ms; }
+  .modern-enter { animation-duration: .01ms; }
   .modern-tool-bodywrap, .modern-tool-head .chev { transition: none; }
   .modern-working .spin { animation-duration: 2s; }
 }
@@ -167,4 +153,24 @@ export const HLJS_CSS = `
 .hljs-built_in, .hljs-builtin-name { color: #5eead4; }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 650; }
+`;
+
+// The lightbox ships its own styles: it also opens from the terminal, where
+// the modern view (and so MODERN_CSS) may not be mounted.
+export const LIGHTBOX_CSS = `
+.modern-lightbox { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); cursor: zoom-out; animation: lb-fade .16s ease-out both; }
+.modern-lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 12px 48px rgba(0,0,0,.6); animation: lb-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
+.modern-lightbox .svgbox { max-width: 92vw; max-height: 92vh; overflow: auto; background: #16161a; border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 18px; animation: lb-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
+.modern-lightbox .svgbox svg { max-width: none; }
+.modern-lightbox { overflow: hidden; touch-action: none; user-select: none; }
+.modern-lightbox .lb-zoom { display: flex; align-items: center; justify-content: center; transform-origin: center; }
+.modern-lightbox .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 50%; color: #e8e8ee; background: rgba(20,20,24,0.72); border: 1px solid rgba(255,255,255,0.14); cursor: pointer; transition: background .12s; }
+.modern-lightbox .lb-nav:hover { background: rgba(40,40,48,0.9); }
+.modern-lightbox .lb-nav.prev { left: 18px; }
+.modern-lightbox .lb-nav.next { right: 18px; }
+@keyframes lb-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes lb-pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .modern-lightbox, .modern-lightbox img, .modern-lightbox .svgbox { animation-duration: .01ms; }
+}
 `;

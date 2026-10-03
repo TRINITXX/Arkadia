@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { LIGHTBOX_CSS } from "@/components/modern/css";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
 import type { ImageRef } from "@/lib/imageGallery";
 import { fetchImageUrl } from "@/lib/imageUrlCache";
@@ -181,6 +182,7 @@ export function Lightbox({ content, gallery, onClose }: LightboxProps) {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
+      <style>{LIGHTBOX_CSS}</style>
       {/* The transform lives on a wrapper: the pop animation on the content
           animates `transform` too, and a CSS animation beats inline styles. */}
       <div

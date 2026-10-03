@@ -1,6 +1,7 @@
 // Which images a conversation block shows, shared by the thumbnails and the
 // lightbox gallery so that arrow navigation walks exactly what is on screen.
 
+import { invoke } from "@tauri-apps/api/core";
 import type { ConvBlock } from "@/components/ModernConversationView";
 import { findImagePaths } from "@/lib/imagePaths";
 
@@ -113,6 +114,37 @@ export function galleryImages(
     }
   }
   return out;
+}
+
+/**
+ * Every image of a pane's Claude conversation, read from its transcript: what
+ * the terminal's lightbox arrows walk. Thinking is left out (the terminal does
+ * not show it); tool results count. Empty when the pane has no conversation.
+ */
+export async function loadPaneGallery(paneId: string): Promise<ImageRef[]> {
+  try {
+    const d = await invoke<{ blocks: ConvBlock[]; cwd?: string | null }>(
+      "read_conversation_delta",
+      { paneId, generation: 0, have: 0 },
+    );
+    return galleryImages(
+      d.blocks.filter((b) => b.kind !== "thinking"),
+      true,
+      d.cwd,
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** `path` as `gallery` spells it, ignoring case and slash style; else null. */
+export function galleryPathOf(
+  gallery: ImageRef[],
+  path: string,
+): string | null {
+  const key = (p: string) => p.replace(/\//g, "\\").toLowerCase();
+  const want = key(path);
+  return gallery.find((g) => key(g.path) === want)?.path ?? null;
 }
 
 function parseInput(json?: string): Record<string, unknown> {
