@@ -44,6 +44,7 @@ import { findProjectsByPath, parentOf } from "@/lib/externalAction";
 import { resolveProjectTarget, type ClaudeSession } from "@/lib/sessionsIndex";
 import { subscribeStable } from "@/lib/tauriEvents";
 import { dropFrame, getFrame, publishFrame } from "@/lib/frameStore";
+import { isBlankShell } from "@/lib/blankShell";
 import {
   buildSessionSnapshot,
   materializeTree,
@@ -1551,29 +1552,47 @@ export function App() {
     });
   };
 
+  // Panes a toolbar action already targeted. Their screen still looks blank
+  // until the command echoes (or until TOOLBAR_RUN_DELAY_MS elapses on a fresh
+  // spawn), so a quick second click must not pile a command onto them.
+  const toolbarClaimedPanesRef = useRef<Set<string>>(new Set());
+
   const runToolbarAction = useCallback(
     async (button: ActionButton) => {
       if (!activeProject) return;
-      const spawned = await spawnTabFor(activeProject);
-      if (!spawned) return;
-      // Running a toolbar action (ccd, ccdr, …) is deliberate user input:
-      // surface the project in the sidebar "Active" tab, like typing would.
-      markProjectInput(activeProject.id);
-      // Wait for pwsh + PSReadLine to be ready, then send the command.
-      setTimeout(async () => {
+      const sendCommand = async (paneId: string) => {
         try {
           const text = button.command + "\r";
           const bytes = Array.from(new TextEncoder().encode(text));
-          await invoke("send_input", {
-            sessionId: spawned.paneId,
-            bytes,
-          });
+          await invoke("send_input", { sessionId: paneId, bytes });
         } catch (e) {
           setError(String(e));
         }
-      }, TOOLBAR_RUN_DELAY_MS);
+      };
+      // Running a toolbar action (ccd, ccdr, …) is deliberate user input:
+      // surface the project in the sidebar "Active" tab, like typing would.
+      // An active pane sitting on a bare prompt runs the command in place
+      // rather than leaving an empty tab behind.
+      const reusable = activePaneIdOfActiveTab;
+      if (
+        reusable &&
+        !toolbarClaimedPanesRef.current.has(reusable) &&
+        isBlankShell(getFrame(reusable))
+      ) {
+        toolbarClaimedPanesRef.current.add(reusable);
+        markProjectInput(activeProject.id);
+        await sendCommand(reusable);
+        focusPaneElement(reusable);
+        return;
+      }
+      const spawned = await spawnTabFor(activeProject);
+      if (!spawned) return;
+      toolbarClaimedPanesRef.current.add(spawned.paneId);
+      markProjectInput(activeProject.id);
+      // Wait for pwsh + PSReadLine to be ready, then send the command.
+      setTimeout(() => void sendCommand(spawned.paneId), TOOLBAR_RUN_DELAY_MS);
     },
-    [activeProject, spawnTabFor, markProjectInput],
+    [activeProject, activePaneIdOfActiveTab, spawnTabFor, markProjectInput],
   );
 
   // Bottom prompt bar: type (or send) the button's text into the active Claude
