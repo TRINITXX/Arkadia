@@ -24,6 +24,7 @@ import {
   buildRowMapping,
   colToCharIndex,
   charRangeToCols,
+  joinWrappedRows,
   type ClickableMatch,
   type PathMatch,
 } from "@/lib/urlDetect";
@@ -1611,8 +1612,18 @@ export function TerminalWebGPU({
       // A pasted image shows as `[Image #N]`, its file in Claude Code's temp
       // dir: the tag then previews and opens like a path to that file.
       const tag = imageTagAt(text, charIdx);
-      // Skip the IPC when there's no path separator on the row.
-      if (!tag && !/[\\/]/.test(text)) {
+      // Claude Code breaks long lines itself, so a path may run onto the rows
+      // around this one: probe the row joined to its neighbours, the break
+      // read as an eaten space or as a cut word, and keep the longer path.
+      const rowText = (r: number) => {
+        const l = screen.lines[r];
+        return l ? buildRowMapping(l).text : null;
+      };
+      const joins = [" ", ""].map((sep) =>
+        joinWrappedRows(rowText(row - 1), text, rowText(row + 1), sep),
+      );
+      // Skip the IPC when there's no path separator around the cursor.
+      if (!tag && !/[\\/]/.test(joins[0].text)) {
         clearAffordance();
         return;
       }
@@ -1628,11 +1639,31 @@ export function TerminalWebGPU({
           }).then((p) =>
             p ? { start: tag.start, end: tag.end, abs_path: p } : null,
           )
-        : invoke<ResolvedPath | null>("resolve_path_at", {
-            line: text,
-            cwd: cwdRef.current,
-            click: charIdx,
-          });
+        : Promise.all(
+            joins.map((j) =>
+              charIdx >= j.start && charIdx < j.end
+                ? invoke<ResolvedPath | null>("resolve_path_at", {
+                    line: j.text,
+                    cwd: cwdRef.current,
+                    click: charIdx + j.offset,
+                  }).then(
+                    (r) =>
+                      // Back to this row: only its own part gets underlined.
+                      r && {
+                        start: Math.max(r.start - j.offset, j.start),
+                        end: Math.min(r.end - j.offset, j.end),
+                        abs_path: r.abs_path,
+                        len: r.end - r.start,
+                      },
+                  )
+                : null,
+            ),
+          ).then((found) =>
+            found.reduce(
+              (best, r) => (r && (!best || r.len > best.len) ? r : best),
+              null,
+            ),
+          );
       void resolved
         .then((res) => {
           if (seq !== probeSeq) return; // superseded by a newer move

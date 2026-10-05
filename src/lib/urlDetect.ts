@@ -89,6 +89,49 @@ export function charRangeToCols(
 }
 
 /**
+ * A row's plaintext glued to the rows around it, for paths a renderer wrapped
+ * over several lines: Claude Code breaks long lines itself, so the terminal
+ * holds separate rows. Each row brings its content only — indentation and a
+ * message frame's `┃`/`│` borders dropped — joined by `sep` (`" "` when the
+ * break ate a space, `""` when it cut a word). A char at `i` in `cur` sits at
+ * `i + offset` in `text`; `start`/`end` bound `cur`'s content. Indices count
+ * code points, as `buildRowMapping` and the backend `resolve_path_at` do.
+ */
+export function joinWrappedRows(
+  prev: string | null,
+  cur: string,
+  next: string | null,
+  sep: string,
+): { text: string; offset: number; start: number; end: number } {
+  const isEdge = (c: string) => /[\s┃│]/.test(c);
+  const span = (chars: string[]): [number, number] => {
+    let a = 0;
+    while (a < chars.length && isEdge(chars[a])) a++;
+    let b = chars.length;
+    while (b > a && isEdge(chars[b - 1])) b--;
+    return [a, b];
+  };
+  const body = (s: string | null): string[] => {
+    if (s === null) return [];
+    const chars = [...s];
+    const [a, b] = span(chars);
+    return chars.slice(a, b);
+  };
+  const curChars = [...cur];
+  const [start, end] = span(curChars);
+  const prevBody = body(prev);
+  const nextBody = body(next);
+  const before = prevBody.length ? [...prevBody, ...sep] : [];
+  const after = nextBody.length ? [...sep, ...nextBody] : [];
+  return {
+    text: [...before, ...curChars.slice(start, end), ...after].join(""),
+    offset: before.length - start,
+    start,
+    end,
+  };
+}
+
+/**
  * Returns the URL covering the cell at `(col, row)` in the rendered screen,
  * or `null`. Wide-char aware: regex matches on the concatenated text and
  * char-indices are mapped back to cell columns.
