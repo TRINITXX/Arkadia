@@ -28,6 +28,7 @@ import {
   type PathMatch,
 } from "@/lib/urlDetect";
 import { isImagePath } from "@/lib/imagePaths";
+import { imageTagAt } from "@/lib/imageTag";
 import {
   galleryPathOf,
   loadPaneGallery,
@@ -1603,17 +1604,36 @@ export function TerminalWebGPU({
       }
       const { text, charToCol, charWidth } = buildRowMapping(line);
       const charIdx = colToCharIndex(charToCol, charWidth, col);
+      if (charIdx == null) {
+        clearAffordance();
+        return;
+      }
+      // A pasted image shows as `[Image #N]`, its file in Claude Code's temp
+      // dir: the tag then previews and opens like a path to that file.
+      const tag = imageTagAt(text, charIdx);
       // Skip the IPC when there's no path separator on the row.
-      if (charIdx == null || !/[\\/]/.test(text)) {
+      if (!tag && !/[\\/]/.test(text)) {
         clearAffordance();
         return;
       }
       const seq = ++probeSeq;
-      void invoke<ResolvedPath | null>("resolve_path_at", {
-        line: text,
-        cwd: cwdRef.current,
-        click: charIdx,
-      })
+      const resolved: Promise<{
+        start: number;
+        end: number;
+        abs_path: string;
+      } | null> = tag
+        ? invoke<string | null>("pasted_image_path", {
+            paneId: pane.id,
+            n: tag.n,
+          }).then((p) =>
+            p ? { start: tag.start, end: tag.end, abs_path: p } : null,
+          )
+        : invoke<ResolvedPath | null>("resolve_path_at", {
+            line: text,
+            cwd: cwdRef.current,
+            click: charIdx,
+          });
+      void resolved
         .then((res) => {
           if (seq !== probeSeq) return; // superseded by a newer move
           const liveLine = screenRef.current?.lines[row];

@@ -157,6 +157,32 @@ pub fn pane_session_id(pane_id: String) -> Option<String> {
     m.session_id.filter(|s| !s.is_empty())
 }
 
+/// The file behind a `[Image #n]` tag of a pane's Claude session, or None.
+/// Claude Code caches each paste as `<tmp>/claude/<project>/<session>/images/<n>.png`
+/// and prints only the tag; the project folder is named after the cwd the
+/// session started in, which may have moved since, so it is found by session id.
+#[tauri::command(async)]
+pub fn pasted_image_path(pane_id: String, n: u32) -> Option<String> {
+    let session_id = pane_session_id(pane_id)?;
+    let root = std::env::temp_dir().join("claude");
+    find_pasted_image(&root, &session_id, n).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Command body over an explicit temp root (unit-testable).
+fn find_pasted_image(root: &Path, session_id: &str, n: u32) -> Option<PathBuf> {
+    std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .map(|project| {
+            project
+                .path()
+                .join(session_id)
+                .join("images")
+                .join(format!("{n}.png"))
+        })
+        .find(|p| p.is_file())
+}
+
 /// Resolves a pane's transcript from the hook-written map: prefer the exact
 /// `transcriptPath`; if it's stale/missing, fall back to a search by session id.
 fn transcript_from_pane_map(pane_id: &str) -> Option<PathBuf> {
@@ -1264,6 +1290,25 @@ mod tests {
         // The mutation dropped the dirty floor so the block is re-sent.
         assert_eq!(floor, 0);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn pasted_image_is_found_by_session_whatever_the_project_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let images = root.path().join("C--old-cwd").join("sess-1").join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        std::fs::create_dir_all(root.path().join("C--other").join("sess-2")).unwrap();
+        std::fs::write(images.join("3.png"), b"png").unwrap();
+        assert_eq!(
+            find_pasted_image(root.path(), "sess-1", 3),
+            Some(images.join("3.png"))
+        );
+        assert_eq!(find_pasted_image(root.path(), "sess-1", 4), None);
+        assert_eq!(find_pasted_image(root.path(), "sess-2", 3), None);
+        assert_eq!(
+            find_pasted_image(&root.path().join("missing"), "sess-1", 3),
+            None
+        );
     }
 
     #[test]
