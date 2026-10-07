@@ -20,7 +20,7 @@ import type { TerminalFont } from "@/types";
 const SPACE_REPEAT_MS = 40;
 
 /** Safety net: never leave a runaway space burst going if the click is forgotten. */
-const MAX_TALK_MS = 3 * 60 * 1000;
+const MAX_TALK_MS = 10 * 60 * 1000;
 
 /** Side of a rail button (Tailwind `size-6`), needed to centre the stack. */
 const BUTTON_PX = 24;
