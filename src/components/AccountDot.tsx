@@ -1,4 +1,4 @@
-/** Square, unlike the round agent badges, so the two never read alike. */
+/** Triangle, unlike the round agent badges, so the two never read alike. */
 export function AccountDot({
   color,
   size = 8,
@@ -11,8 +11,13 @@ export function AccountDot({
   return (
     <span
       title={title}
-      className="inline-block shrink-0 rounded-[2px]"
-      style={{ width: size, height: size, backgroundColor: color }}
+      className="inline-block shrink-0"
+      style={{
+        width: size,
+        height: size,
+        backgroundColor: color,
+        clipPath: "polygon(50% 0, 100% 100%, 0 100%)",
+      }}
     />
   );
 }

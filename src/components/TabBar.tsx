@@ -241,7 +241,6 @@ function SortableTab({
       title={`${title}${hasBell ? " · 🔔" : ""}${account ? `
 Compte : ${account.label}` : ""}`}
     >
-      {account && <AccountDot color={account.color} size={7} />}
       {hasBell && (
         <span
           aria-label="bell"
@@ -251,6 +250,7 @@ Compte : ${account.label}` : ""}`}
       <span className="relative inline-block truncate font-medium">
         {title}
       </span>
+      {account && <AccountDot color={account.color} size={8} />}
       <button
         type="button"
         onPointerDown={(e) => e.stopPropagation()}

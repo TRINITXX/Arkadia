@@ -1097,7 +1097,7 @@ interface ActiveProjectGroupProps extends DraggableProjectRowProps {
 /** Account of a listed tab, at the row's right edge (absent with one account). */
 function TabAccountDot({ mark }: { mark: AccountMark | undefined }) {
   if (!mark) return null;
-  return <AccountDot color={mark.color} size={7} title={`Compte : ${mark.label}`} />;
+  return <AccountDot color={mark.color} size={8} title={`Compte : ${mark.label}`} />;
 }
 
 /** Entry of the flat "Active" list: the project name as a quiet header, its
