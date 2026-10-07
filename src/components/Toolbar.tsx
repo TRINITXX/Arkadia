@@ -30,6 +30,8 @@ interface ToolbarProps {
   onToggleModernView: () => void;
   sidepanelOpen: boolean;
   onToggleSidepanel: () => void;
+  /** Shown only while the sidepanel (and its accounts block) is hidden. */
+  accountChip: React.ReactNode;
   compactFont: boolean;
   onToggleCompactFont: () => void;
 }
@@ -45,6 +47,7 @@ export function Toolbar({
   onToggleModernView,
   sidepanelOpen,
   onToggleSidepanel,
+  accountChip,
   compactFont,
   onToggleCompactFont,
 }: ToolbarProps) {
@@ -69,6 +72,7 @@ export function Toolbar({
           <PanelLeftOpen size={14} />
         )}
       </button>
+      {!sidepanelOpen && accountChip}
       <div className="flex flex-1 items-center gap-1 overflow-x-auto">
         {buttons.length === 0 && (
           <span className="text-xs text-zinc-600">

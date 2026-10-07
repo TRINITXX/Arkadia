@@ -16,11 +16,15 @@ import { Minus, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { Tab } from "@/types";
+import type { AccountMark } from "@/lib/accounts";
+import { AccountDot } from "./AccountDot";
 
 interface TabBarProps {
   tabs: Tab[];
   activeTabId: string | null;
   bellTabs: Record<string, true>;
+  /** Claude account of each tab; empty while there is a single account. */
+  accountMarks: Record<string, AccountMark>;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onSpawn: () => void;
@@ -32,6 +36,7 @@ export function TabBar({
   tabs,
   activeTabId,
   bellTabs,
+  accountMarks,
   onActivate,
   onClose,
   onSpawn,
@@ -73,6 +78,7 @@ export function TabBar({
                 tab={tab}
                 active={tab.id === activeTabId}
                 hasBell={!!bellTabs[tab.id] && tab.id !== activeTabId}
+                account={accountMarks[tab.id]}
                 onActivate={onActivate}
                 onClose={onClose}
               />
@@ -184,6 +190,7 @@ interface SortableTabProps {
   tab: Tab;
   active: boolean;
   hasBell: boolean;
+  account: AccountMark | undefined;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
 }
@@ -192,6 +199,7 @@ function SortableTab({
   tab,
   active,
   hasBell,
+  account,
   onActivate,
   onClose,
 }: SortableTabProps) {
@@ -230,8 +238,10 @@ function SortableTab({
           ? "bg-zinc-900 text-zinc-100"
           : "bg-zinc-950 text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200"
       }`}
-      title={hasBell ? `${title} · 🔔` : title}
+      title={`${title}${hasBell ? " · 🔔" : ""}${account ? `
+Compte : ${account.label}` : ""}`}
     >
+      {account && <AccountDot color={account.color} size={7} />}
       {hasBell && (
         <span
           aria-label="bell"

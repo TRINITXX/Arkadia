@@ -94,7 +94,12 @@ function reattachTab(
     // `cwd` stays null: the shell re-reports it via OSC 7, exactly as it does
     // for a freshly spawned pane. The title is kept so the tab is not blank
     // until the first frame lands.
-    panes: kept.map((p) => ({ id: p.paneId, title: p.title, cwd: null })),
+    panes: kept.map((p) => ({
+      id: p.paneId,
+      title: p.title,
+      cwd: null,
+      accountId: p.accountId,
+    })),
     claudePaneIds: kept.filter((p) => p.wasClaude).map((p) => p.paneId),
   };
 }

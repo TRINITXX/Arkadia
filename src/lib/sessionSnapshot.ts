@@ -32,6 +32,8 @@ export interface SnapshotPane {
   /** True when the pane ever ran a Claude session (sticky) — restore relaunches
    *  it with `ccd --resume <session>`. */
   wasClaude: boolean;
+  /** Claude account the pane ran on (absent = main account). */
+  accountId?: string;
 }
 
 export interface SnapshotTab {
@@ -110,6 +112,7 @@ export function buildSessionSnapshot(
           cwd: t.panes[id]?.cwd ?? null,
           title: t.panes[id]?.title ?? "",
           wasClaude: claudePaneIds.has(id),
+          accountId: t.panes[id]?.accountId,
         })),
       };
     }),
@@ -137,6 +140,8 @@ export function normalizeSessionSnapshot(raw: unknown): SessionSnapshot | null {
         cwd: typeof pane.cwd === "string" ? pane.cwd : null,
         title: typeof pane.title === "string" ? pane.title : "",
         wasClaude: pane.wasClaude === true,
+        accountId:
+          typeof pane.accountId === "string" ? pane.accountId : undefined,
       });
     }
     const tree = normalizeTree(tab.tree, panes.length);

@@ -34,6 +34,8 @@ import {
 } from "@/lib/sessionsIndex";
 import type { Project, Tab, Workspace } from "@/types";
 import { AgentBadge } from "./AgentBadge";
+import { AccountDot } from "./AccountDot";
+import type { AccountMark } from "@/lib/accounts";
 
 interface SidepanelProps {
   projects: Project[];
@@ -75,6 +77,10 @@ interface SidepanelProps {
   /** Projects considered "active" (received input this session + still have a
    *  tab open). Shown flat under the "Active" tab, hidden from "Inactive". */
   activeProjectIds: ReadonlySet<string>;
+  /** Claude account of each tab; empty while there is a single account. */
+  accountMarks: Record<string, AccountMark>;
+  /** The "Comptes" block, docked at the very bottom. */
+  accountsPanel: React.ReactNode;
 }
 
 const UNGROUPED_ID = "__ungrouped__";
@@ -242,6 +248,8 @@ export function Sidepanel({
   paneAgentStates,
   activeTabIdByProject,
   activeProjectIds,
+  accountMarks,
+  accountsPanel,
 }: SidepanelProps) {
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null);
   const [view, setView] = useState<"active" | "inactive">("inactive");
@@ -600,6 +608,7 @@ export function Sidepanel({
                       tabs,
                       paneAgentStates,
                     )}
+                    accountMarks={accountMarks}
                   />
                 ))}
               </SortableContext>
@@ -681,19 +690,24 @@ export function Sidepanel({
             ⟳ Restaurer la session précédente
           </button>
         )}
-        <button
-          onClick={onAdd}
-          className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
-        >
-          + New project
-        </button>
-        <button
-          onClick={onAddWorkspace}
-          className="rounded border border-zinc-800/60 bg-transparent px-2 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
-        >
-          + New workspace
-        </button>
+        <div className="flex gap-1">
+          <button
+            onClick={onAdd}
+            title="New project"
+            className="flex-1 rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+          >
+            + Project
+          </button>
+          <button
+            onClick={onAddWorkspace}
+            title="New workspace"
+            className="flex-1 rounded border border-zinc-800/60 bg-transparent px-2 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+          >
+            + Workspace
+          </button>
+        </div>
       </div>
+      {accountsPanel}
     </aside>
   );
 }
@@ -1077,6 +1091,13 @@ interface ActiveProjectGroupProps extends DraggableProjectRowProps {
   onCloseTab: (tabId: string) => void;
   /** Tab currently shown for this project, highlighted in the list. */
   currentTabId: string | null;
+  accountMarks: Record<string, AccountMark>;
+}
+
+/** Account of a listed tab, at the row's right edge (absent with one account). */
+function TabAccountDot({ mark }: { mark: AccountMark | undefined }) {
+  if (!mark) return null;
+  return <AccountDot color={mark.color} size={7} title={`Compte : ${mark.label}`} />;
 }
 
 /** Entry of the flat "Active" list: the project name as a quiet header, its
@@ -1095,6 +1116,7 @@ function ActiveProjectGroup({
   onActivateTab,
   currentTabId,
   agentStates,
+  accountMarks,
 }: ActiveProjectGroupProps) {
   const {
     attributes,
@@ -1154,6 +1176,7 @@ function ActiveProjectGroup({
           <div className="mt-[1px] flex items-center gap-2 text-xs">
             <AgentBadge state={solo.state} size={8} inline />
             <span className="min-w-0 flex-1 truncate">{solo.title}</span>
+            <TabAccountDot mark={accountMarks[solo.tabId]} />
           </div>
         </div>
       </div>
@@ -1219,6 +1242,7 @@ function ActiveProjectGroup({
             >
               <AgentBadge state={state} size={8} inline />
               <span className="min-w-0 flex-1 truncate">{title}</span>
+              <TabAccountDot mark={accountMarks[tabId]} />
             </button>
           ))}
         </div>

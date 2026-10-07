@@ -189,7 +189,13 @@ fn run_claude(system: &str, prompt: &str, timeout: Duration) -> Result<String, S
     let cwd = workspace_dir()
         .ok_or_else(|| "Impossible de créer le dossier de travail de la recherche IA.".to_string())?;
 
-    let mut child = Command::new(&bin)
+    let mut command = Command::new(&bin);
+    // Billed to the account currently selected for new tabs.
+    match crate::accounts::current_launch_dir() {
+        Some(dir) => command.env("CLAUDE_CONFIG_DIR", dir),
+        None => command.env_remove("CLAUDE_CONFIG_DIR"),
+    };
+    let mut child = command
         .current_dir(&cwd)
         .args([
             "-p",

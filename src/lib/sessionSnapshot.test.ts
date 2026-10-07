@@ -65,6 +65,14 @@ describe("sessionSnapshot", () => {
     expect(snap.tabs[0].panes[0].title).toBe("t-a");
   });
 
+  it("keeps each pane's Claude account through save and reload", () => {
+    const t = tab({ kind: "leaf", paneId: "a" }, ["a"]);
+    t.panes.a.accountId = "b2c3";
+    const snap = buildSessionSnapshot([t], new Set(), 1);
+    const parsed = normalizeSessionSnapshot(JSON.parse(JSON.stringify(snap)));
+    expect(parsed?.tabs[0].panes[0].accountId).toBe("b2c3");
+  });
+
   it("normalize round-trips its own output", () => {
     const snap = buildSessionSnapshot(
       [tab(SPLIT, ["a", "b", "c"])],

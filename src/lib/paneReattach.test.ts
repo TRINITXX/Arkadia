@@ -62,6 +62,16 @@ describe("planReattach", () => {
     expect(plan.leftover?.tabs).toHaveLength(1);
   });
 
+  it("keeps the Claude account of every re-attached pane", () => {
+    const snap = split();
+    snap.tabs[0].panes[1].accountId = "b2c3";
+    const plan = planReattach(snap, ["a", "b"]);
+    expect(plan.tabs[0].panes.map((p) => p.accountId)).toEqual([
+      undefined,
+      "b2c3",
+    ]);
+  });
+
   it("re-attaches nothing when Rust reports no live session", () => {
     const snap = split();
     const plan = planReattach(snap, []);

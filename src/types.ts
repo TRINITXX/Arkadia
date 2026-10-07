@@ -131,6 +131,9 @@ export interface PaneState {
   title: string;
   /** Live cwd reported by the shell via OSC 7 (null until the first prompt fires the hook). */
   cwd: string | null;
+  /** Claude account the pane was launched on (fixed for its lifetime).
+   *  Undefined = the main account. */
+  accountId?: string;
 }
 
 export type SplitDirection = "horizontal" | "vertical";

@@ -1,3 +1,4 @@
+mod accounts;
 mod agent_registry;
 mod ai_search;
 mod claude_watcher;
@@ -128,6 +129,8 @@ pub fn run() {
                 // Nothing inside a wedged webview can repair it, so the
                 // watchdog lives out here (see `uiwatch`).
                 uiwatch::spawn_watchdog(app.handle().clone());
+                // Usage of the accounts no running session reports (see `accounts`).
+                accounts::spawn_usage_poller();
                 // Transcript-image cache housekeeping, off the setup path.
                 std::thread::spawn(|| conversation::prune_imgcache(30));
                 let claude_root = dirs::home_dir()
@@ -162,6 +165,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             spawn_terminal,
+            accounts::accounts_state,
+            accounts::account_add,
+            accounts::account_remove,
+            accounts::account_update,
+            accounts::account_set_current,
             send_input,
             resize_terminal,
             set_scrollback_cap,

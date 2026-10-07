@@ -8,6 +8,10 @@ import { arrayMove } from "@dnd-kit/sortable";
 import { TabBar } from "@/components/TabBar";
 import { Sidepanel } from "@/components/Sidepanel";
 import { Toolbar } from "@/components/Toolbar";
+import { AccountsPanel } from "@/components/AccountsPanel";
+import { AccountChip } from "@/components/AccountChip";
+import { useAccounts } from "@/lib/useAccounts";
+import { MAIN_ACCOUNT_ID, tabAccountMarks } from "@/lib/accounts";
 import { FloatingPromptBar } from "@/components/PromptBar";
 import { PaneTreeView } from "@/components/PaneTreeView";
 import { AddProjectDialog } from "@/components/AddProjectDialog";
@@ -247,6 +251,21 @@ export function App() {
   const activeProject = useMemo(
     () => projects.find((p) => p.id === activeProjectId) ?? null,
     [projects, activeProjectId],
+  );
+
+  // ─── Claude accounts ───────────────────────────────────────────
+
+  const accounts = useAccounts();
+  // Read at spawn time through a ref: the 15 s state refresh must not churn
+  // the identity of every spawn callback.
+  const currentAccountRef = useRef(MAIN_ACCOUNT_ID);
+  const currentAccountId = accounts.state?.current ?? MAIN_ACCOUNT_ID;
+  useEffect(() => {
+    currentAccountRef.current = currentAccountId;
+  }, [currentAccountId]);
+  const accountMarks = useMemo(
+    () => tabAccountMarks(tabs, accounts.state),
+    [tabs, accounts.state],
   );
 
   // Mark a project as having received real user input this session. Called from
@@ -615,7 +634,12 @@ export function App() {
   }, [font.family, font.size]);
 
   const spawnPane = useCallback(
-    async (cwd: string, initCommand?: string): Promise<string | null> => {
+    async (
+      cwd: string,
+      initCommand?: string,
+      /** Claude account of the pane; undefined = main account. */
+      accountId?: string,
+    ): Promise<string | null> => {
       const { cols, rows } = measureSpawnSize();
       try {
         const sessionId = await invoke<string>("spawn_terminal", {
@@ -624,6 +648,7 @@ export function App() {
           rows,
           // Tauri v2 maps this camelCase key to the Rust `init_command` param.
           initCommand,
+          accountId,
         });
         return sessionId;
       } catch (e) {
@@ -641,8 +666,15 @@ export function App() {
       /** Start the pane here instead of the project root — a resumed session
        *  must run in its own cwd, which may be a subfolder of the project. */
       cwd?: string,
+      /** Defaults to the account currently selected for new tabs. */
+      accountId: string = currentAccountRef.current,
     ): Promise<{ tabId: string; paneId: string } | null> => {
-      const paneId = await spawnPane(cwd ?? project.path, initCommand);
+      const paneAccount = accountId === MAIN_ACCOUNT_ID ? undefined : accountId;
+      const paneId = await spawnPane(
+        cwd ?? project.path,
+        initCommand,
+        paneAccount,
+      );
       if (!paneId) return null;
       const tabId = newTabId();
       paneToTab.current.set(paneId, tabId);
@@ -650,6 +682,7 @@ export function App() {
         id: paneId,
         title: project.name,
         cwd: null,
+        accountId: paneAccount,
       };
       const tab: Tab = {
         id: tabId,
@@ -693,7 +726,11 @@ export function App() {
           // empty shell.
           init = sid ? `ccd --resume ${sid}` : "ccd";
         }
-        const paneId = await spawnPane(p.cwd ?? project.path, init);
+        const paneId = await spawnPane(
+          p.cwd ?? project.path,
+          init,
+          p.accountId,
+        );
         if (!paneId) break;
         newIds.push(paneId);
       }
@@ -706,6 +743,7 @@ export function App() {
           id,
           title: st.panes[i].title || project.name,
           cwd: null,
+          accountId: st.panes[i].accountId,
         };
       });
       const tab: Tab = {
@@ -805,6 +843,58 @@ export function App() {
     },
     [projects, spawnTabFor, markProjectInput, pushToast],
   );
+
+  // ─── Account login ─────────────────────────────────────────────
+
+  // Signs an account in from a fresh tab on that account, then starts Claude
+  // there once the browser login succeeds.
+  const loginAccount = useCallback(
+    async (accountId: string): Promise<boolean> => {
+      if (!activeProject) {
+        pushToast(
+          "error",
+          "ouvre d'abord un projet pour y lancer la connexion",
+        );
+        return false;
+      }
+      const spawned = await spawnTabFor(
+        activeProject,
+        "claude auth login; if ($?) { ccd }",
+        undefined,
+        accountId,
+      );
+      if (!spawned) return false;
+      markProjectInput(activeProject.id);
+      return true;
+    },
+    [activeProject, spawnTabFor, markProjectInput, pushToast],
+  );
+
+  // The new account becomes current only once its login tab is really open:
+  // an aborted add is rolled back instead of leaving new tabs signed out.
+  const addAccount = useCallback(async () => {
+    if (!activeProject) {
+      pushToast("error", "ouvre d'abord un projet pour y lancer la connexion");
+      return;
+    }
+    const id = await accounts.add();
+    if (!id) return;
+    if (await loginAccount(id)) await accounts.setCurrent(id);
+    else await accounts.remove(id);
+  }, [accounts, activeProject, loginAccount, pushToast]);
+
+  // Open panes per account: an account still running somewhere cannot be
+  // removed (its config dir would vanish under the live Claude sessions).
+  const openPanesByAccount = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const tab of tabs) {
+      for (const pane of Object.values(tab.panes)) {
+        const id = pane.accountId ?? MAIN_ACCOUNT_ID;
+        counts[id] = (counts[id] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [tabs]);
 
   // ─── Closing ───────────────────────────────────────────────────
 
@@ -955,13 +1045,16 @@ export function App() {
       if (!project) return;
       // Inherit the live cwd of the parent pane if known (OSC 7 reported); else fall back to project root.
       const parentCwd = tab.panes[paneId]?.cwd ?? project.path;
-      const newPaneId = await spawnPane(parentCwd);
+      // A split stays on its tab's account, so a tab never mixes two.
+      const accountId = tab.panes[paneId]?.accountId;
+      const newPaneId = await spawnPane(parentCwd, undefined, accountId);
       if (!newPaneId) return;
       paneToTab.current.set(newPaneId, tabId);
       const newPane: PaneState = {
         id: newPaneId,
         title: project.name,
         cwd: null,
+        accountId,
       };
       setTabs((prev) =>
         prev.map((t) =>
@@ -1685,6 +1778,21 @@ export function App() {
           paneAgentStates={effectivePaneStates}
           activeTabIdByProject={activeTabIdByProject}
           activeProjectIds={activeProjectIds}
+          accountMarks={accountMarks}
+          accountsPanel={
+            accounts.state && (
+              <AccountsPanel
+                state={accounts.state}
+                onSelect={(id) => void accounts.setCurrent(id)}
+                onAdd={() => void addAccount()}
+                onLogin={(id) => void loginAccount(id)}
+                onRename={(id, label) => void accounts.update(id, { label })}
+                onRecolor={(id, color) => void accounts.update(id, { color })}
+                onRemove={(id) => void accounts.remove(id)}
+                openPanesByAccount={openPanesByAccount}
+              />
+            )
+          }
         />
       )}
 
@@ -1693,6 +1801,7 @@ export function App() {
           tabs={visibleTabs}
           activeTabId={activeTabId}
           bellTabs={bellTabs}
+          accountMarks={accountMarks}
           onActivate={(tabId) => {
             setSessionPreview(null);
             onActivateTab(tabId);
@@ -1714,6 +1823,14 @@ export function App() {
           onToggleModernView={() => setModernViewEnabled((v) => !v)}
           sidepanelOpen={sidepanelOpen}
           onToggleSidepanel={() => setSidepanelOpen((v) => !v)}
+          accountChip={
+            accounts.state && accounts.state.accounts.length > 1 ? (
+              <AccountChip
+                state={accounts.state}
+                onSelect={(id) => void accounts.setCurrent(id)}
+              />
+            ) : null
+          }
           compactFont={compactFont}
           onToggleCompactFont={toggleCompactFont}
         />
