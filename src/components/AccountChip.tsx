@@ -43,7 +43,7 @@ export function AccountChip({ state, onSelect }: AccountChipProps) {
         title={`Compte des nouveaux onglets\n${accountTooltip(current)}`}
         className="flex h-7 items-center gap-1.5 rounded px-2 text-xs text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
       >
-        <AccountDot color={current.color} />
+        <AccountDot color={current.color} label={current.label} />
         <span className="max-w-[110px] truncate">{current.label}</span>
         <ChevronDown size={12} className="text-zinc-500" />
       </button>
@@ -62,7 +62,7 @@ export function AccountChip({ state, onSelect }: AccountChipProps) {
                 a.id === state.current ? "text-zinc-100" : "text-zinc-400"
               }`}
             >
-              <AccountDot color={a.color} />
+              <AccountDot color={a.color} label={a.label} />
               <span className="min-w-0 flex-1 truncate">{a.label}</span>
               <span className={`tabular-nums ${a.stale ? "opacity-40" : ""}`}>
                 {formatPct(a.usage?.fiveHour)} · {formatPct(a.usage?.sevenDay)}

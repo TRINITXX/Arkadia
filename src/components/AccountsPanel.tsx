@@ -147,7 +147,7 @@ function AccountRow({
           : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
       }`}
     >
-      <AccountDot color={account.color} />
+      <AccountDot color={account.color} label={account.label} />
       {renaming ? (
         <RenameInput
           initial={account.customLabel ? account.label : ""}

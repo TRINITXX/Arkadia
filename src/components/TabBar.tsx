@@ -250,7 +250,7 @@ Compte : ${account.label}` : ""}`}
       <span className="relative inline-block truncate font-medium">
         {title}
       </span>
-      {account && <AccountDot color={account.color} size={8} />}
+      {account && <AccountDot color={account.color} label={account.label} />}
       <button
         type="button"
         onPointerDown={(e) => e.stopPropagation()}
