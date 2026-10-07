@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Plus } from "lucide-react";
 import { AccountDot } from "./AccountDot";
 import {
@@ -291,7 +292,9 @@ function AccountMenu({
     </button>
   );
 
-  return (
+  // Portalled to <body>: inside the sidepanel (a .chrome-surface) the glass
+  // background preset would turn its fill translucent.
+  return createPortal(
     <div
       ref={ref}
       className="fixed z-50 min-w-[180px] rounded border border-zinc-800 bg-zinc-950 py-1 shadow-xl"
@@ -342,6 +345,7 @@ function AccountMenu({
           )}
         </>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
