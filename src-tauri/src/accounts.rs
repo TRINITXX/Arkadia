@@ -35,7 +35,6 @@ const NOT_SHARED: &[&str] = &[
     ".credentials.json",
     ".claude.json",
     "backups",
-    "sessions",
     "session-env",
     "statsig",
     "stats-cache.json",
@@ -284,6 +283,7 @@ fn logged_in(id: &str) -> bool {
 /// hard link would be broken by Claude Code's write-then-rename.
 fn ensure_links(dir: &Path) {
     let _ = fs::create_dir_all(dir);
+    adopt_sessions_dir(dir);
     let Ok(entries) = fs::read_dir(main_root()) else {
         return;
     };
@@ -307,6 +307,33 @@ fn ensure_links(dir: &Path) {
         if let Err(e) = made {
             eprintln!("[accounts] link {} failed: {e}", link.display());
         }
+    }
+}
+
+/// `sessions` (the registry of running sessions, one `<pid>` file each) used to
+/// be per-account, which hid each account's sessions from the others' peer
+/// messaging. A real folder left by that era is merged into the main one and
+/// removed, so that [`ensure_links`] can replace it with a junction.
+fn adopt_sessions_dir(dir: &Path) {
+    let own = dir.join("sessions");
+    let Ok(meta) = fs::symlink_metadata(&own) else {
+        return;
+    };
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return;
+    }
+    let shared = main_root().join("sessions");
+    let _ = fs::create_dir_all(&shared);
+    if let Ok(entries) = fs::read_dir(&own) {
+        for entry in entries.flatten() {
+            let to = shared.join(entry.file_name());
+            if !to.exists() && fs::rename(entry.path(), &to).is_err() {
+                let _ = fs::copy(entry.path(), &to);
+            }
+        }
+    }
+    if let Err(e) = fs::remove_dir_all(&own) {
+        eprintln!("[accounts] adopt {} failed: {e}", own.display());
     }
 }
 
