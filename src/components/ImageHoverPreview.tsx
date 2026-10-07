@@ -134,20 +134,19 @@ export function ImageHoverPreview({
     window.innerWidth - 2 * MARGIN_PX,
   );
 
-  // The width is only known once the image is laid out: slide left if the
-  // card would overflow the window's right edge.
+  // The width is only known once the image is decoded: on every size change,
+  // slide the card left from the path just enough to stay in the window.
   useLayoutEffect(() => {
     const el = elRef.current;
     if (!el) return;
     const fit = () => {
-      const overflow =
-        el.getBoundingClientRect().right - (window.innerWidth - MARGIN_PX);
-      el.style.left = `${Math.max(MARGIN_PX, anchor.left - Math.max(0, overflow))}px`;
+      const maxLeft = window.innerWidth - MARGIN_PX - el.offsetWidth;
+      el.style.left = `${Math.max(MARGIN_PX, Math.min(anchor.left, maxLeft))}px`;
     };
     fit();
-    const img = el.querySelector("img");
-    img?.addEventListener("load", fit);
-    return () => img?.removeEventListener("load", fit);
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [anchor.left, elRef, preview.url]);
 
   const name = preview.path.split(/[\\/]/).pop() ?? preview.path;
@@ -161,6 +160,9 @@ export function ImageHoverPreview({
       style={{
         position: "fixed",
         left: anchor.left,
+        // Its own width, not what is left right of `left` (shrink-to-fit
+        // would squeeze it against the edge before `fit` can move it).
+        width: "max-content",
         ...(below
           ? { top: anchor.bottom + GAP_PX }
           : { bottom: window.innerHeight - anchor.top + GAP_PX }),

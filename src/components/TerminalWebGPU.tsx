@@ -86,11 +86,24 @@ function loadFontBytes(family: string): Promise<Uint8Array | null> {
   return promise;
 }
 
-interface HoverRange {
-  match: ClickableMatch;
+/** Cells of one row, `endCol` exclusive. */
+interface RowSpan {
   row: number;
   startCol: number;
   endCol: number;
+}
+
+interface HoverRange extends RowSpan {
+  match: ClickableMatch;
+  /** The rest of a path wrapped onto the rows around the hovered one. */
+  more: RowSpan[];
+}
+
+/** True when `(col, row)` is on the hovered link, any of its rows. */
+function hoverCovers(h: HoverRange, row: number, col: number): boolean {
+  return [h, ...h.more].some(
+    (s) => s.row === row && col >= s.startCol && col < s.endCol,
+  );
 }
 
 interface VisibleHit {
@@ -213,9 +226,19 @@ function applyHoverHighlight(
   hover: HoverRange | null,
 ): RenderPayload {
   if (!hover) return screen;
-  const { row, startCol, endCol } = hover;
-  if (row < 0 || row >= screen.lines.length) return screen;
-  const original = screen.lines[row];
+  const newLines = screen.lines.slice();
+  for (const { row, startCol, endCol } of [hover, ...hover.more]) {
+    if (row < 0 || row >= screen.lines.length) continue;
+    newLines[row] = highlightRow(newLines[row], startCol, endCol);
+  }
+  return { ...screen, lines: newLines };
+}
+
+function highlightRow(
+  original: CellRun[],
+  startCol: number,
+  endCol: number,
+): CellRun[] {
   const newRuns: CellRun[] = [];
   let col = 0; // tracked in cell columns
   for (const run of original) {
@@ -250,9 +273,7 @@ function applyHoverHighlight(
     }
     col = runEnd;
   }
-  const newLines = screen.lines.slice();
-  newLines[row] = newRuns;
-  return { ...screen, lines: newLines };
+  return newRuns;
 }
 
 /**
@@ -1293,9 +1314,7 @@ export function TerminalWebGPU({
       openable &&
       hov &&
       hov.match.kind === "path" &&
-      hov.row === row &&
-      snapped >= hov.startCol &&
-      snapped < hov.endCol
+      hoverCovers(hov, row, snapped)
         ? hov.match
         : null;
     const linkHit: ClickableMatch | null = openable
@@ -1499,13 +1518,14 @@ export function TerminalWebGPU({
           cur.startCol === next.startCol &&
           cur.endCol === next.endCol &&
           cur.match.kind === next.match.kind &&
-          key(cur.match) === key(next.match));
+          key(cur.match) === key(next.match) &&
+          JSON.stringify(cur.more) === JSON.stringify(next.more));
       if (same) return;
       hoveredUrlRef.current = next;
       redraw();
     };
 
-    const applyMatch = (match: ClickableMatch | null) => {
+    const applyMatch = (match: ClickableMatch | null, more: RowSpan[] = []) => {
       setHover(
         match
           ? {
@@ -1513,6 +1533,7 @@ export function TerminalWebGPU({
               row: match.row,
               startCol: match.startCol,
               endCol: match.endCol,
+              more,
             }
           : null,
       );
@@ -1576,13 +1597,7 @@ export function TerminalWebGPU({
       // Still within the currently-highlighted path → keep it (no re-probe
       // while sweeping across a multi-cell path).
       const cur = hoveredUrlRef.current;
-      if (
-        cur &&
-        cur.match.kind === "path" &&
-        cur.row === row &&
-        col >= cur.startCol &&
-        col < cur.endCol
-      ) {
+      if (cur && cur.match.kind === "path" && hoverCovers(cur, row, col)) {
         return;
       }
 
@@ -1632,6 +1647,7 @@ export function TerminalWebGPU({
         start: number;
         end: number;
         abs_path: string;
+        more?: RowSpan[];
       } | null> = tag
         ? invoke<string | null>("pasted_image_path", {
             paneId: pane.id,
@@ -1640,30 +1656,45 @@ export function TerminalWebGPU({
             p ? { start: tag.start, end: tag.end, abs_path: p } : null,
           )
         : Promise.all(
-            joins.map((j) =>
-              charIdx >= j.start && charIdx < j.end
+            joins.map((j) => {
+              const own = j.rows.find((r) => r.delta === 0)!;
+              return charIdx >= own.start && charIdx < own.end
                 ? invoke<ResolvedPath | null>("resolve_path_at", {
                     line: j.text,
                     cwd: cwdRef.current,
-                    click: charIdx + j.offset,
-                  }).then(
-                    (r) =>
-                      // Back to this row: only its own part gets underlined.
-                      r && {
-                        start: Math.max(r.start - j.offset, j.start),
-                        end: Math.min(r.end - j.offset, j.end),
-                        abs_path: r.abs_path,
-                        len: r.end - r.start,
-                      },
-                  )
-                : null,
-            ),
-          ).then((found) =>
-            found.reduce(
-              (best, r) => (r && (!best || r.len > best.len) ? r : best),
+                    click: charIdx + own.offset,
+                  }).then((r) => r && { r, j })
+                : null;
+            }),
+          ).then((found) => {
+            const best = found.reduce(
+              (b, f) =>
+                f && (!b || f.r.end - f.r.start > b.r.end - b.r.start) ? f : b,
               null,
-            ),
-          );
+            );
+            if (!best) return null;
+            // Back to each row: the hovered row's part, then the rest of a
+            // wrapped path on the rows around it.
+            const { r, j } = best;
+            let start = 0;
+            let end = 0;
+            const more: RowSpan[] = [];
+            for (const seg of j.rows) {
+              const s = Math.max(r.start - seg.offset, seg.start);
+              const e = Math.min(r.end - seg.offset, seg.end);
+              if (s >= e) continue;
+              if (seg.delta === 0) {
+                start = s;
+                end = e;
+                continue;
+              }
+              const l = screen.lines[row + seg.delta];
+              const m = l && buildRowMapping(l);
+              const cols = m && charRangeToCols(m.charToCol, m.charWidth, s, e);
+              if (cols) more.push({ row: row + seg.delta, ...cols });
+            }
+            return { start, end, abs_path: r.abs_path, more };
+          });
       void resolved
         .then((res) => {
           if (seq !== probeSeq) return; // superseded by a newer move
@@ -1683,13 +1714,16 @@ export function TerminalWebGPU({
             clearAffordance();
             return;
           }
-          applyMatch({
-            kind: "path",
-            absPath: res.abs_path,
-            startCol: cols.startCol,
-            endCol: cols.endCol,
-            row,
-          });
+          applyMatch(
+            {
+              kind: "path",
+              absPath: res.abs_path,
+              startCol: cols.startCol,
+              endCol: cols.endCol,
+              row,
+            },
+            res.more,
+          );
         })
         .catch(() => {});
     };

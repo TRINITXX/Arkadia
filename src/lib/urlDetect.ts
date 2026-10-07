@@ -88,47 +88,52 @@ export function charRangeToCols(
   };
 }
 
+/** Where one row's content sits in a `joinWrappedRows` text. */
+export interface JoinedRow {
+  /** -1 = the row above, 0 = the hovered row, 1 = the row below. */
+  delta: -1 | 0 | 1;
+  /** A char at `i` in this row sits at `i + offset` in the joined text. */
+  offset: number;
+  /** This row's content, borders and padding excluded (row char indices). */
+  start: number;
+  end: number;
+}
+
 /**
  * A row's plaintext glued to the rows around it, for paths a renderer wrapped
  * over several lines: Claude Code breaks long lines itself, so the terminal
  * holds separate rows. Each row brings its content only — indentation and a
  * message frame's `┃`/`│` borders dropped — joined by `sep` (`" "` when the
- * break ate a space, `""` when it cut a word). A char at `i` in `cur` sits at
- * `i + offset` in `text`; `start`/`end` bound `cur`'s content. Indices count
- * code points, as `buildRowMapping` and the backend `resolve_path_at` do.
+ * break ate a space, `""` when it cut a word). `rows` maps each contributing
+ * row back (the hovered one always present). Indices count code points, as
+ * `buildRowMapping` and the backend `resolve_path_at` do.
  */
 export function joinWrappedRows(
   prev: string | null,
   cur: string,
   next: string | null,
   sep: string,
-): { text: string; offset: number; start: number; end: number } {
+): { text: string; rows: JoinedRow[] } {
   const isEdge = (c: string) => /[\s┃│]/.test(c);
-  const span = (chars: string[]): [number, number] => {
-    let a = 0;
-    while (a < chars.length && isEdge(chars[a])) a++;
-    let b = chars.length;
-    while (b > a && isEdge(chars[b - 1])) b--;
-    return [a, b];
-  };
-  const body = (s: string | null): string[] => {
-    if (s === null) return [];
+  const out: string[] = [];
+  const rows: JoinedRow[] = [];
+  const add = (s: string | null, delta: -1 | 0 | 1) => {
+    if (s === null) return;
     const chars = [...s];
-    const [a, b] = span(chars);
-    return chars.slice(a, b);
+    let start = 0;
+    while (start < chars.length && isEdge(chars[start])) start++;
+    let end = chars.length;
+    while (end > start && isEdge(chars[end - 1])) end--;
+    // A blank neighbour adds nothing; the hovered row always counts.
+    if (start === end && delta !== 0) return;
+    if (out.length) out.push(...sep);
+    rows.push({ delta, offset: out.length - start, start, end });
+    out.push(...chars.slice(start, end));
   };
-  const curChars = [...cur];
-  const [start, end] = span(curChars);
-  const prevBody = body(prev);
-  const nextBody = body(next);
-  const before = prevBody.length ? [...prevBody, ...sep] : [];
-  const after = nextBody.length ? [...sep, ...nextBody] : [];
-  return {
-    text: [...before, ...curChars.slice(start, end), ...after].join(""),
-    offset: before.length - start,
-    start,
-    end,
-  };
+  add(prev, -1);
+  add(cur, 0);
+  add(next, 1);
+  return { text: out.join(""), rows };
 }
 
 /**
