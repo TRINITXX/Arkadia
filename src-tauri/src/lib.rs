@@ -428,7 +428,13 @@ fn strip_line_col(s: &[char]) -> (usize, Option<u32>, Option<u32>) {
 /// resolve to an existing file) is naturally excluded. Executables are skipped.
 #[tauri::command]
 fn resolve_path_at(line: String, cwd: Option<String>, click: usize) -> Option<ResolvedPath> {
-    let chars: Vec<char> = line.chars().collect();
+    // A non-breaking space reads as a space: renderers draw inline code with
+    // them (`C:\Claude Desktop\…` keeps its space unbroken), and no real path
+    // holds one. One char for one, so `click` and the returned range stand.
+    let chars: Vec<char> = line
+        .chars()
+        .map(|c| if c == '\u{a0}' { ' ' } else { c })
+        .collect();
     let n = chars.len();
     if n == 0 || click >= n {
         return None;
@@ -642,6 +648,21 @@ mod tests {
         let abs = file.to_string_lossy().to_string();
         let line = format!("see {abs} now");
         let click = click_at(&line, "file.txt", 2);
+        let r = resolve_path_at(line, None, click).expect("should resolve");
+        assert_eq!(r.abs_path, abs);
+    }
+
+    #[test]
+    fn resolves_path_whose_spaces_are_non_breaking() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("Assets IA");
+        fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("cover.jpg");
+        fs::write(&file, "x").unwrap();
+        let abs = file.to_string_lossy().to_string();
+        // Inline code as a display mod draws it: padded, spaces unbreakable.
+        let line = format!("Kit : \u{a0}{}\u{a0}", abs.replace(' ', "\u{a0}"));
+        let click = click_at(&line, "cover.jpg", 2);
         let r = resolve_path_at(line, None, click).expect("should resolve");
         assert_eq!(r.abs_path, abs);
     }
