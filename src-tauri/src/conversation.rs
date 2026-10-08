@@ -141,6 +141,17 @@ struct PaneMap {
     transcript_path: Option<String>,
     #[serde(rename = "sessionId")]
     session_id: Option<String>,
+    /// The Claude session's working directory, as the hook saw it.
+    cwd: Option<String>,
+}
+
+fn read_pane_map(pane_id: &str) -> Option<PaneMap> {
+    let path = dirs::data_local_dir()?
+        .join("Arkadia")
+        .join("panes")
+        .join(format!("{pane_id}.json"));
+    let raw = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(raw.trim_start_matches('\u{feff}')).ok()
 }
 
 /// The Claude session id the notify hook recorded for a pane, or None when the
@@ -148,13 +159,12 @@ struct PaneMap {
 /// previous session" resolves the `claude --resume` target from the OLD pane id.
 #[tauri::command]
 pub fn pane_session_id(pane_id: String) -> Option<String> {
-    let path = dirs::data_local_dir()?
-        .join("Arkadia")
-        .join("panes")
-        .join(format!("{pane_id}.json"));
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let m: PaneMap = serde_json::from_str(raw.trim_start_matches('\u{feff}')).ok()?;
-    m.session_id.filter(|s| !s.is_empty())
+    read_pane_map(&pane_id)?.session_id.filter(|s| !s.is_empty())
+}
+
+/// The folder a pane's Claude session runs in, or None when it never ran Claude.
+pub fn pane_cwd(pane_id: &str) -> Option<String> {
+    read_pane_map(pane_id)?.cwd.filter(|s| !s.is_empty())
 }
 
 /// The file behind a `[Image #n]` tag of a pane's Claude session, or None.

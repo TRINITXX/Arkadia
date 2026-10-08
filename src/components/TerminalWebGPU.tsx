@@ -53,7 +53,7 @@ import type {
   TerminalPalette,
 } from "@/types";
 
-/** Backend result of the `resolve_path_at` command. */
+/** Backend result of the `resolve_path_in_pane` command. */
 interface ResolvedPath {
   start: number;
   end: number;
@@ -1228,7 +1228,7 @@ export function TerminalWebGPU({
             await openImage(match.absPath);
           } else if (match.kind === "path") {
             // Open with the OS default app; absPath was already resolved +
-            // filesystem-validated by the backend `resolve_path_at`.
+            // filesystem-validated by the backend `resolve_path_in_pane`.
             await invoke("open_path", { path: match.absPath });
           } else {
             // url | hyperlink → OS browser via the shell scope (http/https).
@@ -1659,10 +1659,11 @@ export function TerminalWebGPU({
             joins.map((j) => {
               const own = j.rows.find((r) => r.delta === 0)!;
               return charIdx >= own.start && charIdx < own.end
-                ? invoke<ResolvedPath | null>("resolve_path_at", {
+                ? invoke<ResolvedPath | null>("resolve_path_in_pane", {
                     line: j.text,
                     cwd: cwdRef.current,
                     click: charIdx + own.offset,
+                    paneId: pane.id,
                   }).then((r) => r && { r, j })
                 : null;
             }),

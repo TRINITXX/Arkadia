@@ -189,7 +189,7 @@ pub fn run() {
             agent_state_for_project,
             open_path,
             run_detached,
-            resolve_path_at,
+            resolve_path_in_pane,
             save_screenshot,
             conversation::read_conversation,
             conversation::read_conversation_delta,
@@ -353,6 +353,27 @@ fn run_detached(command: String, cwd: String) -> Result<(), String> {
     c.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// `resolve_path_at` for a pane: relative paths are tried against the shell's
+/// cwd (OSC 7), then against the folder of the pane's Claude session. A tab
+/// that starts Claude straight away never prints a shell prompt, so its OSC 7
+/// cwd stays unknown, and Claude names files relative to its own folder anyway.
+#[tauri::command]
+fn resolve_path_in_pane(
+    line: String,
+    cwd: Option<String>,
+    click: usize,
+    pane_id: String,
+) -> Option<ResolvedPath> {
+    if let Some(found) = resolve_path_at(line.clone(), cwd.clone(), click) {
+        return Some(found);
+    }
+    let claude_cwd = conversation::pane_cwd(&pane_id)?;
+    if cwd.as_deref() == Some(claude_cwd.as_str()) {
+        return None;
+    }
+    resolve_path_at(line, Some(claude_cwd), click)
+}
+
 /// A file path located inside a terminal line by `resolve_path_at`. `start`/`end`
 /// are char indices into the line (end exclusive) for the highlight extent.
 #[derive(serde::Serialize)]
@@ -426,7 +447,6 @@ fn strip_line_col(s: &[char]) -> (usize, Option<u32>, Option<u32>) {
 /// resolving relative paths against `cwd`. Spaces are allowed inside a path; the
 /// filesystem check is what bounds the path, so prose around it (which doesn't
 /// resolve to an existing file) is naturally excluded. Executables are skipped.
-#[tauri::command]
 fn resolve_path_at(line: String, cwd: Option<String>, click: usize) -> Option<ResolvedPath> {
     // A non-breaking space reads as a space: renderers draw inline code with
     // them (`C:\Claude Desktop\…` keeps its space unbroken), and no real path
