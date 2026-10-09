@@ -43,7 +43,11 @@ import { measureCellSize } from "@/lib/cellSize";
 import { focusPaneElement } from "@/lib/paneFocus";
 import { DEFAULT_CUSTOM_PALETTE, resolveActivePalette } from "@/lib/palettes";
 import { resolveBackground } from "@/lib/backgrounds";
-import { stateFromTitle, type AgentStateValue } from "@/lib/agentState";
+import {
+  stateFromTitle,
+  withBackgroundTasks,
+  type AgentStateValue,
+} from "@/lib/agentState";
 import { findProjectsByPath, parentOf } from "@/lib/externalAction";
 import { resolveProjectTarget, type ClaudeSession } from "@/lib/sessionsIndex";
 import { subscribeStable } from "@/lib/tauriEvents";
@@ -75,6 +79,7 @@ import {
   type EditorProtocol,
   type ExternalAction,
   type NotifStyle,
+  type PaneBackgroundPayload,
   type PaletteId,
   type PaneState,
   type Project,
@@ -192,17 +197,26 @@ export function App() {
   // We deliberately do NOT use the backend cwd-watcher here: it maps state by
   // working directory (many-to-one), so a non-Claude terminal that merely
   // shares a folder with a Claude session inherited its state and showed a
-  // phantom badge. The title is the only reliable per-pane signal.
+  // phantom badge. The title is the only reliable per-pane signal, refined by
+  // the hook's per-pane count of background tasks (keyed by the same pane id).
+  const [backgroundTasks, setBackgroundTasks] = useState<
+    Record<string, number>
+  >({});
   const effectivePaneStates = useMemo(() => {
     const merged: Record<string, AgentStateValue> = {};
     for (const tab of tabs) {
       for (const [paneId, pane] of Object.entries(tab.panes)) {
         const fromTitle = stateFromTitle(pane.title);
-        if (fromTitle) merged[paneId] = fromTitle;
+        if (fromTitle) {
+          merged[paneId] = withBackgroundTasks(
+            fromTitle,
+            backgroundTasks[paneId] ?? 0,
+          );
+        }
       }
     }
     return merged;
-  }, [tabs]);
+  }, [tabs, backgroundTasks]);
   // Sticky set of panes that have ever looked like a Claude Code session (a
   // status glyph in the terminal title — ✳ waiting, or a busy spinner). Once a
   // pane qualifies it stays flagged for the app session, so the bottom prompt
@@ -1192,6 +1206,15 @@ export function App() {
           prev[tabId] ? prev : { ...prev, [tabId]: true },
         );
       }),
+      subscribeStable<PaneBackgroundPayload>(
+        listen,
+        "pane-background",
+        ({ paneId, count }) => {
+          setBackgroundTasks((prev) =>
+            prev[paneId] === count ? prev : { ...prev, [paneId]: count },
+          );
+        },
+      ),
       // The terminal auto-scroll to the reply start is driven entirely in the
       // backend (off the Stop/PreToolUse hook, when Arkadia is foreground) — no
       // frontend listener needed. Its on/off setting is synced below.

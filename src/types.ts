@@ -78,6 +78,12 @@ export interface BellPayload {
   session_id: string;
 }
 
+/** Background tasks a pane's Claude session still runs (notify hook count). */
+export interface PaneBackgroundPayload {
+  paneId: string;
+  count: number;
+}
+
 export interface SearchHit {
   /** 0 = oldest scrollback line, scroll_max = visible row 0. */
   total_row: number;

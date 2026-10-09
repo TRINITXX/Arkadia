@@ -8,6 +8,7 @@ mod conversation;
 #[cfg_attr(debug_assertions, allow(dead_code))]
 mod external_action;
 mod fonts;
+mod pane_background;
 mod photos;
 mod popup;
 mod screenshots;
@@ -123,6 +124,15 @@ pub fn run() {
                     std::thread::spawn(move || {
                         if let Err(e) = popup::run_notify_watcher(popup_app, popup_registry) {
                             eprintln!("[arkadia popup] watcher stopped: {e}");
+                        }
+                    });
+                }
+                // Background-task count per pane, for the sidebar badge.
+                {
+                    let panes_app = app_handle.clone();
+                    std::thread::spawn(move || {
+                        if let Err(e) = pane_background::run_pane_map_watcher(panes_app) {
+                            eprintln!("[arkadia panes] watcher stopped: {e}");
                         }
                     });
                 }

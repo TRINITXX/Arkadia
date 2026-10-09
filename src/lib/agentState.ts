@@ -42,6 +42,18 @@ export function stateFromTitle(title: string): AgentStateValue | null {
   return null;
 }
 
+// The title flips to ✳ whenever Claude's own turn ends, even while background
+// subagents or workflows run and it will resume on its own. The
+// notify hook counts those tasks; while any remain, Claude isn't waiting on the
+// user, so the pane reads as busy.
+export function withBackgroundTasks(
+  state: AgentStateValue,
+  backgroundTasks: number,
+): AgentStateValue {
+  if (state.kind !== "waiting" || backgroundTasks <= 0) return state;
+  return { kind: "busy", tool: "tâche de fond" };
+}
+
 export function aggregate(states: AgentStateValue[]): AgentStateValue {
   // waiting outranks busy because it requires user action (AskUserQuestion,
   // ExitPlanMode) — it must be surfaced even when other agents are working.

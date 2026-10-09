@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { stateFromTitle, isStatusGlyph, aggregate } from "@/lib/agentState";
+import {
+  stateFromTitle,
+  isStatusGlyph,
+  aggregate,
+  withBackgroundTasks,
+} from "@/lib/agentState";
 
 describe("stateFromTitle", () => {
   it("maps a leading ✳ to waiting", () => {
@@ -57,5 +62,25 @@ describe("aggregate", () => {
     ).toBe("waiting");
     expect(aggregate([{ kind: "none" }, { kind: "busy" }]).kind).toBe("busy");
     expect(aggregate([]).kind).toBe("none");
+  });
+});
+
+describe("withBackgroundTasks", () => {
+  const waiting = { kind: "waiting", session_id: "" } as const;
+
+  it("shows a waiting pane as busy while background tasks run", () => {
+    expect(withBackgroundTasks(waiting, 2)).toEqual({
+      kind: "busy",
+      tool: "tâche de fond",
+    });
+  });
+
+  it("keeps waiting once nothing runs in the background", () => {
+    expect(withBackgroundTasks(waiting, 0)).toBe(waiting);
+  });
+
+  it("leaves a busy pane alone", () => {
+    const busy = { kind: "busy" } as const;
+    expect(withBackgroundTasks(busy, 3)).toBe(busy);
   });
 });
