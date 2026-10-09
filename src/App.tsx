@@ -161,6 +161,13 @@ export function App() {
   // The PREVIOUS session's tab snapshot, frozen at load: the on-demand
   // "restore previous session" target. Cleared once restored (one-shot).
   const [lastSession, setLastSession] = useState<SessionSnapshot | null>(null);
+  // Restore that snapshot by itself at launch instead of waiting for the button.
+  const [autoRestoreSession, setAutoRestoreSession] = useState(false);
+  // Set at load when this launch should auto-restore; consumed once.
+  const autoRestorePending = useRef(false);
+  // Projects the launch-time restore is rebuilding: the empty-project
+  // auto-spawn must not add a blank tab next to them. Cleared once it settles.
+  const autoRestoringProjectIds = useRef<Set<string>>(new Set());
   // Modern-view message-type filters (session-only; default all visible).
   const [convFilters, setConvFilters] =
     useState<ConvFilters>(DEFAULT_CONV_FILTERS);
@@ -421,6 +428,7 @@ export function App() {
         setSessionsGrouping(state.sessionsGrouping);
         setSidepanelOpen(state.sidepanelOpen);
         setScrollbackLines(state.scrollbackLines);
+        setAutoRestoreSession(state.autoRestoreSession);
 
         // The Rust side outlives a webview reload — the freeze watchdog forces
         // one — and pane ids ARE its session ids, so the tabs are rebuilt on
@@ -428,9 +436,11 @@ export function App() {
         // untouched, and no session is left orphaned emitting frames nobody
         // reads. After a real relaunch the list is empty and the snapshot falls
         // through to the manual "restore" button, unchanged.
-        const liveIds = await invoke<string[]>("list_live_panes").catch(
-          () => [] as string[],
-        );
+        let liveIdsFailed = false;
+        const liveIds = await invoke<string[]>("list_live_panes").catch(() => {
+          liveIdsFailed = true;
+          return [] as string[];
+        });
         if (cancelled) return;
         const plan = planReattach(state.sessionSnapshot, liveIds);
         if (plan.tabs.length > 0) {
@@ -464,6 +474,11 @@ export function App() {
           setActiveInputProjectIds((prev) => new Set([...prev, ...touched]));
         }
         setLastSession(plan.leftover);
+        // Only on a real relaunch: after a webview reload the live tabs came
+        // back above, and the leftover is tabs whose shells died.
+        // A failed lookup could hide live tabs: never auto-resume over them.
+        autoRestorePending.current =
+          state.autoRestoreSession && !liveIdsFailed && liveIds.length === 0;
         setLoaded(true);
       })
       .catch((e) => {
@@ -504,6 +519,7 @@ export function App() {
         sidepanelOpen,
         scrollbackLines,
         sessionSnapshot: buildSessionSnapshot(tabs, claudePaneIds, Date.now()),
+        autoRestoreSession,
       });
     }, 500);
     return () => clearTimeout(t);
@@ -534,6 +550,7 @@ export function App() {
     scrollbackLines,
     tabs,
     claudePaneIds,
+    autoRestoreSession,
   ]);
 
   // The notification is triggered by the Rust backend, so mirror its style and
@@ -767,6 +784,16 @@ export function App() {
         : "rien à restaurer (projets disparus ?)",
     );
   }, [lastSession, projects, spawnPane, pushToast, markProjectInput]);
+
+  // Launch-time auto-restore (opt-in setting): same path as the button.
+  useEffect(() => {
+    if (!loaded || !autoRestorePending.current) return;
+    autoRestorePending.current = false;
+    if (!lastSession || lastSession.tabs.length === 0) return;
+    const restoring = autoRestoringProjectIds.current;
+    for (const t of lastSession.tabs) restoring.add(t.projectId);
+    void restoreLastSession().finally(() => restoring.clear());
+  }, [loaded, lastSession, restoreLastSession]);
 
   // ─── Sessions overlay (browse / resume any past conversation) ──
 
@@ -1239,7 +1266,10 @@ export function App() {
     if (!hasTab) {
       // Only when we just switched to (or launched into) this project — not
       // when the user has just closed its last tab (same project → no spawn).
-      if (projectChanged) {
+      if (
+        projectChanged &&
+        !autoRestoringProjectIds.current.has(activeProject.id)
+      ) {
         void spawnTabFor(activeProject);
       }
     } else if (!activeTabIdByProject[activeProject.id]) {
@@ -2130,6 +2160,8 @@ export function App() {
         onChangeMessageFramesEnabled={setMessageFramesEnabled}
         autoScrollReplyEnabled={autoScrollReplyEnabled}
         onChangeAutoScrollReplyEnabled={setAutoScrollReplyEnabled}
+        autoRestoreSession={autoRestoreSession}
+        onChangeAutoRestoreSession={setAutoRestoreSession}
         toolDensity={toolDensity}
         onChangeToolDensity={setToolDensity}
       />

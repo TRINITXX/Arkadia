@@ -72,6 +72,7 @@ const KEY_SESSIONS_GROUPING = "sessionsGrouping";
 const KEY_SIDEPANEL_OPEN = "sidepanelOpen";
 const KEY_SCROLLBACK_LINES = "scrollbackLines";
 const KEY_SESSION_SNAPSHOT = "sessionSnapshot";
+const KEY_AUTO_RESTORE_SESSION = "autoRestoreSession";
 
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 28;
@@ -137,6 +138,8 @@ export interface PersistedState {
   scrollbackLines: number;
   /** Open tabs at last save, for the on-demand "restore previous session". */
   sessionSnapshot: SessionSnapshot | null;
+  /** Restore the previous session's tabs at launch, without the button. */
+  autoRestoreSession: boolean;
 }
 
 const DEFAULT_STATE: PersistedState = {
@@ -164,6 +167,7 @@ const DEFAULT_STATE: PersistedState = {
   sidepanelOpen: true,
   scrollbackLines: SCROLLBACK_LINES_DEFAULT,
   sessionSnapshot: null,
+  autoRestoreSession: false,
 };
 
 /** Reads a boolean store key, defaulting to `fallback`. */
@@ -473,6 +477,9 @@ export async function loadState(
   const rawSidepanelOpen = await store.get<unknown>(KEY_SIDEPANEL_OPEN);
   const rawScrollbackLines = await store.get<unknown>(KEY_SCROLLBACK_LINES);
   const rawSessionSnapshot = await store.get<unknown>(KEY_SESSION_SNAPSHOT);
+  const rawAutoRestoreSession = await store.get<unknown>(
+    KEY_AUTO_RESTORE_SESSION,
+  );
 
   return {
     projects: dedupeProjectsByPath(
@@ -524,6 +531,10 @@ export async function loadState(
     sidepanelOpen: boolOr(rawSidepanelOpen, DEFAULT_STATE.sidepanelOpen),
     scrollbackLines: normalizeScrollbackLines(rawScrollbackLines),
     sessionSnapshot: normalizeSessionSnapshot(rawSessionSnapshot),
+    autoRestoreSession: boolOr(
+      rawAutoRestoreSession,
+      DEFAULT_STATE.autoRestoreSession,
+    ),
   };
 }
 
@@ -552,6 +563,7 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_SESSIONS_GROUPING, state.sessionsGrouping);
   await store.set(KEY_SIDEPANEL_OPEN, state.sidepanelOpen);
   await store.set(KEY_SCROLLBACK_LINES, state.scrollbackLines);
+  await store.set(KEY_AUTO_RESTORE_SESSION, state.autoRestoreSession);
   // Never clobber the previous session's snapshot with an empty one: after a
   // relaunch the tabs start empty, and this key IS what "restore previous
   // session" reads.

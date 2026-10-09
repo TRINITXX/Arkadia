@@ -53,6 +53,8 @@ interface SettingsDialogProps {
   onChangeMessageFramesEnabled: (next: boolean) => void;
   autoScrollReplyEnabled: boolean;
   onChangeAutoScrollReplyEnabled: (next: boolean) => void;
+  autoRestoreSession: boolean;
+  onChangeAutoRestoreSession: (next: boolean) => void;
   toolDensity: ToolDensity;
   onChangeToolDensity: (next: ToolDensity) => void;
 }
@@ -94,6 +96,8 @@ export function SettingsDialog({
   onChangeMessageFramesEnabled,
   autoScrollReplyEnabled,
   onChangeAutoScrollReplyEnabled,
+  autoRestoreSession,
+  onChangeAutoRestoreSession,
   toolDensity,
   onChangeToolDensity,
 }: SettingsDialogProps) {
@@ -198,6 +202,8 @@ export function SettingsDialog({
                 onChangeMessageFramesEnabled={onChangeMessageFramesEnabled}
                 autoScrollReplyEnabled={autoScrollReplyEnabled}
                 onChangeAutoScrollReplyEnabled={onChangeAutoScrollReplyEnabled}
+                autoRestoreSession={autoRestoreSession}
+                onChangeAutoRestoreSession={onChangeAutoRestoreSession}
                 toolDensity={toolDensity}
                 onChangeToolDensity={onChangeToolDensity}
               />
@@ -262,6 +268,8 @@ interface GeneralSettingsProps {
   onChangeMessageFramesEnabled: (next: boolean) => void;
   autoScrollReplyEnabled: boolean;
   onChangeAutoScrollReplyEnabled: (next: boolean) => void;
+  autoRestoreSession: boolean;
+  onChangeAutoRestoreSession: (next: boolean) => void;
   toolDensity: ToolDensity;
   onChangeToolDensity: (next: ToolDensity) => void;
 }
@@ -476,6 +484,8 @@ function GeneralSettings({
   onChangeMessageFramesEnabled,
   autoScrollReplyEnabled,
   onChangeAutoScrollReplyEnabled,
+  autoRestoreSession,
+  onChangeAutoRestoreSession,
   toolDensity,
   onChangeToolDensity,
 }: GeneralSettingsProps) {
@@ -732,6 +742,12 @@ function GeneralSettings({
             onChange={onChangeAutoScrollReplyEnabled}
             label="Défilement auto vers la réponse"
             hint="Quand Claude a fini, remonte au début de sa dernière réponse pour la lire du haut."
+          />
+          <SettingToggle
+            checked={autoRestoreSession}
+            onChange={onChangeAutoRestoreSession}
+            label="Reprendre la session précédente au lancement"
+            hint="À l'ouverture d'Arkadia, rouvre les onglets de la dernière fois et relance leurs conversations Claude, sans passer par le bouton."
           />
         </div>
       </section>
