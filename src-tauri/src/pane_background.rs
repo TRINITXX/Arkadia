@@ -2,8 +2,8 @@
 //! session still waits on, for the sidebar badge.
 //!
 //! Claude Code stamps `✳` into the title whenever its own turn ends, even while
-//! background subagents run and it will resume on its own (unless its reply asks
-//! a question; shells never count). The notify hook counts
+//! background subagents run and it will resume on its own (shells never
+//! count). The notify hook counts
 //! those tasks from the transcript and writes `backgroundTasks` into the pane map
 //! (`panes/<paneId>.json`); this watcher relays every change to the front as a
 //! `pane-background` event, which shows such a pane as busy instead of waiting.
