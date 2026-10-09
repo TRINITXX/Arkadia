@@ -14,7 +14,9 @@ import { useAccounts } from "@/lib/useAccounts";
 import {
   MAIN_ACCOUNT_ID,
   claudePanesToSwitch,
+  formatReset,
   paneAccountId,
+  planAutoSwitch,
   tabAccountMarks,
 } from "@/lib/accounts";
 import { FloatingPromptBar } from "@/components/PromptBar";
@@ -34,7 +36,15 @@ import {
   ModernConversationView,
   type ConvFilters,
 } from "@/components/ModernConversationView";
-import { loadState, saveState, newProjectId, newWorkspaceId } from "@/store";
+import {
+  loadLimitState,
+  loadState,
+  saveLimitState,
+  saveState,
+  newProjectId,
+  newWorkspaceId,
+  type LimitState,
+} from "@/store";
 import { applyActiveReorder } from "@/lib/activeOrder";
 import { WorkspaceContextMenu } from "@/components/WorkspaceContextMenu";
 import { WorkspaceDialog } from "@/components/WorkspaceDialog";
@@ -129,6 +139,14 @@ interface PaneMenuState {
   y: number;
 }
 
+/** `claude-quota-hit` (Rust transcript watcher). */
+interface QuotaHitPayload {
+  sessionId: string;
+  limitType: string;
+  /** Unix seconds. */
+  resetsAt: number;
+}
+
 interface TabMenuState {
   tabId: string;
   x: number;
@@ -181,6 +199,7 @@ export function App() {
   const [lastSession, setLastSession] = useState<SessionSnapshot | null>(null);
   // Restore that snapshot by itself at launch instead of waiting for the button.
   const [autoRestoreSession, setAutoRestoreSession] = useState(false);
+  const [autoSwitchOnLimit, setAutoSwitchOnLimit] = useState(true);
   // Set at load when this launch should auto-restore; consumed once.
   const autoRestorePending = useRef(false);
   // Projects the launch-time restore is rebuilding: the empty-project
@@ -276,6 +295,9 @@ export function App() {
 
   // paneId (= backend session_id) → tabId for fast routing of render/closed events.
   const paneToTab = useRef<Map<string, string>>(new Map());
+  // paneId → when this webview spawned it (absent for panes reattached after
+  // a reload). Read by the automatic switch on a usage limit.
+  const paneBornAt = useRef<Map<string, number>>(new Map());
 
   // Wrapper around the visible PaneTreeView. We measure it before spawning a
   // PTY so PowerShell starts at the right size — otherwise it boots at 120×30
@@ -457,6 +479,7 @@ export function App() {
         setSidepanelOpen(state.sidepanelOpen);
         setScrollbackLines(state.scrollbackLines);
         setAutoRestoreSession(state.autoRestoreSession);
+        setAutoSwitchOnLimit(state.autoSwitchOnLimit);
 
         // The Rust side outlives a webview reload — the freeze watchdog forces
         // one — and pane ids ARE its session ids, so the tabs are rebuilt on
@@ -548,6 +571,7 @@ export function App() {
         scrollbackLines,
         sessionSnapshot: buildSessionSnapshot(tabs, claudePaneIds, Date.now()),
         autoRestoreSession,
+        autoSwitchOnLimit,
       });
     }, 500);
     return () => clearTimeout(t);
@@ -579,6 +603,7 @@ export function App() {
     tabs,
     claudePaneIds,
     autoRestoreSession,
+    autoSwitchOnLimit,
   ]);
 
   // The notification is triggered by the Rust backend, so mirror its style and
@@ -695,6 +720,7 @@ export function App() {
           initCommand,
           accountId,
         });
+        paneBornAt.current.set(sessionId, Date.now());
         return sessionId;
       } catch (e) {
         setError(String(e));
@@ -1096,15 +1122,87 @@ export function App() {
   // resume the same conversation twice.
   const switchingTabs = useRef<Set<string>>(new Set());
 
-  // Relaunches each Claude of the tab on another account, on the same
+  // Relaunches one pane's Claude on another account, on the same
   // conversation: transcripts are shared by every account (junctions into
   // `~/.claude`), so `ccd --resume` finds it. The new pane takes the old one's
   // place in the layout; the old one is closed only once the new one exists.
+  // `prompt` becomes the resumed session's first message. "failed" = no pane
+  // could be spawned at all, worth stopping a batch over.
+  const relaunchPaneOnAccount = useCallback(
+    async (
+      tabId: string,
+      oldId: string,
+      accountId: string,
+      prompt?: string,
+    ): Promise<"done" | "skipped" | "failed"> => {
+      const stillThere = () =>
+        tabsRef.current.some(
+          (t) => t.id === tabId && collectPaneIds(t.tree).includes(oldId),
+        );
+      const tab = tabsRef.current.find((t) => t.id === tabId);
+      const old = tab?.panes[oldId];
+      const project = projects.find((p) => p.id === tab?.projectId);
+      if (!old || !project) return "skipped";
+      const sid = await invoke<string | null>("pane_session_id", {
+        paneId: oldId,
+      }).catch(() => null);
+      if (!sid) return "skipped";
+      // `--resume` only finds the transcript from the folder Claude was
+      // launched in: Rust checks the candidates against the transcript's
+      // folder. None matching → leave this Claude running.
+      const cwd = await invoke<string | null>("pane_resume_cwd", {
+        paneId: oldId,
+        candidates: [old.cwd, project.path].filter((c): c is string => !!c),
+      }).catch(() => null);
+      if (!cwd || !stillThere()) return "skipped";
+      const paneAccount = accountId === MAIN_ACCOUNT_ID ? undefined : accountId;
+      // `ccd` is the user's pwsh alias for Claude and forwards its args.
+      const newId = await spawnPane(
+        cwd,
+        `ccd --resume ${sid}${prompt ? ` ${prompt}` : ""}`,
+        paneAccount,
+      );
+      if (!newId) return "failed";
+      if (!stillThere()) {
+        // Pane or tab closed during the spawn: nowhere to put the new one.
+        void invoke("close_terminal", { sessionId: newId }).catch(() => {});
+        return "skipped";
+      }
+      // The new shell types `ccd` ~800 ms after its spawn, so the old Claude
+      // has that long to exit before the new one reads the transcript.
+      paneToTab.current.delete(oldId);
+      dropFrame(oldId);
+      void invoke("close_terminal", { sessionId: oldId }).catch(() => {});
+      paneToTab.current.set(newId, tabId);
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.id !== tabId) return t;
+          const panes = { ...t.panes };
+          delete panes[oldId];
+          panes[newId] = {
+            id: newId,
+            title: project.name,
+            cwd: null,
+            accountId: paneAccount,
+          };
+          return {
+            ...t,
+            tree: replacePaneInTree(t.tree, oldId, newId),
+            activePaneId: t.activePaneId === oldId ? newId : t.activePaneId,
+            panes,
+          };
+        }),
+      );
+      return "done";
+    },
+    [projects, spawnPane],
+  );
+
+  // Moves every Claude of the tab to another account (tab context menu).
   const switchTabAccount = useCallback(
     async (tabId: string, accountId: string) => {
       const tab = tabs.find((t) => t.id === tabId);
-      const project = projects.find((p) => p.id === tab?.projectId);
-      if (!tab || !project || switchingTabs.current.has(tabId)) return;
+      if (!tab || switchingTabs.current.has(tabId)) return;
       const paneIds = claudePanesToSwitch(tab, accountId);
       if (paneIds.length === 0) return;
       if (paneIds.some((id) => effectivePaneStates[id]?.kind === "busy")) {
@@ -1120,65 +1218,12 @@ export function App() {
         if (!ok) return;
       }
       switchingTabs.current.add(tabId);
-      const paneAccount = accountId === MAIN_ACCOUNT_ID ? undefined : accountId;
-      const stillThere = (paneId: string) =>
-        tabsRef.current.some(
-          (t) => t.id === tabId && collectPaneIds(t.tree).includes(paneId),
-        );
       let switched = 0;
       try {
         for (const oldId of paneIds) {
-          const old = tab.panes[oldId];
-          const sid = await invoke<string | null>("pane_session_id", {
-            paneId: oldId,
-          }).catch(() => null);
-          if (!sid) continue;
-          // `--resume` only finds the transcript from the folder Claude was
-          // launched in: Rust checks the candidates against the transcript's
-          // folder. None matching → leave this Claude running.
-          const cwd = await invoke<string | null>("pane_resume_cwd", {
-            paneId: oldId,
-            candidates: [old.cwd, project.path].filter((c): c is string => !!c),
-          }).catch(() => null);
-          if (!cwd || !stillThere(oldId)) continue;
-          // `ccd` is the user's pwsh alias for Claude and forwards its args.
-          const newId = await spawnPane(
-            cwd,
-            `ccd --resume ${sid}`,
-            paneAccount,
-          );
-          if (!newId) break;
-          if (!stillThere(oldId)) {
-            // Pane or tab closed during the spawn: nowhere to put the new one.
-            void invoke("close_terminal", { sessionId: newId }).catch(() => {});
-            continue;
-          }
-          // The new shell types `ccd` ~800 ms after its spawn, so the old Claude
-          // has that long to exit before the new one reads the transcript.
-          paneToTab.current.delete(oldId);
-          dropFrame(oldId);
-          void invoke("close_terminal", { sessionId: oldId }).catch(() => {});
-          paneToTab.current.set(newId, tabId);
-          setTabs((prev) =>
-            prev.map((t) => {
-              if (t.id !== tabId) return t;
-              const panes = { ...t.panes };
-              delete panes[oldId];
-              panes[newId] = {
-                id: newId,
-                title: project.name,
-                cwd: null,
-                accountId: paneAccount,
-              };
-              return {
-                ...t,
-                tree: replacePaneInTree(t.tree, oldId, newId),
-                activePaneId: t.activePaneId === oldId ? newId : t.activePaneId,
-                panes,
-              };
-            }),
-          );
-          switched++;
+          const result = await relaunchPaneOnAccount(tabId, oldId, accountId);
+          if (result === "failed") break;
+          if (result === "done") switched++;
         }
       } finally {
         switchingTabs.current.delete(tabId);
@@ -1195,7 +1240,259 @@ export function App() {
           : "conversation introuvable, compte inchangé",
       );
     },
-    [tabs, projects, effectivePaneStates, spawnPane, accounts.state, pushToast],
+    [
+      tabs,
+      effectivePaneStates,
+      relaunchPaneOnAccount,
+      accounts.state,
+      pushToast,
+    ],
+  );
+
+  // ─── Automatic switch on a usage limit ─────────────────────────
+
+  // Read from the event listener and the wait checker, which outlive renders.
+  const autoSwitchOnLimitRef = useRef(autoSwitchOnLimit);
+  const accountsStateRef = useRef(accounts.state);
+  const paneStatesRef = useRef(effectivePaneStates);
+  useEffect(() => {
+    autoSwitchOnLimitRef.current = autoSwitchOnLimit;
+    accountsStateRef.current = accounts.state;
+    paneStatesRef.current = effectivePaneStates;
+  }, [autoSwitchOnLimit, accounts.state, effectivePaneStates]);
+
+  // Accounts a limit hit blocks, and paused Claude sessions to resume
+  // (session id → due time). Saved on each change so a restart or a watchdog
+  // reload keeps them; keyed by session, as a restart gives new pane ids.
+  // Waits already overdue at load are dropped: the app was closed when they
+  // came due, and a "continue" hours later would come as a surprise.
+  const limitState = useRef<LimitState>({ waits: {}, blocked: {} });
+  // Saves wait for the load, which would otherwise read back their write.
+  const limitStateLoaded = useRef<Promise<void>>(Promise.resolve());
+  useEffect(() => {
+    limitStateLoaded.current = loadLimitState()
+      .then((saved) => {
+        const { waits, blocked } = limitState.current;
+        const stale = Date.now() - 5 * 60_000;
+        for (const [sid, at] of Object.entries(saved.waits)) {
+          if (at > stale && !(sid in waits)) waits[sid] = at;
+        }
+        for (const [id, until] of Object.entries(saved.blocked)) {
+          blocked[id] = Math.max(blocked[id] ?? 0, until);
+        }
+      })
+      .catch(() => {});
+  }, []);
+  const persistLimitState = useCallback(() => {
+    void limitStateLoaded.current
+      .then(() => {
+        const state = limitState.current;
+        const now = Date.now();
+        for (const [id, until] of Object.entries(state.blocked)) {
+          if (until <= now) delete state.blocked[id];
+        }
+        return saveLimitState(state);
+      })
+      .catch(() => {});
+  }, []);
+  // Puts a session (back) on the wait list, due at `at` at the latest.
+  const deferLimit = useCallback(
+    (sid: string, at: number) => {
+      const waits = limitState.current.waits;
+      waits[sid] = Math.min(waits[sid] ?? at, at);
+      persistLimitState();
+    },
+    [persistLimitState],
+  );
+  // Panes being relaunched after a limit. Per pane, not per tab: two Claudes
+  // of one tab hit the account's limit together, and each must move.
+  const limitSwitching = useRef<Set<string>>(new Set());
+  // Session → when Arkadia last typed "continue" into it in place. Another
+  // rejection right after means the limit has not lifted yet.
+  const lastLimitContinue = useRef<Map<string, number>>(new Map());
+
+  // The pane running a Claude session now, from the hook-written pane maps.
+  // Only panes with Claude up: a pane map outlives `/exit`.
+  const findClaudePane = useCallback(
+    async (sessionId: string): Promise<string | undefined> => {
+      const paneIds = tabsRef.current.flatMap((t) =>
+        Object.values(t.panes)
+          .filter((p) => stateFromTitle(p.title) !== null)
+          .map((p) => p.id),
+      );
+      const sids = await Promise.all(
+        paneIds.map((paneId) =>
+          invoke<string | null>("pane_session_id", { paneId }).catch(
+            () => null,
+          ),
+        ),
+      );
+      return paneIds[sids.indexOf(sessionId)];
+    },
+    [],
+  );
+
+  // Gets a Claude paused on a usage limit going again: relaunched on the
+  // account with most 5-hour room, or woken in place once its own account has
+  // reset, or put on the wait list until the first account resets.
+  const resumeAfterLimit = useCallback(
+    async (paneId: string) => {
+      const tab = tabsRef.current.find((t) => paneId in t.panes);
+      const state = accountsStateRef.current;
+      // Re-read: a wait may come due after the setting was turned off.
+      if (!tab || !state || !autoSwitchOnLimitRef.current) return;
+      const sid = await invoke<string | null>("pane_session_id", {
+        paneId,
+      }).catch(() => null);
+      if (!sid) return;
+      // Already resumed — by the user (any input path), a background agent
+      // reporting in, or Claude Code's own wait-for-reset: leave it be.
+      const paused = await invoke<boolean>("session_paused_on_limit", {
+        sessionId: sid,
+      }).catch(() => false);
+      if (!paused) return;
+      const now = Date.now();
+      const label = (id: string) =>
+        state.accounts.find((a) => a.id === id)?.label ?? id;
+      const from = paneAccountId(tab.panes[paneId].accountId);
+      const plan = planAutoSwitch(
+        state.accounts,
+        limitState.current.blocked,
+        now,
+      );
+      if (plan.kind === "none") return;
+      if (plan.kind === "wait") {
+        if (sid in limitState.current.waits) return;
+        deferLimit(sid, plan.at);
+        pushToast(
+          "error",
+          `⏸ tous les comptes sont à leur limite · reprise ${formatReset(plan.at / 1000) ?? ""} sur ${label(plan.accountId)}`,
+        );
+        return;
+      }
+      // Act only on a Claude idle at its prompt and settled: relaunching one
+      // that still runs background tasks would kill them, and a pane the
+      // restore just relaunched may show a title older than its Claude.
+      const idle = paneStatesRef.current[paneId]?.kind === "waiting";
+      const settled = now - (paneBornAt.current.get(paneId) ?? 0) > 20_000;
+      if (!idle || !settled) {
+        deferLimit(sid, now);
+        return;
+      }
+      if (plan.accountId === from) {
+        // Its own account has reset: wake the paused Claude in place, once
+        // per 5 min at most.
+        const last = lastLimitContinue.current.get(sid) ?? 0;
+        if (now - last < 5 * 60_000) {
+          deferLimit(sid, last + 5 * 60_000);
+          return;
+        }
+        lastLimitContinue.current.set(sid, now);
+        const bytes = Array.from(new TextEncoder().encode("continue\r"));
+        await invoke("send_input", { sessionId: paneId, bytes }).catch(
+          () => {},
+        );
+        pushToast("info", `▶ reprise sur ${label(from)}`);
+        return;
+      }
+      if (limitSwitching.current.has(paneId)) return;
+      limitSwitching.current.add(paneId);
+      let result: "done" | "skipped" | "failed";
+      try {
+        result = await relaunchPaneOnAccount(
+          tab.id,
+          paneId,
+          plan.accountId,
+          "continue",
+        );
+      } finally {
+        limitSwitching.current.delete(paneId);
+      }
+      if (result !== "done") {
+        pushToast(
+          "error",
+          `limite atteinte sur ${label(from)} · bascule impossible`,
+        );
+        return;
+      }
+      // New tabs follow, so they don't start on the blocked account.
+      void accounts.setCurrent(plan.accountId);
+      pushToast(
+        "info",
+        `⟳ limite atteinte sur ${label(from)} · reprise sur ${label(plan.accountId)}`,
+      );
+    },
+    [relaunchPaneOnAccount, accounts, pushToast, deferLimit],
+  );
+
+  // Hands the waits that came due back to `resumeAfterLimit`, which re-lists
+  // the ones that must wait more. A session whose pane never comes back
+  // (closed, not restored) is given up 5 min past due. One pass at a time: a
+  // relaunch can outlast the 30 s period.
+  const checkingLimits = useRef(false);
+  const checkLimitWaits = useCallback(async () => {
+    if (checkingLimits.current) return;
+    checkingLimits.current = true;
+    try {
+      for (const [sid, at] of Object.entries(limitState.current.waits)) {
+        if (at > Date.now()) continue;
+        const paneId = await findClaudePane(sid);
+        const waits = limitState.current.waits;
+        if (!(sid in waits)) continue;
+        if (!paneId) {
+          if (Date.now() - at > 5 * 60_000) {
+            delete waits[sid];
+            persistLimitState();
+          }
+          continue;
+        }
+        delete waits[sid];
+        persistLimitState();
+        await resumeAfterLimit(paneId);
+      }
+    } finally {
+      checkingLimits.current = false;
+    }
+  }, [findClaudePane, resumeAfterLimit, persistLimitState]);
+  const checkLimitWaitsRef = useRef(checkLimitWaits);
+  const resumeAfterLimitRef = useRef(resumeAfterLimit);
+  useEffect(() => {
+    checkLimitWaitsRef.current = checkLimitWaits;
+    resumeAfterLimitRef.current = resumeAfterLimit;
+  }, [checkLimitWaits, resumeAfterLimit]);
+  useEffect(() => {
+    const id = window.setInterval(
+      () => void checkLimitWaitsRef.current(),
+      30_000,
+    );
+    return () => window.clearInterval(id);
+  }, []);
+
+  // A transcript recorded a usage-limit pause (Rust transcript watcher).
+  useEffect(
+    () =>
+      subscribeStable<QuotaHitPayload>(listen, "claude-quota-hit", (hit) => {
+        void (async () => {
+          const paneId = await findClaudePane(hit.sessionId);
+          const tab = tabsRef.current.find((t) => paneId && paneId in t.panes);
+          if (!paneId || !tab) return; // not a Claude running in Arkadia
+          const account = paneAccountId(tab.panes[paneId].accountId);
+          // A minute past the reset, for the server's clock. A reset already
+          // past (clock skew) must not let the same account retry at once.
+          const now = Date.now();
+          const reset = hit.resetsAt * 1000 + 60_000;
+          const blocked = limitState.current.blocked;
+          blocked[account] = Math.max(
+            blocked[account] ?? 0,
+            reset > now ? reset : now + 5 * 60_000,
+          );
+          persistLimitState();
+          if (autoSwitchOnLimitRef.current) {
+            await resumeAfterLimitRef.current(paneId);
+          }
+        })();
+      }),
+    [findClaudePane, persistLimitState],
   );
 
   // ─── Pane operations ───────────────────────────────────────────
@@ -2340,6 +2637,8 @@ export function App() {
         onChangeAutoScrollReplyEnabled={setAutoScrollReplyEnabled}
         autoRestoreSession={autoRestoreSession}
         onChangeAutoRestoreSession={setAutoRestoreSession}
+        autoSwitchOnLimit={autoSwitchOnLimit}
+        onChangeAutoSwitchOnLimit={setAutoSwitchOnLimit}
         toolDensity={toolDensity}
         onChangeToolDensity={setToolDensity}
       />

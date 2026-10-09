@@ -148,9 +148,25 @@ pub fn run() {
                     .join(".claude")
                     .join("projects");
                 let (utx, urx) = std::sync::mpsc::channel::<claude_watcher::watcher::StateUpdate>();
+                let (qtx, qrx) =
+                    std::sync::mpsc::channel::<claude_watcher::watcher::SessionQuotaHit>();
                 let (_stx, srx) = std::sync::mpsc::channel::<()>();
                 std::thread::spawn(move || {
-                    let _ = run_watcher(claude_root, utx, srx);
+                    let _ = run_watcher(claude_root, utx, qtx, srx);
+                });
+                // Usage-limit pauses, for the automatic account switch (UI side).
+                let quota_app = app_handle.clone();
+                std::thread::spawn(move || {
+                    while let Ok(q) = qrx.recv() {
+                        let _ = quota_app.emit(
+                            "claude-quota-hit",
+                            QuotaHitEvent {
+                                session_id: q.session_id,
+                                limit_type: q.hit.limit_type,
+                                resets_at: q.hit.resets_at,
+                            },
+                        );
+                    }
                 });
                 std::thread::spawn(move || {
                     while let Ok(update) = urx.recv() {
@@ -207,6 +223,7 @@ pub fn run() {
             conversation::evict_transcript_cache,
             conversation::pane_session_id,
             conversation::pane_resume_cwd,
+            claude_watcher::session_paused_on_limit,
             conversation::pasted_image_path,
             conversation::read_image_bytes,
             conversation::read_last_code_block,
@@ -258,6 +275,15 @@ pub fn run() {
             } => popup::log_line(&format!("[run] close requested: {label}")),
             _ => {}
         });
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct QuotaHitEvent {
+    session_id: String,
+    limit_type: String,
+    /// Unix seconds.
+    resets_at: i64,
 }
 
 #[derive(serde::Serialize, Clone)]

@@ -95,6 +95,47 @@ export function claudePanesToSwitch(tab: Tab, accountId: string): string[] {
     .map((p) => p.id);
 }
 
+/** Unix ms until which each account is known to be at its usage limit. */
+export type BlockedUntil = Record<string, number>;
+
+export type AutoSwitchPlan =
+  | { kind: "switch"; accountId: string }
+  /** Every account is blocked: resume on `accountId` at `at` (Unix ms). */
+  | { kind: "wait"; accountId: string; at: number }
+  | { kind: "none" };
+
+/**
+ * Where a Claude paused on a usage limit goes next: the signed-in account with
+ * the most 5-hour headroom (the weekly window does not rank). An account is
+ * out while a limit hit blocks it, or while either usage figure reads 100 %
+ * before its reset. A missing figure ranks last, not out. With every account
+ * out, wait for the earliest one to reset.
+ */
+export function planAutoSwitch(
+  accounts: Account[],
+  blocked: BlockedUntil,
+  now: number,
+): AutoSwitchPlan {
+  const fullUntil = (w: UsageWindow | null | undefined): number =>
+    w && w.pct >= 100 && w.resetsAt ? w.resetsAt * 1000 : 0;
+  const freeAt = (a: Account): number =>
+    Math.max(
+      blocked[a.id] ?? 0,
+      fullUntil(a.usage?.fiveHour),
+      fullUntil(a.usage?.sevenDay),
+    );
+  const signedIn = accounts.filter((a) => a.loggedIn);
+  const free = signedIn.filter((a) => freeAt(a) <= now);
+  if (free.length > 0) {
+    const pct = (a: Account) => a.usage?.fiveHour?.pct ?? Infinity;
+    const best = free.reduce((b, a) => (pct(a) < pct(b) ? a : b));
+    return { kind: "switch", accountId: best.id };
+  }
+  if (signedIn.length === 0) return { kind: "none" };
+  const first = signedIn.reduce((b, a) => (freeAt(a) < freeAt(b) ? a : b));
+  return { kind: "wait", accountId: first.id, at: freeAt(first) };
+}
+
 /** "62 %" style figure, "--" when unknown. */
 export function formatPct(window: UsageWindow | null | undefined): string {
   if (!window) return "--";

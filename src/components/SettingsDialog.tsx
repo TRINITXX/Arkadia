@@ -55,6 +55,8 @@ interface SettingsDialogProps {
   onChangeAutoScrollReplyEnabled: (next: boolean) => void;
   autoRestoreSession: boolean;
   onChangeAutoRestoreSession: (next: boolean) => void;
+  autoSwitchOnLimit: boolean;
+  onChangeAutoSwitchOnLimit: (next: boolean) => void;
   toolDensity: ToolDensity;
   onChangeToolDensity: (next: ToolDensity) => void;
 }
@@ -98,6 +100,8 @@ export function SettingsDialog({
   onChangeAutoScrollReplyEnabled,
   autoRestoreSession,
   onChangeAutoRestoreSession,
+  autoSwitchOnLimit,
+  onChangeAutoSwitchOnLimit,
   toolDensity,
   onChangeToolDensity,
 }: SettingsDialogProps) {
@@ -204,6 +208,8 @@ export function SettingsDialog({
                 onChangeAutoScrollReplyEnabled={onChangeAutoScrollReplyEnabled}
                 autoRestoreSession={autoRestoreSession}
                 onChangeAutoRestoreSession={onChangeAutoRestoreSession}
+                autoSwitchOnLimit={autoSwitchOnLimit}
+                onChangeAutoSwitchOnLimit={onChangeAutoSwitchOnLimit}
                 toolDensity={toolDensity}
                 onChangeToolDensity={onChangeToolDensity}
               />
@@ -270,6 +276,8 @@ interface GeneralSettingsProps {
   onChangeAutoScrollReplyEnabled: (next: boolean) => void;
   autoRestoreSession: boolean;
   onChangeAutoRestoreSession: (next: boolean) => void;
+  autoSwitchOnLimit: boolean;
+  onChangeAutoSwitchOnLimit: (next: boolean) => void;
   toolDensity: ToolDensity;
   onChangeToolDensity: (next: ToolDensity) => void;
 }
@@ -486,6 +494,8 @@ function GeneralSettings({
   onChangeAutoScrollReplyEnabled,
   autoRestoreSession,
   onChangeAutoRestoreSession,
+  autoSwitchOnLimit,
+  onChangeAutoSwitchOnLimit,
   toolDensity,
   onChangeToolDensity,
 }: GeneralSettingsProps) {
@@ -748,6 +758,12 @@ function GeneralSettings({
             onChange={onChangeAutoRestoreSession}
             label="Reprendre la session précédente au lancement"
             hint="À l'ouverture d'Arkadia, rouvre les onglets de la dernière fois et relance leurs conversations Claude, sans passer par le bouton."
+          />
+          <SettingToggle
+            checked={autoSwitchOnLimit}
+            onChange={onChangeAutoSwitchOnLimit}
+            label="Reprise automatique à la limite"
+            hint="Quand Claude se met en pause sur une limite, reprend la conversation sur le compte qui a le plus de marge sur 5 h et lui envoie « continue ». Si tous les comptes sont bloqués, attend le premier qui se débloque puis envoie « continue », même avec un seul compte."
           />
         </div>
       </section>

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   claudePanesToSwitch,
   formatPct,
+  planAutoSwitch,
   tabAccountMarks,
   type Account,
   type AccountsState,
@@ -85,6 +86,53 @@ describe("claudePanesToSwitch", () => {
 
   it("skips panes already on the target account", () => {
     expect(claudePanesToSwitch(split, "main")).toEqual([]);
+  });
+});
+
+describe("planAutoSwitch", () => {
+  const NOW = 1_000_000_000_000;
+  const withFive = (a: Account, pct: number, resetsAt?: number): Account => ({
+    ...a,
+    usage: { fiveHour: { pct, resetsAt }, updatedAt: NOW, source: "poll" },
+  });
+  const perso = withFive(account("main", "#a78bfa", "Perso"), 40);
+  const team = withFive(account("b2", "#f472b6", "Team"), 10);
+  const third = withFive(account("b3", "#22d3ee", "Trois"), 70);
+
+  it("picks the most 5-hour headroom among unblocked accounts", () => {
+    expect(
+      planAutoSwitch([perso, team, third], { b2: NOW + 1000 }, NOW),
+    ).toEqual({ kind: "switch", accountId: "main" });
+  });
+
+  it("skips an account whose usage reads full before its reset", () => {
+    const full = withFive(team, 100, NOW / 1000 + 60);
+    expect(planAutoSwitch([full, third], {}, NOW)).toEqual({
+      kind: "switch",
+      accountId: "b3",
+    });
+  });
+
+  it("skips an account full for the week, whatever its 5-hour figure", () => {
+    const weekFull: Account = {
+      ...team,
+      usage: {
+        fiveHour: { pct: 10 },
+        sevenDay: { pct: 100, resetsAt: NOW / 1000 + 3600 },
+        updatedAt: NOW,
+        source: "poll",
+      },
+    };
+    expect(planAutoSwitch([weekFull, third], {}, NOW)).toEqual({
+      kind: "switch",
+      accountId: "b3",
+    });
+  });
+
+  it("waits for the earliest reset when every account is blocked", () => {
+    expect(
+      planAutoSwitch([perso, team], { main: NOW + 5000, b2: NOW + 2000 }, NOW),
+    ).toEqual({ kind: "wait", accountId: "b2", at: NOW + 2000 });
   });
 });
 

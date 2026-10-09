@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
-use super::parse::{parse_line, ParsedLine};
+use super::parse::{parse_line, parse_quota_hit, ParsedLine, QuotaHit};
 use super::state::{AgentState, StateMachine};
 
 #[derive(Debug, Clone)]
@@ -17,9 +17,26 @@ pub struct StateUpdate {
     pub state: AgentState,
 }
 
+/// A usage-limit rejection seen in a session's transcript.
+#[derive(Debug, Clone)]
+pub struct SessionQuotaHit {
+    pub session_id: String,
+    pub hit: QuotaHit,
+}
+
+/// Where usage-limit rejections go, and since when they count: a rejection
+/// written before the watcher started was already dealt with (or not) by the
+/// previous run, and replaying it after a restart would switch a pane that
+/// has since moved on.
+struct QuotaSink {
+    tx: Sender<SessionQuotaHit>,
+    since: chrono::DateTime<chrono::Utc>,
+}
+
 pub fn run_watcher(
     root: PathBuf,
     updates: Sender<StateUpdate>,
+    quota_hits: Sender<SessionQuotaHit>,
     shutdown: std::sync::mpsc::Receiver<()>,
 ) -> notify::Result<()> {
     let (tx, rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
@@ -30,6 +47,10 @@ pub fn run_watcher(
     }
     watcher.watch(&root, RecursiveMode::Recursive)?;
 
+    let quota_hits = QuotaSink {
+        tx: quota_hits,
+        since: chrono::Utc::now(),
+    };
     let mut offsets: HashMap<PathBuf, u64> = HashMap::new();
     let mut machines: HashMap<String, (StateMachine, String)> = HashMap::new();
     let tick_interval = Duration::from_millis(250);
@@ -40,7 +61,14 @@ pub fn run_watcher(
             break;
         }
         match rx.recv_timeout(tick_interval) {
-            Ok(Ok(event)) => handle_event(event, &root, &mut offsets, &mut machines, &updates),
+            Ok(Ok(event)) => handle_event(
+                event,
+                &root,
+                &mut offsets,
+                &mut machines,
+                &updates,
+                &quota_hits,
+            ),
             Ok(Err(e)) => eprintln!("[claude_watcher] notify error: {e}"),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -59,6 +87,7 @@ fn handle_event(
     offsets: &mut HashMap<PathBuf, u64>,
     machines: &mut HashMap<String, (StateMachine, String)>,
     updates: &Sender<StateUpdate>,
+    quota_hits: &QuotaSink,
 ) {
     let interesting = matches!(
         event.kind,
@@ -85,7 +114,7 @@ fn handle_event(
             handle_removal(&path, offsets, machines, updates);
             continue;
         }
-        process_file(&path, offsets, machines, updates);
+        process_file(&path, offsets, machines, updates, quota_hits);
     }
 }
 
@@ -94,6 +123,7 @@ fn process_file(
     offsets: &mut HashMap<PathBuf, u64>,
     machines: &mut HashMap<String, (StateMachine, String)>,
     updates: &Sender<StateUpdate>,
+    quota_hits: &QuotaSink,
 ) {
     let session_id = match path.file_stem().and_then(|s| s.to_str()) {
         Some(s) => s.to_string(),
@@ -110,6 +140,10 @@ fn process_file(
     let mut reader = BufReader::new(file);
     let mut new_offset = last;
     let mut last_parsed: Option<ParsedLine> = None;
+    // Fresh rejections only: at most 10 min old, and never from before start.
+    let not_before = quota_hits
+        .since
+        .max(chrono::Utc::now() - chrono::Duration::minutes(10));
     loop {
         let mut line = String::new();
         let read = match reader.read_line(&mut line) {
@@ -118,6 +152,12 @@ fn process_file(
             Err(_) => break,
         };
         new_offset += read as u64;
+        if let Some(hit) = parse_quota_hit(line.trim(), not_before) {
+            let _ = quota_hits.tx.send(SessionQuotaHit {
+                session_id: session_id.clone(),
+                hit,
+            });
+        }
         if let Some(parsed) = parse_line(line.trim()) {
             last_parsed = Some(parsed);
         }
@@ -211,7 +251,7 @@ mod tests {
         let (utx, urx) = channel();
         let (_stx, srx) = channel();
         let root_clone = root.clone();
-        let handle = thread::spawn(move || run_watcher(root_clone, utx, srx).ok());
+        let handle = thread::spawn(move || run_watcher(root_clone, utx, std::sync::mpsc::channel().0, srx).ok());
 
         thread::sleep(Duration::from_millis(200));
         write_jsonl(
@@ -241,7 +281,7 @@ mod tests {
         let (utx, urx) = channel();
         let (_stx, srx) = channel();
         let root_clone = root.clone();
-        let handle = thread::spawn(move || run_watcher(root_clone, utx, srx).ok());
+        let handle = thread::spawn(move || run_watcher(root_clone, utx, std::sync::mpsc::channel().0, srx).ok());
 
         thread::sleep(Duration::from_millis(200));
 

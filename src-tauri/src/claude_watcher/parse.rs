@@ -1,4 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entry {
@@ -99,9 +101,115 @@ pub fn parse_line(line: &str) -> Option<ParsedLine> {
     })
 }
 
+/// A turn Claude Code ended because the account hit a usage limit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuotaHit {
+    /// `five_hour` or `seven_day`.
+    pub limit_type: String,
+    /// Unix seconds.
+    pub resets_at: i64,
+}
+
+/// The usage-limit rejection Claude Code records as a synthetic assistant
+/// message (`"error":"rate_limit"` with `quotaLimits.status == "rejected"`),
+/// when written at or after `not_before`: the watcher reads a transcript from
+/// its start the first time it changes, and an old rejection is not news.
+/// Other 429s (no `quotaLimits`, e.g. a model that needs usage credits) are
+/// not account limits and yield None.
+pub fn parse_quota_hit(line: &str, not_before: DateTime<Utc>) -> Option<QuotaHit> {
+    if !line.contains("\"quotaLimits\"") {
+        return None;
+    }
+    let v: Value = serde_json::from_str(line).ok()?;
+    if v.get("error")?.as_str()? != "rate_limit" {
+        return None;
+    }
+    let q = v.get("quotaLimits")?;
+    if q.get("status")?.as_str()? != "rejected" {
+        return None;
+    }
+    let at = DateTime::parse_from_rfc3339(v.get("timestamp")?.as_str()?).ok()?;
+    if at.with_timezone(&Utc) < not_before {
+        return None;
+    }
+    Some(QuotaHit {
+        limit_type: q
+            .get("rateLimitType")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        resets_at: q.get("resetsAt")?.as_i64()?,
+    })
+}
+
+/// True when the last user/assistant entry of a transcript (tail) is a
+/// usage-limit rejection: nothing has resumed the session since — not the
+/// user, not a background agent reporting in, not Claude Code's own
+/// wait-for-reset. Other entry kinds (titles, snapshots…) are skipped.
+pub fn ends_on_quota_hit(transcript: &str) -> bool {
+    for line in transcript.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        match v.get("type").and_then(Value::as_str) {
+            Some("user") | Some("assistant") => {
+                return parse_quota_hit(line.trim(), DateTime::<Utc>::MIN_UTC).is_some()
+            }
+            _ => continue,
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const QUOTA_LINE: &str = r#"{"type":"assistant","timestamp":"2026-10-02T14:23:06.723Z","error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429,"quotaLimits":{"status":"rejected","resetsAt":1790954400,"rateLimitType":"five_hour"},"message":{"role":"assistant","content":[{"type":"text","text":"You've hit your session limit"}]}}"#;
+
+    fn at(ts: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(ts).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn quota_hit_reads_a_fresh_rejection() {
+        let hit = parse_quota_hit(QUOTA_LINE, at("2026-10-02T14:20:00Z"));
+        assert_eq!(
+            hit,
+            Some(QuotaHit {
+                limit_type: "five_hour".into(),
+                resets_at: 1790954400
+            })
+        );
+    }
+
+    #[test]
+    fn ends_on_quota_hit_until_something_resumes_the_session() {
+        let title = r#"{"type":"ai-title","aiTitle":"x"}"#;
+        let paused = format!("{QUOTA_LINE}
+{title}
+");
+        assert!(ends_on_quota_hit(&paused));
+        let resumed = format!(
+            "{paused}{}
+",
+            r#"{"type":"user","message":{"role":"user","content":"continue"}}"#
+        );
+        assert!(!ends_on_quota_hit(&resumed));
+    }
+
+    #[test]
+    fn quota_hit_ignores_old_rejections_and_other_429s() {
+        assert_eq!(
+            parse_quota_hit(QUOTA_LINE, at("2026-10-02T14:30:00Z")),
+            None
+        );
+        let credits = r#"{"type":"assistant","timestamp":"2026-10-02T14:23:06Z","error":"rate_limit","apiError":"model_requires_usage_credits"}"#;
+        assert_eq!(
+            parse_quota_hit(credits, at("2026-10-02T14:20:00Z")),
+            None
+        );
+    }
 
     #[test]
     fn parses_user_entry() {

@@ -73,6 +73,8 @@ const KEY_SIDEPANEL_OPEN = "sidepanelOpen";
 const KEY_SCROLLBACK_LINES = "scrollbackLines";
 const KEY_SESSION_SNAPSHOT = "sessionSnapshot";
 const KEY_AUTO_RESTORE_SESSION = "autoRestoreSession";
+const KEY_AUTO_SWITCH_ON_LIMIT = "autoSwitchOnLimit";
+const KEY_LIMIT_STATE = "limitState";
 
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 28;
@@ -140,6 +142,8 @@ export interface PersistedState {
   sessionSnapshot: SessionSnapshot | null;
   /** Restore the previous session's tabs at launch, without the button. */
   autoRestoreSession: boolean;
+  /** Move a Claude paused on a usage limit to the account with most room. */
+  autoSwitchOnLimit: boolean;
 }
 
 const DEFAULT_STATE: PersistedState = {
@@ -168,6 +172,7 @@ const DEFAULT_STATE: PersistedState = {
   scrollbackLines: SCROLLBACK_LINES_DEFAULT,
   sessionSnapshot: null,
   autoRestoreSession: false,
+  autoSwitchOnLimit: true,
 };
 
 /** Reads a boolean store key, defaulting to `fallback`. */
@@ -480,6 +485,9 @@ export async function loadState(
   const rawAutoRestoreSession = await store.get<unknown>(
     KEY_AUTO_RESTORE_SESSION,
   );
+  const rawAutoSwitchOnLimit = await store.get<unknown>(
+    KEY_AUTO_SWITCH_ON_LIMIT,
+  );
 
   return {
     projects: dedupeProjectsByPath(
@@ -535,7 +543,46 @@ export async function loadState(
       rawAutoRestoreSession,
       DEFAULT_STATE.autoRestoreSession,
     ),
+    autoSwitchOnLimit: boolOr(
+      rawAutoSwitchOnLimit,
+      DEFAULT_STATE.autoSwitchOnLimit,
+    ),
   };
+}
+
+/** Usage-limit bookkeeping of the automatic account switch. */
+export interface LimitState {
+  /** Claude session id → Unix ms at which to resume it. */
+  waits: Record<string, number>;
+  /** Account id → Unix ms until which it is at its limit. */
+  blocked: Record<string, number>;
+}
+
+function numberRecord(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(raw).filter(
+      ([, v]) => typeof v === "number" && Number.isFinite(v),
+    ),
+  ) as Record<string, number>;
+}
+
+export async function loadLimitState(): Promise<LimitState> {
+  const store = await getStore();
+  const raw = await store.get<{ waits?: unknown; blocked?: unknown }>(
+    KEY_LIMIT_STATE,
+  );
+  return {
+    waits: numberRecord(raw?.waits),
+    blocked: numberRecord(raw?.blocked),
+  };
+}
+
+/** Saved on each change, apart from the debounced `saveState`. */
+export async function saveLimitState(state: LimitState): Promise<void> {
+  const store = await getStore();
+  await store.set(KEY_LIMIT_STATE, state);
+  await store.save();
 }
 
 export async function saveState(state: PersistedState): Promise<void> {
@@ -564,6 +611,7 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_SIDEPANEL_OPEN, state.sidepanelOpen);
   await store.set(KEY_SCROLLBACK_LINES, state.scrollbackLines);
   await store.set(KEY_AUTO_RESTORE_SESSION, state.autoRestoreSession);
+  await store.set(KEY_AUTO_SWITCH_ON_LIMIT, state.autoSwitchOnLimit);
   // Never clobber the previous session's snapshot with an empty one: after a
   // relaunch the tabs start empty, and this key IS what "restore previous
   // session" reads.
