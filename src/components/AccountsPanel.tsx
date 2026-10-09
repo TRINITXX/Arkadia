@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Plus } from "lucide-react";
+import { Plus, Users } from "lucide-react";
 import { AccountDot } from "./AccountDot";
 import {
   ACCOUNT_COLORS,
@@ -25,9 +25,10 @@ interface AccountsPanelProps {
 }
 
 /**
- * Compact "Comptes" block at the bottom of the sidepanel: one line per Claude
- * account with its 5-hour and weekly usage. Clicking a line makes it the
- * account new tabs open on; right-click for login / rename / colour / remove.
+ * "Comptes" button of the sidepanel. Clicking it opens a popover with one line
+ * per Claude account and its 5-hour and weekly usage. Clicking a line makes it
+ * the account new tabs open on; right-click for login / rename / colour /
+ * remove.
  */
 export function AccountsPanel({
   state,
@@ -45,52 +46,115 @@ export function AccountsPanel({
     y: number;
   } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const open = anchor !== null;
+  const current = state.accounts.find((a) => a.id === state.current);
+
+  // The context menu and the rename field own clicks and keys while they are
+  // up: closing the popover under them would drop their action.
+  const canClose = menu === null && renamingId === null;
+  useEffect(() => {
+    if (!open || !canClose) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (popoverRef.current?.contains(target)) return;
+      if (buttonRef.current?.contains(target)) return;
+      setAnchor(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAnchor(null);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, canClose]);
 
   return (
-    <div className="border-t border-zinc-800/60 px-1.5 pt-1.5 pb-2">
-      <div className="mb-0.5 flex items-center gap-1 px-1.5 text-[10px] uppercase tracking-wide text-zinc-500">
-        <span className="flex-1">Comptes</span>
-        <span
-          className="w-9 text-right normal-case"
-          title="Limite des 5 heures"
-        >
-          5 h
-        </span>
-        <span
-          className="w-9 text-right normal-case"
-          title="Limite de la semaine"
-        >
-          sem.
-        </span>
-        <button
-          type="button"
-          onClick={onAdd}
-          disabled={state.accounts.length >= state.max}
-          className="ml-0.5 flex size-4 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-30 disabled:hover:bg-transparent"
-          title={
-            state.accounts.length >= state.max
-              ? `${state.max} comptes au maximum`
-              : "Ajouter un compte Claude"
-          }
-          aria-label="Ajouter un compte"
-        >
-          <Plus size={12} />
-        </button>
-      </div>
-      {state.accounts.map((account) => (
-        <AccountRow
-          key={account.id}
-          account={account}
-          current={account.id === state.current}
-          renaming={renamingId === account.id}
-          onSelect={() => onSelect(account.id)}
-          onContextMenu={(x, y) => setMenu({ account, x, y })}
-          onRenameDone={(label) => {
-            setRenamingId(null);
-            if (label !== null) onRename(account.id, label);
-          }}
-        />
-      ))}
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() =>
+          setAnchor(
+            open ? null : (buttonRef.current?.getBoundingClientRect() ?? null),
+          )
+        }
+        title="Comptes Claude : compte des nouveaux onglets et consommation"
+        className={`flex items-center justify-center gap-1.5 rounded border border-zinc-800/60 px-2 py-1.5 text-xs hover:bg-zinc-900 hover:text-zinc-200 ${
+          open ? "bg-zinc-900 text-zinc-200" : "bg-transparent text-zinc-400"
+        }`}
+      >
+        <Users size={13} className="shrink-0" />
+        Comptes
+        {current && <AccountDot color={current.color} label={current.label} />}
+      </button>
+      {anchor &&
+        // Portalled to <body>: inside the sidepanel (a .chrome-surface) the
+        // glass background preset would turn its fill translucent.
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="fixed z-40 rounded border border-zinc-800 bg-zinc-950 px-1.5 pt-1.5 pb-2 shadow-xl"
+            style={{
+              left: anchor.left,
+              bottom: window.innerHeight - anchor.top + 4,
+              width: Math.max(anchor.width, 260),
+            }}
+          >
+            <div className="mb-0.5 flex items-center gap-1 px-1.5 text-[10px] uppercase tracking-wide text-zinc-500">
+              <span className="flex-1">Comptes</span>
+              <span
+                className="w-9 text-right normal-case"
+                title="Limite des 5 heures"
+              >
+                5 h
+              </span>
+              <span
+                className="w-9 text-right normal-case"
+                title="Limite de la semaine"
+              >
+                sem.
+              </span>
+              <button
+                type="button"
+                onClick={onAdd}
+                disabled={state.accounts.length >= state.max}
+                className="ml-0.5 flex size-4 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                title={
+                  state.accounts.length >= state.max
+                    ? `${state.max} comptes au maximum`
+                    : "Ajouter un compte Claude"
+                }
+                aria-label="Ajouter un compte"
+              >
+                <Plus size={12} />
+              </button>
+            </div>
+            {state.accounts.map((account) => (
+              <AccountRow
+                key={account.id}
+                account={account}
+                current={account.id === state.current}
+                renaming={renamingId === account.id}
+                onSelect={() => {
+                  onSelect(account.id);
+                  setAnchor(null);
+                }}
+                onContextMenu={(x, y) => setMenu({ account, x, y })}
+                onRenameDone={(label) => {
+                  setRenamingId(null);
+                  if (label !== null) onRename(account.id, label);
+                }}
+              />
+            ))}
+          </div>,
+          document.body,
+        )}
       {menu && (
         <AccountMenu
           account={menu.account}
@@ -104,7 +168,7 @@ export function AccountsPanel({
           openPanes={openPanesByAccount[menu.account.id] ?? 0}
         />
       )}
-    </div>
+    </>
   );
 }
 

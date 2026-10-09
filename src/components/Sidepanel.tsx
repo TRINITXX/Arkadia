@@ -79,7 +79,7 @@ interface SidepanelProps {
   activeProjectIds: ReadonlySet<string>;
   /** Claude account of each tab; empty while there is a single account. */
   accountMarks: Record<string, AccountMark>;
-  /** The "Comptes" block, docked at the very bottom. */
+  /** The "Comptes" button, under "Sessions récentes". */
   accountsPanel: React.ReactNode;
 }
 
@@ -673,14 +673,6 @@ export function Sidepanel({
         </div>
       )}
       <div className="flex flex-col gap-1 p-2">
-        <button
-          onClick={onOpenSessions}
-          title="Retrouver n'importe quelle session Claude, tous dossiers confondus : lecture, recherche, reprise"
-          className="flex items-center justify-center gap-1.5 rounded border border-zinc-800/60 bg-transparent px-2 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
-        >
-          <History size={13} className="shrink-0" />
-          Sessions récentes
-        </button>
         {onRestoreSession && (
           <button
             onClick={onRestoreSession}
@@ -690,6 +682,15 @@ export function Sidepanel({
             ⟳ Restaurer la session précédente
           </button>
         )}
+        <button
+          onClick={onOpenSessions}
+          title="Retrouver n'importe quelle session Claude, tous dossiers confondus : lecture, recherche, reprise"
+          className="flex items-center justify-center gap-1.5 rounded border border-zinc-800/60 bg-transparent px-2 py-1.5 text-xs text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+        >
+          <History size={13} className="shrink-0" />
+          Sessions récentes
+        </button>
+        {accountsPanel}
         <div className="flex gap-1">
           <button
             onClick={onAdd}
@@ -707,7 +708,6 @@ export function Sidepanel({
           </button>
         </div>
       </div>
-      {accountsPanel}
     </aside>
   );
 }
@@ -1097,7 +1097,13 @@ interface ActiveProjectGroupProps extends DraggableProjectRowProps {
 /** Account of a listed tab, at the row's right edge (absent with one account). */
 function TabAccountDot({ mark }: { mark: AccountMark | undefined }) {
   if (!mark) return null;
-  return <AccountDot color={mark.color} label={mark.label} title={`Compte : ${mark.label}`} />;
+  return (
+    <AccountDot
+      color={mark.color}
+      label={mark.label}
+      title={`Compte : ${mark.label}`}
+    />
+  );
 }
 
 /** Entry of the flat "Active" list: the project name as a quiet header, its
