@@ -11,12 +11,18 @@ import { Toolbar } from "@/components/Toolbar";
 import { AccountsPanel } from "@/components/AccountsPanel";
 import { AccountChip } from "@/components/AccountChip";
 import { useAccounts } from "@/lib/useAccounts";
-import { MAIN_ACCOUNT_ID, tabAccountMarks } from "@/lib/accounts";
+import {
+  MAIN_ACCOUNT_ID,
+  claudePanesToSwitch,
+  paneAccountId,
+  tabAccountMarks,
+} from "@/lib/accounts";
 import { FloatingPromptBar } from "@/components/PromptBar";
 import { PaneTreeView } from "@/components/PaneTreeView";
 import { AddProjectDialog } from "@/components/AddProjectDialog";
 import { ProjectContextMenu } from "@/components/ProjectContextMenu";
 import { PaneContextMenu } from "@/components/PaneContextMenu";
+import { TabContextMenu } from "@/components/TabContextMenu";
 import { RenameDialog } from "@/components/RenameDialog";
 import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -36,6 +42,7 @@ import {
   collectPaneIds,
   firstPaneId,
   removePaneFromTree,
+  replacePaneInTree,
   splitTreeAt,
   updateTreeRatio,
 } from "@/lib/paneTree";
@@ -118,6 +125,12 @@ interface WorkspaceMenuState {
 interface PaneMenuState {
   tabId: string;
   paneId: string;
+  x: number;
+  y: number;
+}
+
+interface TabMenuState {
+  tabId: string;
   x: number;
   y: number;
 }
@@ -248,6 +261,7 @@ export function App() {
     null,
   );
   const [paneMenu, setPaneMenu] = useState<PaneMenuState | null>(null);
+  const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null);
   const [renameTarget, setRenameTarget] = useState<Project | null>(null);
   const [colorTarget, setColorTarget] = useState<Project | null>(null);
   const [workspaceDialog, setWorkspaceDialog] = useState<
@@ -1070,6 +1084,120 @@ export function App() {
     [closeTab],
   );
 
+  // ─── Switching a tab's account ─────────────────────────────────
+
+  // Read after the awaits below: the tab may have changed (pane closed, tab
+  // closed) while a pane was being relaunched.
+  const tabsRef = useRef(tabs);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+  // Tabs being switched: a second click while the first relaunch runs would
+  // resume the same conversation twice.
+  const switchingTabs = useRef<Set<string>>(new Set());
+
+  // Relaunches each Claude of the tab on another account, on the same
+  // conversation: transcripts are shared by every account (junctions into
+  // `~/.claude`), so `ccd --resume` finds it. The new pane takes the old one's
+  // place in the layout; the old one is closed only once the new one exists.
+  const switchTabAccount = useCallback(
+    async (tabId: string, accountId: string) => {
+      const tab = tabs.find((t) => t.id === tabId);
+      const project = projects.find((p) => p.id === tab?.projectId);
+      if (!tab || !project || switchingTabs.current.has(tabId)) return;
+      const paneIds = claudePanesToSwitch(tab, accountId);
+      if (paneIds.length === 0) return;
+      if (paneIds.some((id) => effectivePaneStates[id]?.kind === "busy")) {
+        const ok = await ask(
+          "Claude travaille encore dans cet onglet. Changer de compte coupe sa tâche en cours.",
+          {
+            title: "Changer de compte",
+            kind: "warning",
+            okLabel: "Changer",
+            cancelLabel: "Annuler",
+          },
+        );
+        if (!ok) return;
+      }
+      switchingTabs.current.add(tabId);
+      const paneAccount = accountId === MAIN_ACCOUNT_ID ? undefined : accountId;
+      const stillThere = (paneId: string) =>
+        tabsRef.current.some(
+          (t) => t.id === tabId && collectPaneIds(t.tree).includes(paneId),
+        );
+      let switched = 0;
+      try {
+        for (const oldId of paneIds) {
+          const old = tab.panes[oldId];
+          const sid = await invoke<string | null>("pane_session_id", {
+            paneId: oldId,
+          }).catch(() => null);
+          if (!sid) continue;
+          // `--resume` only finds the transcript from the folder Claude was
+          // launched in: Rust checks the candidates against the transcript's
+          // folder. None matching → leave this Claude running.
+          const cwd = await invoke<string | null>("pane_resume_cwd", {
+            paneId: oldId,
+            candidates: [old.cwd, project.path].filter((c): c is string => !!c),
+          }).catch(() => null);
+          if (!cwd || !stillThere(oldId)) continue;
+          // `ccd` is the user's pwsh alias for Claude and forwards its args.
+          const newId = await spawnPane(
+            cwd,
+            `ccd --resume ${sid}`,
+            paneAccount,
+          );
+          if (!newId) break;
+          if (!stillThere(oldId)) {
+            // Pane or tab closed during the spawn: nowhere to put the new one.
+            void invoke("close_terminal", { sessionId: newId }).catch(() => {});
+            continue;
+          }
+          // The new shell types `ccd` ~800 ms after its spawn, so the old Claude
+          // has that long to exit before the new one reads the transcript.
+          paneToTab.current.delete(oldId);
+          dropFrame(oldId);
+          void invoke("close_terminal", { sessionId: oldId }).catch(() => {});
+          paneToTab.current.set(newId, tabId);
+          setTabs((prev) =>
+            prev.map((t) => {
+              if (t.id !== tabId) return t;
+              const panes = { ...t.panes };
+              delete panes[oldId];
+              panes[newId] = {
+                id: newId,
+                title: project.name,
+                cwd: null,
+                accountId: paneAccount,
+              };
+              return {
+                ...t,
+                tree: replacePaneInTree(t.tree, oldId, newId),
+                activePaneId: t.activePaneId === oldId ? newId : t.activePaneId,
+                panes,
+              };
+            }),
+          );
+          switched++;
+        }
+      } finally {
+        switchingTabs.current.delete(tabId);
+      }
+      const label =
+        accounts.state?.accounts.find((a) => a.id === accountId)?.label ??
+        accountId;
+      const count =
+        paneIds.length > 1 ? ` (${switched}/${paneIds.length})` : "";
+      pushToast(
+        switched === paneIds.length ? "info" : "error",
+        switched > 0
+          ? `⟳ conversation reprise sur ${label}${count}`
+          : "conversation introuvable, compte inchangé",
+      );
+    },
+    [tabs, projects, effectivePaneStates, spawnPane, accounts.state, pushToast],
+  );
+
   // ─── Pane operations ───────────────────────────────────────────
 
   const focusPane = useCallback((tabId: string, paneId: string) => {
@@ -1785,6 +1913,13 @@ export function App() {
     );
   }
 
+  const menuTab = tabMenu
+    ? tabs.find((t) => t.id === tabMenu.tabId)
+    : undefined;
+  const menuClaudePane =
+    menuTab &&
+    Object.values(menuTab.panes).find((p) => stateFromTitle(p.title) !== null);
+
   return (
     <div
       className="relative flex h-screen w-screen bg-zinc-950 text-zinc-100"
@@ -1860,6 +1995,12 @@ export function App() {
             onActivateTab(tabId);
           }}
           onClose={closeTab}
+          onContextMenu={(tabId, x, y) => {
+            // A single account has nothing to switch to.
+            if ((accounts.state?.accounts.length ?? 0) >= 2) {
+              setTabMenu({ tabId, x, y });
+            }
+          }}
           onSpawn={() => activeProject && spawnTabFor(activeProject)}
           onReorder={onReorderTabs}
           disabled={!activeProject}
@@ -2111,6 +2252,20 @@ export function App() {
           setWorkspaceDialog(null);
         }}
       />
+
+      {tabMenu && menuTab && accounts.state && (
+        <TabContextMenu
+          x={tabMenu.x}
+          y={tabMenu.y}
+          accounts={accounts.state.accounts}
+          currentAccountId={paneAccountId(
+            (menuClaudePane ?? menuTab.panes[menuTab.activePaneId])?.accountId,
+          )}
+          hasClaude={!!menuClaudePane}
+          onSwitchAccount={(id) => void switchTabAccount(tabMenu.tabId, id)}
+          onDismiss={() => setTabMenu(null)}
+        />
+      )}
 
       {paneMenu && (
         <PaneContextMenu

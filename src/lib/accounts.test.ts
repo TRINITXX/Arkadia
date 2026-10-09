@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  claudePanesToSwitch,
   formatPct,
   tabAccountMarks,
   type Account,
@@ -57,6 +58,33 @@ describe("tabAccountMarks", () => {
 
   it("falls back to the main account for a removed account", () => {
     expect(tabAccountMarks([tab("t1", "gone")], two).t1?.label).toBe("Max 5x");
+  });
+});
+
+describe("claudePanesToSwitch", () => {
+  const split: Tab = {
+    id: "t",
+    projectId: "p",
+    tree: {
+      kind: "split",
+      direction: "horizontal",
+      ratio: 0.5,
+      first: { kind: "leaf", paneId: "claude" },
+      second: { kind: "leaf", paneId: "shell" },
+    },
+    activePaneId: "claude",
+    panes: {
+      claude: { id: "claude", title: "✳ Fix tests", cwd: null },
+      shell: { id: "shell", title: "C:\repo", cwd: null },
+    },
+  };
+
+  it("relaunches only the panes running Claude", () => {
+    expect(claudePanesToSwitch(split, "b2")).toEqual(["claude"]);
+  });
+
+  it("skips panes already on the target account", () => {
+    expect(claudePanesToSwitch(split, "main")).toEqual([]);
   });
 });
 

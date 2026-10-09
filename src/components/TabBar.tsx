@@ -27,6 +27,7 @@ interface TabBarProps {
   accountMarks: Record<string, AccountMark>;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
+  onContextMenu: (id: string, x: number, y: number) => void;
   onSpawn: () => void;
   onReorder: (oldIndex: number, newIndex: number) => void;
   disabled?: boolean;
@@ -39,6 +40,7 @@ export function TabBar({
   accountMarks,
   onActivate,
   onClose,
+  onContextMenu,
   onSpawn,
   onReorder,
   disabled = false,
@@ -81,6 +83,7 @@ export function TabBar({
                 account={accountMarks[tab.id]}
                 onActivate={onActivate}
                 onClose={onClose}
+                onContextMenu={onContextMenu}
               />
             ))}
           </SortableContext>
@@ -193,6 +196,7 @@ interface SortableTabProps {
   account: AccountMark | undefined;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
+  onContextMenu: (id: string, x: number, y: number) => void;
 }
 
 function SortableTab({
@@ -202,6 +206,7 @@ function SortableTab({
   account,
   onActivate,
   onClose,
+  onContextMenu,
 }: SortableTabProps) {
   const {
     attributes,
@@ -233,13 +238,21 @@ function SortableTab({
           onClose(tab.id);
         }
       }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(tab.id, e.clientX, e.clientY);
+      }}
       className={`group flex min-w-[120px] max-w-[220px] cursor-pointer items-center gap-2 border-r border-zinc-800 px-3 text-xs ${
         active
           ? "bg-zinc-900 text-zinc-100"
           : "bg-zinc-950 text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200"
       }`}
-      title={`${title}${hasBell ? " · 🔔" : ""}${account ? `
-Compte : ${account.label}` : ""}`}
+      title={`${title}${hasBell ? " · 🔔" : ""}${
+        account
+          ? `
+Compte : ${account.label}`
+          : ""
+      }`}
     >
       {hasBell && (
         <span

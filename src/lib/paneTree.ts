@@ -33,6 +33,24 @@ export function splitTreeAt(
   };
 }
 
+/** Swaps one leaf's pane id, keeping the layout (a pane relaunched in place). */
+export function replacePaneInTree(
+  tree: PaneTree,
+  oldPaneId: string,
+  newPaneId: string,
+): PaneTree {
+  if (tree.kind === "leaf") {
+    return tree.paneId === oldPaneId
+      ? { kind: "leaf", paneId: newPaneId }
+      : tree;
+  }
+  return {
+    ...tree,
+    first: replacePaneInTree(tree.first, oldPaneId, newPaneId),
+    second: replacePaneInTree(tree.second, oldPaneId, newPaneId),
+  };
+}
+
 /** Returns null if the only remaining pane was removed (caller should close the tab). */
 export function removePaneFromTree(
   tree: PaneTree,

@@ -167,6 +167,39 @@ pub fn pane_cwd(pane_id: &str) -> Option<String> {
     read_pane_map(pane_id)?.cwd.filter(|s| !s.is_empty())
 }
 
+/// Where to relaunch a pane's Claude so `claude --resume` finds its transcript:
+/// the first of `candidates` (then the hook's cwd) whose encoded name is the
+/// transcript's project folder. None when no candidate matches, so the caller
+/// keeps the running Claude instead of relaunching it into "No conversation".
+#[tauri::command]
+pub fn pane_resume_cwd(pane_id: String, candidates: Vec<String>) -> Option<String> {
+    let map = read_pane_map(&pane_id)?;
+    let mut all = candidates;
+    all.extend(map.cwd.filter(|s| !s.is_empty()));
+    resume_cwd(map.transcript_path.as_deref(), all)
+}
+
+/// Claude Code names a project folder after the cwd it was launched in, every
+/// non-alphanumeric char turned into `-`.
+fn project_dir_name(cwd: &str) -> String {
+    cwd.trim_end_matches(['/', '\\'])
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// [`pane_resume_cwd`] over explicit inputs (unit-testable). Without a recorded
+/// transcript path there is nothing to check against: the first candidate.
+fn resume_cwd(transcript: Option<&str>, candidates: Vec<String>) -> Option<String> {
+    let dir = transcript
+        .and_then(|t| Path::new(t).parent()?.file_name()?.to_str())
+        .map(str::to_owned);
+    match dir {
+        Some(dir) => candidates.into_iter().find(|c| project_dir_name(c) == dir),
+        None => candidates.into_iter().next(),
+    }
+}
+
 /// The file behind a `[Image #n]` tag of a pane's Claude session, or None.
 /// Claude Code caches each paste as `<tmp>/claude/<project>/<session>/images/<n>.png`
 /// and prints only the tag; the project folder is named after the cwd the
@@ -988,6 +1021,18 @@ mod tests {
     const USER_LINE: &str = r#"{"type":"user","message":{"role":"user","content":"salut"}}"#;
     const TOOL_LINE: &str = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#;
     const RESULT_LINE: &str = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#;
+
+    #[test]
+    fn resume_cwd_picks_the_folder_the_transcript_lives_under() {
+        let t = r"C:\Users\me\.claude\projects\C--repo-sub\abc.jsonl";
+        let cands = vec![r"C:\repo".to_string(), r"C:\repo\sub\".to_string()];
+        assert_eq!(resume_cwd(Some(t), cands).as_deref(), Some(r"C:\repo\sub\"));
+        assert_eq!(resume_cwd(Some(t), vec![r"C:\other".to_string()]), None);
+        assert_eq!(
+            resume_cwd(None, vec![r"C:\repo".to_string()]).as_deref(),
+            Some(r"C:\repo")
+        );
+    }
 
     #[test]
     fn delta_appends_only_new_lines() {

@@ -206,6 +206,7 @@ pub fn run() {
             conversation::read_transcript_delta,
             conversation::evict_transcript_cache,
             conversation::pane_session_id,
+            conversation::pane_resume_cwd,
             conversation::pasted_image_path,
             conversation::read_image_bytes,
             conversation::read_last_code_block,

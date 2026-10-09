@@ -6,6 +6,7 @@
  */
 
 import type { Tab } from "@/types";
+import { stateFromTitle } from "@/lib/agentState";
 
 export const MAIN_ACCOUNT_ID = "main";
 
@@ -77,6 +78,21 @@ export function tabAccountMarks(
     if (account) marks[tab.id] = { color: account.color, label: account.label };
   }
   return marks;
+}
+
+/**
+ * Panes of a tab that "switch account" relaunches: those running Claude right
+ * now (a status glyph in their title) on another account than `accountId`.
+ * Plain shells keep their account.
+ */
+export function claudePanesToSwitch(tab: Tab, accountId: string): string[] {
+  return Object.values(tab.panes)
+    .filter(
+      (p) =>
+        stateFromTitle(p.title) !== null &&
+        paneAccountId(p.accountId) !== accountId,
+    )
+    .map((p) => p.id);
 }
 
 /** "62 %" style figure, "--" when unknown. */
