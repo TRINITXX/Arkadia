@@ -25,6 +25,7 @@ import { AddProjectDialog } from "@/components/AddProjectDialog";
 import { ProjectContextMenu } from "@/components/ProjectContextMenu";
 import { PaneContextMenu } from "@/components/PaneContextMenu";
 import { TabContextMenu } from "@/components/TabContextMenu";
+import { SidebarTabContextMenu } from "@/components/SidebarTabContextMenu";
 import { RenameDialog } from "@/components/RenameDialog";
 import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -46,6 +47,12 @@ import {
   type LimitState,
 } from "@/store";
 import { applyActiveReorder } from "@/lib/activeOrder";
+import {
+  REVEAL_ON_WAITING_MS,
+  tabAgentStates,
+  visibleActiveProjectIds,
+  waitingTransitions,
+} from "@/lib/sidebarHidden";
 import { WorkspaceContextMenu } from "@/components/WorkspaceContextMenu";
 import { WorkspaceDialog } from "@/components/WorkspaceDialog";
 import {
@@ -126,6 +133,8 @@ interface ProjectMenuState {
   project: Project;
   x: number;
   y: number;
+  /** Single-tab row of the sidebar "Active" list: the tab the menu can hide. */
+  hideTabId?: string;
 }
 
 interface WorkspaceMenuState {
@@ -284,6 +293,9 @@ export function App() {
   );
   const [paneMenu, setPaneMenu] = useState<PaneMenuState | null>(null);
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null);
+  const [sidebarTabMenu, setSidebarTabMenu] = useState<TabMenuState | null>(
+    null,
+  );
   const [renameTarget, setRenameTarget] = useState<Project | null>(null);
   const [colorTarget, setColorTarget] = useState<Project | null>(null);
   const [workspaceDialog, setWorkspaceDialog] = useState<
@@ -345,6 +357,66 @@ export function App() {
     setProjects((prev) => applyActiveReorder(prev, orderedIds));
   }, []);
 
+  // Tabs hidden from the sidebar "Active" list until the next launch (tab
+  // right-click menu). In-memory only, like activeInputProjectIds.
+  const [hiddenSidebarTabIds, setHiddenSidebarTabIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  // paneId → pending reveal of its tab, armed when its Claude starts waiting.
+  const revealTimers = useRef<
+    Map<string, { tabId: string; timer: ReturnType<typeof setTimeout> }>
+  >(new Map());
+  const hideSidebarTab = useCallback((tabId: string) => {
+    // A turn that ended just before hiding must not bring the tab back.
+    for (const [paneId, pending] of revealTimers.current) {
+      if (pending.tabId !== tabId) continue;
+      clearTimeout(pending.timer);
+      revealTimers.current.delete(paneId);
+    }
+    setHiddenSidebarTabIds((prev) => new Set(prev).add(tabId));
+  }, []);
+  // Typing in a hidden tab lists it again.
+  const revealSidebarTab = useCallback((tabId: string) => {
+    setHiddenSidebarTabIds((prev) => {
+      if (!prev.has(tabId)) return prev;
+      const next = new Set(prev);
+      next.delete(tabId);
+      return next;
+    });
+  }, []);
+  // So does Claude finishing a turn in it, once it has kept waiting for
+  // REVEAL_ON_WAITING_MS.
+  const prevPaneStatesRef = useRef(effectivePaneStates);
+  useEffect(() => {
+    const prev = prevPaneStatesRef.current;
+    prevPaneStatesRef.current = effectivePaneStates;
+    const timers = revealTimers.current;
+    const { entered, left } = waitingTransitions(prev, effectivePaneStates);
+    for (const paneId of left) {
+      clearTimeout(timers.get(paneId)?.timer);
+      timers.delete(paneId);
+    }
+    for (const paneId of entered) {
+      const tabId = paneToTab.current.get(paneId);
+      if (!tabId) continue;
+      const timer = setTimeout(() => {
+        timers.delete(paneId);
+        revealSidebarTab(tabId);
+      }, REVEAL_ON_WAITING_MS);
+      timers.set(paneId, { tabId, timer });
+    }
+  }, [effectivePaneStates, revealSidebarTab]);
+  useEffect(() => {
+    const timers = revealTimers.current;
+    return () => {
+      for (const { timer } of timers.values()) clearTimeout(timer);
+    };
+  }, []);
+  const tabStates = useMemo(
+    () => tabAgentStates(tabs, effectivePaneStates),
+    [tabs, effectivePaneStates],
+  );
+
   // Projects shown under the sidebar "Active" tab: received input this session
   // AND still have at least one open tab.
   const activeProjectIds = useMemo(
@@ -359,6 +431,17 @@ export function App() {
           .map((p) => p.id),
       ),
     [projects, activeInputProjectIds, tabs],
+  );
+  // Minus those whose listed tabs are all hidden: back under "Inactive".
+  const sidebarActiveProjectIds = useMemo(
+    () =>
+      visibleActiveProjectIds(
+        activeProjectIds,
+        tabs,
+        tabStates,
+        hiddenSidebarTabIds,
+      ),
+    [activeProjectIds, tabs, tabStates, hiddenSidebarTabIds],
   );
 
   const visibleTabs = useMemo(
@@ -2223,6 +2306,7 @@ export function App() {
   const menuTab = tabMenu
     ? tabs.find((t) => t.id === tabMenu.tabId)
     : undefined;
+  const projectMenuHideTabId = projectMenu?.hideTabId;
   const menuClaudePane =
     menuTab &&
     Object.values(menuTab.panes).find((p) => stateFromTitle(p.title) !== null);
@@ -2244,9 +2328,10 @@ export function App() {
           }}
           onAdd={() => setAddOpen(true)}
           onAddWorkspace={() => setWorkspaceDialog({ mode: "create" })}
-          onProjectContextMenu={(project, x, y) =>
-            setProjectMenu({ project, x, y })
+          onProjectContextMenu={(project, x, y, hideTabId) =>
+            setProjectMenu({ project, x, y, hideTabId })
           }
+          onTabContextMenu={(tabId, x, y) => setSidebarTabMenu({ tabId, x, y })}
           onCloseProjectTabs={closeProjectTabs}
           onCloseTab={closeTab}
           onWorkspaceContextMenu={(workspace, x, y) =>
@@ -2272,7 +2357,8 @@ export function App() {
           tabs={tabs}
           paneAgentStates={effectivePaneStates}
           activeTabIdByProject={activeTabIdByProject}
-          activeProjectIds={activeProjectIds}
+          activeProjectIds={sidebarActiveProjectIds}
+          hiddenTabIds={hiddenSidebarTabIds}
           accountMarks={accountMarks}
           accountsPanel={
             accounts.state && (
@@ -2436,7 +2522,10 @@ export function App() {
                   onToast={pushToast}
                   inputRailEnabled={navRailEnabled}
                   onActivate={(paneId) => focusPane(tab.id, paneId)}
-                  onUserInput={() => markProjectInput(tab.projectId)}
+                  onUserInput={() => {
+                    markProjectInput(tab.projectId);
+                    revealSidebarTab(tab.id);
+                  }}
                   onContextMenu={(paneId, x, y) =>
                     setPaneMenu({ tabId: tab.id, paneId, x, y })
                   }
@@ -2510,7 +2599,21 @@ export function App() {
           onMoveToWorkspace={(workspaceId) =>
             onMoveProject(projectMenu.project.id, workspaceId, null)
           }
+          onHideUntilRestart={
+            projectMenuHideTabId
+              ? () => hideSidebarTab(projectMenuHideTabId)
+              : undefined
+          }
           onClose={() => setProjectMenu(null)}
+        />
+      )}
+
+      {sidebarTabMenu && (
+        <SidebarTabContextMenu
+          x={sidebarTabMenu.x}
+          y={sidebarTabMenu.y}
+          onHide={() => hideSidebarTab(sidebarTabMenu.tabId)}
+          onClose={() => setSidebarTabMenu(null)}
         />
       )}
 

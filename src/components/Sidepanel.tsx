@@ -44,7 +44,16 @@ interface SidepanelProps {
   onActivate: (id: string) => void;
   onAdd: () => void;
   onAddWorkspace: () => void;
-  onProjectContextMenu: (project: Project, x: number, y: number) => void;
+  /** `hideTabId`: opened on a single-tab row of the "Active" list, whose
+   *  menu can then hide that tab until the next launch. */
+  onProjectContextMenu: (
+    project: Project,
+    x: number,
+    y: number,
+    hideTabId?: string,
+  ) => void;
+  /** Right-click on a tab listed under a project in the "Active" list. */
+  onTabContextMenu: (tabId: string, x: number, y: number) => void;
   /** Middle-click on a project row in the "Active" list closes all its tabs. */
   onCloseProjectTabs: (projectId: string) => void;
   /** Middle-click on a tab listed under an active project closes that tab. */
@@ -77,6 +86,8 @@ interface SidepanelProps {
   /** Projects considered "active" (received input this session + still have a
    *  tab open). Shown flat under the "Active" tab, hidden from "Inactive". */
   activeProjectIds: ReadonlySet<string>;
+  /** Tabs left out of the "Active" list until the next launch. */
+  hiddenTabIds: ReadonlySet<string>;
   /** Claude account of each tab; empty while there is a single account. */
   accountMarks: Record<string, AccountMark>;
   /** The "Comptes" button, under "Sessions récentes". */
@@ -231,6 +242,7 @@ export function Sidepanel({
   onAdd,
   onAddWorkspace,
   onProjectContextMenu,
+  onTabContextMenu,
   onCloseProjectTabs,
   onCloseTab,
   onWorkspaceContextMenu,
@@ -248,6 +260,7 @@ export function Sidepanel({
   paneAgentStates,
   activeTabIdByProject,
   activeProjectIds,
+  hiddenTabIds,
   accountMarks,
   accountsPanel,
 }: SidepanelProps) {
@@ -599,6 +612,7 @@ export function Sidepanel({
                     active={project.id === activeProjectId}
                     onActivate={onActivate}
                     onContextMenu={onProjectContextMenu}
+                    onTabContextMenu={onTabContextMenu}
                     onCloseTabs={onCloseProjectTabs}
                     onCloseTab={onCloseTab}
                     onActivateTab={onActivateTab}
@@ -607,7 +621,7 @@ export function Sidepanel({
                       project.id,
                       tabs,
                       paneAgentStates,
-                    )}
+                    ).filter((s) => !hiddenTabIds.has(s.tabId))}
                     accountMarks={accountMarks}
                   />
                 ))}
@@ -1085,7 +1099,17 @@ function ProjectRowContent({
   );
 }
 
-interface ActiveProjectGroupProps extends DraggableProjectRowProps {
+interface ActiveProjectGroupProps extends Omit<
+  DraggableProjectRowProps,
+  "onContextMenu"
+> {
+  onContextMenu: (
+    project: Project,
+    x: number,
+    y: number,
+    hideTabId?: string,
+  ) => void;
+  onTabContextMenu: (tabId: string, x: number, y: number) => void;
   onActivateTab: (projectId: string, tabId: string) => void;
   /** Middle-click on one of the listed tabs closes just that tab. */
   onCloseTab: (tabId: string) => void;
@@ -1117,6 +1141,7 @@ function ActiveProjectGroup({
   active,
   onActivate,
   onContextMenu,
+  onTabContextMenu,
   onCloseTabs,
   onCloseTab,
   onActivateTab,
@@ -1149,7 +1174,7 @@ function ActiveProjectGroup({
   };
   const openContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    onContextMenu(project, e.clientX, e.clientY);
+    onContextMenu(project, e.clientX, e.clientY, solo?.tabId);
   };
 
   if (solo) {
@@ -1236,6 +1261,10 @@ function ActiveProjectGroup({
                   e.stopPropagation();
                   onCloseTab(tabId);
                 }
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onTabContextMenu(tabId, e.clientX, e.clientY);
               }}
               className={`flex items-center gap-2 rounded px-1.5 py-[3px] text-left text-xs ${
                 // Only the visible project highlights its current tab — doing it

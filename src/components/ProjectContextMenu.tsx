@@ -10,6 +10,8 @@ interface ProjectContextMenuProps {
   onChangeColor: () => void;
   onDelete: () => void;
   onMoveToWorkspace: (workspaceId: string | null) => void;
+  /** Set when opened on a single-tab row of the sidebar "Active" list. */
+  onHideUntilRestart?: () => void;
   onClose: () => void;
 }
 
@@ -22,6 +24,7 @@ export function ProjectContextMenu({
   onChangeColor,
   onDelete,
   onMoveToWorkspace,
+  onHideUntilRestart,
   onClose,
 }: ProjectContextMenuProps) {
   const [moveOpen, setMoveOpen] = useState(false);
@@ -120,6 +123,12 @@ export function ProjectContextMenu({
           </div>
         )}
       </div>
+      {onHideUntilRestart && (
+        <Item
+          label="Masquer jusqu'au prochain redémarrage"
+          action={onHideUntilRestart}
+        />
+      )}
       <div className="my-1 border-t border-zinc-800" />
       <Item label="Supprimer" danger action={onDelete} />
     </div>
