@@ -1,9 +1,9 @@
 //! The newest files of the two folders the input rail's picker offers: the
 //! iCloud camera roll, and the downloads folder.
 //!
-//! The roll is filtered to stills and gets thumbnails; downloads are listed
-//! whole, because what lands there is arbitrary — an installer, a CSV, a log, an
-//! extracted folder — and a preview would mean nothing for most of it.
+//! The roll is filtered to stills; downloads are listed whole, because what
+//! lands there is arbitrary — an installer, a CSV, a log, an extracted folder.
+//! Every still, in either folder, gets a thumbnail.
 //!
 //! HEIC is listed among the stills. The Claude API itself only takes JPEG, PNG,
 //! GIF and WebP, but Claude Code is an agent: handed a `.HEIC` path it converts
@@ -38,8 +38,10 @@ const DOWNLOADS: &str = r"D:\Downloads";
 const EXTS: [&str; 7] = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif"];
 /// Of those, the ones the `image` crate can't decode — delegated to ImageMagick.
 const EXTERNAL: [&str; 2] = ["heic", "heif"];
-/// How many entries each tab shows. There is no paging.
-const LIMIT: usize = 10;
+/// Ceiling on one listing. The picker asks for a page more each time it is
+/// scrolled to the bottom, and stops growing here: past a thousand entries the
+/// file is better found by name than by scrolling.
+const MAX_LIMIT: usize = 1000;
 
 /// Which folder the picker is listing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -103,10 +105,16 @@ pub struct FileEntry {
     /// Bytes; 0 for a directory, whose size would need a full walk to know.
     pub size: u64,
     pub is_dir: bool,
+    /// A still `photo_thumbnail` can preview.
+    pub is_image: bool,
 }
 
 #[tauri::command(async)]
-pub fn list_recent_files(app: AppHandle, source: String) -> Result<Vec<FileEntry>, String> {
+pub fn list_recent_files(
+    app: AppHandle,
+    source: String,
+    limit: usize,
+) -> Result<Vec<FileEntry>, String> {
     let source = Source::parse(&source)?;
     let dir = source.root().ok_or("no such folder on this machine")?;
     if !dir.is_dir() {
@@ -115,7 +123,7 @@ pub fn list_recent_files(app: AppHandle, source: String) -> Result<Vec<FileEntry
     // First listing arms the watcher, so the tab never has to be told to refresh
     // once something new lands in the folder.
     ensure_watcher(&app, source, dir.clone());
-    Ok(scan(&dir, LIMIT, source))
+    Ok(scan(&dir, limit.min(MAX_LIMIT), source))
 }
 
 /// Command body (unit-testable without the real folders).
@@ -152,6 +160,7 @@ fn scan(dir: &Path, limit: usize, source: Source) -> Vec<FileEntry> {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+            is_image: !is_dir && is_still_image(&path),
             path: path.to_string_lossy().into_owned(),
             mtime,
             size,
@@ -170,17 +179,22 @@ fn is_still_image(path: &Path) -> bool {
 // ─── Thumbnails ─────────────────────────────────────────────────────────────
 //
 // The roll is full-resolution phone captures: a 1290×2796 screenshot is ~14 MB
-// of RGBA once decoded, so handing ten of them to the webview to paint 90px
-// tiles costs ~144 MB of bitmaps and megabytes of IPC. Instead the decode
-// happens once here, and what crosses the boundary is a ~15 KB JPEG.
+// of RGBA once decoded, so handing a screenful of them to the webview to paint
+// 90px tiles costs hundreds of MB of bitmaps and megabytes of IPC. Instead the
+// decode happens once here, and what crosses the boundary is a ~15 KB JPEG.
 
 /// Longest edge of a generated thumbnail — 2× the tile so it stays crisp on a
 /// HiDPI display without paying for the full image.
 const THUMB_EDGE: u32 = 256;
 /// JPEG quality. At this size the difference above 80 is invisible.
 const THUMB_QUALITY: u8 = 80;
+/// Largest source worth decoding for a thumbnail. Phone captures stay well
+/// under it; a giant image in the downloads would cost a decode of hundreds of
+/// MB, several at once while the list scrolls, and keeps its placeholder.
+const MAX_SOURCE_BYTES: u64 = 50 * 1024 * 1024;
 
-/// Serves a downscaled JPEG for one photo, generating it on first use.
+/// Serves a downscaled JPEG for one still — a photo, or an image among the
+/// downloads — generating it on first use.
 ///
 /// Cached on disk under the app data dir and keyed by path + mtime + size, so
 /// the cost is paid once ever rather than once per app start; editing a photo
@@ -194,6 +208,9 @@ pub fn photo_thumbnail(app: AppHandle, path: String) -> Result<tauri::ipc::Respo
     let meta = fs::metadata(&src).map_err(|e| e.to_string())?;
     if !meta.is_file() {
         return Err("not a file".into());
+    }
+    if meta.len() > MAX_SOURCE_BYTES {
+        return Err("image too large to preview".into());
     }
     let stamp = meta
         .modified()
@@ -433,6 +450,23 @@ mod tests {
     }
 
     #[test]
+    fn downloads_flag_the_stills_they_can_preview() {
+        let tmp = tempfile::tempdir().unwrap();
+        touch(tmp.path(), "cover.JPG", 30);
+        touch(tmp.path(), "IMG_1.heic", 20);
+        touch(tmp.path(), "setup.exe", 10);
+        // A folder named like an image is still a folder: nothing to decode.
+        fs::create_dir(tmp.path().join("album.png")).unwrap();
+
+        let got = scan(tmp.path(), 50, Source::Downloads);
+        let image = |name: &str| got.iter().find(|e| e.name == name).unwrap().is_image;
+        assert!(image("cover.JPG"));
+        assert!(image("IMG_1.heic"));
+        assert!(!image("setup.exe"));
+        assert!(!image("album.png"));
+    }
+
+    #[test]
     fn reports_size_for_files_and_zero_for_folders() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("payload.bin"), vec![0u8; 4096]).unwrap();
@@ -450,8 +484,8 @@ mod tests {
         for i in 0..25 {
             touch(tmp.path(), &format!("img{i:02}.png"), 1000 - i);
         }
-        let got = scan(tmp.path(), LIMIT, Source::Photos);
-        assert_eq!(got.len(), LIMIT);
+        let got = scan(tmp.path(), 10, Source::Photos);
+        assert_eq!(got.len(), 10);
         // Highest index == smallest age == newest.
         assert_eq!(got[0].name, "img24.png");
     }

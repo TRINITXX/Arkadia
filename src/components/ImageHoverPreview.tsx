@@ -7,6 +7,12 @@ export interface PreviewAnchor {
   left: number;
   top: number;
   bottom: number;
+  /**
+   * Set, the card goes beside the box (left of it, or right when there is more
+   * room there) instead of under or over it: for a box in a panel the card
+   * must not cover, `left`/`right` being the panel's and `top` the item's.
+   */
+  right?: number;
 }
 
 interface PreviewState {
@@ -24,12 +30,17 @@ const MAX_WIDTH_PX = 860;
 const MAX_HEIGHT_PX = 720;
 const GAP_PX = 6;
 const MARGIN_PX = 12;
+/** Narrowest card worth putting beside an anchor; less, it goes under or over. */
+const MIN_SIDE_PX = 160;
+/** The card's padding and border, around the image's own max width. */
+const CARD_CHROME_PX = 10;
 
 /**
- * Hover preview of an image path, driven imperatively from the terminal's
- * window-level hover loop: `hover` is fed the hovered image path (or null) on
- * every evaluation, `keep` holds the preview while the pointer sits on it.
- * The returned `api` is stable, so long-lived listener closures can hold it.
+ * Hover preview of an image path, driven imperatively — by the terminal's
+ * window-level hover loop, or by the file picker's thumbnails: `hover` is fed
+ * the hovered image path (or null) on every evaluation, `keep` holds the
+ * preview while the pointer sits on it. The returned `api` is stable, so
+ * long-lived listener closures can hold it.
  */
 export function useImageHoverPreview() {
   const [preview, setPreview] = useState<PreviewState | null>(null);
@@ -109,13 +120,19 @@ export function useImageHoverPreview() {
 interface ImageHoverPreviewProps {
   preview: PreviewState;
   elRef: React.RefObject<HTMLDivElement>;
-  onEnter: () => void;
-  onOpen: (path: string) => void;
+  /** Pointer entered the card; only reachable when the card has `onOpen`. */
+  onEnter?: () => void;
+  /**
+   * Left out, the card is look-only: the pointer passes through it to
+   * whatever lies beneath, and nothing has to hide it on leaving.
+   */
+  onOpen?: (path: string) => void;
 }
 
 /**
  * The floating preview card, under the path (or above it when there is more
- * room there). Portaled to `body` so no pane ancestor clips or offsets it.
+ * room there), or beside an anchor that sets `right`. Portaled to `body` so no
+ * pane ancestor clips or offsets it.
  */
 export function ImageHoverPreview({
   preview,
@@ -127,52 +144,78 @@ export function ImageHoverPreview({
   const roomBelow = window.innerHeight - anchor.bottom - GAP_PX - MARGIN_PX;
   const roomAbove = anchor.top - GAP_PX - MARGIN_PX;
   const below = roomBelow >= roomAbove;
-  const maxHeight = Math.min(MAX_HEIGHT_PX, below ? roomBelow : roomAbove);
-  const maxWidth = Math.min(
-    MAX_WIDTH_PX,
-    window.innerWidth * 0.6,
-    window.innerWidth - 2 * MARGIN_PX,
-  );
+  const roomLeft = anchor.left - GAP_PX - MARGIN_PX - CARD_CHROME_PX;
+  const roomRight =
+    window.innerWidth -
+    (anchor.right ?? 0) -
+    GAP_PX -
+    MARGIN_PX -
+    CARD_CHROME_PX;
+  const onLeft = roomLeft >= roomRight;
+  // A window too narrow on both sides falls back to under or over the box:
+  // covering part of it beats a card hanging off the screen.
+  const beside =
+    anchor.right !== undefined && Math.max(roomLeft, roomRight) >= MIN_SIDE_PX;
+  const maxHeight = beside
+    ? Math.min(MAX_HEIGHT_PX, window.innerHeight - 2 * MARGIN_PX)
+    : Math.min(MAX_HEIGHT_PX, below ? roomBelow : roomAbove);
+  const maxWidth = beside
+    ? Math.min(MAX_WIDTH_PX, onLeft ? roomLeft : roomRight)
+    : Math.min(
+        MAX_WIDTH_PX,
+        window.innerWidth * 0.6,
+        window.innerWidth - 2 * MARGIN_PX,
+      );
 
-  // The width is only known once the image is decoded: on every size change,
-  // slide the card left from the path just enough to stay in the window.
+  // The size is only known once the image is decoded: on every size change,
+  // slide the card along the anchor just enough to stay in the window — left
+  // from the path, or up from the item it sits beside.
   useLayoutEffect(() => {
     const el = elRef.current;
     if (!el) return;
     const fit = () => {
-      const maxLeft = window.innerWidth - MARGIN_PX - el.offsetWidth;
-      el.style.left = `${Math.max(MARGIN_PX, Math.min(anchor.left, maxLeft))}px`;
+      if (beside) {
+        const maxTop = window.innerHeight - MARGIN_PX - el.offsetHeight;
+        el.style.top = `${Math.max(MARGIN_PX, Math.min(anchor.top, maxTop))}px`;
+      } else {
+        const maxLeft = window.innerWidth - MARGIN_PX - el.offsetWidth;
+        el.style.left = `${Math.max(MARGIN_PX, Math.min(anchor.left, maxLeft))}px`;
+      }
     };
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [anchor.left, elRef, preview.url]);
+  }, [anchor.left, anchor.top, beside, elRef, preview.url]);
 
   const name = preview.path.split(/[\\/]/).pop() ?? preview.path;
+  const position: React.CSSProperties = beside
+    ? onLeft
+      ? { top: anchor.top, right: window.innerWidth - anchor.left + GAP_PX }
+      : { top: anchor.top, left: (anchor.right ?? 0) + GAP_PX }
+    : below
+      ? { left: anchor.left, top: anchor.bottom + GAP_PX }
+      : { left: anchor.left, bottom: window.innerHeight - anchor.top + GAP_PX };
 
   return createPortal(
     <div
       ref={elRef}
       onMouseEnter={onEnter}
-      onClick={() => onOpen(preview.path)}
-      title="Cliquer pour agrandir"
+      onClick={onOpen && (() => onOpen(preview.path))}
+      title={onOpen && "Cliquer pour agrandir"}
       style={{
         position: "fixed",
-        left: anchor.left,
+        ...position,
         // Its own width, not what is left right of `left` (shrink-to-fit
         // would squeeze it against the edge before `fit` can move it).
         width: "max-content",
-        ...(below
-          ? { top: anchor.bottom + GAP_PX }
-          : { bottom: window.innerHeight - anchor.top + GAP_PX }),
         zIndex: 40,
         padding: 4,
         background: "rgba(20,20,24,0.96)",
         border: "1px solid rgba(255,255,255,0.14)",
         borderRadius: 8,
         boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
-        cursor: "zoom-in",
+        ...(onOpen ? { cursor: "zoom-in" } : { pointerEvents: "none" }),
         animation: "img-preview-in .12s ease-out both",
       }}
     >

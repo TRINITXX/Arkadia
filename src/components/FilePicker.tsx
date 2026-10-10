@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -7,10 +13,16 @@ import {
   Image as ImageIcon,
   Loader2,
 } from "lucide-react";
+import {
+  ImageHoverPreview,
+  useImageHoverPreview,
+} from "@/components/ImageHoverPreview";
 import { formatSize } from "@/lib/fileSize";
+import { isImagePath } from "@/lib/imagePaths";
 import { fetchThumbnailUrl } from "@/lib/imageUrlCache";
 import { formatWhen } from "@/lib/sessionsIndex";
 import { subscribeStable } from "@/lib/tauriEvents";
+import { useLazyThumbnail } from "@/lib/useLazyThumbnail";
 
 /** Mirrors `Source` in `src-tauri/src/photos.rs`. */
 type SourceKey = "photos" | "downloads";
@@ -22,6 +34,7 @@ interface FileEntry {
   mtime: number;
   size: number;
   is_dir: boolean;
+  is_image: boolean;
 }
 
 const TABS: { key: SourceKey; label: string }[] = [
@@ -32,10 +45,19 @@ const TABS: { key: SourceKey; label: string }[] = [
 /** Tiles per row in the photo grid; the downloads list is one column. */
 const PHOTO_COLS = 5;
 
+/**
+ * Entries per listing step. Enough to overflow the panel, so scrolling to its
+ * bottom is what asks for the next step.
+ */
+const PAGE = 30;
+/** Distance from the list's bottom, in px, at which the next step is fetched. */
+const NEAR_END_PX = 200;
+
 /** Backend signal that a watched folder changed; payload is the source key. */
 const FILES_CHANGED = "recent-files-changed";
 
 const EMPTY: Record<SourceKey, null> = { photos: null, downloads: null };
+const FIRST_PAGE: Record<SourceKey, number> = { photos: PAGE, downloads: PAGE };
 
 /**
  * A photo listing started on hover, and how long it stays usable. Hovering the
@@ -46,14 +68,14 @@ const EMPTY: Record<SourceKey, null> = { photos: null, downloads: null };
 let prefetched: { at: number; roll: Promise<FileEntry[]> } | null = null;
 const PREFETCH_TTL_MS = 30_000;
 
-function listSource(source: SourceKey): Promise<FileEntry[]> {
-  return invoke<FileEntry[]>("list_recent_files", { source });
+function listSource(source: SourceKey, limit: number): Promise<FileEntry[]> {
+  return invoke<FileEntry[]>("list_recent_files", { source, limit });
 }
 
-/** Lists the roll and warms every thumbnail. Safe to call repeatedly. */
+/** Lists the roll's first page and warms its thumbnails. Safe to call repeatedly. */
 export function prefetchPhotos() {
   if (prefetched && Date.now() - prefetched.at < PREFETCH_TTL_MS) return;
-  const roll = listSource("photos");
+  const roll = listSource("photos", PAGE);
   void roll
     .then((list) =>
       list.forEach((p) => void fetchThumbnailUrl(p.path, p.mtime)),
@@ -67,15 +89,18 @@ function invalidatePrefetch() {
   prefetched = null;
 }
 
-/** Consumes a fresh-enough photo prefetch, or lists the source from scratch. */
-function takeList(source: SourceKey): Promise<FileEntry[]> {
-  if (source !== "photos") return listSource(source);
+/**
+ * Consumes a fresh-enough photo prefetch, or lists the source from scratch. The
+ * prefetch only ever holds the first page, so a deeper listing skips it.
+ */
+function takeList(source: SourceKey, limit: number): Promise<FileEntry[]> {
+  if (source !== "photos" || limit !== PAGE) return listSource(source, limit);
   const hit =
     prefetched && Date.now() - prefetched.at < PREFETCH_TTL_MS
       ? prefetched.roll
       : null;
   prefetched = null;
-  return hit ?? listSource("photos");
+  return hit ?? listSource("photos", limit);
 }
 
 interface FilePickerProps {
@@ -85,9 +110,10 @@ interface FilePickerProps {
 }
 
 /**
- * The input rail's file picker: the ten most recent camera-roll photos as a
- * grid, and the ten most recent downloads as a list. Downloads get no preview —
- * what lands there is an installer or a CSV as often as an image.
+ * The input rail's file picker: the camera roll as a grid of thumbnails, and
+ * the downloads as a list, both newest first and extended a page at a time as
+ * the panel is scrolled. A download that is an image shows its thumbnail; the
+ * rest show an icon.
  *
  * The selection spans both tabs, so a screenshot and a log file can go into the
  * same prompt. It takes keyboard focus on open — arrows move, space toggles, Tab
@@ -97,6 +123,7 @@ interface FilePickerProps {
  */
 export function FilePicker({ onInsert, onClose }: FilePickerProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<SourceKey>("photos");
   const [lists, setLists] =
     useState<Record<SourceKey, FileEntry[] | null>>(EMPTY);
@@ -109,8 +136,19 @@ export function FilePicker({ onInsert, onClose }: FilePickerProps) {
     photos: 0,
     downloads: 0,
   });
+  // How deep each tab has been scrolled into, in entries. A refresh keeps it.
+  const [limits, setLimits] = useState(FIRST_PAGE);
+  // A download's thumbnail, hovered, shows the image larger beside the panel.
+  const {
+    preview,
+    api: previewApi,
+    elRef: previewElRef,
+  } = useImageHoverPreview();
 
   const entries = lists[tab];
+  const limit = limits[tab];
+  // Only the tab on screen re-lists on news; the other reloads when shown.
+  const refreshes = nonce[tab];
   // Reference point for the rows' relative dates. Stamped alongside each load
   // rather than during render, which has to stay pure.
   const [now, setNow] = useState(0);
@@ -118,7 +156,7 @@ export function FilePicker({ onInsert, onClose }: FilePickerProps) {
   useEffect(() => {
     let active = true;
     const source = tab;
-    takeList(source)
+    takeList(source, limit)
       .then((list) => {
         if (!active) return;
         setNow(Date.now());
@@ -132,7 +170,20 @@ export function FilePicker({ onInsert, onClose }: FilePickerProps) {
     return () => {
       active = false;
     };
-  }, [tab, nonce]);
+  }, [tab, refreshes, limit]);
+
+  // Asks for the next page once the list is scrolled near its end. A listing
+  // shorter than requested means either the folder has nothing older or the
+  // next page is still on its way, and neither should ask again.
+  const loadMoreNearEnd = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || entries === null || entries.length < limit) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight > NEAR_END_PX) return;
+    setLimits((prev) => ({ ...prev, [tab]: limit + PAGE }));
+  }, [entries, limit, tab]);
+
+  // A page too short to fill the panel never scrolls, so also check on arrival.
+  useEffect(loadMoreNearEnd, [loadMoreNearEnd]);
 
   // A refresh can drop an entry that was picked. Returning `prev` untouched when
   // there is nothing to prune keeps this from looping on its own output.
@@ -166,6 +217,41 @@ export function FilePicker({ onInsert, onClose }: FilePickerProps) {
       }),
     [],
   );
+
+  // Beside the panel rather than over it, level with the hovered row, so the
+  // rest of the list stays in view.
+  const previewImage = useCallback(
+    (path: string, thumb: HTMLElement | null) => {
+      const panel = rootRef.current?.getBoundingClientRect();
+      if (!thumb || !panel) {
+        previewApi.hover(null);
+        return;
+      }
+      const row = thumb.getBoundingClientRect();
+      previewApi.hover(path, {
+        left: panel.left,
+        right: panel.right,
+        top: row.top,
+        bottom: row.bottom,
+      });
+    },
+    [previewApi],
+  );
+
+  // A tab opens scrolled to its top, so its cursor starts there too rather
+  // than on a row off screen. And switching unmounts the hovered row before
+  // it can report leaving, so its preview goes with it.
+  useEffect(() => {
+    setCursor(0);
+    previewApi.hide();
+  }, [tab, previewApi]);
+
+  // The rows move under a still pointer, so the card would float beside the
+  // wrong one; the next row hovered brings its own.
+  const onScroll = () => {
+    previewApi.hide();
+    loadMoreNearEnd();
+  };
 
   const toggle = useCallback((path: string) => {
     setSelected((prev) =>
@@ -204,7 +290,12 @@ export function FilePicker({ onInsert, onClose }: FilePickerProps) {
         return;
       e.preventDefault();
       const next = cursor + step[e.key];
-      if (next >= 0 && next < count) setCursor(next);
+      if (next < 0 || next >= count) return;
+      setCursor(next);
+      // The scroller's only child is the grid or the list, one child per entry.
+      scrollRef.current?.firstElementChild?.children[next]?.scrollIntoView({
+        block: "nearest",
+      });
     }
   };
 
@@ -252,38 +343,57 @@ export function FilePicker({ onInsert, onClose }: FilePickerProps) {
             ? "Aucune photo (HEIC, JPEG, PNG, GIF, WebP) dans le dossier."
             : "Aucun fichier dans le dossier."}
         </p>
-      ) : tab === "photos" ? (
-        <div className="grid grid-cols-5 gap-1.5">
-          {entries.map((photo, i) => (
-            <PhotoTile
-              key={photo.path}
-              photo={photo}
-              rank={selected.indexOf(photo.path)}
-              atCursor={i === cursor}
-              onPick={() => {
-                setCursor(i);
-                toggle(photo.path);
-              }}
-            />
-          ))}
-        </div>
       ) : (
-        <ul className="flex flex-col gap-0.5">
-          {entries.map((entry, i) => (
-            <FileRow
-              key={entry.path}
-              entry={entry}
-              now={now}
-              rank={selected.indexOf(entry.path)}
-              atCursor={i === cursor}
-              onPick={() => {
-                setCursor(i);
-                toggle(entry.path);
-              }}
-            />
-          ))}
-        </ul>
+        // Keyed by tab so each one opens scrolled to its top.
+        <div
+          key={tab}
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="scrollbar-none max-h-80 overflow-y-auto"
+        >
+          {tab === "photos" ? (
+            <div className="grid grid-cols-5 gap-1.5">
+              {entries.map((photo, i) => (
+                <PhotoTile
+                  key={photo.path}
+                  photo={photo}
+                  scroller={scrollRef}
+                  rank={selected.indexOf(photo.path)}
+                  atCursor={i === cursor}
+                  onPick={() => {
+                    setCursor(i);
+                    toggle(photo.path);
+                  }}
+                />
+              ))}
+            </div>
+          ) : (
+            <ul className="flex flex-col gap-0.5">
+              {entries.map((entry, i) => (
+                <FileRow
+                  key={entry.path}
+                  entry={entry}
+                  now={now}
+                  scroller={scrollRef}
+                  rank={selected.indexOf(entry.path)}
+                  atCursor={i === cursor}
+                  onPick={() => {
+                    setCursor(i);
+                    toggle(entry.path);
+                  }}
+                  // Only what the webview decodes full size: not HEIC.
+                  onPreview={
+                    entry.is_image && isImagePath(entry.path)
+                      ? (thumb) => previewImage(entry.path, thumb)
+                      : undefined
+                  }
+                />
+              ))}
+            </ul>
+          )}
+        </div>
       )}
+      {preview && <ImageHoverPreview preview={preview} elRef={previewElRef} />}
 
       <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-zinc-800 pt-2">
         <span className="truncate text-[11px] text-zinc-500">
@@ -307,23 +417,46 @@ export function FilePicker({ onInsert, onClose }: FilePickerProps) {
 interface RowProps {
   entry: FileEntry;
   now: number;
+  /** The scrolling list, which decides when the row's thumbnail loads. */
+  scroller: RefObject<HTMLElement | null>;
   /** Position in the selection, or -1 when unselected. */
   rank: number;
   atCursor: boolean;
   onPick: () => void;
+  /** Fed the hovered thumbnail, then null on leaving it; absent, no preview. */
+  onPreview?: (thumb: HTMLElement | null) => void;
 }
 
-/** One download: no preview, just what tells two files apart at a glance. */
-function FileRow({ entry, now, rank, atCursor, onPick }: RowProps) {
+/**
+ * One download: what tells two files apart at a glance, and for an image, a
+ * thumbnail of it.
+ */
+function FileRow({
+  entry,
+  now,
+  scroller,
+  rank,
+  atCursor,
+  onPick,
+  onPreview,
+}: RowProps) {
+  const ref = useRef<HTMLLIElement>(null);
+  const { url } = useLazyThumbnail(
+    ref,
+    scroller,
+    entry.path,
+    entry.mtime,
+    entry.is_image,
+  );
   const picked = rank >= 0;
   return (
-    <li>
+    <li ref={ref}>
       <button
         type="button"
         onClick={onPick}
         title={entry.path}
         aria-pressed={picked}
-        className={`flex w-full items-center gap-2 rounded border px-2 py-1.5 text-left transition-colors ${
+        className={`flex w-full items-center gap-2 rounded border px-2 py-1 text-left transition-colors ${
           picked
             ? "border-sky-400 bg-[rgba(56,189,248,0.08)]"
             : atCursor
@@ -331,8 +464,20 @@ function FileRow({ entry, now, rank, atCursor, onPick }: RowProps) {
               : "border-transparent hover:bg-zinc-900"
         }`}
       >
-        <span className="shrink-0 text-zinc-500">
-          {entry.is_dir ? <Folder size={13} /> : <FileIcon size={13} />}
+        <span
+          onMouseEnter={onPreview && ((e) => onPreview(e.currentTarget))}
+          onMouseLeave={onPreview && (() => onPreview(null))}
+          className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded text-zinc-500"
+        >
+          {url ? (
+            <img src={url} alt="" className="h-full w-full object-cover" />
+          ) : entry.is_dir ? (
+            <Folder size={13} />
+          ) : entry.is_image ? (
+            <ImageIcon size={13} />
+          ) : (
+            <FileIcon size={13} />
+          )}
         </span>
         <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-200">
           {entry.name}
@@ -355,6 +500,8 @@ function FileRow({ entry, now, rank, atCursor, onPick }: RowProps) {
 
 interface PhotoTileProps {
   photo: FileEntry;
+  /** The scrolling grid, which decides when the tile's thumbnail loads. */
+  scroller: RefObject<HTMLElement | null>;
   /** Position in the selection, or -1 when unselected. */
   rank: number;
   atCursor: boolean;
@@ -362,25 +509,25 @@ interface PhotoTileProps {
 }
 
 /** One square thumbnail; a photo whose bytes can't be read renders its name. */
-function PhotoTile({ photo, rank, atCursor, onPick }: PhotoTileProps) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    void fetchThumbnailUrl(photo.path, photo.mtime).then((u) => {
-      if (!active) return;
-      if (u) setUrl(u);
-      else setFailed(true);
-    });
-    return () => {
-      active = false;
-    };
-  }, [photo.path, photo.mtime]);
+function PhotoTile({
+  photo,
+  scroller,
+  rank,
+  atCursor,
+  onPick,
+}: PhotoTileProps) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const { url, failed } = useLazyThumbnail(
+    ref,
+    scroller,
+    photo.path,
+    photo.mtime,
+  );
 
   const picked = rank >= 0;
   return (
     <button
+      ref={ref}
       type="button"
       onClick={onPick}
       title={photo.name}

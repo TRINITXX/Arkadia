@@ -5,11 +5,20 @@ import { invoke } from "@tauri-apps/api/core";
  *
  * Failures are cached too, so a non-existent path mentioned in prose is probed
  * exactly once. LRU-ish capped: the oldest entry is revoked when full, which
- * keeps a long reading session (or many photo-picker openings) from pinning
+ * keeps a long reading session (or many photo-picker scrolls) from pinning
  * every image it ever showed in memory.
  */
 const urlCache = new Map<string, Promise<string | null>>();
 const URL_CACHE_MAX = 80;
+
+/**
+ * Thumbnails get their own, larger cache. The file picker can hold up to a
+ * thousand tiles at ~15 KB each, and scrolling through them must neither
+ * evict a thumbnail still loading — its tile would then render a revoked URL —
+ * nor push the conversation's full-size images out of the cache above.
+ */
+const thumbCache = new Map<string, Promise<string | null>>();
+const THUMB_CACHE_MAX = 1000;
 
 const MIME_FOR_EXT: Record<string, string> = {
   png: "image/png",
@@ -25,7 +34,7 @@ export function fetchImageUrl(
   path: string,
   mediaType?: string,
 ): Promise<string | null> {
-  return fetchVia("read_image_bytes", path, mediaType);
+  return fetchVia(urlCache, URL_CACHE_MAX, "read_image_bytes", path, mediaType);
 }
 
 /**
@@ -40,10 +49,19 @@ export function fetchThumbnailUrl(
   path: string,
   version?: number,
 ): Promise<string | null> {
-  return fetchVia("photo_thumbnail", path, "image/jpeg", version);
+  return fetchVia(
+    thumbCache,
+    THUMB_CACHE_MAX,
+    "photo_thumbnail",
+    path,
+    "image/jpeg",
+    version,
+  );
 }
 
 function fetchVia(
+  cache: Map<string, Promise<string | null>>,
+  max: number,
   command: string,
   path: string,
   mediaType?: string,
@@ -52,7 +70,7 @@ function fetchVia(
   // Namespaced by command: the full image and the thumbnail of one path are two
   // different blobs and must not share an entry.
   const key = `${command} ${path} ${version ?? ""}`;
-  const cached = urlCache.get(key);
+  const cached = cache.get(key);
   if (cached) return cached;
   const promise = invoke<ArrayBuffer>(command, { path })
     .then((buf) => {
@@ -61,13 +79,13 @@ function fetchVia(
       return URL.createObjectURL(new Blob([buf], { type }));
     })
     .catch(() => null);
-  if (urlCache.size >= URL_CACHE_MAX) {
-    const [oldestKey, oldest] = urlCache.entries().next().value!;
-    urlCache.delete(oldestKey);
+  if (cache.size >= max) {
+    const [oldestKey, oldest] = cache.entries().next().value!;
+    cache.delete(oldestKey);
     void oldest.then((url) => {
       if (url) URL.revokeObjectURL(url);
     });
   }
-  urlCache.set(key, promise);
+  cache.set(key, promise);
   return promise;
 }
