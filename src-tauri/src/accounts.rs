@@ -206,7 +206,10 @@ fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     let tmp = path.with_extension("arkadia-tmp");
     let text = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
     fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        e.to_string()
+    })
 }
 
 // ─── Registry ───────────────────────────────────────────────────────
@@ -607,6 +610,157 @@ pub fn current_launch_dir() -> Option<PathBuf> {
     prepare_launch(Some(&current))
 }
 
+// ─── Memory folder ──────────────────────────────────────────────────
+
+/// Longest project folder name Claude Code uses as is; past it, it appends a
+/// hash this code does not reproduce.
+const MAX_SLUG: usize = 200;
+
+/// Claude Code's folder name for a project under `projects/`: every UTF-16
+/// unit that is not an ASCII letter or digit becomes `-`.
+fn project_slug(root: &str) -> Option<String> {
+    let slug: String = root
+        .encode_utf16()
+        .map(|u| match u {
+            0x30..=0x39 | 0x41..=0x5a | 0x61..=0x7a => char::from(u as u8),
+            _ => '-',
+        })
+        .collect();
+    (slug.len() <= MAX_SLUG).then_some(slug)
+}
+
+/// `fs::canonicalize` without Windows' `\\?\` prefix: the spelling Node's
+/// `realpath` hands Claude Code.
+fn real_path(p: &Path) -> Option<PathBuf> {
+    let canon = fs::canonicalize(p).ok()?;
+    let s = canon.to_string_lossy();
+    Some(match s.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => PathBuf::from(format!(r"\\{rest}")),
+        None => PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s)),
+    })
+}
+
+/// Main working tree of the linked worktree whose `.git` file sits in `root`
+/// (the shared git folder itself for a bare repo), checked the way Claude
+/// Code checks it. `None` for a plain repo or a submodule.
+fn linked_worktree_main(root: &Path) -> Option<PathBuf> {
+    let text = fs::read_to_string(root.join(".git")).ok()?;
+    let gitdir = text.trim().strip_prefix("gitdir:")?.trim();
+    let gitdir = std::path::absolute(root.join(gitdir)).ok()?;
+    let common = fs::read_to_string(gitdir.join("commondir")).ok()?;
+    let common = std::path::absolute(gitdir.join(common.trim())).ok()?;
+    if gitdir.parent()? != common.join("worktrees") {
+        return None;
+    }
+    let back = fs::read_to_string(gitdir.join("gitdir")).ok()?;
+    if real_path(&gitdir.join(back.trim()))? != real_path(root)?.join(".git") {
+        return None;
+    }
+    if common.file_name()? != ".git" {
+        return (!common.join(".git").exists()).then_some(common);
+    }
+    common.parent().map(Path::to_path_buf)
+}
+
+/// Folder Claude Code keys a project's memory by, and whether it is a git
+/// repo: the nearest folder up from `start` holding a `.git`, a linked
+/// worktree standing for its main one; else `start`. Claude Code reads these
+/// files rather than asking git, so this does too. `None` when a `.git` is a
+/// link, which Claude Code leaves undecided.
+fn memory_root(start: &Path) -> Option<(PathBuf, bool)> {
+    let mut dir = start;
+    loop {
+        if let Ok(meta) = fs::symlink_metadata(dir.join(".git")) {
+            if meta.file_type().is_symlink() {
+                return None;
+            }
+            let root = linked_worktree_main(dir).unwrap_or_else(|| dir.to_path_buf());
+            return Some((root, true));
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => return Some((start.to_path_buf(), false)),
+        }
+    }
+}
+
+/// A value [`pin_memory_dir`] wrote: `~/.claude/projects/<folder>/memory`.
+fn is_pinned(value: &str) -> bool {
+    value
+        .strip_prefix("~/.claude/projects/")
+        .and_then(|rest| rest.strip_suffix("/memory"))
+        .is_some_and(|name| {
+            !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+/// Points a project's local settings at `dir`. A value pinned here before
+/// follows the folder when it is copied or moved; one the user chose stays.
+fn with_memory_dir(settings: &mut Value, dir: &str) -> bool {
+    let Some(obj) = settings.as_object_mut() else {
+        return false;
+    };
+    match obj.get("autoMemoryDirectory") {
+        None => {}
+        Some(Value::String(cur)) if cur != dir && is_pinned(cur) => {}
+        Some(_) => return false,
+    }
+    obj.insert("autoMemoryDirectory".into(), Value::String(dir.into()));
+    true
+}
+
+/// `git -C <cwd> <args>` without a console window. `None` = git missing.
+fn git_in(cwd: &Path, args: &[&str]) -> Option<std::process::Output> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(cwd).args(args);
+    // Inherited, these would make git answer for another repo.
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CEILING_DIRECTORIES"] {
+        cmd.env_remove(var);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd.output().ok()
+}
+
+/// A secondary account reaches the memory folder through its `projects`
+/// junction. Claude Code resolves it, lands in `~/.claude` (a folder it always
+/// protects, ahead of any allow rule) and asks before every memory write.
+/// Pointing `autoMemoryDirectory` at the real folder, in the project's local
+/// settings, removes the detour. Never touches the user-wide local settings
+/// (the home folder's) nor a file git would show.
+pub fn pin_memory_dir(cwd: &Path) {
+    let (Some(start), Some(home)) = (real_path(cwd), real_path(&home())) else {
+        return;
+    };
+    if start == home || real_path(&start.join(".claude")) == real_path(&main_root()) {
+        return;
+    }
+    let Some((root, in_repo)) = memory_root(&start) else {
+        return;
+    };
+    let Some(slug) = project_slug(&root.to_string_lossy()) else {
+        return;
+    };
+    let path = start.join(".claude").join("settings.local.json");
+    let Ok(existing) = read_existing(&path) else {
+        return;
+    };
+    let mut settings = existing.unwrap_or_else(|| Value::Object(Map::new()));
+    if !with_memory_dir(&mut settings, &format!("~/.claude/projects/{slug}/memory")) {
+        return;
+    }
+    if in_repo
+        && !git_in(&start, &["check-ignore", "-q", ".claude/settings.local.json"])
+            .is_some_and(|o| o.status.success())
+    {
+        return;
+    }
+    let _ = write_json(&path, &settings);
+}
+
 // ─── Usage ──────────────────────────────────────────────────────────
 
 fn read_usage(id: &str) -> Option<Usage> {
@@ -903,5 +1057,56 @@ mod tests {
         assert_eq!(acc["projects"]["C:/p"]["hasTrustDialogAccepted"], true);
         assert_eq!(acc["hasCompletedOnboarding"], true);
         assert_eq!(acc["oauthAccount"]["emailAddress"], "b@x");
+    }
+
+    #[test]
+    fn project_slug_matches_claude_code_folder_names() {
+        assert_eq!(
+            project_slug(r"C:\Users\TRINITX\Desktop\Claude Desktop\Assets IA").as_deref(),
+            Some("C--Users-TRINITX-Desktop-Claude-Desktop-Assets-IA")
+        );
+        // One dash per UTF-16 unit: two for an emoji.
+        assert_eq!(project_slug("C:/Données/😀").as_deref(), Some("C--Donn-es---"));
+        assert_eq!(project_slug(&"a".repeat(201)), None);
+    }
+
+    /// A linked worktree: `<meta>` is its folder under the shared git folder.
+    fn fake_worktree(tree: &Path, meta: &Path) {
+        fs::create_dir_all(meta).unwrap();
+        fs::create_dir_all(tree.join("sub")).unwrap();
+        fs::write(meta.join("commondir"), "../..\n").unwrap();
+        let back = format!("{}\n", tree.join(".git").display());
+        fs::write(meta.join("gitdir"), back).unwrap();
+        fs::write(tree.join(".git"), format!("gitdir: {}\n", meta.display())).unwrap();
+    }
+
+    #[test]
+    fn linked_worktrees_share_the_main_repo_memory() {
+        let tmp = std::env::temp_dir().join(format!("arkadia-memroot-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let app_git = tmp.join("app").join(".git");
+        fake_worktree(&tmp.join("app-feat"), &app_git.join("worktrees").join("feat"));
+        let bare = tmp.join("proj").join(".bare");
+        fake_worktree(&tmp.join("proj").join("main"), &bare.join("worktrees").join("main"));
+
+        let from_sub = memory_root(&tmp.join("app-feat").join("sub"));
+        assert_eq!(from_sub, Some((tmp.join("app"), true)));
+        // Bare repo: the shared git folder itself, as Claude Code keys it.
+        assert_eq!(memory_root(&tmp.join("proj").join("main")), Some((bare, true)));
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn a_pinned_memory_dir_follows_the_folder_but_a_user_choice_stays() {
+        let (a, b) = ("~/.claude/projects/C--a/memory", "~/.claude/projects/C--b/memory");
+        let mut s = json!({"enabledMcpjsonServers": ["blender"]});
+        assert!(with_memory_dir(&mut s, a));
+        assert!(!with_memory_dir(&mut s, a));
+        assert!(with_memory_dir(&mut s, b));
+        assert_eq!(s["autoMemoryDirectory"], b);
+        assert_eq!(s["enabledMcpjsonServers"][0], "blender");
+        let mut own = json!({"autoMemoryDirectory": "D:/notes"});
+        assert!(!with_memory_dir(&mut own, b));
+        assert_eq!(own["autoMemoryDirectory"], "D:/notes");
     }
 }

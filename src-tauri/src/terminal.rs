@@ -349,7 +349,11 @@ pub fn spawn_terminal(
     // The pane's Claude account: a secondary one is its own config dir; the
     // main one must run WITHOUT the variable (see `accounts`).
     match crate::accounts::prepare_launch(account_id.as_deref()) {
-        Some(dir) => cmd.env("CLAUDE_CONFIG_DIR", dir),
+        Some(dir) => {
+            // Without it, each memory write of this account asks first.
+            crate::accounts::pin_memory_dir(Path::new(&cwd));
+            cmd.env("CLAUDE_CONFIG_DIR", dir)
+        }
         None => cmd.env_remove("CLAUDE_CONFIG_DIR"),
     }
     // Identify ourselves as WezTerm-compatible: many TUIs (incl. Claude Code's
