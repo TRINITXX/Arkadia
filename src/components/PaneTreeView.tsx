@@ -154,7 +154,10 @@ export function PaneTreeView({
         )}
         {modernViewEnabled && (
           <ModernOverlay paneId={pane.id} font={font} useWebGPU={useWebGPU}>
+            {/* Keyed: a pane swapped in place (relaunch on another account)
+                gets a fresh view, not the previous pane's in-flight reads. */}
             <ModernConversationView
+              key={pane.id}
               paneId={pane.id}
               filters={convFilters}
               onFiltersChange={onConvFiltersChange}

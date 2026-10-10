@@ -28,6 +28,14 @@ import { galleryImages } from "@/lib/imageGallery";
 import { toolIcon } from "@/components/modern/toolIcons";
 import type { TerminalPalette, ToolDensity } from "@/types";
 import type { AgentStateValue } from "@/lib/agentState";
+import {
+  applyDelta,
+  EMPTY_CONV,
+  getHeldConv,
+  setHeldConv,
+  type ConvDelta,
+  type HeldConv,
+} from "@/lib/convStore";
 
 /** One transcript image, materialized in the backend's imgcache. */
 export interface ConvImage {
@@ -48,16 +56,6 @@ export interface ConvBlock {
   tool_output_images?: ConvImage[];
   /** ISO-8601 UTC instant of the transcript line this block came from. */
   ts?: string;
-}
-
-/** Incremental response: keep the first `base` blocks, append `blocks`. */
-interface ConvDelta {
-  generation: number;
-  base: number;
-  blocks: ConvBlock[];
-  sessionId?: string | null;
-  /** The session's working directory (latest `cwd` in the transcript). */
-  cwd?: string | null;
 }
 
 /** Which message types the modern view shows. */
@@ -105,6 +103,12 @@ function sourceKey(source: ConvSource | null): string {
     : `transcript:${source.sessionId}`;
 }
 
+/** What a live pane's view already read, if anything — it outlives the view.
+ *  Transcript previews are not kept: one can weigh tens of MB. */
+function heldFor(source: ConvSource | null): HeldConv | undefined {
+  return source?.kind === "pane" ? getHeldConv(source.paneId) : undefined;
+}
+
 /**
  * Reads the structured blocks of `source`. A pane source stays live (refreshes
  * on `agent-state-changed` events for its session); a transcript source is read
@@ -113,33 +117,57 @@ function sourceKey(source: ConvSource | null): string {
  * previous one, instead of re-reading the whole JSONL.
  */
 export function useConversationBlocks(source: ConvSource | null) {
-  const [blocks, setBlocks] = useState<ConvBlock[]>([]);
-  // Backend cache generation of `blocks` — bumps when the transcript was
-  // reset/rewritten, so consumers can tell "rebuilt history" from "append".
-  const [generation, setGeneration] = useState(0);
+  // A pane read before (its project was switched away, then back) starts from
+  // what it held, so no empty frame shows while the delta comes in. Its
+  // `generation` is the backend cache generation — it bumps when the transcript
+  // was reset/rewritten, so consumers can tell "rebuilt history" from "append".
+  const [conv, setConv] = useState<HeldConv>(
+    () => heldFor(source) ?? EMPTY_CONV,
+  );
+  // False until the first read of `source` lands: until then an empty list
+  // means "not read yet", not "no conversation".
+  const [loaded, setLoaded] = useState(
+    () => !source || heldFor(source) !== undefined,
+  );
   const [error, setError] = useState<string | null>(null);
-  const [cwd, setCwd] = useState<string | null>(null);
-  // What this client already holds (mirrors the backend cache contract).
-  const genRef = useRef(0);
-  const haveRef = useRef(0);
-  // Claude session id of this pane's transcript — used to ignore
-  // agent-state-changed events from other panes' sessions.
-  const sessionRef = useRef<string | null>(null);
+  // What this client already holds (mirrors the backend cache contract). Its
+  // session id is used to ignore agent-state-changed events from other panes'
+  // sessions.
+  const heldRef = useRef(conv);
   // Coalesce refreshes: one in-flight delta at a time, bursts collapse into
   // a single trailing call.
   const inflightRef = useRef(false);
   const pendingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const refresh = useCallback(() => {
     if (!source) {
-      genRef.current = 0;
-      haveRef.current = 0;
-      sessionRef.current = null;
-      setBlocks([]);
+      heldRef.current = EMPTY_CONV;
+      setConv(EMPTY_CONV);
       setError(null);
-      setCwd(null);
+      setLoaded(true);
       return;
     }
+    const commit = (next: HeldConv, err: string | null) => {
+      // Kept even when the view unmounted meanwhile (project switched away):
+      // the backend already counts this delta as delivered. Unless the pane
+      // was closed — its entry is gone and must stay gone.
+      if (
+        source.kind === "pane" &&
+        (mountedRef.current || getHeldConv(source.paneId) !== undefined)
+      )
+        setHeldConv(source.paneId, next);
+      heldRef.current = next;
+      setConv(next);
+      setError(err);
+      setLoaded(true);
+    };
     const run = () => {
       inflightRef.current = true;
       const [cmd, args] =
@@ -149,34 +177,19 @@ export function useConversationBlocks(source: ConvSource | null) {
               "read_transcript_delta",
               { sessionId: source.sessionId, path: source.path },
             ] as const);
+      const held = heldRef.current;
       void invoke<ConvDelta>(cmd, {
         ...args,
-        generation: genRef.current,
-        have: haveRef.current,
+        generation: held.generation,
+        have: held.blocks.length,
       })
-        .then((d) => {
-          sessionRef.current = d.sessionId ?? null;
-          setCwd(d.cwd ?? null);
-          genRef.current = d.generation;
-          setGeneration(d.generation);
-          setBlocks((prev) => {
-            const next =
-              d.base === 0 ? d.blocks : prev.slice(0, d.base).concat(d.blocks);
-            haveRef.current = next.length;
-            return next;
-          });
-          setError(null);
-        })
-        .catch((e) => {
-          genRef.current = 0;
-          haveRef.current = 0;
-          setGeneration(0);
-          setBlocks([]);
-          setError(String(e));
-        })
+        .then((d) => commit(applyDelta(held, d), null))
+        .catch((e) => commit(EMPTY_CONV, String(e)))
         .finally(() => {
           inflightRef.current = false;
-          if (pendingRef.current) {
+          // An unmounted view reads no more: the remounted one reads on its
+          // own, and two readers of one pane would split its deltas.
+          if (pendingRef.current && mountedRef.current) {
             pendingRef.current = false;
             run();
           }
@@ -192,14 +205,14 @@ export function useConversationBlocks(source: ConvSource | null) {
   }, [source]);
 
   useEffect(() => {
-    // New source: drop everything the previous one's deltas accumulated.
-    genRef.current = 0;
-    haveRef.current = 0;
-    sessionRef.current = null;
-    setGeneration(0);
-    setBlocks([]);
+    // New source: drop what the previous one's deltas accumulated, and start
+    // from what this one already held, if anything.
+    const held = heldFor(source);
+    heldRef.current = held ?? EMPTY_CONV;
+    setConv(heldRef.current);
+    setLoaded(!source || held !== undefined);
     refresh();
-  }, [refresh]);
+  }, [refresh, source]);
 
   useEffect(() => {
     // A transcript read off disk has no live writer: nothing to follow.
@@ -211,7 +224,8 @@ export function useConversationBlocks(source: ConvSource | null) {
       // Only this pane's session triggers a re-read; before the session is
       // known (fresh pane) any event does, so the first turn still surfaces.
       const sid = e.payload?.session_id;
-      if (sessionRef.current && sid && sid !== sessionRef.current) return;
+      const own = heldRef.current.sessionId;
+      if (own && sid && sid !== own) return;
       refresh();
     }).then((fn) => {
       if (active) unlisten = fn;
@@ -223,7 +237,14 @@ export function useConversationBlocks(source: ConvSource | null) {
     };
   }, [refresh, source]);
 
-  return { blocks, generation, error, cwd, refresh };
+  return {
+    blocks: conv.blocks,
+    generation: conv.generation,
+    error,
+    cwd: conv.cwd,
+    loaded,
+    refresh,
+  };
 }
 
 function FilterPopover({
@@ -390,7 +411,7 @@ export const ModernConversationView = memo(function ModernConversationView({
           : null,
     [transcript, paneId],
   );
-  const { blocks, generation, cwd } = useConversationBlocks(source);
+  const { blocks, generation, cwd, loaded } = useConversationBlocks(source);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
   // Last offset seen while on screen, restored when a hidden tab comes back.
@@ -627,7 +648,10 @@ export const ModernConversationView = memo(function ModernConversationView({
 
   // No conversation for this pane (plain shell, or a Claude tab before its first
   // message) → render see-through so the real terminal stays visible and usable.
+  // Not before the first read lands, though: the bare terminal would flash
+  // through while a pane that does have one is still being read.
   const hasConversation = blocks.length > 0;
+  const seeThrough = loaded && !hasConversation;
 
   // An inactive tab is display:none, which throws the scroll offset away:
   // coming back to it showed the top of the conversation. Put it back — at the
@@ -673,15 +697,13 @@ export const ModernConversationView = memo(function ModernConversationView({
   return (
     <div
       className={`reading-root flex h-full w-full flex-col ${
-        hasConversation ? "" : "pointer-events-none"
+        seeThrough ? "pointer-events-none" : ""
       }`}
       style={{
         // A gradient preset paints the app gradient here (the view is an
         // overlay ON TOP of the opaque terminal, so a translucent bg would
         // reveal the terminal, not the gradient). "noir" keeps palette.bg.
-        background: hasConversation
-          ? (backgroundCss ?? palette.bg)
-          : "transparent",
+        background: seeThrough ? "transparent" : (backgroundCss ?? palette.bg),
         color: palette.fg,
       }}
     >

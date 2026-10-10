@@ -70,6 +70,7 @@ import { findProjectsByPath, parentOf } from "@/lib/externalAction";
 import { resolveProjectTarget, type ClaudeSession } from "@/lib/sessionsIndex";
 import { subscribeStable } from "@/lib/tauriEvents";
 import { dropFrame, getFrame, publishFrame } from "@/lib/frameStore";
+import { dropHeldConv } from "@/lib/convStore";
 import { isBlankShell } from "@/lib/blankShell";
 import {
   buildSessionSnapshot,
@@ -1022,6 +1023,7 @@ export function App() {
       for (const pid of paneIds) {
         paneToTab.current.delete(pid);
         dropFrame(pid);
+        dropHeldConv(pid);
         try {
           await invoke("close_terminal", { sessionId: pid });
         } catch {
@@ -1063,6 +1065,7 @@ export function App() {
         for (const pid of collectPaneIds(t.tree)) {
           paneToTab.current.delete(pid);
           dropFrame(pid);
+          dropHeldConv(pid);
           try {
             await invoke("close_terminal", { sessionId: pid });
           } catch {
@@ -1103,6 +1106,7 @@ export function App() {
 
       paneToTab.current.delete(paneId);
       dropFrame(paneId);
+      dropHeldConv(paneId);
       try {
         await invoke("close_terminal", { sessionId: paneId });
       } catch {
@@ -1174,6 +1178,7 @@ export function App() {
       // has that long to exit before the new one reads the transcript.
       paneToTab.current.delete(oldId);
       dropFrame(oldId);
+      dropHeldConv(oldId);
       void invoke("close_terminal", { sessionId: oldId }).catch(() => {});
       paneToTab.current.set(newId, tabId);
       setTabs((prev) =>
@@ -1848,6 +1853,7 @@ export function App() {
       const paneIds = collectPaneIds(t.tree);
       paneIds.forEach((pid) => {
         paneToTab.current.delete(pid);
+        dropHeldConv(pid);
         void invoke("close_terminal", { sessionId: pid });
       });
     });
