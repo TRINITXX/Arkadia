@@ -6,6 +6,7 @@ import {
   ACCOUNT_COLORS,
   MAIN_ACCOUNT_ID,
   accountTooltip,
+  formatCountdown,
   formatPct,
   type Account,
   type AccountsState,
@@ -51,6 +52,13 @@ export function AccountsPanel({
   const popoverRef = useRef<HTMLDivElement>(null);
   const open = anchor !== null;
   const current = state.accounts.find((a) => a.id === state.current);
+  // Countdown clock: set on opening, then ticks while the popover is up.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!open) return;
+    const id = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(id);
+  }, [open]);
 
   // The context menu and the rename field own clicks and keys while they are
   // up: closing the popover under them would drop their action.
@@ -79,11 +87,12 @@ export function AccountsPanel({
       <button
         ref={buttonRef}
         type="button"
-        onClick={() =>
+        onClick={() => {
+          setNow(Date.now());
           setAnchor(
             open ? null : (buttonRef.current?.getBoundingClientRect() ?? null),
-          )
-        }
+          );
+        }}
         title="Comptes Claude : compte des nouveaux onglets et consommation"
         className={`flex items-center justify-center gap-1.5 rounded border border-zinc-800/60 px-2 py-1.5 text-xs hover:bg-zinc-900 hover:text-zinc-200 ${
           open ? "bg-zinc-900 text-zinc-200" : "bg-transparent text-zinc-400"
@@ -115,6 +124,12 @@ export function AccountsPanel({
                 5 h
               </span>
               <span
+                className="w-8 text-right normal-case"
+                title="Temps restant avant la remise à zéro des 5 heures"
+              >
+                reset
+              </span>
+              <span
                 className="w-9 text-right normal-case"
                 title="Limite de la semaine"
               >
@@ -141,6 +156,7 @@ export function AccountsPanel({
                 account={account}
                 current={account.id === state.current}
                 renaming={renamingId === account.id}
+                now={now}
                 onSelect={() => {
                   onSelect(account.id);
                   setAnchor(null);
@@ -176,6 +192,8 @@ interface AccountRowProps {
   account: Account;
   current: boolean;
   renaming: boolean;
+  /** Unix ms the countdowns read from. */
+  now: number;
   onSelect: () => void;
   onContextMenu: (x: number, y: number) => void;
   /** New label, "" for the automatic one, null when cancelled. */
@@ -186,6 +204,7 @@ function AccountRow({
   account,
   current,
   renaming,
+  now,
   onSelect,
   onContextMenu,
   onRenameDone,
@@ -227,6 +246,11 @@ function AccountRow({
         </span>
       )}
       <Gauge window={u?.fiveHour} color={account.color} stale={account.stale} />
+      <Countdown
+        resetsAt={u?.fiveHour?.resetsAt}
+        now={now}
+        stale={account.stale}
+      />
       <Gauge window={u?.sevenDay} color={account.color} stale={account.stale} />
       {/* Keeps the gauges aligned under the header's "+" column. */}
       <span className="ml-0.5 w-4 shrink-0" />
@@ -260,6 +284,29 @@ function Gauge({
           style={{ width: `${pct}%`, backgroundColor: color }}
         />
       </span>
+    </div>
+  );
+}
+
+/** Time left before the 5-hour reset, laid out like a gauge's figure. */
+function Countdown({
+  resetsAt,
+  now,
+  stale,
+}: {
+  resetsAt: number | null | undefined;
+  now: number;
+  stale: boolean;
+}) {
+  return (
+    <div
+      className={`flex w-8 shrink-0 flex-col items-end ${stale ? "opacity-40" : ""}`}
+    >
+      <span className="text-[10px] leading-3 tabular-nums">
+        {formatCountdown(resetsAt, now) ?? "--"}
+      </span>
+      {/* The gauges' bar height, so the figures line up. */}
+      <span className="mt-[1px] h-[2px]" />
     </div>
   );
 }

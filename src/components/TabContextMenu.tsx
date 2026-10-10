@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Check } from "lucide-react";
 import type { Account } from "@/lib/accounts";
 import { AccountDot } from "./AccountDot";
+import { UsageRing } from "./UsageRing";
 
 interface TabContextMenuProps {
   x: number;
@@ -82,12 +83,21 @@ export function TabContextMenu({
           >
             <AccountDot color={a.color} label={a.label} />
             <span className="truncate">{a.label}</span>
-            {!a.loggedIn && (
+            {a.loggedIn ? (
+              <span className="ml-auto pl-3">
+                <UsageRing
+                  window={a.usage?.fiveHour}
+                  color={a.color}
+                  stale={a.stale}
+                />
+              </span>
+            ) : (
               <span className="text-xs text-zinc-600">non connecté</span>
             )}
-            {current && (
-              <Check size={13} className="ml-auto shrink-0 text-zinc-400" />
-            )}
+            {/* Same width on every row, so the rings line up. */}
+            <span className="w-[13px] shrink-0">
+              {current && <Check size={13} className="text-zinc-400" />}
+            </span>
           </button>
         );
       })}

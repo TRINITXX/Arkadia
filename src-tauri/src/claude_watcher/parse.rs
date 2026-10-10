@@ -144,13 +144,18 @@ pub fn parse_quota_hit(line: &str, not_before: DateTime<Utc>) -> Option<QuotaHit
 
 /// True when the last user/assistant entry of a transcript (tail) is a
 /// usage-limit rejection: nothing has resumed the session since — not the
-/// user, not a background agent reporting in, not Claude Code's own
-/// wait-for-reset. Other entry kinds (titles, snapshots…) are skipped.
+/// user, not Claude Code's own wait-for-reset. Other entry kinds (titles,
+/// snapshots…) are skipped, and so are background-agent reports: agents of
+/// the blocked account fail right after the rejection, and a report only
+/// resumes the session once Claude answers it — an assistant entry.
 pub fn ends_on_quota_hit(transcript: &str) -> bool {
     for line in transcript.lines().rev() {
         let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
             continue;
         };
+        if v.pointer("/origin/kind").and_then(Value::as_str) == Some("task-notification") {
+            continue;
+        }
         match v.get("type").and_then(Value::as_str) {
             Some("user") | Some("assistant") => {
                 return parse_quota_hit(line.trim(), DateTime::<Utc>::MIN_UTC).is_some()
@@ -196,6 +201,12 @@ mod tests {
             r#"{"type":"user","message":{"role":"user","content":"continue"}}"#
         );
         assert!(!ends_on_quota_hit(&resumed));
+    }
+
+    #[test]
+    fn ends_on_quota_hit_through_agent_reports() {
+        let report = r#"{"type":"user","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>failed</task-notification>"}}"#;
+        assert!(ends_on_quota_hit(&format!("{QUOTA_LINE}\n{report}\n")));
     }
 
     #[test]

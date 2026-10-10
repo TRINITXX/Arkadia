@@ -158,6 +158,18 @@ export function formatReset(
   return `${day} ${time}`;
 }
 
+/** Time left before a reset as "1:30" (h:mm), null once past or unknown. */
+export function formatCountdown(
+  resetsAt: number | null | undefined,
+  nowMs: number = Date.now(),
+): string | null {
+  if (!resetsAt) return null;
+  // Rounded up: "0:00" would read as reset already.
+  const min = Math.ceil((resetsAt * 1000 - nowMs) / 60000);
+  if (min <= 0) return null;
+  return `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}`;
+}
+
 /** "il y a 12 min" for the age of a usage figure. */
 export function formatAge(
   updatedAt: number,

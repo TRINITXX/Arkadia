@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   claudePanesToSwitch,
+  formatCountdown,
   formatPct,
   planAutoSwitch,
   tabAccountMarks,
@@ -140,5 +141,16 @@ describe("formatPct", () => {
   it("rounds and shows -- when unknown", () => {
     expect(formatPct({ pct: 61.6 })).toBe("62 %");
     expect(formatPct(null)).toBe("--");
+  });
+});
+
+describe("formatCountdown", () => {
+  it("shows h:mm left, rounded up, and nothing once past", () => {
+    const now = 1_000_000_000_000;
+    const at = (ms: number) => (now + ms) / 1000;
+    expect(formatCountdown(at(90 * 60_000), now)).toBe("1:30");
+    expect(formatCountdown(at(9 * 60_000 + 1), now)).toBe("0:10");
+    expect(formatCountdown(at(-1000), now)).toBeNull();
+    expect(formatCountdown(null, now)).toBeNull();
   });
 });
