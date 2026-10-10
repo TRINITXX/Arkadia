@@ -354,9 +354,22 @@ fn is_executable_ext(p: &std::path::Path) -> bool {
 /// Opens a file with the OS default application. The path is expected to be
 /// resolved to absolute form by the caller. Detached so the launched app's
 /// lifetime is independent of ours. Executable types are rejected (see above).
+/// A missing text file the user is asked to fill (`is_creatable_missing`) is
+/// created empty first, never overwriting one that appeared in the meantime.
 #[tauri::command]
 fn open_path(path: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
+    if is_creatable_missing(p) {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(p)
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(format!("cannot create {path}: {e}")),
+        }
+    }
     if !p.exists() {
         return Err(format!("path not found: {path}"));
     }
@@ -404,11 +417,71 @@ fn resolve_path_in_pane(
     if let Some(found) = resolve_path_at(line.clone(), cwd.clone(), click) {
         return Some(found);
     }
-    let claude_cwd = conversation::pane_cwd(&pane_id)?;
-    if cwd.as_deref() == Some(claude_cwd.as_str()) {
+    if let Some(claude_cwd) = conversation::pane_cwd(&pane_id) {
+        if cwd.as_deref() != Some(claude_cwd.as_str()) {
+            if let Some(found) = resolve_path_at(line.clone(), Some(claude_cwd), click) {
+                return Some(found);
+            }
+        }
+    }
+    if line.contains('…') {
+        let elided = conversation::pane_transcript(&pane_id)
+            .and_then(|t| std::fs::read_to_string(t).ok())
+            .and_then(|transcript| resolve_elided_path(&line, click, &transcript));
+        if elided.is_some() {
+            return elided;
+        }
+    }
+    // A file the agent asks the user to create: clicking creates then opens it.
+    resolve_missing_path_at(&line, click)
+}
+
+/// A tool row's `…/.screenshots/x.png`: a display mod keeps only the last parts
+/// of a path outside the project. The full spelling is the latest `file_path`
+/// of the transcript that ends with what the row shows.
+fn resolve_elided_path(line: &str, click: usize, transcript: &str) -> Option<ResolvedPath> {
+    let chars: Vec<char> = line.chars().collect();
+    let n = chars.len();
+    if click >= n {
         return None;
     }
-    resolve_path_at(line, Some(claude_cwd), click)
+    let mut start = click;
+    while start > 0 && chars[start - 1] != ' ' {
+        start -= 1;
+    }
+    let mut end = click + 1;
+    while end < n && chars[end] != ' ' {
+        end += 1;
+    }
+    let token: String = chars[start..end].iter().collect();
+    let tail = token
+        .strip_prefix("…/")
+        .or_else(|| token.strip_prefix("…\\"))?
+        .replace('\\', "/")
+        .to_lowercase();
+    if tail.is_empty() {
+        return None;
+    }
+    const KEY: &str = "\"file_path\":";
+    for (at, _) in transcript.rmatch_indices(KEY) {
+        let Some(Ok(path)) = serde_json::Deserializer::from_str(&transcript[at + KEY.len()..])
+            .into_iter::<String>()
+            .next()
+        else {
+            continue;
+        };
+        let norm = path.replace('\\', "/").to_lowercase();
+        if norm.ends_with(&format!("/{tail}")) && std::path::Path::new(&path).exists() {
+            return Some(ResolvedPath {
+                start,
+                end,
+                abs_path: path,
+                line: None,
+                col: None,
+            });
+        }
+    }
+    None
 }
 
 /// A file path located inside a terminal line by `resolve_path_at`. `start`/`end`
@@ -485,6 +558,89 @@ fn strip_line_col(s: &[char]) -> (usize, Option<u32>, Option<u32>) {
 /// filesystem check is what bounds the path, so prose around it (which doesn't
 /// resolve to an existing file) is naturally excluded. Executables are skipped.
 fn resolve_path_at(line: String, cwd: Option<String>, click: usize) -> Option<ResolvedPath> {
+    let (chars, pairs) = path_candidates(&line, click)?;
+
+    // Second pass only when nothing matched as written: repair separators a
+    // Markdown escape swallowed, so a path that really exists always wins.
+    for repair in [false, true] {
+        for &(s, e) in &pairs {
+            let sub = &chars[s..e];
+            if !sub.iter().any(|&c| c == '/' || c == '\\') {
+                continue; // not path-like
+            }
+            let (path_len, line_no, col_no) = strip_line_col(sub);
+            let path_part: String = sub[..path_len].iter().collect();
+            let path_part = path_part.trim();
+            if path_part.is_empty() {
+                continue;
+            }
+            let mut abs = resolve_against_cwd(path_part, cwd.as_deref());
+            if repair {
+                match restore_eaten_dot_separators(&abs) {
+                    Some(fixed) => abs = fixed,
+                    None => continue,
+                }
+            }
+            let p = std::path::Path::new(&abs);
+            if p.exists() && !is_executable_ext(p) {
+                return Some(ResolvedPath {
+                    start: s,
+                    end: e,
+                    abs_path: abs,
+                    line: line_no,
+                    col: col_no,
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Text files a click may create empty before opening them, when an agent
+/// names one for the user to fill (`C:\Users\me\keys.txt`).
+const CREATABLE_EXTS: &[&str] = &[
+    "txt", "md", "json", "jsonc", "csv", "tsv", "log", "env", "ini", "cfg", "conf", "toml", "yaml",
+    "yml", "xml", "html", "css", "sql", "ts", "tsx", "jsx", "py", "rs", "go",
+];
+
+/// True when `p` is missing but a click may create it: absolute, in an existing
+/// folder, with a single-word name and a creatable text extension. The
+/// space-free name keeps prose after the path (`x.txt sous`) from qualifying.
+fn is_creatable_missing(p: &std::path::Path) -> bool {
+    let name_ok = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| !n.contains(' '));
+    let ext_ok = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| CREATABLE_EXTS.contains(&e.to_ascii_lowercase().as_str()));
+    p.is_absolute() && name_ok && ext_ok && !p.exists() && p.parent().is_some_and(|d| d.is_dir())
+}
+
+/// Last resort of `resolve_path_in_pane`: the longest absolute path covering
+/// `click` that doesn't exist yet but a click may create (`is_creatable_missing`).
+fn resolve_missing_path_at(line: &str, click: usize) -> Option<ResolvedPath> {
+    let (chars, pairs) = path_candidates(line, click)?;
+    pairs.into_iter().find_map(|(s, e)| {
+        let path_part: String = chars[s..e].iter().collect();
+        let abs = resolve_against_cwd(path_part.trim(), None);
+        is_creatable_missing(std::path::Path::new(&abs)).then_some(ResolvedPath {
+            start: s,
+            end: e,
+            abs_path: abs,
+            line: None,
+            col: None,
+        })
+    })
+}
+
+/// A line as chars, and the (start, end) char ranges in it that may hold a path.
+type PathCandidates = (Vec<char>, Vec<(usize, usize)>);
+
+/// The line as chars, and the (start, end) char ranges around `click` that may
+/// hold a path, longest first. `None` when `click` falls outside the line.
+fn path_candidates(line: &str, click: usize) -> Option<PathCandidates> {
     // A non-breaking space reads as a space: renderers draw inline code with
     // them (`C:\Claude Desktop\…` keeps its space unbroken), and no real path
     // holds one. One char for one, so `click` and the returned range stand.
@@ -545,7 +701,8 @@ fn resolve_path_at(line: String, cwd: Option<String>, click: usize) -> Option<Re
         }
     }
 
-    // 3. Try (start, end) longest first; first one that exists wins.
+    // 3. Every (start, end) covering `click`, longest first: callers keep the
+    //    first one that checks out on disk.
     let mut pairs: Vec<(usize, usize)> = Vec::new();
     for &s in &starts {
         for &e in &ends {
@@ -555,41 +712,7 @@ fn resolve_path_at(line: String, cwd: Option<String>, click: usize) -> Option<Re
         }
     }
     pairs.sort_by_key(|&(s, e)| std::cmp::Reverse(e - s));
-
-    // 4. Second pass only when nothing matched as written: repair separators a
-    //    Markdown escape swallowed, so a path that really exists always wins.
-    for repair in [false, true] {
-        for &(s, e) in &pairs {
-            let sub = &chars[s..e];
-            if !sub.iter().any(|&c| c == '/' || c == '\\') {
-                continue; // not path-like
-            }
-            let (path_len, line_no, col_no) = strip_line_col(sub);
-            let path_part: String = sub[..path_len].iter().collect();
-            let path_part = path_part.trim();
-            if path_part.is_empty() {
-                continue;
-            }
-            let mut abs = resolve_against_cwd(path_part, cwd.as_deref());
-            if repair {
-                match restore_eaten_dot_separators(&abs) {
-                    Some(fixed) => abs = fixed,
-                    None => continue,
-                }
-            }
-            let p = std::path::Path::new(&abs);
-            if p.exists() && !is_executable_ext(p) {
-                return Some(ResolvedPath {
-                    start: s,
-                    end: e,
-                    abs_path: abs,
-                    line: line_no,
-                    col: col_no,
-                });
-            }
-        }
-    }
-    None
+    Some((chars, pairs))
 }
 
 /// Markdown renderers (Claude Code's included) read `\.` as an escaped dot and
@@ -722,6 +845,27 @@ mod tests {
         let click = click_at(&line, "cover.jpg", 2);
         let r = resolve_path_at(line, None, click).expect("should resolve");
         assert_eq!(r.abs_path, abs);
+    }
+
+    #[test]
+    fn resolves_elided_tool_row_path_from_the_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let shots = dir.path().join(".screenshots");
+        fs::create_dir_all(&shots).unwrap();
+        let file = shots.join("kitbash-gaines_v4.png");
+        fs::write(&file, "x").unwrap();
+        let abs = file.to_string_lossy().to_string();
+        let transcript = format!(
+            "{{\"input\":{{\"file_path\":{}}}}}\n",
+            serde_json::to_string(&abs).unwrap()
+        );
+        let line = "≡ Read  …/.screenshots/kitbash-gaines_v4.png ▸".to_string();
+        let click = click_at(&line, "gaines", 1);
+        let r = resolve_elided_path(&line, click, &transcript).expect("should resolve");
+        assert_eq!(r.abs_path, abs);
+        let chars: Vec<char> = line.chars().collect();
+        let extent: String = chars[r.start..r.end].iter().collect();
+        assert_eq!(extent, "…/.screenshots/kitbash-gaines_v4.png");
     }
 
     #[test]
@@ -869,6 +1013,34 @@ mod tests {
         let click = click_at(&line, "x.png", 1);
         let r = resolve_path_at(line, None, click).expect("should resolve");
         assert_eq!(std::path::Path::new(&r.abs_path), literal.as_path());
+    }
+
+    #[test]
+    fn resolves_missing_text_file_to_create_excluding_prose() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("cles-anthropic.txt");
+        let abs = file.to_string_lossy().to_string();
+        let line = format!("Les coller dans {abs} sous la forme revente=…");
+        let click = click_at(&line, "cles-anthropic", 2);
+        let r = resolve_missing_path_at(&line, click).expect("should resolve");
+        assert_eq!(r.abs_path, abs);
+        let chars: Vec<char> = line.chars().collect();
+        let extent: String = chars[r.start..r.end].iter().collect();
+        assert_eq!(extent, abs);
+    }
+
+    #[test]
+    fn missing_file_needs_existing_folder_text_ext_and_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        for (line, needle) in [
+            (format!("in {root}\\nope\\keys.txt now"), "keys.txt"),
+            (format!("in {root}\\shot.png now"), "shot.png"),
+            ("in notes/keys.txt now".to_string(), "keys.txt"),
+        ] {
+            let click = click_at(&line, needle, 1);
+            assert!(resolve_missing_path_at(&line, click).is_none(), "{line}");
+        }
     }
 
     #[test]

@@ -167,6 +167,13 @@ pub fn pane_cwd(pane_id: &str) -> Option<String> {
     read_pane_map(pane_id)?.cwd.filter(|s| !s.is_empty())
 }
 
+/// The transcript file of a pane's Claude session, or None when it never ran Claude.
+pub fn pane_transcript(pane_id: &str) -> Option<String> {
+    read_pane_map(pane_id)?
+        .transcript_path
+        .filter(|s| !s.is_empty())
+}
+
 /// Where to relaunch a pane's Claude so `claude --resume` finds its transcript:
 /// the first of `candidates` (then the hook's cwd) whose encoded name is the
 /// transcript's project folder. None when no candidate matches, so the caller
