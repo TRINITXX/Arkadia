@@ -72,8 +72,13 @@ function fetchVia(
   const key = `${command} ${path} ${version ?? ""}`;
   const cached = cache.get(key);
   if (cached) return cached;
-  const promise = invoke<ArrayBuffer>(command, { path })
-    .then((buf) => {
+  const promise = invoke<ArrayBuffer | number[]>(command, { path })
+    .then((data) => {
+      // Raw bytes arrive as an ArrayBuffer over Tauri's IPC protocol, but as a
+      // plain number array once one IPC fetch has failed and the window falls
+      // back to postMessage for good: blobbed as is, that array is the text
+      // "255,216,…" and every image fetched from then on comes out broken.
+      const buf = data instanceof ArrayBuffer ? data : new Uint8Array(data);
       const ext = path.split(".").pop()?.toLowerCase() ?? "";
       const type = mediaType ?? MIME_FOR_EXT[ext] ?? "image/png";
       return URL.createObjectURL(new Blob([buf], { type }));
