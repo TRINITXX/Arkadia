@@ -729,15 +729,14 @@ fn git_in(cwd: &Path, args: &[&str]) -> Option<std::process::Output> {
 /// junction. Claude Code resolves it, lands in `~/.claude` (a folder it always
 /// protects, ahead of any allow rule) and asks before every memory write.
 /// Pointing `autoMemoryDirectory` at the real folder, in the project's local
-/// settings, removes the detour. Never touches the user-wide local settings
-/// (the home folder's) nor a file git would show.
+/// settings, removes the detour. Never touches a file git would show. The
+/// home folder is no exception: Claude Code's user settings are
+/// `settings.json` only, so `~/.claude/settings.local.json` is just the home
+/// project's local file.
 pub fn pin_memory_dir(cwd: &Path) {
-    let (Some(start), Some(home)) = (real_path(cwd), real_path(&home())) else {
+    let Some(start) = real_path(cwd) else {
         return;
     };
-    if start == home || real_path(&start.join(".claude")) == real_path(&main_root()) {
-        return;
-    }
     let Some((root, in_repo)) = memory_root(&start) else {
         return;
     };
