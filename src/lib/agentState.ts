@@ -2,7 +2,7 @@ export type AgentStateValue =
   | { kind: "none" }
   | { kind: "idle"; session_id: string }
   | { kind: "busy"; tool?: string | null }
-  | { kind: "waiting"; session_id: string };
+  | { kind: "waiting"; session_id: string; shellRunning?: boolean };
 
 export interface AgentEventPayload {
   session_id: string;
@@ -54,6 +54,16 @@ export function withBackgroundTasks(
   return { kind: "busy", tool: "tâche de fond" };
 }
 
+// A background shell (a dev server, a long build) doesn't make Claude resume,
+// so the pane stays waiting; the badge only gets a ring saying one is open.
+export function withBackgroundShells(
+  state: AgentStateValue,
+  backgroundShells: number,
+): AgentStateValue {
+  if (state.kind !== "waiting" || backgroundShells <= 0) return state;
+  return { ...state, shellRunning: true };
+}
+
 export function aggregate(states: AgentStateValue[]): AgentStateValue {
   // waiting outranks busy because it requires user action (AskUserQuestion,
   // ExitPlanMode) — it must be surfaced even when other agents are working.
@@ -63,8 +73,11 @@ export function aggregate(states: AgentStateValue[]): AgentStateValue {
     idle: 2,
     none: 1,
   };
+  // Between two waiting panes, the one with a shell open keeps its ring.
+  const rank = (s: AgentStateValue) =>
+    order[s.kind] * 2 + (s.kind === "waiting" && s.shellRunning ? 1 : 0);
   return states.reduce<AgentStateValue>(
-    (best, s) => (order[s.kind] > order[best.kind] ? s : best),
+    (best, s) => (rank(s) > rank(best) ? s : best),
     { kind: "none" },
   );
 }

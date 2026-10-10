@@ -81,7 +81,10 @@ export interface BellPayload {
 /** Background tasks a pane's Claude session still runs (notify hook count). */
 export interface PaneBackgroundPayload {
   paneId: string;
+  /** Subagents and workflows Claude will resume on. */
   count: number;
+  /** Background shells, counted apart: they never mean Claude will resume. */
+  shells: number;
 }
 
 export interface SearchHit {

@@ -12,14 +12,24 @@ export function AgentBadge({
   inline = false,
 }: AgentBadgeProps) {
   if (state.kind === "none" || state.kind === "idle") return null;
+  // A background shell still open while Claude waits: blue ring, with a gap
+  // (outline-offset stays transparent whatever the row background).
+  const shellRing =
+    state.kind === "waiting" && state.shellRunning
+      ? " outline-[length:1.5px] outline-offset-[1.5px] outline-blue-400"
+      : "";
   const cls =
-    state.kind === "busy" ? "bg-amber-500 agent-badge-busy" : "bg-emerald-500";
+    state.kind === "busy"
+      ? "bg-amber-500 agent-badge-busy"
+      : `bg-emerald-500${shellRing}`;
   const tooltip =
     state.kind === "busy"
       ? state.tool
         ? `Claude bosse: ${state.tool}…`
         : "Claude bosse…"
-      : "Claude attend une réponse";
+      : state.shellRunning
+        ? "Claude attend une réponse · un shell tourne en arrière-plan"
+        : "Claude attend une réponse";
   const positionCls = inline ? "inline-block" : "absolute -top-0.5 -right-0.5";
   return (
     <span

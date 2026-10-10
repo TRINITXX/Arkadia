@@ -3,6 +3,7 @@ import {
   stateFromTitle,
   isStatusGlyph,
   aggregate,
+  withBackgroundShells,
   withBackgroundTasks,
 } from "@/lib/agentState";
 
@@ -63,6 +64,13 @@ describe("aggregate", () => {
     expect(aggregate([{ kind: "none" }, { kind: "busy" }]).kind).toBe("busy");
     expect(aggregate([]).kind).toBe("none");
   });
+
+  it("keeps the shell ring whichever waiting pane comes first", () => {
+    const plain = { kind: "waiting", session_id: "a" } as const;
+    const ringed = { kind: "waiting", session_id: "b", shellRunning: true };
+    expect(aggregate([plain, ringed])).toBe(ringed);
+    expect(aggregate([ringed, plain])).toBe(ringed);
+  });
 });
 
 describe("withBackgroundTasks", () => {
@@ -82,5 +90,25 @@ describe("withBackgroundTasks", () => {
   it("leaves a busy pane alone", () => {
     const busy = { kind: "busy" } as const;
     expect(withBackgroundTasks(busy, 3)).toBe(busy);
+  });
+});
+
+describe("withBackgroundShells", () => {
+  const waiting = { kind: "waiting", session_id: "" } as const;
+
+  it("rings a waiting pane while a background shell runs", () => {
+    expect(withBackgroundShells(waiting, 1)).toEqual({
+      ...waiting,
+      shellRunning: true,
+    });
+  });
+
+  it("leaves a waiting pane plain once no shell runs", () => {
+    expect(withBackgroundShells(waiting, 0)).toBe(waiting);
+  });
+
+  it("never rings a busy pane", () => {
+    const busy = { kind: "busy" } as const;
+    expect(withBackgroundShells(busy, 2)).toBe(busy);
   });
 });

@@ -7,6 +7,8 @@
 //! those tasks from the transcript and writes `backgroundTasks` into the pane map
 //! (`panes/<paneId>.json`); this watcher relays every change to the front as a
 //! `pane-background` event, which shows such a pane as busy instead of waiting.
+//! Background shells ride along apart (`backgroundShells`): they only ring the
+//! badge of a waiting pane.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -22,6 +24,8 @@ struct PaneMapCount {
     /// Absent on events that don't recount (prompt submitted, session start).
     #[serde(rename = "backgroundTasks")]
     background_tasks: Option<u32>,
+    #[serde(rename = "backgroundShells", default)]
+    background_shells: u32,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -29,6 +33,7 @@ struct PaneMapCount {
 pub struct PaneBackground {
     pane_id: String,
     count: u32,
+    shells: u32,
 }
 
 /// The count a pane-map file carries, or None when it has none (keep the last).
@@ -38,6 +43,7 @@ fn parse_pane_map(raw: &str) -> Option<PaneBackground> {
     Some(PaneBackground {
         pane_id: m.pane_id.filter(|s| !s.is_empty())?,
         count: m.background_tasks?,
+        shells: m.background_shells,
     })
 }
 
@@ -92,12 +98,13 @@ mod tests {
 
     #[test]
     fn reads_the_count_written_by_the_hook() {
-        let raw = "\u{feff}{\"paneId\":\"p1\",\"sessionId\":\"s\",\"backgroundTasks\":2}";
+        let raw = "\u{feff}{\"paneId\":\"p1\",\"sessionId\":\"s\",\"backgroundTasks\":2,\"backgroundShells\":1}";
         assert_eq!(
             parse_pane_map(raw),
             Some(PaneBackground {
                 pane_id: "p1".into(),
-                count: 2
+                count: 2,
+                shells: 1
             })
         );
     }

@@ -62,6 +62,7 @@ import { DEFAULT_CUSTOM_PALETTE, resolveActivePalette } from "@/lib/palettes";
 import { resolveBackground } from "@/lib/backgrounds";
 import {
   stateFromTitle,
+  withBackgroundShells,
   withBackgroundTasks,
   type AgentStateValue,
 } from "@/lib/agentState";
@@ -232,7 +233,7 @@ export function App() {
   // phantom badge. The title is the only reliable per-pane signal, refined by
   // the hook's per-pane count of background tasks (keyed by the same pane id).
   const [backgroundTasks, setBackgroundTasks] = useState<
-    Record<string, number>
+    Record<string, Omit<PaneBackgroundPayload, "paneId">>
   >({});
   const effectivePaneStates = useMemo(() => {
     const merged: Record<string, AgentStateValue> = {};
@@ -240,9 +241,10 @@ export function App() {
       for (const [paneId, pane] of Object.entries(tab.panes)) {
         const fromTitle = stateFromTitle(pane.title);
         if (fromTitle) {
-          merged[paneId] = withBackgroundTasks(
-            fromTitle,
-            backgroundTasks[paneId] ?? 0,
+          const bg = backgroundTasks[paneId];
+          merged[paneId] = withBackgroundShells(
+            withBackgroundTasks(fromTitle, bg?.count ?? 0),
+            bg?.shells ?? 0,
           );
         }
       }
@@ -1634,9 +1636,11 @@ export function App() {
       subscribeStable<PaneBackgroundPayload>(
         listen,
         "pane-background",
-        ({ paneId, count }) => {
+        ({ paneId, count, shells }) => {
           setBackgroundTasks((prev) =>
-            prev[paneId] === count ? prev : { ...prev, [paneId]: count },
+            prev[paneId]?.count === count && prev[paneId]?.shells === shells
+              ? prev
+              : { ...prev, [paneId]: { count, shells } },
           );
         },
       ),
