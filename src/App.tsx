@@ -472,6 +472,7 @@ export function App() {
       accountMarks,
       accounts: accounts.state,
       autoSwitch: autoSwitchOnLimit,
+      toolDensity,
     }),
     [
       projects,
@@ -487,6 +488,7 @@ export function App() {
       accountMarks,
       accounts.state,
       autoSwitchOnLimit,
+      toolDensity,
     ],
   );
   useRemoteSnapshot(loaded, remoteSnapshotInput);

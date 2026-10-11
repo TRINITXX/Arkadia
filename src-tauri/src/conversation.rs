@@ -760,6 +760,39 @@ pub fn read_transcript_delta(
 /// the prefix can't collide) and makes them easy to evict as a group.
 const TRANSCRIPT_KEY_PREFIX: &str = "transcript:";
 
+/// Same, for the phone companion: one entry per phone and pane.
+const PHONE_KEY_PREFIX: &str = "phone:";
+
+/// A phone's read of a pane's conversation. It gets its own cache entry: two
+/// readers of one entry split its deltas (`dirty_floor`), and the desktop view
+/// would then miss updates to blocks it already shows.
+pub(crate) fn read_conversation_delta_for_phone(
+    cache: &ConvCacheMap,
+    phone: u64,
+    pane_id: &str,
+    generation: u64,
+    have: usize,
+) -> Result<ConvDelta, String> {
+    let path = transcript_from_pane_map(pane_id)
+        .ok_or("no Claude conversation found for this pane yet")?;
+    // One parsed conversation per phone: the one it shows now.
+    evict_phone_cache(cache, phone, Some(pane_id));
+    delta_from_path(cache, &phone_key(phone, pane_id), path, generation, have)
+}
+
+fn phone_key(phone: u64, pane_id: &str) -> String {
+    format!("{PHONE_KEY_PREFIX}{phone}:{pane_id}")
+}
+
+/// Drops what a phone had parsed, but for `keep` (the pane it shows now).
+pub(crate) fn evict_phone_cache(cache: &ConvCacheMap, phone: u64, keep: Option<&str>) {
+    let prefix = format!("{PHONE_KEY_PREFIX}{phone}:");
+    let kept = keep.map(|pane| phone_key(phone, pane));
+    if let Ok(mut map) = cache.0.lock() {
+        map.retain(|k, _| !k.starts_with(&prefix) || Some(k) == kept.as_ref());
+    }
+}
+
 /// Drops the overlay's parsed transcript (it closed) — panes keep theirs.
 #[tauri::command]
 pub fn evict_transcript_cache(cache: State<'_, ConvCacheMap>) {
@@ -777,9 +810,14 @@ pub fn evict_transcript_cache(cache: State<'_, ConvCacheMap>) {
 /// the thread that also has to paint.
 #[tauri::command(async)]
 pub fn read_image_bytes(path: String) -> Result<tauri::ipc::Response, String> {
+    image_bytes(&path).map(tauri::ipc::Response::new)
+}
+
+/// `read_image_bytes`' body, also behind the phone companion's `/image`.
+pub(crate) fn image_bytes(path: &str) -> Result<Vec<u8>, String> {
     const ALLOWED: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
     const MAX_BYTES: u64 = 25 * 1024 * 1024;
-    let p = Path::new(&path);
+    let p = Path::new(path);
     let ext = p
         .extension()
         .and_then(|e| e.to_str())
@@ -795,8 +833,7 @@ pub fn read_image_bytes(path: String) -> Result<tauri::ipc::Response, String> {
     if meta.len() > MAX_BYTES {
         return Err("image too large".into());
     }
-    let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
-    Ok(tauri::ipc::Response::new(bytes))
+    std::fs::read(p).map_err(|e| e.to_string())
 }
 
 /// Command body, path already resolved (unit-testable without the pane map).
@@ -807,10 +844,30 @@ fn delta_from_path(
     generation: u64,
     have: usize,
 ) -> Result<ConvDelta, String> {
-    let mut map = cache.0.lock().map_err(|e| e.to_string())?;
-    let entry = map
-        .entry(pane_id.to_string())
-        .or_insert_with(|| ConvCacheEntry::new(path.clone(), 1));
+    // The entry is taken out while it is read and parsed, so the map's lock is
+    // only held for an instant: a phone opening a long conversation never
+    // stalls the desktop view, whose reads run on the main thread.
+    let mut entry = {
+        let mut map = cache.0.lock().map_err(|e| e.to_string())?;
+        map.remove(pane_id)
+            .unwrap_or_else(|| ConvCacheEntry::new(path.clone(), 1))
+    };
+    let delta = advance(&mut entry, &path, generation, have);
+    if let Ok(mut map) = cache.0.lock() {
+        map.insert(pane_id.to_string(), entry);
+    }
+    delta
+}
+
+/// Reads what was appended to `path` into `entry` and returns the delta for
+/// a client holding `generation`/`have`.
+fn advance(
+    entry: &mut ConvCacheEntry,
+    path: &Path,
+    generation: u64,
+    have: usize,
+) -> Result<ConvDelta, String> {
+    let path = path.to_path_buf();
     // New transcript for this pane (fresh session / resume): start over.
     if entry.path != path {
         *entry = ConvCacheEntry::new(path.clone(), entry.generation + 1);
@@ -1060,6 +1117,30 @@ mod tests {
         assert_eq!(d2.base, 1);
         assert_eq!(d2.blocks.len(), 1);
         assert_eq!(d2.blocks[0].kind, "tool");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// The phone reads the desktop's pane too: if it shared the desktop's
+    /// cache entry, its read would mark the mutated block as delivered and
+    /// the desktop would never get the tool's result.
+    #[test]
+    fn a_phone_read_leaves_the_desktop_delta_intact() {
+        let cache = ConvCacheMap::default();
+        let path = tmp_jsonl("phone", &format!("{USER_LINE}\n{TOOL_LINE}\n"));
+        let d1 = delta_from_path(&cache, "p1", path.clone(), 0, 0).unwrap();
+
+        let mut content = std::fs::read_to_string(&path).unwrap();
+        content.push_str(&format!("{RESULT_LINE}\n"));
+        std::fs::write(&path, &content).unwrap();
+        delta_from_path(&cache, &phone_key(7, "p1"), path.clone(), 0, 0).unwrap();
+
+        let d2 = delta_from_path(&cache, "p1", path.clone(), d1.generation, 2).unwrap();
+        assert_eq!(d2.base, 1);
+        assert_eq!(d2.blocks[0].tool_output.as_deref(), Some("ok"));
+
+        evict_phone_cache(&cache, 7, None);
+        let keys: Vec<String> = cache.0.lock().unwrap().keys().cloned().collect();
+        assert_eq!(keys, ["p1"]);
         std::fs::remove_file(&path).ok();
     }
 

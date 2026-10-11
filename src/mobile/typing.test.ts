@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { typingDelta } from "./typing";
+import { pasteData, typingDelta } from "./typing";
 
 const DEL = "\x7f";
 
@@ -15,6 +15,11 @@ describe("typingDelta", () => {
 
   it("erases what was deleted", () => {
     expect(typingDelta("abc", "a")).toBe(DEL.repeat(2));
+  });
+
+  it("pastes line breaks as Enter, inside markers when the app wants them", () => {
+    expect(pasteData("a\r\nb\nc", false)).toBe("a\rb\rc");
+    expect(pasteData("a\nb", true)).toBe("\x1b[200~a\rb\x1b[201~");
   });
 
   it("counts an emoji as one character to erase", () => {

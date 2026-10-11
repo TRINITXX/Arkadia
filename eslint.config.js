@@ -10,6 +10,9 @@ export default [
       "dist/**",
       "node_modules/**",
       "src-tauri/target/**",
+      // Cargo build outputs at the workspace root (incl. the verify dir).
+      "target/**",
+      "target-verify/**",
       "crates/terminal-renderer/pkg/**",
       "crates/**",
       "src-tauri/**",
@@ -104,6 +107,24 @@ export default [
       // dialogs; the rule's recommendation (key-based remount) adds friction.
       "react-hooks/set-state-in-effect": "off",
       "no-empty": ["error", { allowEmptyCatch: true }],
+    },
+  },
+  {
+    // The phone page's offline cache: a service worker, with its own globals.
+    files: ["public/sw.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "script",
+      globals: {
+        self: "readonly",
+        caches: "readonly",
+        fetch: "readonly",
+        Response: "readonly",
+        URL: "readonly",
+        AbortController: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+      },
     },
   },
 ];

@@ -19,6 +19,7 @@ import type {
   Tab,
   TerminalPalette,
   ToolbarButton,
+  ToolDensity,
   Workspace,
 } from "@/types";
 
@@ -79,6 +80,8 @@ export interface RemoteSnapshot {
   accounts: AccountsState | null;
   /** Automatic account switch on a usage limit. */
   autoSwitch: boolean;
+  /** How the modern view opens tool cards (the desktop setting). */
+  toolDensity: ToolDensity;
 }
 
 export interface RemoteSnapshotInput {
@@ -95,6 +98,7 @@ export interface RemoteSnapshotInput {
   accountMarks: Record<string, AccountMark>;
   accounts: AccountsState | null;
   autoSwitch: boolean;
+  toolDensity: ToolDensity;
 }
 
 export function badgeOf(state: AgentStateValue | undefined): RemoteBadge {
@@ -201,5 +205,6 @@ export function buildRemoteSnapshot(
       : null,
     accounts: input.accounts,
     autoSwitch: input.autoSwitch,
+    toolDensity: input.toolDensity,
   };
 }

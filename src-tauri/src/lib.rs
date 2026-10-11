@@ -184,14 +184,15 @@ pub fn run() {
                             update.state.clone(),
                         );
                         let payload = agent_registry::AgentStatePayload::from(&update.state);
-                        let _ = app_handle.emit(
-                            "agent-state-changed",
-                            AgentEvent {
-                                session_id: update.session_id,
-                                cwd: update.cwd,
-                                state: payload,
-                            },
-                        );
+                        let event = AgentEvent {
+                            session_id: update.session_id,
+                            cwd: update.cwd,
+                            state: payload,
+                        };
+                        if let Some(hub) = app_handle.try_state::<Arc<remote::RemoteHub>>() {
+                            hub.broadcast_event("agent-state-changed", &event);
+                        }
+                        let _ = app_handle.emit("agent-state-changed", event);
                     }
                 });
                 Ok(())

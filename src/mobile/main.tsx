@@ -1,9 +1,11 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { MobileApp } from "@/mobile/MobileApp";
-import { startRemote } from "@/mobile/remote";
+import { setBridge } from "@/lib/bridge";
+import { phoneBridge, startRemote } from "@/mobile/remote";
 import "@/styles/app.css";
 
+setBridge(phoneBridge);
 startRemote();
 
 // Offline copy of this page (public/sw.js): it still opens with Arkadia

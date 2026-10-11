@@ -2,7 +2,8 @@ import { AgentBadge } from "@/components/AgentBadge";
 import type { AgentStateValue } from "@/lib/agentState";
 import type { RemoteBadge } from "@/lib/remoteSnapshot";
 
-function stateOf(badge: RemoteBadge): AgentStateValue {
+/** A badge back as the desktop's agent state (what the shared views read). */
+export function agentStateOf(badge: RemoteBadge): AgentStateValue {
   if (badge === "busy") return { kind: "busy" };
   if (badge === null) return { kind: "none" };
   return {
@@ -14,5 +15,5 @@ function stateOf(badge: RemoteBadge): AgentStateValue {
 
 /** The desktop's green / amber badge. */
 export function RemoteBadgeDot({ badge }: { badge: RemoteBadge }) {
-  return <AgentBadge state={stateOf(badge)} size={9} inline />;
+  return <AgentBadge state={agentStateOf(badge)} size={9} inline />;
 }

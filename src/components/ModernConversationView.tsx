@@ -7,8 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { backendInvoke, backendListen, TransientError } from "@/lib/bridge";
 import { ChevronDown, ChevronUp, Filter, X } from "lucide-react";
 import { CONVERSATION_CSS } from "@/components/ConversationView";
 import { BlockRow, type MatchState } from "@/components/modern/BlockRow";
@@ -178,13 +177,17 @@ export function useConversationBlocks(source: ConvSource | null) {
               { sessionId: source.sessionId, path: source.path },
             ] as const);
       const held = heldRef.current;
-      void invoke<ConvDelta>(cmd, {
+      void backendInvoke<ConvDelta>(cmd, {
         ...args,
         generation: held.generation,
         have: held.blocks.length,
       })
         .then((d) => commit(applyDelta(held, d), null))
-        .catch((e) => commit(EMPTY_CONV, String(e)))
+        .catch((e) => {
+          // Connection lost: keep what is shown, the next read catches up.
+          if (e instanceof TransientError) setLoaded(true);
+          else commit(EMPTY_CONV, String(e));
+        })
         .finally(() => {
           inflightRef.current = false;
           // An unmounted view reads no more: the remounted one reads on its
@@ -217,9 +220,9 @@ export function useConversationBlocks(source: ConvSource | null) {
   useEffect(() => {
     // A transcript read off disk has no live writer: nothing to follow.
     if (source?.kind !== "pane") return;
-    let unlisten: UnlistenFn | undefined;
+    let unlisten: (() => void) | undefined;
     let active = true;
-    void listen<{ session_id?: string }>("agent-state-changed", (e) => {
+    void backendListen<{ session_id?: string }>("agent-state-changed", (e) => {
       if (!active) return;
       // Only this pane's session triggers a re-read; before the session is
       // known (fresh pane) any event does, so the first turn still surfaces.

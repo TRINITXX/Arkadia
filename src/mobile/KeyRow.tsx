@@ -1,22 +1,31 @@
 import { ChevronDown } from "lucide-react";
 
-/** The keys a phone keyboard lacks; Claude's questions are answered with them. */
-const KEYS: { label: string; data: string }[] = [
+/**
+ * The keys a phone keyboard lacks, and the paste a hidden field cannot offer
+ * (no long-press menu on it). The keyboard's own return key submits.
+ */
+const KEYS: { label: string; data: string | "paste" }[] = [
   { label: "Échap", data: "\x1b" },
   { label: "Tab", data: "\t" },
   { label: "↑", data: "\x1b[A" },
   { label: "↓", data: "\x1b[B" },
-  { label: "Entrée", data: "\r" },
+  { label: "Coller", data: "paste" },
   { label: "Ctrl+C", data: "\x03" },
 ];
 
 interface KeyRowProps {
   onKey: (data: string) => void;
+  onPaste: () => void;
   keyboardOpen: boolean;
   onHideKeyboard: () => void;
 }
 
-export function KeyRow({ onKey, keyboardOpen, onHideKeyboard }: KeyRowProps) {
+export function KeyRow({
+  onKey,
+  onPaste,
+  keyboardOpen,
+  onHideKeyboard,
+}: KeyRowProps) {
   // preventDefault on pointerdown: a tap must not take the focus from the
   // hidden field, or the keyboard would close.
   const keep = (e: React.PointerEvent) => e.preventDefault();
@@ -34,7 +43,7 @@ export function KeyRow({ onKey, keyboardOpen, onHideKeyboard }: KeyRowProps) {
           key={k.label}
           type="button"
           onPointerDown={keep}
-          onClick={() => onKey(k.data)}
+          onClick={() => (k.data === "paste" ? onPaste() : onKey(k.data))}
           className="h-9 flex-1 rounded-md bg-zinc-800 text-[13px] font-medium text-zinc-100 active:bg-zinc-600"
         >
           {k.label}

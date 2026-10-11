@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { backendInvoke } from "@/lib/bridge";
 
 /**
  * Shared path → object-URL cache for on-disk images fetched over IPC.
@@ -72,7 +72,7 @@ function fetchVia(
   const key = `${command} ${path} ${version ?? ""}`;
   const cached = cache.get(key);
   if (cached) return cached;
-  const promise = invoke<ArrayBuffer | number[]>(command, { path })
+  const promise = backendInvoke<ArrayBuffer | number[]>(command, { path })
     .then((data) => {
       // Raw bytes arrive as an ArrayBuffer over Tauri's IPC protocol, but as a
       // plain number array once one IPC fetch has failed and the window falls

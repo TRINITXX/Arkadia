@@ -1,6 +1,5 @@
 import { isValidElement, memo, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { backendInvoke, openUrl } from "@/lib/bridge";
 import { Check, Copy, SquareArrowOutUpRight } from "lucide-react";
 import Markdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -74,7 +73,7 @@ export function clickablePath(text: string): string | null {
 
 /** Opens a file with the OS default app; failures surface as a toast. */
 export function openPath(path: string, onToast?: ToastFn) {
-  invoke("open_path", { path }).catch((e) => {
+  backendInvoke("open_path", { path }).catch((e) => {
     onToast?.("error", `Ouverture impossible : ${String(e)}`);
   });
 }
@@ -112,7 +111,7 @@ function buildComponents(
       <a
         onClick={(e) => {
           e.preventDefault();
-          if (href) void openExternal(href).catch(() => {});
+          if (href) void openUrl(href).catch(() => {});
         }}
         title={href}
       >

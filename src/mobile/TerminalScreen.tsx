@@ -1,11 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, X, Zap } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, LayoutList, X, Zap } from "lucide-react";
+import {
+  DEFAULT_CONV_FILTERS,
+  ModernConversationView,
+  type ConvFilters,
+} from "@/components/ModernConversationView";
 import { AccountDot } from "@/components/AccountDot";
 import { TerminalRow } from "@/components/TerminalRow";
 import { getIcon } from "@/icons";
 import { ButtonSheet } from "@/mobile/ButtonSheet";
 import { KeyRow } from "@/mobile/KeyRow";
-import { RemoteBadgeDot } from "@/mobile/RemoteBadgeDot";
+import type { ToastFn } from "@/components/modern/MarkdownContent";
+import { RemoteBadgeDot, agentStateOf } from "@/mobile/RemoteBadgeDot";
+import { showNotice } from "@/mobile/notice";
+import { useModernPreference } from "@/mobile/useModernPreference";
+import { footerRowCount } from "@/lib/terminalChrome";
+import { pasteData } from "@/mobile/typing";
+import { DEFAULT_TOOL_DENSITY } from "@/types";
 import { Sheet, SheetRow } from "@/mobile/Sheet";
 import { send, useWatchedFrame, watchPane, type Status } from "@/mobile/remote";
 import {
@@ -62,12 +73,19 @@ export function TerminalScreen({
   const rowHeight = fontSize * LINE_HEIGHT;
   const [chosenPaneId, setChosenPaneId] = useState(tab.activePaneId);
   const [sheet, setSheet] = useState<OpenSheet | null>(null);
+  const [modern, setModern] = useModernPreference();
+  const [filters, setFilters] = useState<ConvFilters>(DEFAULT_CONV_FILTERS);
   // A pane closed on the desktop: fall back to the tab's active one.
   const pane =
     tab.panes.find((p) => p.id === chosenPaneId) ??
     tab.panes.find((p) => p.id === tab.activePaneId) ??
     tab.panes[0];
   const paneId = pane?.id ?? null;
+  // Stable props: this screen re-renders with every terminal frame, the
+  // (memoized) conversation must not.
+  const badge = pane?.badge ?? null;
+  const agentState = useMemo(() => agentStateOf(badge), [badge]);
+  const onToast = useCallback<ToastFn>((_, message) => showNotice(message), []);
 
   useEffect(() => watchPane(paneId), [paneId]);
   useEffect(() => () => watchPane(null), []);
@@ -117,6 +135,15 @@ export function TerminalScreen({
     sendInput(data);
     resetField();
   };
+  // A phone keyboard has no Ctrl+V, and the hidden field no paste menu.
+  const paste = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) onKey(pasteData(text, !!frameRef.current?.bracketed_paste));
+    } catch {
+      showNotice("Presse-papiers inaccessible");
+    }
+  };
   const runPromptButton = (buttonId: string) => {
     if (!paneId) return;
     resetField();
@@ -165,6 +192,17 @@ export function TerminalScreen({
         <RemoteBadgeDot badge={tab.badge} />
         <button
           type="button"
+          aria-label="Vue moderne"
+          aria-pressed={modern}
+          onClick={() => setModern(!modern)}
+          className={`flex h-11 w-10 shrink-0 items-center justify-center ${
+            modern ? "text-sky-400" : "text-zinc-300 active:text-white"
+          }`}
+        >
+          <LayoutList size={18} />
+        </button>
+        <button
+          type="button"
           aria-label="Commandes"
           onClick={() => setSheet({ kind: "commands" })}
           className="flex h-11 w-10 shrink-0 items-center justify-center text-zinc-300 active:text-white"
@@ -202,60 +240,91 @@ export function TerminalScreen({
         </div>
       )}
 
-      <div
-        ref={gridRef}
-        className="relative min-h-0 flex-1 touch-none overflow-hidden"
-        style={{ backgroundColor: palette.bg }}
-        onClick={() => {
-          reclaim(frameRef.current);
-          fieldRef.current?.focus();
-        }}
-        {...scroll}
-      >
+      <div className="relative min-h-0 flex-1 overflow-hidden">
         <div
-          className="[&>div]:overflow-hidden"
-          style={{
-            fontFamily: TERMINAL_FONT_FAMILY,
-            fontSize: `${fontSize}px`,
-            lineHeight: LINE_HEIGHT,
-            color: palette.fg,
-            padding: `0 ${PAD_X}px`,
-            whiteSpace: "pre",
+          ref={gridRef}
+          className="absolute inset-0 touch-none overflow-hidden"
+          style={{ backgroundColor: palette.bg }}
+          onClick={() => {
+            reclaim(frameRef.current);
+            fieldRef.current?.focus();
           }}
+          {...scroll}
         >
-          {screen ? (
-            screen.lines.map((runs, row) => (
-              <div key={row} style={{ height: rowHeight }}>
-                <TerminalRow
-                  runs={runs}
-                  cursorCol={
-                    row === screen.cursor_row && screen.cursor_visible
-                      ? screen.cursor_col
-                      : null
-                  }
-                  focused
-                  palette={palette}
-                />
-              </div>
-            ))
-          ) : (
-            <div className="pt-3 text-zinc-500">Chargement…</div>
-          )}
+          <div
+            className="[&>div]:overflow-hidden"
+            style={{
+              fontFamily: TERMINAL_FONT_FAMILY,
+              fontSize: `${fontSize}px`,
+              lineHeight: LINE_HEIGHT,
+              color: palette.fg,
+              padding: `0 ${PAD_X}px`,
+              whiteSpace: "pre",
+            }}
+          >
+            {screen ? (
+              screen.lines.map((runs, row) => (
+                <div key={row} style={{ height: rowHeight }}>
+                  <TerminalRow
+                    runs={runs}
+                    cursorCol={
+                      row === screen.cursor_row && screen.cursor_visible
+                        ? screen.cursor_col
+                        : null
+                    }
+                    focused
+                    palette={palette}
+                  />
+                </div>
+              ))
+            ) : (
+              <div className="pt-3 text-zinc-500">Chargement…</div>
+            )}
+          </div>
+          <textarea
+            ref={fieldRef}
+            aria-label="Saisie"
+            rows={1}
+            autoCapitalize="sentences"
+            autoCorrect="on"
+            enterKeyHint="send"
+            onInput={onInput}
+            onKeyDown={onKeyDown}
+            onFocus={resetField}
+            // 16px: iOS zooms the page into any field with a smaller font.
+            className="absolute bottom-0 left-0 h-px w-px resize-none opacity-0"
+            style={{ fontSize: 16, caretColor: "transparent" }}
+          />
         </div>
-        <textarea
-          ref={fieldRef}
-          aria-label="Saisie"
-          rows={1}
-          autoCapitalize="sentences"
-          autoCorrect="on"
-          enterKeyHint="send"
-          onInput={onInput}
-          onKeyDown={onKeyDown}
-          onFocus={resetField}
-          // 16px: iOS zooms the page into any field with a smaller font.
-          className="absolute bottom-0 left-0 h-px w-px resize-none opacity-0"
-          style={{ fontSize: 16, caretColor: "transparent" }}
-        />
+        {modern && paneId && (
+          // The conversation above the terminal's own footer (prompt box,
+          // Claude's questions), which stays live and typed into below it.
+          // Sized from the top, like the terminal's rows, so it ends above
+          // the footer even when the PTY has another screen's size.
+          <div
+            className="absolute inset-x-0 top-0 z-10"
+            style={
+              screen
+                ? {
+                    height:
+                      Math.max(0, screen.rows - footerRowCount(screen) - 1) *
+                      rowHeight,
+                  }
+                : { bottom: (footerRowCount(null) + 1) * rowHeight }
+            }
+          >
+            <ModernConversationView
+              paneId={paneId}
+              filters={filters}
+              onFiltersChange={setFilters}
+              density={snapshot.toolDensity ?? DEFAULT_TOOL_DENSITY}
+              palette={palette}
+              agentState={agentState}
+              isActive={false}
+              onToast={onToast}
+            />
+          </div>
+        )}
       </div>
 
       {promptButtons && (
@@ -267,6 +336,7 @@ export function TerminalScreen({
       )}
       <KeyRow
         onKey={onKey}
+        onPaste={() => void paste()}
         keyboardOpen={keyboardOpen}
         onHideKeyboard={() => fieldRef.current?.blur()}
       />

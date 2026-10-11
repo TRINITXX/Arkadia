@@ -13,6 +13,16 @@ function split(text: string): string[] {
   return Array.from(graphemes.segment(text), (s) => s.segment);
 }
 
+/**
+ * Clipboard text as a terminal paste: line breaks become the terminal's Enter,
+ * wrapped in bracketed-paste markers when the app asked for them (Claude
+ * does), so a pasted line break does not submit the prompt.
+ */
+export function pasteData(text: string, bracketed: boolean): string {
+  const normalized = text.replace(/\r\n/g, "\r").replace(/\n/g, "\r");
+  return bracketed ? `\x1b[200~${normalized}\x1b[201~` : normalized;
+}
+
 /** The keystrokes that turn `sent` (already in the prompt) into `now`. */
 export function typingDelta(sent: string, now: string): string {
   const before = split(sent);

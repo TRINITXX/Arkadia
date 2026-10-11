@@ -80,6 +80,7 @@ function input(extra: Partial<RemoteSnapshotInput>): RemoteSnapshotInput {
     accountMarks: {},
     accounts: null,
     autoSwitch: true,
+    toolDensity: "preview",
     ...extra,
   };
 }

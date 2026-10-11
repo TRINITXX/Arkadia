@@ -8,6 +8,7 @@
  */
 
 import { useSyncExternalStore } from "react";
+import { TransientError, type Bridge } from "@/lib/bridge";
 import type { RemoteAction, RemoteActionResult } from "@/lib/remoteActions";
 import type { RemoteSnapshot } from "@/lib/remoteSnapshot";
 import type { ClaudeSession, SessionMatch } from "@/lib/sessionsIndex";
@@ -21,12 +22,14 @@ export type ClientMsg =
   | { t: "wheel"; pane: string; col: number; row: number; button: 64 | 65 }
   | { t: "action"; id: number; action: RemoteAction }
   | { t: "sessions"; id: number }
-  | { t: "search"; id: number; query: string };
+  | { t: "search"; id: number; query: string }
+  | { t: "conv"; id: number; pane: string; generation: number; have: number };
 
 type ServerMsg =
   | { t: "state"; state: RemoteSnapshot }
   | { t: "frame"; frame: RenderPayload }
-  | { t: "reply"; id: number; result: unknown }
+  | { t: "reply"; id: number; result?: unknown; error?: string }
+  | { t: "event"; name: string; payload: unknown }
   | { t: "error"; message: string };
 
 /** `connecting` until the first open, `lost` while retrying after a drop. */
@@ -64,6 +67,7 @@ let view: RemoteView = {
 let watched: string | null = null;
 let frame: RenderPayload | null = null;
 let startingSince = 0;
+let openedBefore = false;
 const viewSubs = new Set<() => void>();
 const frameSubs = new Set<() => void>();
 
@@ -139,6 +143,12 @@ function connect() {
     retryMs = 500;
     setView({ status: "open", reach: "unknown" });
     if (watched) send({ t: "watch", pane: watched });
+    // Back after a drop: what changed meanwhile announced itself while we
+    // were away. A bare event makes every open modern view read again.
+    if (openedBefore)
+      for (const handler of eventSubs.get("agent-state-changed") ?? [])
+        handler({});
+    openedBefore = true;
   };
   ws.onmessage = (e) => {
     const msg = JSON.parse(String(e.data)) as ServerMsg;
@@ -146,14 +156,19 @@ function connect() {
     else if (msg.t === "frame" && msg.frame.session_id === watched)
       setFrame(msg.frame);
     else if (msg.t === "reply") {
-      pending.get(msg.id)?.resolve(msg.result);
+      const waiting = pending.get(msg.id);
       pending.delete(msg.id);
+      if (msg.error !== undefined) waiting?.reject(new Error(msg.error));
+      else waiting?.resolve(msg.result);
+    } else if (msg.t === "event") {
+      for (const handler of eventSubs.get(msg.name) ?? []) handler(msg.payload);
     } else if (msg.t === "error") console.warn("[arkadia]", msg.message);
   };
   ws.onclose = () => {
     if (socket !== ws) return;
     socket = null;
-    for (const p of pending.values()) p.reject(new Error("connexion perdue"));
+    for (const p of pending.values())
+      p.reject(new TransientError("connexion perdue"));
     pending.clear();
     if (view.status === "open") setView({ status: "lost" });
     void probeGate();
@@ -190,12 +205,12 @@ function request<T>(
   return new Promise<T>((resolve, reject) => {
     const id = nextRequestId++;
     if (!send(build(id))) {
-      reject(new Error("Arkadia injoignable"));
+      reject(new TransientError("Arkadia injoignable"));
       return;
     }
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error("pas de réponse d’Arkadia"));
+      reject(new TransientError("pas de réponse d’Arkadia"));
     }, timeoutMs);
     pending.set(id, {
       resolve: (value) => {
@@ -228,6 +243,48 @@ export function listSessions(): Promise<ClaudeSession[]> {
 export function searchSessions(query: string): Promise<SessionMatch[]> {
   return request((id) => ({ t: "search", id, query }), SEARCH_TIMEOUT_MS);
 }
+
+/** Desktop events relayed to the phones (`agent-state-changed`). */
+const eventSubs = new Map<string, Set<(payload: unknown) => void>>();
+
+/**
+ * The phone side of the bridge the modern conversation view talks through
+ * (see `@/lib/bridge`): its reads go over the socket, its images over HTTP.
+ */
+export const phoneBridge: Bridge = {
+  invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+    if (cmd === "read_conversation_delta")
+      return request<T>((id) => ({
+        t: "conv",
+        id,
+        pane: String(args?.paneId),
+        generation: Number(args?.generation ?? 0),
+        have: Number(args?.have ?? 0),
+      }));
+    if (cmd === "read_image_bytes")
+      return window
+        .fetch(`/image?path=${encodeURIComponent(String(args?.path))}`)
+        .then((res) => {
+          if (!res.ok) throw new Error(`image ${res.status}`);
+          return res.arrayBuffer() as Promise<T>;
+        });
+    // Opening a file of the PC from the phone makes no sense.
+    return Promise.reject(new Error("disponible sur le PC seulement"));
+  },
+  listen<T>(event: string, handler: (e: { payload: T }) => void) {
+    const wrapped = (payload: unknown) => handler({ payload: payload as T });
+    let subs = eventSubs.get(event);
+    if (!subs) eventSubs.set(event, (subs = new Set()));
+    subs.add(wrapped);
+    return Promise.resolve(() => {
+      eventSubs.get(event)?.delete(wrapped);
+    });
+  },
+  openUrl(url: string) {
+    if (/^https?:\/\//i.test(url)) window.open(url, "_blank", "noopener");
+    return Promise.resolve();
+  },
+};
 
 /** Streams `paneId`'s frames (one pane at a time); null stops. */
 export function watchPane(paneId: string | null) {

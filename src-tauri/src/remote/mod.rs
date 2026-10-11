@@ -89,6 +89,16 @@ impl RemoteHub {
     fn remove_client(&self, id: u64) {
         self.clients.lock().remove(&id);
     }
+
+    /// Tells every connected phone about a desktop event (the modern view
+    /// re-reads its conversation on `agent-state-changed`, as on the desktop).
+    pub fn broadcast_event(&self, name: &str, payload: &impl serde::Serialize) {
+        let msg = serde_json::json!({ "t": "event", "name": name, "payload": payload });
+        let text = msg.to_string();
+        for out in self.clients.lock().values() {
+            let _ = out.try_send(Message::Text(text.clone().into()));
+        }
+    }
 }
 
 /// The desktop window's snapshot (JSON built by `buildRemoteSnapshot`).

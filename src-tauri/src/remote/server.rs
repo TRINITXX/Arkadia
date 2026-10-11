@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, State as AxState};
+use axum::extract::{ConnectInfo, Query, State as AxState};
 use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -19,6 +19,9 @@ use tokio::sync::mpsc;
 use super::access::{decide, Access, RequestInfo};
 use super::peer::is_tailscale_daemon;
 use super::{RemoteHub, PORT};
+use crate::conversation::{
+    evict_phone_cache, image_bytes, read_conversation_delta_for_phone, ConvCacheMap,
+};
 use crate::popup::log_line;
 use crate::sessions::{self, SessionIndex};
 use crate::terminal::{self, SessionMap};
@@ -88,6 +91,7 @@ pub async fn serve(app: AppHandle, hub: Arc<RemoteHub>, access: Arc<Access>) {
     log_line(&format!("[remote] listening on 127.0.0.1:{PORT}"));
     let router = Router::new()
         .route("/ws", get(ws_route))
+        .route("/image", get(image_route))
         .fallback(get(static_route))
         .with_state(Ctx { app, hub, access });
     let service = router.into_make_service_with_connect_info::<SocketAddr>();
@@ -138,6 +142,76 @@ async fn static_route(
         asset.bytes,
     )
         .into_response()
+}
+
+/// An image the modern view shows (pasted, screenshot, path in a message),
+/// with the desktop's own checks (image types only, size cap).
+async fn image_route(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Query(query): Query<ImageQuery>,
+    headers: HeaderMap,
+    AxState(ctx): AxState<Ctx>,
+) -> Response {
+    if ctx.check(peer, &headers, false).is_err() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    // Only the phone page's own fetches: another site open on the phone
+    // could otherwise probe which images exist on the PC.
+    let same_origin =
+        headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("same-origin");
+    if !same_origin {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let path = query.path;
+    // A network path would make the PC sign in to another machine.
+    if path.starts_with("\\\\") || path.starts_with("//") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match tauri::async_runtime::spawn_blocking(move || {
+        let bytes = image_bytes(&path)?;
+        let ext = path
+            .rsplit('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        Ok::<_, String>((bytes, ext))
+    })
+    .await
+    {
+        Ok(Ok((bytes, ext))) => {
+            let mime = match ext.as_str() {
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                "bmp" => "image/bmp",
+                "svg" => "image/svg+xml",
+                _ => "image/png",
+            };
+            (
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                    (
+                        header::HeaderName::from_static("cross-origin-resource-policy"),
+                        "same-origin",
+                    ),
+                    // An SVG opened on its own must not run scripts here.
+                    (
+                        header::CONTENT_SECURITY_POLICY,
+                        "sandbox; default-src 'none'",
+                    ),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct ImageQuery {
+    path: String,
 }
 
 async fn ws_route(
@@ -199,6 +273,14 @@ enum ClientMsg {
     Search {
         id: u64,
         query: String,
+    },
+    /// The modern view's incremental read of a pane's conversation (same
+    /// generation/have contract as `read_conversation_delta`).
+    Conv {
+        id: u64,
+        pane: String,
+        generation: u64,
+        have: usize,
     },
 }
 
@@ -273,6 +355,19 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
                             let _ = out.send(error(&format!("desktop window unreachable: {e}"))).await;
                         }
                     }
+                    ClientMsg::Conv { id, pane, generation, have } => {
+                        let app = ctx.app.clone();
+                        let out = out.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let cache = app.state::<ConvCacheMap>();
+                            let read = read_conversation_delta_for_phone(&cache, client, &pane, generation, have);
+                            let reply = match read {
+                                Ok(delta) => serde_json::json!({ "t": "reply", "id": id, "result": delta }),
+                                Err(e) => serde_json::json!({ "t": "reply", "id": id, "error": e }),
+                            };
+                            let _ = out.blocking_send(text(reply.to_string()));
+                        });
+                    }
                     ClientMsg::Sessions { .. } | ClientMsg::Search { .. } => {
                         // A full scan can take seconds: off the socket loop.
                         let app = ctx.app.clone();
@@ -312,6 +407,7 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
         }
     }
     ctx.hub.remove_client(client);
+    evict_phone_cache(&ctx.app.state::<ConvCacheMap>(), client, None);
     if let Some(task) = frames {
         task.abort();
     }
@@ -371,7 +467,8 @@ fn run(app: &AppHandle, msg: ClientMsg) -> Result<(), String> {
         ClientMsg::Watch { .. }
         | ClientMsg::Action { .. }
         | ClientMsg::Sessions { .. }
-        | ClientMsg::Search { .. } => Ok(()),
+        | ClientMsg::Search { .. }
+        | ClientMsg::Conv { .. } => Ok(()),
         ClientMsg::Input { pane, data } => terminal::send_input(pane, data.into_bytes(), sessions),
         ClientMsg::Resize { pane, cols, rows } => {
             terminal::resize_terminal(pane, cols, rows, sessions, app.clone())
