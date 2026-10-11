@@ -4,6 +4,8 @@ import {
   dropFrame,
   getFrame,
   publishFrame,
+  rememberDesktopSize,
+  sizeToReclaim,
   subscribeFrame,
 } from "./frameStore";
 
@@ -71,5 +73,13 @@ describe("frameStore", () => {
     // The old subscriber was dropped with the pane.
     expect(cb).toHaveBeenCalledTimes(1);
     dropFrame("a");
+  });
+
+  it("gives the desktop its size back once a phone resized the pane", () => {
+    rememberDesktopSize("a", 80, 24);
+    publishFrame(frame("a"));
+    expect(sizeToReclaim("a")).toBeNull();
+    publishFrame({ ...frame("a"), cols: 52, rows: 30 });
+    expect(sizeToReclaim("a")).toEqual({ cols: 80, rows: 24 });
   });
 });

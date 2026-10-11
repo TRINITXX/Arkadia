@@ -8,9 +8,11 @@ mod conversation;
 #[cfg_attr(debug_assertions, allow(dead_code))]
 mod external_action;
 mod fonts;
+pub mod gate;
 mod pane_background;
 mod photos;
 mod popup;
+mod remote;
 mod screenshots;
 mod sessions;
 mod terminal;
@@ -67,6 +69,7 @@ pub fn run() {
     }));
 
     let registry: Arc<AgentRegistry> = Arc::new(AgentRegistry::default());
+    let remote_hub = Arc::new(remote::RemoteHub::default());
 
     // `mut` is only used by the release-only single-instance block below.
     #[allow(unused_mut)]
@@ -107,6 +110,7 @@ pub fn run() {
         .manage(registry.clone())
         .manage(popup::PopupQueue::default())
         .manage(uiwatch::UiHealth::default())
+        .manage(remote_hub.clone())
         .setup({
             let registry = registry.clone();
             move |app| {
@@ -114,6 +118,10 @@ pub fn run() {
                 if let Some(window) = app_handle.get_webview_window("main") {
                     wire_main_window(&app_handle, &window);
                 }
+                // Phone companion server (loopback, behind `tailscale serve`),
+                // and the always-on gate that can start Arkadia for the phone.
+                remote::spawn(app_handle.clone(), remote_hub);
+                std::thread::spawn(gate::install);
 
                 // Background-notification popup: watch the hook signal dir and
                 // surface a reply popup when Claude is waiting and the main
@@ -245,6 +253,8 @@ pub fn run() {
             popup::popup_set_auto_scroll,
             popup::popup_dismiss,
             popup::popup_open_in_main,
+            remote::remote_publish_state,
+            remote::remote_reply,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

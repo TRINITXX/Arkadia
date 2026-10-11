@@ -37,6 +37,16 @@ export default defineConfig(async () => ({
     watch: {
       ignored: ["**/src-tauri/**"],
     },
+    // The phone page under `tauri dev` (mobile.html): the same routes as
+    // behind `tailscale serve`, to the debug build's server and gate.
+    proxy: {
+      "/ws": { target: "ws://127.0.0.1:47601", ws: true, changeOrigin: true },
+      "/gate": {
+        target: "http://127.0.0.1:47611",
+        changeOrigin: true,
+        rewrite: (p: string) => p.replace(/^\/gate/, ""),
+      },
+    },
   },
 
   envPrefix: ["VITE_", "TAURI_ENV_*"],
@@ -45,5 +55,12 @@ export default defineConfig(async () => ({
       process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
     minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    rollupOptions: {
+      // The phone companion page, served by Arkadia's own server (src-tauri remote).
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        mobile: path.resolve(__dirname, "mobile.html"),
+      },
+    },
   },
 }));

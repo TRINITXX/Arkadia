@@ -43,7 +43,10 @@ import {
 import { storeIsHealthy } from "@/lib/storeHealth";
 import { dedupeProjectsByPath } from "@/lib/externalAction";
 
-const STORE_FILE = "store.json";
+// A `tauri dev` copy keeps its own file: it must never rewrite the daily
+// instance's store.json (the tabs to restore, the usage-limit bookkeeping).
+const STORE_BASE = import.meta.env.DEV ? "store.dev" : "store";
+const STORE_FILE = `${STORE_BASE}.json`;
 const LEGACY_LOCAL_STORAGE_KEY = "arkadia.v1";
 
 const KEY_PROJECTS = "projects";
@@ -254,7 +257,7 @@ const openStore: StoreOpener = async (name) =>
  * from an old backup. See `storeIsHealthy`.
  */
 const STORE_SPEC: DurableSpec = {
-  base: "store",
+  base: STORE_BASE,
   ringSize: 3,
   isHealthy: storeIsHealthy,
 };
@@ -266,9 +269,33 @@ let storePromise: Promise<Store> | null = null;
 // calls loadState({ heal: false }) so it never mutates this shared cache.
 function getStore(): Promise<Store> {
   if (!storePromise) {
-    storePromise = Store.load(STORE_FILE, { autoSave: false, defaults: {} });
+    storePromise = Store.load(STORE_FILE, {
+      autoSave: false,
+      defaults: {},
+    }).then(async (store) => {
+      if (import.meta.env.DEV) await seedDevStore(store);
+      return store;
+    });
   }
   return storePromise;
+}
+
+/**
+ * First `tauri dev` run: start from the daily instance's projects and
+ * settings, without its tabs to restore or its usage-limit bookkeeping.
+ * store.json is only read here, never saved.
+ */
+async function seedDevStore(store: Store): Promise<void> {
+  if ((await store.length()) > 0) return;
+  const daily = await Store.load("store.json", {
+    autoSave: false,
+    defaults: {},
+  });
+  for (const [key, value] of await daily.entries()) {
+    if (key === KEY_SESSION_SNAPSHOT || key === KEY_LIMIT_STATE) continue;
+    await store.set(key, value);
+  }
+  await store.save();
 }
 
 function normalizeAction(b: unknown): ActionButton {

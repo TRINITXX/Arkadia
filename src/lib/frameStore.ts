@@ -46,6 +46,29 @@ export function subscribeFrame(paneId: string, cb: () => void): () => void {
 export function dropFrame(paneId: string): void {
   frames.delete(paneId);
   listeners.delete(paneId);
+  desktopSizes.delete(paneId);
+}
+
+// The grid each desktop pane last gave its PTY. A phone watching a pane
+// resizes it to its own screen; the desktop takes it back on the next touch.
+const desktopSizes = new Map<string, { cols: number; rows: number }>();
+
+export function rememberDesktopSize(
+  paneId: string,
+  cols: number,
+  rows: number,
+): void {
+  desktopSizes.set(paneId, { cols, rows });
+}
+
+/** The desktop's size for `paneId` when the PTY no longer has it, else null. */
+export function sizeToReclaim(
+  paneId: string,
+): { cols: number; rows: number } | null {
+  const want = desktopSizes.get(paneId);
+  const frame = frames.get(paneId);
+  if (!want || !frame) return null;
+  return frame.cols === want.cols && frame.rows === want.rows ? null : want;
 }
 
 /**

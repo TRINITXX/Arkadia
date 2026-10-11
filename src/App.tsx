@@ -76,7 +76,19 @@ import {
 import { findProjectsByPath, parentOf } from "@/lib/externalAction";
 import { resolveProjectTarget, type ClaudeSession } from "@/lib/sessionsIndex";
 import { subscribeStable } from "@/lib/tauriEvents";
-import { dropFrame, getFrame, publishFrame } from "@/lib/frameStore";
+import {
+  dropFrame,
+  getFrame,
+  publishFrame,
+  sizeToReclaim,
+} from "@/lib/frameStore";
+import { useRemoteSnapshot } from "@/lib/useRemoteSnapshot";
+import { useRemoteActions } from "@/lib/useRemoteActions";
+import {
+  actionButton,
+  type RemoteAction,
+  type RemoteActionResult,
+} from "@/lib/remoteActions";
 import { dropHeldConv } from "@/lib/convStore";
 import { isBlankShell } from "@/lib/blankShell";
 import {
@@ -444,6 +456,41 @@ export function App() {
     [activeProjectIds, tabs, tabStates, hiddenSidebarTabIds],
   );
 
+  // Phone companion: the Rust server relays this picture of the desktop.
+  const remoteSnapshotInput = useMemo(
+    () => ({
+      projects,
+      workspaces,
+      tabs,
+      paneStates: effectivePaneStates,
+      activeProjectIds: sidebarActiveProjectIds,
+      palette,
+      toolbarButtons,
+      promptButtons,
+      promptBarEnabled,
+      claudePaneIds,
+      accountMarks,
+      accounts: accounts.state,
+      autoSwitch: autoSwitchOnLimit,
+    }),
+    [
+      projects,
+      workspaces,
+      tabs,
+      effectivePaneStates,
+      sidebarActiveProjectIds,
+      palette,
+      toolbarButtons,
+      promptButtons,
+      promptBarEnabled,
+      claudePaneIds,
+      accountMarks,
+      accounts.state,
+      autoSwitchOnLimit,
+    ],
+  );
+  useRemoteSnapshot(loaded, remoteSnapshotInput);
+
   const visibleTabs = useMemo(
     () =>
       activeProjectId
@@ -462,6 +509,44 @@ export function App() {
   // session — see `claudePaneIds`.
   const activePaneIsClaude =
     !!activePaneIdOfActiveTab && claudePaneIds.has(activePaneIdOfActiveTab);
+
+  // A phone watching a pane resizes it to its own screen. Any click or key in
+  // this window gives the desktop's size back: to the pane under the pointer,
+  // else to the active one (the prompt bar, rail and notepad type there).
+  const activePaneIdRef = useRef(activePaneIdOfActiveTab);
+  useEffect(() => {
+    activePaneIdRef.current = activePaneIdOfActiveTab;
+  }, [activePaneIdOfActiveTab]);
+  useEffect(() => {
+    const reclaim = (e: Event) => {
+      const under =
+        e.target instanceof Element
+          ? e.target.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId
+          : undefined;
+      const paneId = under ?? activePaneIdRef.current;
+      const size = paneId ? sizeToReclaim(paneId) : null;
+      if (paneId && size)
+        void invoke("resize_terminal", { sessionId: paneId, ...size }).catch(
+          () => {},
+        );
+    };
+    document.addEventListener("pointerdown", reclaim, true);
+    document.addEventListener("keydown", reclaim, true);
+    return () => {
+      document.removeEventListener("pointerdown", reclaim, true);
+      document.removeEventListener("keydown", reclaim, true);
+    };
+  }, []);
+  // The click that switches tabs reclaims the tab being left: the one being
+  // shown, hidden while the phone resized it, takes its size back here.
+  useEffect(() => {
+    const paneId = activePaneIdOfActiveTab;
+    const size = paneId ? sizeToReclaim(paneId) : null;
+    if (paneId && size)
+      void invoke("resize_terminal", { sessionId: paneId, ...size }).catch(
+        () => {},
+      );
+  }, [activePaneIdOfActiveTab]);
 
   // Focus the active pane when tabs/panes switch so the user can type
   // immediately. The Terminal/TerminalWebGPU components only focus on their
@@ -614,8 +699,13 @@ export function App() {
         // Only on a real relaunch: after a webview reload the live tabs came
         // back above, and the leftover is tabs whose shells died.
         // A failed lookup could hide live tabs: never auto-resume over them.
+        // Never in a `tauri dev` copy: it runs beside the daily instance and
+        // would start its Claude sessions a second time.
         autoRestorePending.current =
-          state.autoRestoreSession && !liveIdsFailed && liveIds.length === 0;
+          !import.meta.env.DEV &&
+          state.autoRestoreSession &&
+          !liveIdsFailed &&
+          liveIds.length === 0;
         setLoaded(true);
       })
       .catch((e) => {
@@ -825,6 +915,9 @@ export function App() {
       cwd?: string,
       /** Defaults to the account currently selected for new tabs. */
       accountId: string = currentAccountRef.current,
+      /** False from the phone: the desktop keeps showing its current tab
+       *  (the new one only becomes the project's tab if it had none). */
+      activate = true,
     ): Promise<{ tabId: string; paneId: string } | null> => {
       const paneAccount = accountId === MAIN_ACCOUNT_ID ? undefined : accountId;
       const paneId = await spawnPane(
@@ -849,7 +942,9 @@ export function App() {
         panes: { [paneId]: pane },
       };
       setTabs((prev) => [...prev, tab]);
-      setActiveTabIdByProject((prev) => ({ ...prev, [project.id]: tabId }));
+      setActiveTabIdByProject((prev) =>
+        activate || !prev[project.id] ? { ...prev, [project.id]: tabId } : prev,
+      );
       return { tabId, paneId };
     },
     [spawnPane],
@@ -976,7 +1071,11 @@ export function App() {
   // session's own cwd — `--resume` only finds a transcript under the project
   // directory encoded from the *current* cwd.
   const resumeSession = useCallback(
-    async (session: ClaudeSession) => {
+    async (
+      session: ClaudeSession,
+      /** False from the phone: the desktop view stays where it is. */
+      activate = true,
+    ) => {
       const target = resolveProjectTarget(projects, session.cwd);
       let project: Project | undefined;
       if (target.kind === "existing") {
@@ -993,20 +1092,23 @@ export function App() {
         };
         setProjects((prev) => [...prev, project as Project]);
       }
-      if (!project) return;
+      if (!project) return null;
       // `ccd` is the user's pwsh alias for Claude (skip-permissions + effort)
       // and forwards its args, so --resume passes straight through.
       const spawned = await spawnTabFor(
         project,
         `ccd --resume ${session.id}`,
         session.cwd,
+        undefined,
+        activate,
       );
-      if (!spawned) return;
-      setActiveProjectId(project.id);
+      if (!spawned) return null;
+      if (activate) setActiveProjectId(project.id);
       // The project is where the user is about to work: surface it in the
       // sidebar's "Active" list now, not on the first keystroke.
       markProjectInput(project.id);
       pushToast("info", `⟳ ${session.title}`);
+      return spawned;
     },
     [projects, spawnTabFor, markProjectInput, pushToast],
   );
@@ -2222,8 +2324,13 @@ export function App() {
   const toolbarClaimedPanesRef = useRef<Set<string>>(new Set());
 
   const runToolbarAction = useCallback(
-    async (button: ActionButton) => {
-      if (!activeProject) return;
+    async (
+      button: ActionButton,
+      /** From the phone: its project and pane; the desktop view stays put. */
+      remote?: { project: Project; paneId: string | null },
+    ): Promise<string | null> => {
+      const project = remote?.project ?? activeProject;
+      if (!project) return null;
       const sendCommand = async (paneId: string) => {
         try {
           const text = button.command + "\r";
@@ -2237,24 +2344,31 @@ export function App() {
       // surface the project in the sidebar "Active" tab, like typing would.
       // An active pane sitting on a bare prompt runs the command in place
       // rather than leaving an empty tab behind.
-      const reusable = activePaneIdOfActiveTab;
+      const reusable = remote ? remote.paneId : activePaneIdOfActiveTab;
       if (
         reusable &&
         !toolbarClaimedPanesRef.current.has(reusable) &&
         isBlankShell(getFrame(reusable))
       ) {
         toolbarClaimedPanesRef.current.add(reusable);
-        markProjectInput(activeProject.id);
+        markProjectInput(project.id);
         await sendCommand(reusable);
-        focusPaneElement(reusable);
-        return;
+        if (!remote) focusPaneElement(reusable);
+        return paneToTab.current.get(reusable) ?? null;
       }
-      const spawned = await spawnTabFor(activeProject);
-      if (!spawned) return;
+      const spawned = await spawnTabFor(
+        project,
+        undefined,
+        undefined,
+        undefined,
+        !remote,
+      );
+      if (!spawned) return null;
       toolbarClaimedPanesRef.current.add(spawned.paneId);
-      markProjectInput(activeProject.id);
+      markProjectInput(project.id);
       // Wait for pwsh + PSReadLine to be ready, then send the command.
       setTimeout(() => void sendCommand(spawned.paneId), TOOLBAR_RUN_DELAY_MS);
+      return spawned.tabId;
     },
     [activeProject, activePaneIdOfActiveTab, spawnTabFor, markProjectInput],
   );
@@ -2262,8 +2376,12 @@ export function App() {
   // Bottom prompt bar: type (or send) the button's text into the active Claude
   // pane. Unlike runToolbarAction it targets the existing pane, never spawns.
   const runPromptAction = useCallback(
-    async (button: ActionButton) => {
-      const paneId = activePaneIdOfActiveTab;
+    async (
+      button: ActionButton,
+      /** From the phone: the pane it shows; the desktop focus stays put. */
+      remotePaneId?: string,
+    ) => {
+      const paneId = remotePaneId ?? activePaneIdOfActiveTab;
       if (!paneId) return;
       // "keys" mode: send the captured shortcut bytes verbatim (no bracketed
       // paste, no submit) — exactly as if the user pressed the combo.
@@ -2271,7 +2389,7 @@ export function App() {
         if (!button.keys || button.keys.length === 0) return;
         try {
           await invoke("send_input", { sessionId: paneId, bytes: button.keys });
-          focusActivePane();
+          if (!remotePaneId) focusActivePane();
         } catch (e) {
           setError(String(e));
         }
@@ -2287,13 +2405,101 @@ export function App() {
       try {
         const bytes = Array.from(new TextEncoder().encode(payload));
         await invoke("send_input", { sessionId: paneId, bytes });
-        focusActivePane();
+        if (!remotePaneId) focusActivePane();
       } catch (e) {
         setError(String(e));
       }
     },
     [activePaneIdOfActiveTab, focusActivePane],
   );
+
+  // Phone companion: actions relayed by the Rust server, run with the same
+  // functions as the desktop UI. The desktop view never jumps to their tab.
+  const handleRemoteAction = useCallback(
+    async (action: RemoteAction): Promise<RemoteActionResult> => {
+      switch (action.kind) {
+        case "newTab": {
+          const project = projects.find((p) => p.id === action.projectId);
+          if (!project) return { error: "projet introuvable" };
+          const spawned = await spawnTabFor(
+            project,
+            undefined,
+            undefined,
+            undefined,
+            false,
+          );
+          if (!spawned) return { error: "onglet non créé" };
+          markProjectInput(project.id);
+          return { tabId: spawned.tabId };
+        }
+        case "closeTab":
+          await closeTab(action.tabId);
+          return {};
+        case "runButton": {
+          const project = projects.find((p) => p.id === action.projectId);
+          const button = actionButton(toolbarButtons, action.buttonId);
+          if (!project || !button) return { error: "bouton introuvable" };
+          const tabId = await runToolbarAction(button, {
+            project,
+            paneId: action.paneId,
+          });
+          return tabId ? { tabId } : {};
+        }
+        case "promptButton": {
+          const button = actionButton(promptButtons, action.buttonId);
+          if (!button) return { error: "bouton introuvable" };
+          await runPromptAction(button, action.paneId);
+          return {};
+        }
+        case "resume": {
+          // Already running in a tab: show that one, never a second Claude
+          // on the same transcript (the desktop overlay does the same).
+          const panes = tabs.flatMap((t) =>
+            Object.keys(t.panes).map((paneId) => ({ tabId: t.id, paneId })),
+          );
+          const owners = await Promise.all(
+            panes.map(({ paneId }) =>
+              invoke<string | null>("pane_session_id", { paneId }).catch(
+                () => null,
+              ),
+            ),
+          );
+          const live = panes.find((_, i) => owners[i] === action.session.id);
+          if (live) return { tabId: live.tabId };
+          const spawned = await resumeSession(action.session, false);
+          return spawned
+            ? { tabId: spawned.tabId }
+            : { error: "session non reprise" };
+        }
+        case "setAccount":
+          await accounts.setCurrent(action.accountId);
+          return {};
+        case "updateAccount":
+          await accounts.update(action.accountId, {
+            label: action.label,
+            color: action.color,
+          });
+          return {};
+        case "autoSwitch":
+          setAutoSwitchOnLimit(action.on);
+          return {};
+      }
+    },
+    [
+      projects,
+      tabs,
+      spawnTabFor,
+      markProjectInput,
+      closeTab,
+      toolbarButtons,
+      runToolbarAction,
+      promptButtons,
+      runPromptAction,
+      resumeSession,
+      accounts,
+    ],
+  );
+  useRemoteActions(handleRemoteAction);
 
   if (!loaded) {
     return (

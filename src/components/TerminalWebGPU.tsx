@@ -15,7 +15,7 @@ import {
 } from "@/lib/gpuPresenter";
 import { measureCellSize } from "@/lib/cellSize";
 import { keyEventToBytes } from "@/lib/keymap";
-import { getFrame, usePaneFrame } from "@/lib/frameStore";
+import { getFrame, rememberDesktopSize, usePaneFrame } from "@/lib/frameStore";
 import { useElementVisible } from "@/lib/useElementVisible";
 import { CLAUDE_TINT, hexToRgba, USER_TINT } from "@/lib/messageTint";
 import { isChromeRow, isInputRow, isJumpPill } from "@/lib/terminalChrome";
@@ -982,6 +982,7 @@ export function TerminalWebGPU({
         Math.floor((cssWidth - SCROLLBAR_RESERVE_PX) / cell.width),
       );
       const rows = Math.max(5, Math.floor(cssHeight / cell.height));
+      rememberDesktopSize(pane.id, cols, rows);
       if (cols === lastCols && rows === lastRows) return;
       // The grid is changing: viewport columns no longer line up with the
       // selected content — drop the selection rather than show a stale shape.

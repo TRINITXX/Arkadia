@@ -770,6 +770,9 @@ fn emit_render(
         bracketed_paste,
         line_kinds,
     };
+    if let Some(hub) = app.try_state::<Arc<crate::remote::RemoteHub>>() {
+        hub.publish_frame(&payload);
+    }
     let _ = app.emit("terminal-render", payload);
 }
 
