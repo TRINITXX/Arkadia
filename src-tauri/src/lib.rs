@@ -52,6 +52,29 @@ pub(crate) fn wire_main_window(app: &tauri::AppHandle, window: &tauri::WebviewWi
     });
 }
 
+/// Variables a Claude Code session sets for the programs it starts. Arkadia
+/// started from one (a script Claude ran, a relaunch after an update) would
+/// hand them to every terminal, and each Claude there would take itself for a
+/// child session and save no transcript at all: four hours of conversations
+/// were lost that way on 11/10/2026. User settings for Claude live in its
+/// settings.json, never in these.
+fn is_inherited_claude_marker(name: &str) -> bool {
+    name == "CLAUDECODE" || name == "CLAUDE_PID" || name.starts_with("CLAUDE_CODE_")
+}
+
+/// Drops those variables from Arkadia's own environment, so no terminal, gate
+/// or tool it starts inherits them. Call first thing in `main`, before any
+/// thread exists.
+pub fn forget_parent_claude_session() {
+    let inherited: Vec<String> = std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .filter(|name| is_inherited_claude_marker(name))
+        .collect();
+    for name in inherited {
+        std::env::remove_var(name);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // A panic on the main thread ends the process with nothing in the log
@@ -813,6 +836,18 @@ fn agent_state_for_project(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn drops_what_a_parent_claude_session_leaves_behind() {
+        use super::is_inherited_claude_marker as marker;
+        assert!(marker("CLAUDE_CODE_CHILD_SESSION"));
+        assert!(marker("CLAUDE_CODE_SESSION_ID"));
+        assert!(marker("CLAUDECODE"));
+        assert!(marker("CLAUDE_PID"));
+        // Arkadia sets this one itself, per pane (accounts).
+        assert!(!marker("CLAUDE_CONFIG_DIR"));
+        assert!(!marker("PATH"));
+    }
+
     use super::*;
     use std::fs;
 
