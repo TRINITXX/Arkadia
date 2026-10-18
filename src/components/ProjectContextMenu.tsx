@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Workspace } from "@/types";
+import { useOverlay } from "@/lib/overlays";
 
 interface ProjectContextMenuProps {
   x: number;
@@ -27,6 +28,8 @@ export function ProjectContextMenu({
   onHideUntilRestart,
   onClose,
 }: ProjectContextMenuProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay();
   const [moveOpen, setMoveOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 

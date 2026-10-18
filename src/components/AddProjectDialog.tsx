@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { desktopDir } from "@tauri-apps/api/path";
 import { PROJECT_COLORS, shortenPath } from "@/store";
+import { useOverlay } from "@/lib/overlays";
 
 interface AddProjectDialogProps {
   open: boolean;
@@ -14,6 +15,8 @@ export function AddProjectDialog({
   onCancel,
   onSubmit,
 }: AddProjectDialogProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay(isOpen);
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const [color, setColor] = useState(PROJECT_COLORS[0]);

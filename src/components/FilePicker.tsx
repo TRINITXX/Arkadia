@@ -23,6 +23,7 @@ import { fetchThumbnailUrl } from "@/lib/imageUrlCache";
 import { formatWhen } from "@/lib/sessionsIndex";
 import { subscribeStable } from "@/lib/tauriEvents";
 import { useLazyThumbnail } from "@/lib/useLazyThumbnail";
+import { useOverlay } from "@/lib/overlays";
 
 /** Mirrors `Source` in `src-tauri/src/photos.rs`. */
 type SourceKey = "photos" | "downloads";
@@ -122,6 +123,8 @@ interface FilePickerProps {
  * its own button sits outside this subtree.
  */
 export function FilePicker({ onInsert, onClose }: FilePickerProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay();
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<SourceKey>("photos");

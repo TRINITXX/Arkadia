@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useOverlay } from "@/lib/overlays";
 
 interface SidebarTabContextMenuProps {
   x: number;
@@ -14,6 +15,8 @@ export function SidebarTabContextMenu({
   onHide,
   onClose,
 }: SidebarTabContextMenuProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay();
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

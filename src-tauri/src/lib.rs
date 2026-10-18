@@ -1,6 +1,7 @@
 mod accounts;
 mod agent_registry;
 mod ai_search;
+mod artifact_view;
 mod claude_watcher;
 mod conversation;
 // Only consumed by the release-only single-instance block below; in debug the
@@ -41,10 +42,13 @@ pub(crate) fn wire_main_window(app: &tauri::AppHandle, window: &tauri::WebviewWi
     // When the user alt-tabs back to Arkadia, dismiss any pending background
     // notification — they're now looking at the app.
     let ah = app.clone();
-    window.on_window_event(move |event| {
-        if let tauri::WindowEvent::Focused(true) = event {
-            crate::popup::dismiss_all(&ah);
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::Focused(true) => crate::popup::dismiss_all(&ah),
+        // The artifact window is laid over main's panel: it moves along.
+        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+            crate::artifact_view::follow(&ah)
         }
+        _ => {}
     });
 }
 
@@ -107,6 +111,7 @@ pub fn run() {
         .manage(conversation::ConvCacheMap::default())
         .manage(sessions::SessionIndex::default())
         .manage(ai_search::AiSearchState::default())
+        .manage(artifact_view::ArtifactView::default())
         .manage(registry.clone())
         .manage(popup::PopupQueue::default())
         .manage(uiwatch::UiHealth::default())
@@ -198,13 +203,19 @@ pub fn run() {
                 Ok(())
             }
         })
-        .invoke_handler(tauri::generate_handler![
+        // The artifact page is remote: `guard` refuses it every app command.
+        .invoke_handler(artifact_view::guard(tauri::generate_handler![
             spawn_terminal,
             accounts::accounts_state,
             accounts::account_add,
             accounts::account_remove,
             accounts::account_update,
             accounts::account_set_current,
+            artifact_view::artifact_view_show,
+            artifact_view::artifact_view_place,
+            artifact_view::artifact_view_reload,
+            artifact_view::artifact_view_set_hidden,
+            artifact_view::artifact_view_close,
             send_input,
             resize_terminal,
             set_scrollback_cap,
@@ -256,7 +267,7 @@ pub fn run() {
             popup::popup_open_in_main,
             remote::remote_publish_state,
             remote::remote_reply,
-        ])
+        ]))
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| match &event {

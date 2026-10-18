@@ -360,7 +360,8 @@ fn main_is_foreground(app: &AppHandle) -> bool {
         .get_webview_window("main")
         .and_then(|w| w.is_focused().ok())
         .unwrap_or(false);
-    focused || main_is_effective_foreground(app)
+    // Reading an artifact beside the terminals is being in Arkadia too.
+    focused || crate::artifact_view::has_focus(app) || main_is_effective_foreground(app)
 }
 
 /// Fires `NOTIFY_GRACE` after a signal. The chime ALWAYS plays (debounced) — the
@@ -509,7 +510,7 @@ fn main_is_effective_foreground(app: &AppHandle) -> bool {
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows::Win32::UI::WindowsAndMessaging::{
         GetTopWindow, GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextLengthW, IsIconic,
-        IsWindowVisible, GWL_EXSTYLE, GW_HWNDNEXT, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        IsWindowVisible, GWL_EXSTYLE, GW_HWNDNEXT, GW_OWNER, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
     let Some(main) = app.get_webview_window("main") else {
@@ -550,7 +551,9 @@ fn main_is_effective_foreground(app: &AppHandle) -> bool {
                     && rect.right > rect.left
                     && rect.bottom > rect.top;
                 if cloaked == 0 && !is_tool && titled && has_area {
-                    if hwnd.0 as isize == main_raw {
+                    // A window main owns (the artifact panel) is Arkadia too.
+                    let owner = GetWindow(hwnd, GW_OWNER).map(|h| h.0 as isize).unwrap_or(0);
+                    if hwnd.0 as isize == main_raw || owner == main_raw {
                         return true; // Arkadia is the front-most real window
                     }
                     if exstyle & WS_EX_TOPMOST.0 == 0 {

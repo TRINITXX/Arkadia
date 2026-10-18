@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { paneAccountId } from "@/lib/accounts";
+import { openLink } from "@/lib/openLink";
 import {
   readText as readClipboard,
   writeText as writeClipboard,
@@ -1232,8 +1233,9 @@ export function TerminalWebGPU({
             // filesystem-validated by the backend `resolve_path_in_pane`.
             await invoke("open_path", { path: match.absPath });
           } else {
-            // url | hyperlink → OS browser via the shell scope (http/https).
-            await openExternal(match.url);
+            // url | hyperlink → a claude.ai artifact opens in the panel,
+            // signed in to this pane's account; the rest goes to the browser.
+            await openLink(match.url, paneAccountId(pane.accountId));
           }
         } catch (err) {
           console.error("[arkadia] open clickable failed:", err);

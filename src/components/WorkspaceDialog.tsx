@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useOverlay } from "@/lib/overlays";
 
 interface WorkspaceDialogProps {
   open: boolean;
@@ -15,6 +16,8 @@ export function WorkspaceDialog({
   onCancel,
   onSubmit,
 }: WorkspaceDialogProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay(open);
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLInputElement>(null);
 

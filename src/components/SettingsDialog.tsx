@@ -17,6 +17,7 @@ import {
   type ToolDensity,
 } from "@/types";
 import { ToolbarSettings } from "@/components/ToolbarSettings";
+import { useOverlay } from "@/lib/overlays";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -105,6 +106,8 @@ export function SettingsDialog({
   toolDensity,
   onChangeToolDensity,
 }: SettingsDialogProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay(open);
   const [tab, setTab] = useState<Tab>("toolbar");
 
   if (!open) return null;

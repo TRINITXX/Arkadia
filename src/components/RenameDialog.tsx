@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useOverlay } from "@/lib/overlays";
 
 interface RenameDialogProps {
   open: boolean;
@@ -13,6 +14,8 @@ export function RenameDialog({
   onCancel,
   onSubmit,
 }: RenameDialogProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay(open);
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLInputElement>(null);
 

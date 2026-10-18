@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useOverlay } from "@/lib/overlays";
 
 interface WorkspaceContextMenuProps {
   x: number;
@@ -15,6 +16,8 @@ export function WorkspaceContextMenu({
   onDelete,
   onClose,
 }: WorkspaceContextMenuProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay();
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

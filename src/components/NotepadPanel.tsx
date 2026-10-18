@@ -16,6 +16,7 @@ import {
   saveProjectNotepad,
   type NotepadEntry,
 } from "@/lib/notepadStore";
+import { useOverlay } from "@/lib/overlays";
 
 const DRAFT_SAVE_DEBOUNCE_MS = 500;
 const COPIED_FLASH_MS = 1200;
@@ -56,6 +57,8 @@ export function NotepadPanel({
   onClose,
   onValidated,
 }: NotepadPanelProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay();
   const [width, setWidth] = useState(PANEL_WIDTH_DEFAULT);
   const [editorHeight, setEditorHeight] = useState<number>(defaultEditorHeight);
   const [draft, setDraft] = useState("");

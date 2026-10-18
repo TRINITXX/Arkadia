@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { PROJECT_COLORS } from "@/store";
+import { useOverlay } from "@/lib/overlays";
 
 interface ColorPickerDialogProps {
   open: boolean;
@@ -14,6 +15,8 @@ export function ColorPickerDialog({
   onCancel,
   onSubmit,
 }: ColorPickerDialogProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay(open);
   const [color, setColor] = useState(initialValue);
 
   useEffect(() => {

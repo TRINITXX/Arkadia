@@ -1,0 +1,17 @@
+import { describe, it, expect } from "vitest";
+import { isArtifactUrl } from "@/lib/openLink";
+
+describe("isArtifactUrl", () => {
+  it("takes both artifact link shapes and nothing else", () => {
+    expect(
+      isArtifactUrl("https://claude.ai/artifact/QXVbCtb1dyAMJHWDbZpB4d"),
+    ).toBe(true);
+    expect(isArtifactUrl("https://claude.ai/code/artifact/0b4f-uuid")).toBe(
+      true,
+    );
+    expect(isArtifactUrl("https://claude.ai/chat/123")).toBe(false);
+    expect(isArtifactUrl("https://claude.ai.evil.com/artifact/x")).toBe(false);
+    expect(isArtifactUrl("http://claude.ai/artifact/x")).toBe(false);
+    expect(isArtifactUrl("not a url")).toBe(false);
+  });
+});

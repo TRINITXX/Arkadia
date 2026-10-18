@@ -30,6 +30,8 @@ import { RenameDialog } from "@/components/RenameDialog";
 import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { NotepadPanel } from "@/components/NotepadPanel";
+import { ArtifactPanel } from "@/components/ArtifactPanel";
+import { setArtifactOpener } from "@/lib/openLink";
 import { SessionsOverlay } from "@/components/SessionsOverlay";
 import { Toaster, useToasts } from "@/components/Toaster";
 import {
@@ -519,6 +521,40 @@ export function App() {
   useEffect(() => {
     activePaneIdRef.current = activePaneIdOfActiveTab;
   }, [activePaneIdOfActiveTab]);
+
+  // claude.ai artifact links open in the side panel, signed in to the account
+  // of the pane that printed them; a link whose pane is unknown (conversation
+  // views) takes the active pane's account.
+  const [artifact, setArtifact] = useState<{
+    url: string;
+    accountId: string;
+    /** Bumped per click, so clicking the same link again shows it again. */
+    nonce: number;
+  } | null>(null);
+  const [artifactWidth, setArtifactWidth] = useState(0);
+  // A reload of this page forgets the panel: drop a window left from before.
+  useEffect(() => {
+    void invoke("artifact_view_close").catch(() => {});
+  }, []);
+  const activePaneAccountRef = useRef<string>(MAIN_ACCOUNT_ID);
+  useEffect(() => {
+    const tab = tabs.find((t) => t.id === activeTabId);
+    const pane =
+      tab && activePaneIdOfActiveTab
+        ? tab.panes[activePaneIdOfActiveTab]
+        : undefined;
+    activePaneAccountRef.current = paneAccountId(pane?.accountId);
+  }, [tabs, activeTabId, activePaneIdOfActiveTab]);
+  useEffect(() => {
+    setArtifactOpener((url, accountId) =>
+      setArtifact((prev) => ({
+        url,
+        accountId: accountId ?? activePaneAccountRef.current,
+        nonce: (prev?.nonce ?? 0) + 1,
+      })),
+    );
+    return () => setArtifactOpener(null);
+  }, []);
   useEffect(() => {
     const reclaim = (e: Event) => {
       const under =
@@ -591,6 +627,16 @@ export function App() {
         }
         requestAnimationFrame(() => {
           if (!activePaneIdOfActiveTab) return;
+          // A click that brought the window back (say from the artifact
+          // panel) may have focused a field meanwhile: leave it there.
+          const now = document.activeElement;
+          if (
+            now &&
+            now !== document.body &&
+            now.tagName !== "HTML" &&
+            !now.hasAttribute("data-pane-id")
+          )
+            return;
           const el = document.querySelector<HTMLElement>(
             `[data-pane-id="${activePaneIdOfActiveTab}"]`,
           );
@@ -2757,6 +2803,26 @@ export function App() {
         </div>
       </div>
 
+      {artifact && (
+        <ArtifactPanel
+          url={artifact.url}
+          accountId={artifact.accountId}
+          accountLabel={
+            (accounts.state?.accounts.length ?? 0) >= 2
+              ? (accounts.state?.accounts.find(
+                  (a) => a.id === artifact.accountId,
+                )?.label ?? null)
+              : null
+          }
+          nonce={artifact.nonce}
+          onWidthChange={setArtifactWidth}
+          onClose={() => {
+            setArtifact(null);
+            setArtifactWidth(0);
+          }}
+        />
+      )}
+
       {notepadOpen && (
         <NotepadPanel
           projectId={activeProject?.id ?? null}
@@ -2963,7 +3029,7 @@ export function App() {
         toolDensity={toolDensity}
         onChangeToolDensity={setToolDensity}
       />
-      <Toaster toasts={toasts} />
+      <Toaster toasts={toasts} right={16 + artifactWidth} />
     </div>
   );
 }

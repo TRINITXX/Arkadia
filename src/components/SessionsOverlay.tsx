@@ -48,6 +48,7 @@ import type {
   TerminalPalette,
   ToolDensity,
 } from "@/types";
+import { useOverlay } from "@/lib/overlays";
 
 /** Idle time after the last keystroke before the (expensive) content search runs. */
 const SEARCH_DEBOUNCE_MS = 300;
@@ -113,6 +114,8 @@ export function SessionsOverlay({
   density,
   palette,
 }: SessionsOverlayProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay(open);
   const [sessions, setSessions] = useState<ClaudeSession[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");

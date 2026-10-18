@@ -3,6 +3,7 @@ import { Check } from "lucide-react";
 import type { Account } from "@/lib/accounts";
 import { AccountDot } from "./AccountDot";
 import { UsageRing } from "./UsageRing";
+import { useOverlay } from "@/lib/overlays";
 
 interface TabContextMenuProps {
   x: number;
@@ -25,6 +26,8 @@ export function TabContextMenu({
   onSwitchAccount,
   onDismiss,
 }: TabContextMenuProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay();
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

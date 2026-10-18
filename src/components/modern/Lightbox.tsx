@@ -5,6 +5,7 @@ import type { LightboxContent } from "@/components/modern/ImageThumb";
 import type { ImageRef } from "@/lib/imageGallery";
 import { fetchImageUrl } from "@/lib/imageUrlCache";
 import { IDENTITY_VIEW, zoomAt, type ZoomView } from "@/lib/zoomPan";
+import { useOverlay } from "@/lib/overlays";
 
 interface LightboxProps {
   content: LightboxContent;
@@ -37,6 +38,8 @@ function fromCentre(
  * arrow keys or the side buttons, skipping paths that no longer load.
  */
 export function Lightbox({ content, gallery, onClose }: LightboxProps) {
+  // The artifact page steps aside while this layer is open.
+  useOverlay();
   const [image, setImage] = useState(
     content.kind === "image" ? { url: content.url, path: content.path } : null,
   );

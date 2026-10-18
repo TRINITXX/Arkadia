@@ -6,7 +6,7 @@
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
-import { open as tauriOpen } from "@tauri-apps/plugin-shell";
+import { openLink } from "@/lib/openLink";
 
 /**
  * The backend could not be reached (the phone lost its connection): what a
@@ -20,14 +20,14 @@ export interface Bridge {
     event: string,
     handler: (e: { payload: T }) => void,
   ): Promise<() => void>;
-  /** Opens a web link outside the app. */
+  /** Opens a web link: a claude.ai artifact in the panel, the rest outside the app. */
   openUrl(url: string): Promise<void>;
 }
 
 let bridge: Bridge = {
   invoke: (cmd, args) => tauriInvoke(cmd, args),
   listen: (event, handler) => tauriListen(event, handler),
-  openUrl: (url) => tauriOpen(url),
+  openUrl: (url) => openLink(url),
 };
 
 export function setBridge(next: Bridge): void {

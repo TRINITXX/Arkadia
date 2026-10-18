@@ -16,13 +16,21 @@ export function useToasts() {
   return { toasts, pushToast };
 }
 
-export function Toaster({ toasts }: { toasts: Toast[] }) {
+/** `right`: distance from the window's right edge, wider while the artifact
+ *  panel (a separate window that would cover the toasts) is open. */
+export function Toaster({
+  toasts,
+  right = 16,
+}: {
+  toasts: Toast[];
+  right?: number;
+}) {
   return (
     <div
       style={{
         position: "fixed",
         bottom: 16,
-        right: 16,
+        right,
         display: "flex",
         flexDirection: "column",
         gap: 8,

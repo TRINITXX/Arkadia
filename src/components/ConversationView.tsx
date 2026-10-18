@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { openLink } from "@/lib/openLink";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CLAUDE_TINT, USER_TINT, hexToRgba } from "@/lib/messageTint";
@@ -44,7 +44,7 @@ const MD_COMPONENTS = {
     <a
       onClick={(e) => {
         e.preventDefault();
-        if (href) void openExternal(href).catch(() => {});
+        if (href) void openLink(href).catch(() => {});
       }}
       title={href}
     >
