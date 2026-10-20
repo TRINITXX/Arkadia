@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { Store } from "@tauri-apps/plugin-store";
 import { ExternalLink, RotateCw, X } from "lucide-react";
 import type { ArtifactItem } from "@/lib/artifactTabs";
@@ -235,8 +234,14 @@ export function ArtifactPanel({
           </button>
           <button
             type="button"
+            // In the Chrome profile of the artifact's account, else the
+            // default browser (`chrome_profile.rs`).
             onClick={() =>
-              active && void openExternal(active.url).catch(() => {})
+              active &&
+              void invoke("artifact_open_in_browser", {
+                url: active.url,
+                account: active.accountId,
+              }).catch(() => {})
             }
             className={iconButton}
             title="Ouvrir dans le navigateur"

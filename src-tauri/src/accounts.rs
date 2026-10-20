@@ -273,6 +273,11 @@ fn identity(id: &str) -> Option<Identity> {
     })
 }
 
+/// The Claude account's email, as its `.claude.json` records it.
+pub fn account_email(id: &str) -> Option<String> {
+    identity(id)?.email
+}
+
 fn logged_in(id: &str) -> bool {
     read_json(&config_root(id).join(".credentials.json"))
         .and_then(|c| c.get("claudeAiOauth").cloned())

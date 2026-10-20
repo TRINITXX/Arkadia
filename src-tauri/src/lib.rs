@@ -3,6 +3,7 @@ mod agent_registry;
 mod ai_search;
 pub mod artifact_inbox;
 mod artifact_view;
+mod chrome_profile;
 mod claude_watcher;
 mod conversation;
 // Only consumed by the release-only single-instance block below; in debug the
@@ -252,6 +253,7 @@ pub fn run() {
             artifact_view::artifact_view_hide_all,
             artifact_view::artifact_view_close,
             artifact_view::artifact_view_close_all,
+            chrome_profile::artifact_open_in_browser,
             send_input,
             resize_terminal,
             set_scrollback_cap,
