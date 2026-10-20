@@ -62,6 +62,13 @@ pub struct SessionMap {
     sessions: Mutex<HashMap<String, Session>>,
 }
 
+impl SessionMap {
+    /// Whether this Arkadia runs the pane `id` (another instance may).
+    pub fn has_session(&self, id: &str) -> bool {
+        self.sessions.lock().contains_key(id)
+    }
+}
+
 /// User-configured scrollback line cap (Settings → "Scrollback"), applied to
 /// new PTYs at spawn and mirrored into live sessions by `set_scrollback_cap`.
 pub struct ScrollbackConfig(AtomicUsize);
@@ -346,6 +353,11 @@ pub fn spawn_terminal(
     // notification hook echoes this back, letting the popup target the right
     // conversation even when several Claude tabs share one project folder.
     cmd.env("ARKADIA_PANE_ID", &session_id);
+    // Links the pane's programs open go through Arkadia: a claude.ai artifact
+    // lands in this tab's panel, anything else in the browser (`artifact_inbox`).
+    if let Some(browser) = crate::artifact_inbox::browser_command() {
+        cmd.env("BROWSER", browser);
+    }
     // The pane's Claude account: a secondary one is its own config dir; the
     // main one must run WITHOUT the variable (see `accounts`).
     match crate::accounts::prepare_launch(account_id.as_deref()) {

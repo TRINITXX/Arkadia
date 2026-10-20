@@ -1,29 +1,33 @@
-//! Artifact panel: a claude.ai artifact link clicked in a pane opens beside
-//! the terminals instead of the default browser.
+//! Artifact panel: claude.ai artifacts open beside the terminals instead of
+//! the default browser, one tab of the panel per artifact.
 //!
-//! The page lives in a borderless window owned by `main`, laid exactly over
+//! Each artifact is a borderless window owned by `main`, laid exactly over
 //! the empty body of the React panel (the frontend reports that body in
 //! physical pixels of main's client area) and moved along with `main`
-//! (`follow`). An owned window stays above its owner, hides when it is
-//! minimised and dies with it. A separate window rather than a child webview:
-//! child webviews need Tauri's `unstable` feature, which turns every window
-//! into a multi-webview one and breaks `get_webview_window("main")` and the
-//! keyboard focus of the terminals.
+//! (`follow`). Only the artifact of the panel's active tab is shown; the
+//! others stay built and hidden, so switching tabs keeps their page as it
+//! was. An owned window stays above its owner, hides when it is minimised and
+//! dies with it. Separate windows rather than child webviews: child webviews
+//! need Tauri's `unstable` feature, which turns every window into a
+//! multi-webview one and breaks `get_webview_window("main")` and the keyboard
+//! focus of the terminals.
 //!
-//! Each Claude account gets its own WebView2 data folder, so the window is
-//! signed in to the account that published the artifact: an artifact is
-//! private to that account. The page is remote: `ipc_allowed` refuses every
-//! app command from it, and no capability lists it, which keeps plugins out.
+//! Each Claude account gets its own WebView2 data folder, so a window is
+//! signed in to the account that published its artifact: an artifact is
+//! private to that account. The pages are remote: `ipc_allowed` refuses every
+//! app command from them, and no capability lists them, which keeps plugins
+//! out.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::ipc::Invoke;
 use tauri::webview::NewWindowResponse;
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime, State, Url, WebviewUrl,
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Runtime, State, Url, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder,
 };
 
@@ -31,24 +35,28 @@ const LABEL_PREFIX: &str = "artifact-view-";
 
 #[derive(Default)]
 pub struct ArtifactView {
-    live: Mutex<Option<Live>>,
-    /// Bumped by every show and close: a window finished building under an
-    /// older generation was overtaken and is dropped.
-    generation: AtomicU64,
-    /// A layer of main is open over the panel. Kept apart from `live`: it can
-    /// arrive before the window exists, which is then built hidden.
+    inner: Mutex<Inner>,
+    /// A layer of main is open over the panel. Kept apart from `inner`: it
+    /// can arrive while a window is being built, which is then shown hidden.
     hidden: AtomicBool,
 }
 
-struct Live {
-    label: String,
-    account: String,
-    bounds: Bounds,
+#[derive(Default)]
+struct Inner {
+    /// Built windows by artifact key (one per tab of the panel): their labels.
+    windows: HashMap<String, String>,
+    /// Builds in flight by key, with their ticket: a close (or a newer open of
+    /// the same key) while a window is being built drops that window.
+    building: HashMap<String, u64>,
+    /// The artifact on screen, if the panel shows one.
+    active: Option<String>,
+    /// The panel body, for windows built or shown later.
+    bounds: Option<Bounds>,
 }
 
-/// A fresh label per window: closing one is asynchronous, so reusing its
-/// label right away could collide with the one still being torn down.
-static NEXT_ID: AtomicU32 = AtomicU32::new(1);
+/// Tickets of builds, and suffixes of labels: closing a window is
+/// asynchronous, so a label is never reused.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The panel body, in physical pixels relative to main's client area.
 #[derive(Deserialize, Clone, Copy)]
@@ -57,6 +65,12 @@ pub struct Bounds {
     y: f64,
     width: f64,
     height: f64,
+}
+
+#[derive(Serialize, Clone)]
+struct TitleChanged {
+    key: String,
+    title: String,
 }
 
 /// Whether a webview may call app commands: the windows of
@@ -84,7 +98,7 @@ pub fn guard<R: Runtime>(
 }
 
 /// `https://claude.ai/artifact/<id>` or `https://claude.ai/code/artifact/<id>`.
-fn is_artifact_url(url: &Url) -> bool {
+pub(crate) fn is_artifact_url(url: &Url) -> bool {
     url.scheme() == "https"
         && url.host_str() == Some("claude.ai")
         && url.path().contains("/artifact/")
@@ -157,59 +171,97 @@ fn place(main: &WebviewWindow, window: &WebviewWindow, bounds: Bounds) -> tauri:
     ))
 }
 
-fn take_live(app: &AppHandle, state: &ArtifactView) {
-    state.generation.fetch_add(1, Ordering::SeqCst);
-    let old = state.live.lock().ok().and_then(|mut live| live.take());
-    if let Some(window) = old.and_then(|l| app.get_webview_window(&l.label)) {
-        // `destroy`, not `close`: the window refuses close requests (Alt+F4).
+/// Shows or hides a window. Showing does not activate it: it was built with
+/// `focused(false)`, which tao keeps for every later show.
+fn apply_hidden(window: &WebviewWindow, hidden: bool) -> Result<(), String> {
+    if hidden {
+        window.hide().map_err(|e| e.to_string())
+    } else {
+        window.show().map_err(|e| e.to_string())
+    }
+}
+
+fn hide_label(app: &AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.hide();
+    }
+}
+
+/// `destroy`, not `close`: the windows refuse close requests (Alt+F4).
+fn destroy_label(app: &AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
         let _ = window.destroy();
     }
 }
 
-/// Shows `url` beside the terminals, signed in as `account`. Async, like every
-/// command here: building a window waits on the main thread, which runs the
-/// sync commands, and no lock is held while it does.
+/// Puts artifact `key` on screen, signed in as `account`: built on first
+/// show, reloaded when `reload` (the same link clicked or opened again),
+/// otherwise shown as it was left. Async, like the other commands here:
+/// building a window waits on the main thread, and no lock is held while it
+/// does, since `follow` runs there and takes the lock.
+// Tauri commands take each argument from the page as its own parameter, like
+// `terminal.rs`'s commands.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn artifact_view_show(
     app: AppHandle,
     state: State<'_, ArtifactView>,
+    key: String,
     url: String,
     account: String,
     bounds: Bounds,
+    reload: bool,
+    // Whether a layer of main covers the panel right now: the panel sends it
+    // with each show, so a show never acts on a stale value.
+    hidden: bool,
 ) -> Result<(), String> {
     let url: Url = url.parse().map_err(|e| format!("bad url: {e}"))?;
     if !is_artifact_url(&url) {
         return Err(format!("not a claude.ai artifact: {url}"));
     }
-    let key = account_key(&account);
     let main = main_window(&app)?;
+    state.hidden.store(hidden, Ordering::SeqCst);
 
-    // Same account: its window navigates.
-    let reuse = {
-        let mut live = state.live.lock().map_err(|e| e.to_string())?;
-        match live.as_mut() {
-            Some(l) if l.account == key => {
-                l.bounds = bounds;
-                app.get_webview_window(&l.label)
-            }
-            _ => None,
-        }
+    let (existing, previous) = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.bounds = Some(bounds);
+        let previous = inner
+            .active
+            .replace(key.clone())
+            .filter(|k| *k != key)
+            .and_then(|k| inner.windows.get(&k).cloned());
+        (inner.windows.get(&key).cloned(), previous)
     };
-    if let Some(window) = reuse {
-        window.navigate(url).map_err(|e| e.to_string())?;
-        return place(&main, &window, bounds).map_err(|e| e.to_string());
+    if let Some(label) = previous {
+        hide_label(&app, &label);
+    }
+    if let Some(window) = existing.and_then(|label| app.get_webview_window(&label)) {
+        if reload {
+            window.navigate(url).map_err(|e| e.to_string())?;
+        }
+        place(&main, &window, bounds).map_err(|e| e.to_string())?;
+        // Placing waited on the main thread: decide on what holds now (the
+        // panel may have left, another artifact come forward, a layer opened).
+        return show_if_current(&state, &key, &window);
     }
 
-    // Another account, or none yet: a new window on that account's folder.
-    take_live(&app, &state);
-    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    // First show of this artifact: a window on its account's folder.
+    let ticket = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    state
+        .inner
+        .lock()
+        .map_err(|e| e.to_string())?
+        .building
+        .insert(key.clone(), ticket);
     let scale = main.scale_factor().map_err(|e| e.to_string())?;
     let origin = main.inner_position().map_err(|e| e.to_string())?;
-    let label = format!("{LABEL_PREFIX}{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
+    let label = format!("{LABEL_PREFIX}{ticket}");
+    let title_app = app.clone();
+    let title_key = key.clone();
     let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
         .parent(&main)
         .map_err(|e| e.to_string())?
-        .data_directory(data_dir(&key))
+        .data_directory(data_dir(&account_key(&account)))
         .title("Artefact")
         .decorations(false)
         .shadow(false)
@@ -219,8 +271,8 @@ pub async fn artifact_view_show(
         .minimizable(false)
         .closable(false)
         .skip_taskbar(true)
-        .visible(!state.hidden.load(Ordering::SeqCst))
-        // Shown without taking the keyboard from the terminal that was clicked.
+        .visible(false)
+        // Shown without taking the keyboard from the terminal in use.
         .focused(false)
         .position(
             (origin.x as f64 + bounds.x) / scale,
@@ -243,45 +295,75 @@ pub async fn artifact_view_show(
                 NewWindowResponse::Deny
             }
         })
+        // The tab of the panel shows the page's own title.
+        .on_document_title_changed(move |_window, title| {
+            let _ = title_app.emit_to(
+                "main",
+                "artifact-title",
+                TitleChanged {
+                    key: title_key.clone(),
+                    title,
+                },
+            );
+        })
         .build()
         .map_err(|e| e.to_string())?;
-    // Alt+F4 in the page: the panel's own Close button is the way out.
     window.on_window_event(|event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
         }
     });
 
-    {
-        // Never held across a call that waits on the main thread: `follow`
-        // runs there and takes this lock.
-        let mut live = state.live.lock().map_err(|e| e.to_string())?;
-        if state.generation.load(Ordering::SeqCst) != generation {
-            // A newer show or a close came in while this window was being built.
-            drop(live);
+    let (on_screen, bounds) = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        if inner.building.get(&key) != Some(&ticket) {
+            // Closed, or opened again, while this window was being built.
+            drop(inner);
             let _ = window.destroy();
             return Ok(());
         }
-        *live = Some(Live {
-            label,
-            account: key,
-            bounds,
-        });
-    }
+        inner.building.remove(&key);
+        inner.windows.insert(key.clone(), label);
+        (
+            inner.active.as_deref() == Some(key.as_str()),
+            inner.bounds.unwrap_or(bounds),
+        )
+    };
     // The builder works in logical units: settle on the exact physical pixels.
     place(&main, &window, bounds).map_err(|e| e.to_string())?;
-    // A layer may have opened or closed over the panel during the build.
-    apply_hidden(&window, state.hidden.load(Ordering::SeqCst))
+    if !on_screen {
+        return Ok(());
+    }
+    // A layer may have opened or the panel left during the build and placing.
+    show_if_current(&state, &key, &window)
 }
 
-/// Shows or hides the window. Showing does not activate it: it was built
-/// with `focused(false)`, which tao keeps for every later show.
-fn apply_hidden(window: &WebviewWindow, hidden: bool) -> Result<(), String> {
-    if hidden {
-        window.hide().map_err(|e| e.to_string())
-    } else {
-        window.show().map_err(|e| e.to_string())
+/// Shows `window` only if its artifact is still the one on screen and no
+/// layer covers the panel; hides it otherwise. Decided and sent under the
+/// lock, so a `hide_all` cannot slip in between: show and hide only post a
+/// message to the main thread, they never wait on it.
+fn show_if_current(state: &ArtifactView, key: &str, window: &WebviewWindow) -> Result<(), String> {
+    let inner = state.inner.lock().map_err(|e| e.to_string())?;
+    let current = inner.active.as_deref() == Some(key);
+    apply_hidden(window, !current || state.hidden.load(Ordering::SeqCst))
+}
+
+/// The panel left the screen (its tab has no artifact, or it closed): every
+/// artifact window hides and keeps its page for when the tab comes back.
+#[tauri::command]
+pub async fn artifact_view_hide_all(
+    app: AppHandle,
+    state: State<'_, ArtifactView>,
+) -> Result<(), String> {
+    let labels: Vec<String> = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.active = None;
+        inner.windows.values().cloned().collect()
+    };
+    for label in labels {
+        hide_label(&app, &label);
     }
+    Ok(())
 }
 
 /// Follows the panel body when it is resized or the scale changes.
@@ -291,52 +373,57 @@ pub async fn artifact_view_place(
     state: State<'_, ArtifactView>,
     bounds: Bounds,
 ) -> Result<(), String> {
-    let window = {
-        let mut live = state.live.lock().map_err(|e| e.to_string())?;
-        let Some(l) = live.as_mut() else {
-            return Ok(());
-        };
-        l.bounds = bounds;
-        app.get_webview_window(&l.label)
+    let label = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.bounds = Some(bounds);
+        let active = inner.active.clone();
+        active.and_then(|k| inner.windows.get(&k).cloned())
     };
-    match window {
+    match label.and_then(|label| app.get_webview_window(&label)) {
         Some(window) => place(&main_window(&app)?, &window, bounds).map_err(|e| e.to_string()),
         None => Ok(()),
     }
 }
 
-/// Moves the window along with `main` (its move and resize events).
+/// Moves the artifact on screen along with `main` (its move and resize events).
 pub fn follow(app: &AppHandle) {
     let Some(state) = app.try_state::<ArtifactView>() else {
         return;
     };
-    let target = state.live.lock().ok().and_then(|live| {
-        live.as_ref()
-            .and_then(|l| app.get_webview_window(&l.label).map(|w| (w, l.bounds)))
+    let target = state.inner.lock().ok().and_then(|inner| {
+        let label = inner
+            .active
+            .as_ref()
+            .and_then(|k| inner.windows.get(k).cloned())?;
+        Some((label, inner.bounds?))
     });
-    if let (Some((window, bounds)), Ok(main)) = (target, main_window(app)) {
+    let Some((label, bounds)) = target else {
+        return;
+    };
+    if let (Some(window), Ok(main)) = (app.get_webview_window(&label), main_window(app)) {
         let _ = place(&main, &window, bounds);
     }
 }
 
-/// Whether the artifact window has the keyboard: Arkadia is then in front.
+/// Whether an artifact window has the keyboard: Arkadia is then in front.
 pub fn has_focus(app: &AppHandle) -> bool {
     let Some(state) = app.try_state::<ArtifactView>() else {
         return false;
     };
-    let label = state
-        .live
+    let labels: Vec<String> = state
+        .inner
         .lock()
-        .ok()
-        .and_then(|live| live.as_ref().map(|l| l.label.clone()));
-    label
-        .and_then(|label| app.get_webview_window(&label))
-        .and_then(|w| w.is_focused().ok())
-        .unwrap_or(false)
+        .map(|inner| inner.windows.values().cloned().collect())
+        .unwrap_or_default();
+    labels.iter().any(|label| {
+        app.get_webview_window(label)
+            .and_then(|w| w.is_focused().ok())
+            .unwrap_or(false)
+    })
 }
 
-/// Hides the window while a layer of `main` (dialog, menu, image viewer,
-/// notepad) is open, since a separate window always covers it.
+/// Hides the artifact on screen while a layer of `main` (dialog, menu, image
+/// viewer, notepad) is open, since a separate window always covers it.
 #[tauri::command]
 pub async fn artifact_view_set_hidden(
     app: AppHandle,
@@ -344,12 +431,13 @@ pub async fn artifact_view_set_hidden(
     hidden: bool,
 ) -> Result<(), String> {
     state.hidden.store(hidden, Ordering::SeqCst);
-    let label = state
-        .live
-        .lock()
-        .map_err(|e| e.to_string())?
-        .as_ref()
-        .map(|l| l.label.clone());
+    let label = {
+        let inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner
+            .active
+            .as_ref()
+            .and_then(|k| inner.windows.get(k).cloned())
+    };
     match label.and_then(|label| app.get_webview_window(&label)) {
         Some(window) => apply_hidden(&window, hidden),
         None => Ok(()),
@@ -361,25 +449,56 @@ pub async fn artifact_view_reload(
     app: AppHandle,
     state: State<'_, ArtifactView>,
 ) -> Result<(), String> {
-    let label = state
-        .live
-        .lock()
-        .map_err(|e| e.to_string())?
-        .as_ref()
-        .map(|l| l.label.clone());
+    let label = {
+        let inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner
+            .active
+            .as_ref()
+            .and_then(|k| inner.windows.get(k).cloned())
+    };
     match label.and_then(|label| app.get_webview_window(&label)) {
         Some(window) => window.reload().map_err(|e| e.to_string()),
         None => Ok(()),
     }
 }
 
-/// Closes the window with the panel; the account's sign-in stays on disk.
+/// Closes one artifact for good (its tab was closed); the account's sign-in
+/// stays on disk.
 #[tauri::command]
 pub async fn artifact_view_close(
     app: AppHandle,
     state: State<'_, ArtifactView>,
+    key: String,
 ) -> Result<(), String> {
-    take_live(&app, &state);
+    let label = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.building.remove(&key);
+        if inner.active.as_deref() == Some(key.as_str()) {
+            inner.active = None;
+        }
+        inner.windows.remove(&key)
+    };
+    if let Some(label) = label {
+        destroy_label(&app, &label);
+    }
+    Ok(())
+}
+
+/// Closes every artifact: a reload of main's page forgets the panel.
+#[tauri::command]
+pub async fn artifact_view_close_all(
+    app: AppHandle,
+    state: State<'_, ArtifactView>,
+) -> Result<(), String> {
+    let labels: Vec<String> = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.building.clear();
+        inner.active = None;
+        inner.windows.drain().map(|(_, label)| label).collect()
+    };
+    for label in labels {
+        destroy_label(&app, &label);
+    }
     Ok(())
 }
 

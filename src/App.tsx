@@ -32,6 +32,16 @@ import { SettingsDialog } from "@/components/SettingsDialog";
 import { NotepadPanel } from "@/components/NotepadPanel";
 import { ArtifactPanel } from "@/components/ArtifactPanel";
 import { setArtifactOpener } from "@/lib/openLink";
+import { useAnyOverlayOpen } from "@/lib/overlays";
+import {
+  closeArtifact,
+  dropTab,
+  openArtifact,
+  selectArtifact,
+  setArtifactTitle,
+  type ArtifactChange,
+  type ArtifactsByTab,
+} from "@/lib/artifactTabs";
 import { SessionsOverlay } from "@/components/SessionsOverlay";
 import { Toaster, useToasts } from "@/components/Toaster";
 import {
@@ -522,39 +532,97 @@ export function App() {
     activePaneIdRef.current = activePaneIdOfActiveTab;
   }, [activePaneIdOfActiveTab]);
 
-  // claude.ai artifact links open in the side panel, signed in to the account
-  // of the pane that printed them; a link whose pane is unknown (conversation
-  // views) takes the active pane's account.
-  const [artifact, setArtifact] = useState<{
-    url: string;
-    accountId: string;
-    /** Bumped per click, so clicking the same link again shows it again. */
-    nonce: number;
-  } | null>(null);
+  // claude.ai artifacts open in the panel of the tab whose pane printed the
+  // link, or opened it through the pane's BROWSER (Claude Code publishing),
+  // signed in to that pane's account. A link from an unknown pane
+  // (conversation views) goes to the active tab and its active pane. Each
+  // tab keeps its own artifacts until it closes or Arkadia restarts.
+  const [artifacts, setArtifacts] = useState<ArtifactsByTab>({});
   const [artifactWidth, setArtifactWidth] = useState(0);
-  // A reload of this page forgets the panel: drop a window left from before.
+  // Source of truth for the handlers below, which outlive any render.
+  const artifactsRef = useRef<ArtifactsByTab>({});
+  const artifactSeq = useRef(0);
+  const artifactTabsRef = useRef(tabs);
+  const activeTabIdRef = useRef(activeTabId);
   useEffect(() => {
-    void invoke("artifact_view_close").catch(() => {});
+    artifactTabsRef.current = tabs;
+    activeTabIdRef.current = activeTabId;
+  }, [tabs, activeTabId]);
+  // Applies a change and closes the native windows it dropped.
+  const changeArtifacts = useCallback(
+    (change: (state: ArtifactsByTab) => ArtifactChange) => {
+      const { state, closed } = change(artifactsRef.current);
+      artifactsRef.current = state;
+      setArtifacts(state);
+      for (const key of closed) {
+        void invoke("artifact_view_close", { key }).catch(() => {});
+      }
+    },
+    [],
+  );
+  const openArtifactFor = useCallback(
+    (url: string, paneId: string | null) => {
+      const all = artifactTabsRef.current;
+      const tab =
+        (paneId
+          ? all.find((t) =>
+              Object.prototype.hasOwnProperty.call(t.panes, paneId),
+            )
+          : undefined) ?? all.find((t) => t.id === activeTabIdRef.current);
+      if (!tab) return;
+      const pane =
+        tab.panes[
+          paneId && Object.prototype.hasOwnProperty.call(tab.panes, paneId)
+            ? paneId
+            : tab.activePaneId
+        ];
+      changeArtifacts((state) =>
+        openArtifact(state, tab.id, url, paneAccountId(pane?.accountId), () => {
+          artifactSeq.current += 1;
+          return `artifact-${artifactSeq.current}`;
+        }),
+      );
+    },
+    [changeArtifacts],
+  );
+  // A reload of this page forgets the panel: drop windows left from before.
+  useEffect(() => {
+    void invoke("artifact_view_close_all").catch(() => {});
   }, []);
-  const activePaneAccountRef = useRef<string>(MAIN_ACCOUNT_ID);
+  // A layer over the panel (dialog, menu, image viewer, notepad) hides the
+  // artifact on screen. Tracked here, not in the panel, so it stays right
+  // while a tab without artifacts is shown.
+  const overlayOpen = useAnyOverlayOpen();
   useEffect(() => {
-    const tab = tabs.find((t) => t.id === activeTabId);
-    const pane =
-      tab && activePaneIdOfActiveTab
-        ? tab.panes[activePaneIdOfActiveTab]
-        : undefined;
-    activePaneAccountRef.current = paneAccountId(pane?.accountId);
-  }, [tabs, activeTabId, activePaneIdOfActiveTab]);
-  useEffect(() => {
-    setArtifactOpener((url, accountId) =>
-      setArtifact((prev) => ({
-        url,
-        accountId: accountId ?? activePaneAccountRef.current,
-        nonce: (prev?.nonce ?? 0) + 1,
-      })),
+    void invoke("artifact_view_set_hidden", { hidden: overlayOpen }).catch(
+      () => {},
     );
+  }, [overlayOpen]);
+  useEffect(() => {
+    setArtifactOpener(openArtifactFor);
     return () => setArtifactOpener(null);
-  }, []);
+  }, [openArtifactFor]);
+  useEffect(() => {
+    let cancelled = false;
+    const unlisteners: UnlistenFn[] = [];
+    const keep = (fn: UnlistenFn) => {
+      if (cancelled) fn();
+      else unlisteners.push(fn);
+    };
+    void listen<{ paneId: string; url: string }>("artifact-open-request", (e) =>
+      openArtifactFor(e.payload.url, e.payload.paneId),
+    ).then(keep);
+    void listen<{ key: string; title: string }>("artifact-title", (e) =>
+      changeArtifacts((state) => ({
+        state: setArtifactTitle(state, e.payload.key, e.payload.title),
+        closed: [],
+      })),
+    ).then(keep);
+    return () => {
+      cancelled = true;
+      for (const fn of unlisteners) fn();
+    };
+  }, [openArtifactFor, changeArtifacts]);
   useEffect(() => {
     const reclaim = (e: Event) => {
       const under =
@@ -1231,6 +1299,8 @@ export function App() {
       const wasActive = activeTabIdByProject[projId] === tabId;
 
       setTabs((prev) => prev.filter((t) => t.id !== tabId));
+      // Its artifacts close with it.
+      changeArtifacts((state) => dropTab(state, tabId));
 
       if (wasActive) {
         setActiveTabIdByProject((prev) => {
@@ -1264,7 +1334,7 @@ export function App() {
         }
       }
     },
-    [tabs, activeTabIdByProject],
+    [tabs, activeTabIdByProject, changeArtifacts],
   );
 
   // Close every tab of a project at once (middle-click on a row in the sidebar
@@ -1277,6 +1347,8 @@ export function App() {
 
       const ids = new Set(projTabs.map((t) => t.id));
       setTabs((prev) => prev.filter((t) => !ids.has(t.id)));
+      // Their artifacts close with them.
+      for (const id of ids) changeArtifacts((state) => dropTab(state, id));
 
       setActiveTabIdByProject((prev) => {
         if (!(projectId in prev)) return prev;
@@ -1307,7 +1379,7 @@ export function App() {
         }
       }
     },
-    [tabs],
+    [tabs, changeArtifacts],
   );
 
   const closePane = useCallback(
@@ -2083,6 +2155,8 @@ export function App() {
   const onDeleteProject = (id: string) => {
     const tabsOfProj = tabs.filter((t) => t.projectId === id);
     tabsOfProj.forEach((t) => {
+      // Its artifacts close with it (also `--wt-remove`, so /m and /s).
+      changeArtifacts((state) => dropTab(state, t.id));
       const paneIds = collectPaneIds(t.tree);
       paneIds.forEach((pid) => {
         paneToTab.current.delete(pid);
@@ -2549,6 +2623,9 @@ export function App() {
   );
   useRemoteActions(handleRemoteAction);
 
+  // The panel shows the artifacts of the tab on screen, if it has any.
+  const tabArtifacts = activeTabId ? artifacts[activeTabId] : undefined;
+
   if (!loaded) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-zinc-950 text-xs text-zinc-600">
@@ -2803,23 +2880,29 @@ export function App() {
         </div>
       </div>
 
-      {artifact && (
+      {activeTabId && tabArtifacts && (
         <ArtifactPanel
-          url={artifact.url}
-          accountId={artifact.accountId}
-          accountLabel={
+          items={tabArtifacts.items}
+          activeKey={tabArtifacts.activeKey}
+          accountLabel={(id) =>
             (accounts.state?.accounts.length ?? 0) >= 2
-              ? (accounts.state?.accounts.find(
-                  (a) => a.id === artifact.accountId,
-                )?.label ?? null)
+              ? (accounts.state?.accounts.find((a) => a.id === id)?.label ??
+                null)
               : null
           }
-          nonce={artifact.nonce}
+          onSelect={(key) =>
+            changeArtifacts((state) => ({
+              state: selectArtifact(state, activeTabId, key),
+              closed: [],
+            }))
+          }
+          onCloseItem={(key) =>
+            changeArtifacts((state) => closeArtifact(state, activeTabId, key))
+          }
+          onCloseAll={() =>
+            changeArtifacts((state) => dropTab(state, activeTabId))
+          }
           onWidthChange={setArtifactWidth}
-          onClose={() => {
-            setArtifact(null);
-            setArtifactWidth(0);
-          }}
         />
       )}
 
@@ -3029,7 +3112,10 @@ export function App() {
         toolDensity={toolDensity}
         onChangeToolDensity={setToolDensity}
       />
-      <Toaster toasts={toasts} right={16 + artifactWidth} />
+      <Toaster
+        toasts={toasts}
+        right={16 + (tabArtifacts ? artifactWidth : 0)}
+      />
     </div>
   );
 }

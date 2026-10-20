@@ -1,6 +1,7 @@
 mod accounts;
 mod agent_registry;
 mod ai_search;
+pub mod artifact_inbox;
 mod artifact_view;
 mod claude_watcher;
 mod conversation;
@@ -163,6 +164,15 @@ pub fn run() {
                         }
                     });
                 }
+                // Artifacts Claude Code opens by itself, for the panel of their tab.
+                {
+                    let inbox_app = app_handle.clone();
+                    std::thread::spawn(move || {
+                        if let Err(e) = artifact_inbox::run_watcher(inbox_app) {
+                            eprintln!("[arkadia artifacts] inbox watcher stopped: {e}");
+                        }
+                    });
+                }
                 // Background-task count per pane, for the sidebar badge.
                 {
                     let panes_app = app_handle.clone();
@@ -238,7 +248,9 @@ pub fn run() {
             artifact_view::artifact_view_place,
             artifact_view::artifact_view_reload,
             artifact_view::artifact_view_set_hidden,
+            artifact_view::artifact_view_hide_all,
             artifact_view::artifact_view_close,
+            artifact_view::artifact_view_close_all,
             send_input,
             resize_terminal,
             set_scrollback_cap,

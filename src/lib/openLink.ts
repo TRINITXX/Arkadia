@@ -14,9 +14,10 @@ export function isArtifactUrl(url: string): boolean {
   }
 }
 
-/** `accountId` = the Claude account that printed the link, `null` = unknown
- *  (the main window then uses the active pane's account). */
-type ArtifactOpener = (url: string, accountId: string | null) => void;
+/** `paneId` = the pane that printed the link, `null` = unknown (the main
+ *  window then uses the active pane): the artifact opens in that pane's tab,
+ *  signed in to its Claude account. */
+type ArtifactOpener = (url: string, paneId: string | null) => void;
 
 let artifactOpener: ArtifactOpener | null = null;
 
@@ -30,10 +31,10 @@ export function setArtifactOpener(opener: ArtifactOpener | null): void {
  *  default browser. */
 export async function openLink(
   url: string,
-  accountId: string | null = null,
+  paneId: string | null = null,
 ): Promise<void> {
   if (artifactOpener && isArtifactUrl(url)) {
-    artifactOpener(url, accountId);
+    artifactOpener(url, paneId);
     return;
   }
   await openExternal(url);

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { Store } from "@tauri-apps/plugin-store";
 import { ExternalLink, RotateCw, X } from "lucide-react";
+import type { ArtifactItem } from "@/lib/artifactTabs";
 import { useAnyOverlayOpen } from "@/lib/overlays";
 
 /** Own store file: the main saveState() never rewrites it (see notepadStore). */
@@ -38,31 +39,39 @@ function placeWebview(el: HTMLElement): void {
   );
 }
 
+/** The nonce each artifact was last shown with: a newer one reloads its page.
+ *  Module-wide, so it outlives the panel leaving with its tab (keys are unique
+ *  for the app's lifetime). */
+const shownNonce = new Map<string, number>();
+
 interface ArtifactPanelProps {
-  url: string;
-  /** Claude account the artifact opens with: its own claude.ai sign-in. */
-  accountId: string;
+  /** The artifacts of the active Arkadia tab, one tab of the panel each. */
+  items: ArtifactItem[];
+  activeKey: string;
   /** Shown in the header when several accounts exist. */
-  accountLabel: string | null;
-  /** Bumped per click: the same link clicked again is shown again. */
-  nonce: number;
+  accountLabel: (accountId: string) => string | null;
+  onSelect: (key: string) => void;
+  onCloseItem: (key: string) => void;
+  /** Closes the panel: every artifact of this tab. */
+  onCloseAll: () => void;
   /** The panel's width once settled (not on every step of a drag). */
   onWidthChange: (width: number) => void;
-  onClose: () => void;
 }
 
 /**
- * A claude.ai artifact docked beside the terminals. The page itself is a
- * separate borderless window (`artifact_view.rs`) laid over the empty body
- * below the header; React only reserves that room and reports where it is.
+ * The claude.ai artifacts of the active tab, docked beside the terminals.
+ * Each page is a separate borderless window (`artifact_view.rs`) laid over
+ * the empty body below the tabs; React only reserves that room and reports
+ * where it is.
  */
 export function ArtifactPanel({
-  url,
-  accountId,
+  items,
+  activeKey,
   accountLabel,
-  nonce,
+  onSelect,
+  onCloseItem,
+  onCloseAll,
   onWidthChange,
-  onClose,
 }: ArtifactPanelProps) {
   const [width, setWidth] = useState(() => clampWidth(undefined));
   const [settledWidth, setSettledWidth] = useState(width);
@@ -70,6 +79,7 @@ export function ArtifactPanel({
   const widthRef = useRef(width);
   const bodyRef = useRef<HTMLDivElement>(null);
   const hidden = useAnyOverlayOpen();
+  const active = items.find((i) => i.key === activeKey) ?? items[0];
 
   useEffect(() => {
     widthRef.current = width;
@@ -96,20 +106,39 @@ export function ArtifactPanel({
     };
   }, []);
 
-  // Show the artifact, or switch to a new one, once the body is laid out.
+  // Put the active artifact on screen once the body is laid out: built the
+  // first time, reloaded when its link was opened again, else as it was left.
+  const activeItemKey = active?.key;
+  const activeNonce = active?.nonce;
   useLayoutEffect(() => {
     const el = bodyRef.current;
-    if (!el) return;
+    if (!el || !active) return;
+    const last = shownNonce.get(active.key);
+    shownNonce.set(active.key, active.nonce);
     setError(null);
     invoke("artifact_view_show", {
-      url,
-      account: accountId,
+      key: active.key,
+      url: active.url,
+      account: active.accountId,
       bounds: bodyBounds(el),
+      reload: last !== undefined && last !== active.nonce,
+      hidden,
     })
       // The panel may have moved while the window was being built.
       .then(() => placeWebview(el))
       .catch((e) => setError(String(e)));
-  }, [url, accountId, nonce]);
+    // Keyed on the artifact and its nonce only: a title change is no reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeItemKey, activeNonce]);
+
+  // The panel leaves the screen with its tab: the pages hide and stay as
+  // they are, for when the tab comes back.
+  useEffect(
+    () => () => {
+      void invoke("artifact_view_hide_all").catch(() => {});
+    },
+    [],
+  );
 
   // Keep the page on the body as the window or the panel resizes, or the
   // window moves to a screen of another scale (no resize fires then).
@@ -145,18 +174,6 @@ export function ArtifactPanel({
       scaleQuery?.removeEventListener("change", onScale);
     };
   }, []);
-
-  useEffect(() => {
-    void invoke("artifact_view_set_hidden", { hidden }).catch(() => {});
-  }, [hidden]);
-
-  // The webview goes away with the panel.
-  useEffect(
-    () => () => {
-      void invoke("artifact_view_close").catch(() => {});
-    },
-    [],
-  );
 
   // Width resize from the left strip. Pointer capture keeps the drag alive
   // when the cursor crosses the artifact window; a lost capture (Alt+Tab
@@ -203,9 +220,9 @@ export function ArtifactPanel({
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-9 shrink-0 items-center gap-2 border-b border-zinc-800 px-3">
-          <span className="text-xs font-medium text-zinc-200">Artefact</span>
+          <span className="text-xs font-medium text-zinc-200">Artefacts</span>
           <span className="flex-1 truncate text-xs text-zinc-500">
-            {accountLabel ?? ""}
+            {active ? (accountLabel(active.accountId) ?? "") : ""}
           </span>
           <button
             type="button"
@@ -218,7 +235,9 @@ export function ArtifactPanel({
           </button>
           <button
             type="button"
-            onClick={() => void openExternal(url).catch(() => {})}
+            onClick={() =>
+              active && void openExternal(active.url).catch(() => {})
+            }
             className={iconButton}
             title="Ouvrir dans le navigateur"
             aria-label="Ouvrir l'artefact dans le navigateur"
@@ -227,13 +246,57 @@ export function ArtifactPanel({
           </button>
           <button
             type="button"
-            onClick={onClose}
+            onClick={onCloseAll}
             className={iconButton}
-            title="Fermer"
-            aria-label="Fermer le panneau d'artefact"
+            title="Fermer tous les artefacts de cet onglet"
+            aria-label="Fermer le panneau d'artefacts"
           >
             <X size={14} />
           </button>
+        </div>
+        <div
+          role="tablist"
+          aria-label="Artefacts de cet onglet"
+          className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-zinc-800 px-2 pt-1.5"
+        >
+          {items.map((item) => {
+            const isActive = item.key === active?.key;
+            const label = item.title?.trim() || "Artefact";
+            return (
+              <div
+                key={item.key}
+                className={`group flex min-w-0 max-w-44 shrink-0 items-center gap-1.5 rounded-t-md pl-2.5 pr-1 text-xs ${
+                  isActive
+                    ? "bg-[#f3f0e8] font-semibold text-zinc-900"
+                    : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+                }`}
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => onSelect(item.key)}
+                  className="min-w-0 truncate py-1.5 text-left"
+                  title={label}
+                >
+                  {label}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onCloseItem(item.key)}
+                  className={`flex size-5 shrink-0 items-center justify-center rounded ${
+                    isActive
+                      ? "text-zinc-500 hover:bg-zinc-300 hover:text-zinc-900"
+                      : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100"
+                  }`}
+                  title="Fermer cet artefact"
+                  aria-label={`Fermer ${label}`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            );
+          })}
         </div>
         <div
           ref={bodyRef}
