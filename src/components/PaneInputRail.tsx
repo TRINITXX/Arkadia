@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, CornerDownLeft, Copy, Images, Mic, Square } from "lucide-react";
+import {
+  Check,
+  CornerDownLeft,
+  Copy,
+  Images,
+  MessagesSquare,
+  Mic,
+  Square,
+} from "lucide-react";
 import { FilePicker, prefetchPhotos } from "@/components/FilePicker";
 import { measureCellSize } from "@/lib/cellSize";
 import { copiedCodeMessage } from "@/lib/codeCopy";
@@ -37,15 +45,16 @@ interface PaneInputRailProps {
 }
 
 /**
- * Four keyboard-free actions for the active pane: pick files from the camera
- * roll or the downloads folder, hold/release space for voice dictation (click to
- * start, click to stop), copy the last code block Claude wrote, and send the
- * typed prompt (Enter).
+ * Five keyboard-free actions for the active pane: show the prompts and replies
+ * alone (the display mod hides the rest), pick files from the camera roll or the
+ * downloads folder, hold/release space for voice dictation (click to start,
+ * click to stop), copy the last code block Claude wrote, and send the typed
+ * prompt (Enter).
  *
  * Stacked vertically against the right edge rather than laid out in a row, so
  * they cover one column of Claude Code's input box instead of three — a long
  * prompt used to run underneath them and become unreadable. Enter keeps the spot
- * it has always had, level with the `❯` line, and the other two climb above it;
+ * it has always had, level with the `❯` line, and the others climb above it;
  * growing downwards would land on the hint row under the box.
  *
  * Hidden whenever the pane shows no `❯` input line — except while dictating,
@@ -61,6 +70,7 @@ export function PaneInputRail({
   const [talking, setTalking] = useState(false);
   const [picking, setPicking] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [onlyMessages, setOnlyMessages] = useState(false);
   const railRef = useRef<HTMLDivElement>(null);
   // Interval writing the repeated spaces + the runaway stop, so both survive
   // re-renders and get cleared on unmount / pane change.
@@ -79,6 +89,29 @@ export function PaneInputRail({
   );
 
   useEffect(() => () => window.clearTimeout(copiedRef.current), []);
+
+  // The pane's flag lives in its file, which the mod reads: read back on each
+  // pane switch and remount, so the button never contradicts the transcript.
+  useEffect(() => {
+    let isCurrent = true;
+    void invoke<boolean>("messages_only_get", { paneId })
+      .then((on) => {
+        if (isCurrent) setOnlyMessages(on);
+      })
+      .catch(() => {});
+    return () => {
+      isCurrent = false;
+    };
+  }, [paneId]);
+
+  const toggleOnlyMessages = () => {
+    const on = !onlyMessages;
+    setOnlyMessages(on);
+    void invoke("messages_only_set", { paneId, on }).catch((e) => {
+      setOnlyMessages(!on);
+      onToast?.("error", String(e));
+    });
+  };
 
   /**
    * Copies the last fenced code block of this pane's conversation — the modern
@@ -187,7 +220,7 @@ export function PaneInputRail({
           the spot it has always had, level with the `❯` line, and the others
           climb above it. The offset centres that bottom button on the row rather
           than letting it hang below. Read top to bottom, the order is the one the
-          row used to have left to right. */}
+          row used to have left to right, « Messages seuls » added on top. */}
       <div
         className="absolute right-0 flex flex-col-reverse items-center gap-1"
         style={{ bottom: (cellH - BUTTON_PX) / 2 }}
@@ -253,6 +286,22 @@ export function PaneInputRail({
           }`}
         >
           <Images size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={toggleOnlyMessages}
+          title={
+            onlyMessages ? "Tout afficher" : "Messages seuls (cache les outils)"
+          }
+          aria-label={onlyMessages ? "Tout afficher" : "Messages seuls"}
+          aria-pressed={onlyMessages}
+          className={`pointer-events-auto flex size-6 items-center justify-center rounded transition-colors ${
+            onlyMessages
+              ? "bg-[rgba(244,63,94,0.28)] text-rose-200"
+              : "bg-[rgba(244,63,94,0.10)] text-zinc-400 hover:bg-[rgba(244,63,94,0.20)] hover:text-zinc-100"
+          }`}
+        >
+          <MessagesSquare size={12} />
         </button>
       </div>
     </div>

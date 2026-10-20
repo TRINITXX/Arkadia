@@ -894,6 +894,7 @@ pub fn close_terminal(
         registry.forget_pane(uuid);
     }
     crate::conversation::evict_conversation_cache(&conv_cache, &session_id);
+    crate::messages_only::forget(&session_id);
     Ok(())
 }
 

@@ -11,6 +11,7 @@ mod conversation;
 mod external_action;
 mod fonts;
 pub mod gate;
+mod messages_only;
 mod pane_background;
 mod photos;
 mod popup;
@@ -282,6 +283,8 @@ pub fn run() {
             conversation::pasted_image_path,
             conversation::read_image_bytes,
             conversation::read_last_code_block,
+            messages_only::messages_only_get,
+            messages_only::messages_only_set,
             sessions::list_claude_sessions,
             sessions::search_claude_sessions,
             ai_search::ai_search_plan,
@@ -319,7 +322,10 @@ pub fn run() {
                     api.prevent_exit();
                 }
             }
-            tauri::RunEvent::Exit => popup::log_line("[run] exiting"),
+            tauri::RunEvent::Exit => {
+                messages_only::forget_all();
+                popup::log_line("[run] exiting");
+            }
             tauri::RunEvent::WindowEvent {
                 label,
                 event: tauri::WindowEvent::Destroyed,
