@@ -59,6 +59,7 @@ import {
   type LimitState,
 } from "@/store";
 import { applyActiveReorder } from "@/lib/activeOrder";
+import { closeConfirmMessage } from "@/lib/closeConfirm";
 import {
   REVEAL_ON_WAITING_MS,
   tabAgentStates,
@@ -1421,6 +1422,56 @@ export function App() {
     [closeTab],
   );
 
+  // Closing from the tab bar or the sidebar asks first when something still
+  // runs there (see closeConfirmMessage). The phone's close action skips it:
+  // a dialog on the desktop would wait for nobody.
+  // The close itself goes through refs: titles change every spinner frame
+  // while the dialog is open, so the closures captured before it are stale.
+  const closeTabRef = useRef(closeTab);
+  const closeProjectTabsRef = useRef(closeProjectTabs);
+  useEffect(() => {
+    closeTabRef.current = closeTab;
+    closeProjectTabsRef.current = closeProjectTabs;
+  }, [closeTab, closeProjectTabs]);
+
+  const confirmClose = useCallback(
+    async (targets: Tab[], title: string) => {
+      const message = closeConfirmMessage(targets, effectivePaneStates);
+      if (!message) return true;
+      return ask(message, {
+        title,
+        kind: "warning",
+        okLabel: "Fermer",
+        cancelLabel: "Annuler",
+      });
+    },
+    [effectivePaneStates],
+  );
+
+  const requestCloseTab = useCallback(
+    async (tabId: string) => {
+      const target = tabs.find((t) => t.id === tabId);
+      if (!target) return;
+      if (!(await confirmClose([target], "Fermer l'onglet"))) return;
+      await closeTabRef.current(tabId);
+    },
+    [tabs, confirmClose],
+  );
+
+  const requestCloseProjectTabs = useCallback(
+    async (projectId: string) => {
+      const projTabs = tabs.filter((t) => t.projectId === projectId);
+      if (projTabs.length === 0) return;
+      const title =
+        projTabs.length > 1
+          ? "Fermer les onglets du projet"
+          : "Fermer l'onglet";
+      if (!(await confirmClose(projTabs, title))) return;
+      await closeProjectTabsRef.current(projectId);
+    },
+    [tabs, confirmClose],
+  );
+
   // ─── Switching a tab's account ─────────────────────────────────
 
   // Read after the awaits below: the tab may have changed (pane closed, tab
@@ -2663,8 +2714,8 @@ export function App() {
             setProjectMenu({ project, x, y, hideTabId })
           }
           onTabContextMenu={(tabId, x, y) => setSidebarTabMenu({ tabId, x, y })}
-          onCloseProjectTabs={closeProjectTabs}
-          onCloseTab={closeTab}
+          onCloseProjectTabs={requestCloseProjectTabs}
+          onCloseTab={requestCloseTab}
           onWorkspaceContextMenu={(workspace, x, y) =>
             setWorkspaceMenu({ workspace, x, y })
           }
@@ -2718,7 +2769,7 @@ export function App() {
             setSessionPreview(null);
             onActivateTab(tabId);
           }}
-          onClose={closeTab}
+          onClose={requestCloseTab}
           onContextMenu={(tabId, x, y) => {
             // A single account has nothing to switch to.
             if ((accounts.state?.accounts.length ?? 0) >= 2) {
