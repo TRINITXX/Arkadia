@@ -61,6 +61,12 @@ export function keyEventToBytes(e: React.KeyboardEvent): Uint8Array | null {
       // Ctrl+Delete → Alt+D (kill-word forward) in readline conventions.
       case "Delete":
         return new TextEncoder().encode("\x1bd");
+      // Ctrl+Enter → CSI u (kitty keyboard encoding). A bare CR is
+      // indistinguishable from Enter; Claude Code needs this to "send now" a
+      // queued message. Ctrl+Shift+Enter keeps the Shift+Enter newline below.
+      case "Enter":
+        if (!e.shiftKey) return new TextEncoder().encode("\x1b[13;5u");
+        break;
     }
   }
   switch (e.key) {

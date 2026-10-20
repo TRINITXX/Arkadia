@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type React from "react";
-import { describeKeyEvent } from "@/lib/keymap";
+import { describeKeyEvent, keyEventToBytes } from "@/lib/keymap";
 
 const ev = (o: Partial<React.KeyboardEvent>) => o as React.KeyboardEvent;
 
@@ -26,5 +26,24 @@ describe("describeKeyEvent", () => {
         ev({ ctrlKey: true, altKey: true, shiftKey: true, key: "k" }),
       ),
     ).toBe("Ctrl+Alt+Shift+K");
+  });
+});
+
+describe("keyEventToBytes", () => {
+  it("sends Ctrl+Enter as CSI u so it differs from a bare Enter", () => {
+    const decode = (b: Uint8Array | null) => new TextDecoder().decode(b!);
+    expect(decode(keyEventToBytes(ev({ ctrlKey: true, key: "Enter" })))).toBe(
+      "\x1b[13;5u",
+    );
+    expect(decode(keyEventToBytes(ev({ key: "Enter" })))).toBe("\r");
+  });
+
+  it("keeps Ctrl+Shift+Enter as the Shift+Enter newline", () => {
+    const decode = (b: Uint8Array | null) => new TextDecoder().decode(b!);
+    expect(
+      decode(
+        keyEventToBytes(ev({ ctrlKey: true, shiftKey: true, key: "Enter" })),
+      ),
+    ).toBe("\x1b\r");
   });
 });
