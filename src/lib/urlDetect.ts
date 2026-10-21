@@ -103,16 +103,18 @@ export interface JoinedRow {
  * A row's plaintext glued to the rows around it, for paths a renderer wrapped
  * over several lines: Claude Code breaks long lines itself, so the terminal
  * holds separate rows. Each row brings its content only — indentation and a
- * message frame's `┃`/`│` borders dropped — joined by `sep` (`" "` when the
- * break ate a space, `""` when it cut a word). `rows` maps each contributing
- * row back (the hovered one always present). Indices count code points, as
- * `buildRowMapping` and the backend `resolve_path_at` do.
+ * message frame's `┃`/`│` borders dropped — joined by `sep` above the hovered
+ * row and `nextSep` below it (`" "` when the break ate a space, `""` when it
+ * cut a word). `rows` maps each contributing row back (the hovered one always
+ * present). Indices count code points, as `buildRowMapping` and the backend
+ * `resolve_path_at` do.
  */
 export function joinWrappedRows(
   prev: string | null,
   cur: string,
   next: string | null,
   sep: string,
+  nextSep: string = sep,
 ): { text: string; rows: JoinedRow[] } {
   const isEdge = (c: string) => /[\s┃│]/.test(c);
   const out: string[] = [];
@@ -126,7 +128,7 @@ export function joinWrappedRows(
     while (end > start && isEdge(chars[end - 1])) end--;
     // A blank neighbour adds nothing; the hovered row always counts.
     if (start === end && delta !== 0) return;
-    if (out.length) out.push(...sep);
+    if (out.length) out.push(...(delta === 1 ? nextSep : sep));
     rows.push({ delta, offset: out.length - start, start, end });
     out.push(...chars.slice(start, end));
   };
@@ -134,6 +136,28 @@ export function joinWrappedRows(
   add(cur, 0);
   add(next, 1);
   return { text: out.join(""), rows };
+}
+
+/**
+ * Every way the hovered row may continue a wrapped path, to probe them all:
+ * each break, above and below, read as an eaten space or as a cut word. A
+ * `" "` edge also stands for "this neighbour is not part of the path" (the
+ * prose line above a path, the next path stacked below), the space bounding a
+ * candidate there. Joins with no path separator are left out: they cannot
+ * resolve, and each probe costs a backend call.
+ */
+export function wrappedRowJoins(
+  prev: string | null,
+  cur: string,
+  next: string | null,
+): { text: string; rows: JoinedRow[] }[] {
+  const joins = [" ", ""].flatMap((sep) =>
+    [" ", ""].map((nextSep) => joinWrappedRows(prev, cur, next, sep, nextSep)),
+  );
+  return joins.filter(
+    (j, i) =>
+      /[\\/]/.test(j.text) && joins.findIndex((o) => o.text === j.text) === i,
+  );
 }
 
 /**

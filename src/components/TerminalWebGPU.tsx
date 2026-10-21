@@ -24,7 +24,7 @@ import {
   buildRowMapping,
   colToCharIndex,
   charRangeToCols,
-  joinWrappedRows,
+  wrappedRowJoins,
   type ClickableMatch,
   type PathMatch,
 } from "@/lib/urlDetect";
@@ -1630,17 +1630,15 @@ export function TerminalWebGPU({
       // dir: the tag then previews and opens like a path to that file.
       const tag = imageTagAt(text, charIdx);
       // Claude Code breaks long lines itself, so a path may run onto the rows
-      // around this one: probe the row joined to its neighbours, the break
-      // read as an eaten space or as a cut word, and keep the longer path.
+      // around this one: probe each break above and below as an eaten space
+      // or a cut word, and keep the longest path.
       const rowText = (r: number) => {
         const l = screen.lines[r];
         return l ? buildRowMapping(l).text : null;
       };
-      const joins = [" ", ""].map((sep) =>
-        joinWrappedRows(rowText(row - 1), text, rowText(row + 1), sep),
-      );
+      const joins = wrappedRowJoins(rowText(row - 1), text, rowText(row + 1));
       // Skip the IPC when there's no path separator around the cursor.
-      if (!tag && !/[\\/]/.test(joins[0].text)) {
+      if (!tag && joins.length === 0) {
         clearAffordance();
         return;
       }
