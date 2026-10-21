@@ -30,6 +30,32 @@ struct RemoteConfig {
     /// Tailscale machine names, as `tailscale status` prints them.
     #[serde(default)]
     allowed_devices: Vec<String>,
+    /// The relay that wakes this PC when it is off (see `Wake-on-LAN/`). Kept
+    /// raw: a malformed one must not take the allowlist down with it.
+    #[serde(default)]
+    wake: Option<serde_json::Value>,
+}
+
+impl RemoteConfig {
+    fn wake_relay(&self) -> Option<WakeRelay> {
+        self.wake
+            .clone()
+            .and_then(|v| serde_json::from_value(v).ok())
+    }
+}
+
+/// Where the phone asks for this PC to be woken: the relay's HTTPS address on
+/// the tailnet and its token. Handed to the phone, which keeps it for when the
+/// PC is off and cannot tell it.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct WakeRelay {
+    pub url: String,
+    pub token: String,
+}
+
+/// The wake relay from `remote.json`, if one is set up.
+pub fn wake_relay() -> Option<WakeRelay> {
+    read_config().wake_relay()
 }
 
 /// What the server knows about the tailnet: its own HTTPS name and the IPs of
@@ -169,11 +195,15 @@ fn config_path() -> PathBuf {
         .join("remote.json")
 }
 
-fn load_tailnet() -> Tailnet {
-    let config: RemoteConfig = std::fs::read_to_string(config_path())
+fn read_config() -> RemoteConfig {
+    std::fs::read_to_string(config_path())
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+fn load_tailnet() -> Tailnet {
+    let config = read_config();
     let exe = if std::path::Path::new(TAILSCALE_EXE).exists() {
         TAILSCALE_EXE
     } else {
@@ -224,6 +254,32 @@ mod tests {
             via_tailscale: true,
             check_origin,
         }
+    }
+
+    fn config(json: &str) -> RemoteConfig {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn reads_the_wake_relay_only_when_set() {
+        let with = config(
+            r#"{"allowedDevices": ["a"], "wake": {"url": "https://vps2.tail.ts.net:8443", "token": "t"}}"#,
+        );
+        assert_eq!(
+            with.wake_relay(),
+            Some(WakeRelay {
+                url: "https://vps2.tail.ts.net:8443".into(),
+                token: "t".into()
+            })
+        );
+        assert_eq!(config(r#"{"allowedDevices": ["a"]}"#).wake_relay(), None);
+    }
+
+    #[test]
+    fn a_malformed_wake_relay_keeps_the_allowed_devices() {
+        let broken = config(r#"{"allowedDevices": ["a"], "wake": "https://vps2.tail.ts.net"}"#);
+        assert_eq!(broken.wake_relay(), None);
+        assert_eq!(broken.allowed_devices, vec!["a".to_string()]);
     }
 
     #[test]

@@ -13,6 +13,15 @@ import type { RemoteAction, RemoteActionResult } from "@/lib/remoteActions";
 import type { RemoteSnapshot } from "@/lib/remoteSnapshot";
 import type { ClaudeSession, SessionMatch } from "@/lib/sessionsIndex";
 import type { RenderPayload } from "@/types";
+import {
+  loadRelay,
+  pcOnline,
+  saveRelay,
+  sendWake,
+  wakeAfterLostGate,
+  type WakeProgress,
+  type WakeRelay,
+} from "@/mobile/wake";
 
 export type ClientMsg =
   | { t: "watch"; pane: string | null }
@@ -31,6 +40,7 @@ type ServerMsg =
   | { t: "frame"; frame: RenderPayload }
   | { t: "reply"; id: number; result?: unknown; error?: string }
   | { t: "event"; name: string; payload: unknown }
+  | ({ t: "wake" } & WakeRelay)
   | { t: "error"; message: string };
 
 /** `connecting` until the first open, `lost` while retrying after a drop. */
@@ -39,15 +49,18 @@ export type Status = "connecting" | "open" | "lost";
 /**
  * Where the PC stands while the socket is down, as the gate tells it:
  * `offline` = no answer at all (PC off, asleep, or no Tailscale),
+ * `off` = no answer, and the wake relay says the PC is off the tailnet,
  * `closed` = the PC answers but Arkadia is not running,
  * `starting` = the gate was just asked to start Arkadia.
  */
-export type Reach = "unknown" | "offline" | "closed" | "starting";
+export type Reach = "unknown" | "offline" | "off" | "closed" | "starting";
 
 export interface RemoteView {
   status: Status;
   reach: Reach;
   snapshot: RemoteSnapshot | null;
+  /** A wake asked from this phone, until Arkadia connects or is opened. */
+  wake: WakeProgress | null;
 }
 
 const RETRY_MAX_MS = 5000;
@@ -56,6 +69,8 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const SEARCH_TIMEOUT_MS = 90_000;
 /** Arkadia takes a few seconds to start and open its server. */
 const STARTING_GRACE_MS = 30_000;
+/** How often a wake asks the relay, then the gate, how far the PC got. */
+const WAKE_POLL_MS = 2000;
 
 let socket: WebSocket | null = null;
 let retryMs = 500;
@@ -64,7 +79,11 @@ let view: RemoteView = {
   status: "connecting",
   reach: "unknown",
   snapshot: null,
+  wake: null,
 };
+let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+let wakeRun = 0;
+let probeRun = 0;
 let watched: string | null = null;
 let frame: RenderPayload | null = null;
 let startingSince = 0;
@@ -107,27 +126,104 @@ function gateUrl(path: string): string {
 
 /** Asks the gate why the socket is down. */
 async function probeGate() {
-  if (
-    view.reach === "starting" &&
-    Date.now() - startingSince < STARTING_GRACE_MS
-  )
-    return;
+  const run = ++probeRun;
+  // A newer probe, an open socket or Arkadia starting: this one is stale.
+  const stale = () =>
+    run !== probeRun ||
+    socket?.readyState === WebSocket.OPEN ||
+    (view.reach === "starting" &&
+      Date.now() - startingSince < STARTING_GRACE_MS);
+  if (stale()) return;
   try {
     const res = await window.fetch(gateUrl("/status"), { cache: "no-store" });
-    if (socket?.readyState === WebSocket.OPEN) return;
+    if (stale()) return;
     // No gate behind Tailscale: the PC is there, its state is not known.
     if (!res.ok) return setView({ reach: "unknown" });
     const body = (await res.json()) as { arkadia: boolean };
+    if (stale()) return;
     setView({ reach: body.arkadia ? "unknown" : "closed" });
   } catch {
-    if (socket?.readyState !== WebSocket.OPEN) setView({ reach: "offline" });
+    // No gate: the relay, elsewhere on the tailnet, tells a PC that is off
+    // from a phone without Tailscale (then it does not answer either).
+    const relay = loadRelay();
+    const online = relay ? await pcOnline(relay) : null;
+    if (stale()) return;
+    const wake = wakeAfterLostGate(view.wake);
+    if (wake !== view.wake) stopWake();
+    setView({ reach: online === false ? "off" : "offline", wake });
   }
+}
+
+/** Wakes the PC through the relay, then follows it until Windows answers. */
+export async function wakePc(): Promise<void> {
+  const relay = loadRelay();
+  if (!relay) return;
+  stopWake();
+  const run = wakeRun;
+  setView({ wake: { done: 0, since: Date.now(), failed: false } });
+  const sent = await sendWake(relay);
+  if (run !== wakeRun || !view.wake) return;
+  setView({
+    wake: sent
+      ? { done: 1, since: Date.now(), failed: false }
+      : { ...view.wake, failed: true },
+  });
+  followWake(relay, run);
+}
+
+/**
+ * Advances the wake as the PC comes back: on the tailnet (the relay says),
+ * then Windows (the gate answers). Keeps watching past the 30 s, and even
+ * when the order failed: the PC may come up anyway.
+ */
+function followWake(relay: WakeRelay, run: number) {
+  wakeTimer = setTimeout(async () => {
+    const done = view.wake?.done ?? 3;
+    if (done < 2) {
+      if ((await pcOnline(relay)) && run === wakeRun) advanceWake(2);
+    } else if (done === 2) {
+      const arkadia = await gateSaysArkadia();
+      if (arkadia !== null && run === wakeRun) {
+        advanceWake(3);
+        setView({ reach: arkadia ? "unknown" : "closed" });
+        if (arkadia) reconnectNow();
+      }
+    }
+    if (run === wakeRun && view.wake && view.wake.done < 3)
+      followWake(relay, run);
+  }, WAKE_POLL_MS);
+}
+
+/** Whether Arkadia runs, per the gate; null while Windows is not up. */
+async function gateSaysArkadia(): Promise<boolean | null> {
+  try {
+    const res = await window.fetch(gateUrl("/status"), {
+      cache: "no-store",
+      signal: AbortSignal.timeout(WAKE_POLL_MS * 2),
+    });
+    if (!res.ok) return null;
+    return ((await res.json()) as { arkadia: boolean }).arkadia;
+  } catch {
+    return null;
+  }
+}
+
+function advanceWake(done: 2 | 3) {
+  if (view.wake) setView({ wake: { done, since: Date.now(), failed: false } });
+}
+
+/** Ends the wake being followed; a new one starts its own run. */
+function stopWake() {
+  wakeRun++;
+  if (wakeTimer) clearTimeout(wakeTimer);
+  wakeTimer = null;
 }
 
 /** Has the gate start Arkadia; the socket reconnects once it is up. */
 export async function openArkadia(): Promise<void> {
+  stopWake();
   startingSince = Date.now();
-  setView({ reach: "starting" });
+  setView({ reach: "starting", wake: null });
   try {
     await window.fetch(gateUrl("/open"), { method: "POST" });
   } catch {
@@ -142,7 +238,8 @@ function connect() {
   socket = ws;
   ws.onopen = () => {
     retryMs = 500;
-    setView({ status: "open", reach: "unknown" });
+    stopWake();
+    setView({ status: "open", reach: "unknown", wake: null });
     if (watched) send({ t: "watch", pane: watched });
     // Back after a drop: what changed meanwhile announced itself while we
     // were away. A bare event makes every open modern view read again.
@@ -163,7 +260,8 @@ function connect() {
       else waiting?.resolve(msg.result);
     } else if (msg.t === "event") {
       for (const handler of eventSubs.get(msg.name) ?? []) handler(msg.payload);
-    } else if (msg.t === "error") console.warn("[arkadia]", msg.message);
+    } else if (msg.t === "wake") saveRelay({ url: msg.url, token: msg.token });
+    else if (msg.t === "error") console.warn("[arkadia]", msg.message);
   };
   ws.onclose = () => {
     if (socket !== ws) return;

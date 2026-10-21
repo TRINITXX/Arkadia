@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
 
-use super::access::{decide, Access, RequestInfo};
+use super::access::{decide, wake_relay, Access, RequestInfo};
 use super::peer::is_tailscale_daemon;
 use super::{RemoteHub, PORT};
 use crate::conversation::{
@@ -325,6 +325,11 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
         }
     });
 
+    // Kept by the phone for when the PC is off and this server with it.
+    if let Some(relay) = wake_relay() {
+        let msg = serde_json::json!({ "t": "wake", "url": relay.url, "token": relay.token });
+        let _ = out.send(text(msg.to_string())).await;
+    }
     let client = ctx.hub.add_client(out.clone());
     let mut state_rx = ctx.hub.watch_state();
     state_rx.mark_changed();

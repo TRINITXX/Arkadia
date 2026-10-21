@@ -4,11 +4,13 @@ import { AccountsScreen } from "@/mobile/AccountsScreen";
 import { ProjectList } from "@/mobile/ProjectList";
 import { SessionsScreen } from "@/mobile/SessionsScreen";
 import { TerminalScreen } from "@/mobile/TerminalScreen";
+import { WakeScreen } from "@/mobile/WakeScreen";
 import { useNotice } from "@/mobile/notice";
 import {
   openArkadia,
   reconnectNow,
   useRemoteView,
+  wakePc,
   type Reach,
   type Status,
 } from "@/mobile/remote";
@@ -48,7 +50,7 @@ function findTab(
  * (the old PC) the list stays on its left.
  */
 export function MobileApp() {
-  const { status, reach, snapshot } = useRemoteView();
+  const { status, reach, snapshot, wake } = useRemoteView();
   const viewport = useVisualViewport();
   const wide = useWideScreen();
   const notice = useNotice();
@@ -99,9 +101,10 @@ export function MobileApp() {
     if (openTabId && snapshot && !found && !awaiting) closeTab();
   }, [openTabId, snapshot, found, awaiting, closeTab]);
 
-  const down = status !== "open" && reach !== "unknown";
+  const down = status !== "open" && (reach !== "unknown" || wake !== null);
   let body: React.ReactNode;
-  if (down) body = <ReachScreen reach={reach} />;
+  if (down && wake) body = <WakeScreen wake={wake} reach={reach} />;
+  else if (down) body = <ReachScreen reach={reach} />;
   else if (!snapshot) body = <Centered>En attente d’Arkadia…</Centered>;
   else {
     const list = (
@@ -178,10 +181,28 @@ function Centered({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** PC off, or Arkadia closed (with a button to start it), or starting. */
+/**
+ * PC unreachable, or off (with a button to wake it), or Arkadia closed (with
+ * a button to start it), or starting.
+ */
 function ReachScreen({ reach }: { reach: Reach }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
+      {reach === "off" && (
+        <>
+          <p className="text-lg text-zinc-100">PC éteint</p>
+          <p className="text-sm text-zinc-500">
+            Le PC ne répond pas sur le réseau.
+          </p>
+          <button
+            type="button"
+            onClick={() => void wakePc()}
+            className="rounded-lg bg-zinc-100 px-5 py-2.5 text-sm font-medium text-zinc-900 active:bg-zinc-300"
+          >
+            Allumer le PC
+          </button>
+        </>
+      )}
       {reach === "offline" && (
         <>
           <p className="text-lg text-zinc-100">PC hors ligne</p>
