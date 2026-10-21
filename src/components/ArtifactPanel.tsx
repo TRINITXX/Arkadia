@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
-import { ExternalLink, RotateCw, X } from "lucide-react";
+import { ExternalLink, RotateCw, Scissors, X } from "lucide-react";
 import type { ArtifactItem } from "@/lib/artifactTabs";
 import { useAnyOverlayOpen } from "@/lib/overlays";
+import { useArtifactSnip } from "@/lib/useArtifactSnip";
 
 /** Own store file: the main saveState() never rewrites it (see notepadStore). */
 const STORE_FILE = "artifact-panel.json";
@@ -47,14 +48,15 @@ interface ArtifactPanelProps {
   /** The artifacts of the active Arkadia tab, one tab of the panel each. */
   items: ArtifactItem[];
   activeKey: string;
-  /** Shown in the header when several accounts exist. */
-  accountLabel: (accountId: string) => string | null;
   onSelect: (key: string) => void;
   onCloseItem: (key: string) => void;
   /** Closes the panel: every artifact of this tab. */
   onCloseAll: () => void;
   /** The panel's width once settled (not on every step of a drag). */
   onWidthChange: (width: number) => void;
+  /** A region of the artifact is on the clipboard: paste it in Claude. */
+  onSnipped: () => void;
+  onSnipFailed: (message: string) => void;
 }
 
 /**
@@ -66,11 +68,12 @@ interface ArtifactPanelProps {
 export function ArtifactPanel({
   items,
   activeKey,
-  accountLabel,
   onSelect,
   onCloseItem,
   onCloseAll,
   onWidthChange,
+  onSnipped,
+  onSnipFailed,
 }: ArtifactPanelProps) {
   const [width, setWidth] = useState(() => clampWidth(undefined));
   const [settledWidth, setSettledWidth] = useState(width);
@@ -79,10 +82,28 @@ export function ArtifactPanel({
   const bodyRef = useRef<HTMLDivElement>(null);
   const hidden = useAnyOverlayOpen();
   const active = items.find((i) => i.key === activeKey) ?? items[0];
+  const {
+    snipping,
+    src: snipSrc,
+    region: snipRegion,
+    toggle: toggleSnip,
+    imageRef: snipImageRef,
+    layerHandlers: snipLayerHandlers,
+  } = useArtifactSnip(active?.key, onSnipped, onSnipFailed);
+  const tablistRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     widthRef.current = width;
   }, [width]);
+
+  // Tabs beyond the row scroll (wheel, no bar): the one on screen is brought
+  // into view, a new artifact being the last one.
+  useEffect(() => {
+    tablistRef.current
+      ?.querySelector('[aria-selected="true"]')
+      // The whole tab, its close button included, not only its title.
+      ?.parentElement?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [active?.key, items.length, snipping]);
 
   useEffect(() => {
     onWidthChange(settledWidth);
@@ -208,7 +229,7 @@ export function ArtifactPanel({
   };
 
   const iconButton =
-    "flex size-7 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100";
+    "flex size-7 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100";
 
   return (
     <div style={{ width }} className="flex shrink-0 bg-zinc-950">
@@ -218,11 +239,80 @@ export function ArtifactPanel({
         title="Glisser pour changer la largeur"
       />
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-zinc-800 px-3">
-          <span className="text-xs font-medium text-zinc-200">Artefacts</span>
-          <span className="flex-1 truncate text-xs text-zinc-500">
-            {active ? (accountLabel(active.accountId) ?? "") : ""}
-          </span>
+        {/* The tabs and the buttons share the top row. */}
+        <div className="flex h-9 shrink-0 items-center gap-1 border-b border-zinc-800 px-2">
+          {snipping ? (
+            <span className="min-w-0 flex-1 truncate px-1 text-xs text-zinc-200">
+              Trace la zone. Échap pour annuler.
+            </span>
+          ) : (
+            <div
+              ref={tablistRef}
+              role="tablist"
+              aria-label="Artefacts de cet onglet"
+              onWheel={(e) => {
+                e.currentTarget.scrollLeft += e.deltaY;
+              }}
+              className="flex min-w-0 flex-1 gap-0.5 self-end overflow-x-auto [scrollbar-width:none]"
+            >
+              {items.map((item) => {
+                const isActive = item.key === active?.key;
+                const label = item.title?.trim() || "Artefact";
+                return (
+                  <div
+                    key={item.key}
+                    className={`group flex min-w-24 max-w-44 items-center gap-1.5 rounded-t-md pl-2.5 pr-1 text-xs ${
+                      isActive
+                        ? "bg-[#f3f0e8] font-semibold text-zinc-900"
+                        : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      onClick={() => onSelect(item.key)}
+                      className="min-w-0 flex-1 truncate py-1.5 text-left"
+                      title={label}
+                    >
+                      {label}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onCloseItem(item.key)}
+                      className={`flex size-5 shrink-0 items-center justify-center rounded ${
+                        isActive
+                          ? "text-zinc-500 hover:bg-zinc-300 hover:text-zinc-900"
+                          : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100"
+                      }`}
+                      title="Fermer cet artefact"
+                      aria-label={`Fermer ${label}`}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => void toggleSnip()}
+            className={
+              snipping
+                ? `${iconButton} bg-[#d4af37] text-zinc-900 hover:bg-[#d4af37] hover:text-zinc-900`
+                : iconButton
+            }
+            title={
+              snipping
+                ? "Annuler la capture"
+                : "Capturer une zone et la coller dans Claude"
+            }
+            aria-label="Capturer une zone de l'artefact"
+            aria-pressed={snipping}
+          >
+            <Scissors size={14} />
+          </button>
           <button
             type="button"
             onClick={() => void invoke("artifact_view_reload").catch(() => {})}
@@ -235,16 +325,22 @@ export function ArtifactPanel({
           <button
             type="button"
             // In the Chrome profile of the artifact's account, else the
-            // default browser (`chrome_profile.rs`).
-            onClick={() =>
-              active &&
+            // default browser (`chrome_profile.rs`). Once it opened there,
+            // the artifact leaves the panel; on a failure it stays.
+            onClick={(e) => {
+              // The second click of a double-click would hit the artifact
+              // that came forward after the first one closed.
+              if (!active || e.detail > 1) return;
+              const { key, url, accountId } = active;
               void invoke("artifact_open_in_browser", {
-                url: active.url,
-                account: active.accountId,
-              }).catch(() => {})
-            }
+                url,
+                account: accountId,
+              })
+                .then(() => onCloseItem(key))
+                .catch(() => {});
+            }}
             className={iconButton}
-            title="Ouvrir dans le navigateur"
+            title="Ouvrir dans le navigateur et fermer ici"
             aria-label="Ouvrir l'artefact dans le navigateur"
           >
             <ExternalLink size={14} />
@@ -260,56 +356,43 @@ export function ArtifactPanel({
           </button>
         </div>
         <div
-          role="tablist"
-          aria-label="Artefacts de cet onglet"
-          className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-zinc-800 px-2 pt-1.5"
-        >
-          {items.map((item) => {
-            const isActive = item.key === active?.key;
-            const label = item.title?.trim() || "Artefact";
-            return (
-              <div
-                key={item.key}
-                className={`group flex min-w-0 max-w-44 shrink-0 items-center gap-1.5 rounded-t-md pl-2.5 pr-1 text-xs ${
-                  isActive
-                    ? "bg-[#f3f0e8] font-semibold text-zinc-900"
-                    : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
-                }`}
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  onClick={() => onSelect(item.key)}
-                  className="min-w-0 truncate py-1.5 text-left"
-                  title={label}
-                >
-                  {label}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onCloseItem(item.key)}
-                  className={`flex size-5 shrink-0 items-center justify-center rounded ${
-                    isActive
-                      ? "text-zinc-500 hover:bg-zinc-300 hover:text-zinc-900"
-                      : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100"
-                  }`}
-                  title="Fermer cet artefact"
-                  aria-label={`Fermer ${label}`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-        <div
           ref={bodyRef}
-          className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-zinc-500"
+          className="relative flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-zinc-500"
         >
           {error
             ? `Impossible d'afficher l'artefact : ${error}`
             : "Chargement de l'artefact…"}
+          {/* The artifact, frozen while a region is traced over it. */}
+          {snipSrc && (
+            <div
+              {...snipLayerHandlers}
+              className="absolute inset-0 cursor-crosshair touch-none select-none"
+            >
+              <img
+                ref={snipImageRef}
+                src={snipSrc}
+                alt=""
+                draggable={false}
+                className="pointer-events-none absolute inset-0 size-full"
+              />
+              {snipRegion && (
+                <div
+                  className="pointer-events-none absolute"
+                  style={{
+                    left: `${snipRegion.x * 100}%`,
+                    top: `${snipRegion.y * 100}%`,
+                    width: `${snipRegion.width * 100}%`,
+                    height: `${snipRegion.height * 100}%`,
+                    // Dark dashes edged in white: seen on light and dark pages.
+                    outline: "2px dashed #18181b",
+                    boxShadow:
+                      "0 0 0 3px rgba(255,255,255,0.85), inset 0 0 0 1px rgba(255,255,255,0.85)",
+                    background: "rgba(212,175,55,0.12)",
+                  }}
+                />
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

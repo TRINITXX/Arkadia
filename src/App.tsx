@@ -42,6 +42,7 @@ import {
   type ArtifactChange,
   type ArtifactsByTab,
 } from "@/lib/artifactTabs";
+import { snipTarget } from "@/lib/artifactSnip";
 import { SessionsOverlay } from "@/components/SessionsOverlay";
 import { Toaster, useToasts } from "@/components/Toaster";
 import {
@@ -560,6 +561,32 @@ export function App() {
       }
     },
     [],
+  );
+  // A region of the artifact is on the clipboard: Alt+V (ESC v) pastes it in
+  // the tab's Claude, as after Windows' snipping tool, and the cursor waits
+  // there for the prompt.
+  const pasteSnipInClaude = useCallback(() => {
+    const tab = artifactTabsRef.current.find(
+      (t) => t.id === activeTabIdRef.current,
+    );
+    if (!tab) return;
+    const paneId = snipTarget(
+      tab.activePaneId,
+      collectPaneIds(tab.tree),
+      claudePaneIds,
+    );
+    if (!paneId) {
+      pushToast("info", "Capture copiée : aucun Claude dans cet onglet");
+      return;
+    }
+    focusPaneElement(paneId);
+    void invoke("send_input", { sessionId: paneId, bytes: [0x1b, 0x76] }).catch(
+      () => {},
+    );
+  }, [claudePaneIds, pushToast]);
+  const onSnipFailed = useCallback(
+    (message: string) => pushToast("error", `Capture impossible : ${message}`),
+    [pushToast],
   );
   const openArtifactFor = useCallback(
     (url: string, paneId: string | null) => {
@@ -2935,12 +2962,6 @@ export function App() {
         <ArtifactPanel
           items={tabArtifacts.items}
           activeKey={tabArtifacts.activeKey}
-          accountLabel={(id) =>
-            (accounts.state?.accounts.length ?? 0) >= 2
-              ? (accounts.state?.accounts.find((a) => a.id === id)?.label ??
-                null)
-              : null
-          }
           onSelect={(key) =>
             changeArtifacts((state) => ({
               state: selectArtifact(state, activeTabId, key),
@@ -2954,6 +2975,8 @@ export function App() {
             changeArtifacts((state) => dropTab(state, activeTabId))
           }
           onWidthChange={setArtifactWidth}
+          onSnipped={pasteSnipInClaude}
+          onSnipFailed={onSnipFailed}
         />
       )}
 

@@ -2,6 +2,7 @@ mod accounts;
 mod agent_registry;
 mod ai_search;
 pub mod artifact_inbox;
+mod artifact_snip;
 mod artifact_view;
 mod chrome_profile;
 mod claude_watcher;
@@ -138,6 +139,7 @@ pub fn run() {
         .manage(sessions::SessionIndex::default())
         .manage(ai_search::AiSearchState::default())
         .manage(artifact_view::ArtifactView::default())
+        .manage(artifact_snip::ArtifactSnip::default())
         .manage(registry.clone())
         .manage(popup::PopupQueue::default())
         .manage(uiwatch::UiHealth::default())
@@ -254,6 +256,9 @@ pub fn run() {
             artifact_view::artifact_view_close,
             artifact_view::artifact_view_close_all,
             chrome_profile::artifact_open_in_browser,
+            artifact_snip::artifact_snip_grab,
+            artifact_snip::artifact_snip_copy,
+            artifact_snip::artifact_snip_cancel,
             send_input,
             resize_terminal,
             set_scrollback_cap,

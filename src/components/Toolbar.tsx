@@ -73,7 +73,9 @@ export function Toolbar({
         )}
       </button>
       {!sidepanelOpen && accountChip}
-      <div className="flex flex-1 items-center gap-1 overflow-x-auto">
+      {/* One row of whole buttons: those that do not fit wrap to a second
+          row, which is cut off, instead of a scroll bar or squeezed labels. */}
+      <div className="flex h-7 min-w-0 flex-1 flex-wrap content-start items-center gap-1 overflow-hidden [&>*]:shrink-0 [&>*]:whitespace-nowrap">
         {buttons.length === 0 && (
           <span className="text-xs text-zinc-600">
             no toolbar button — open settings to add one

@@ -194,6 +194,16 @@ fn destroy_label(app: &AppHandle, label: &str) {
     }
 }
 
+/// The window of the artifact on screen, if the panel shows one.
+pub(crate) fn active_window(app: &AppHandle, state: &ArtifactView) -> Option<WebviewWindow> {
+    let label = {
+        let inner = state.inner.lock().ok()?;
+        let key = inner.active.as_ref()?;
+        inner.windows.get(key).cloned()?
+    };
+    app.get_webview_window(&label)
+}
+
 /// Puts artifact `key` on screen, signed in as `account`: built on first
 /// show, reloaded when `reload` (the same link clicked or opened again),
 /// otherwise shown as it was left. Async, like the other commands here:
