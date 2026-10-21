@@ -20,6 +20,7 @@ export type ClientMsg =
   | { t: "resize"; pane: string; cols: number; rows: number }
   | { t: "scroll"; pane: string; delta: number }
   | { t: "wheel"; pane: string; col: number; row: number; button: 64 | 65 }
+  | { t: "click"; pane: string; col: number; row: number }
   | { t: "action"; id: number; action: RemoteAction }
   | { t: "sessions"; id: number }
   | { t: "search"; id: number; query: string }

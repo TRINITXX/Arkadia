@@ -259,6 +259,12 @@ enum ClientMsg {
         row: u16,
         button: u8,
     },
+    /// A left click (press then release) for an app that tracks the mouse.
+    Click {
+        pane: String,
+        col: u16,
+        row: u16,
+    },
     /// Something only the desktop window can do (new tab, toolbar button,
     /// account…): relayed as `remote-action`, answered by `remote_reply`.
     Action {
@@ -485,6 +491,19 @@ fn run(app: &AppHandle, msg: ClientMsg) -> Result<(), String> {
             terminal::send_mouse_event(pane, col, row, button, 0, false, true, sessions)
         }
         ClientMsg::Wheel { button, .. } => Err(format!("not a wheel button: {button}")),
+        ClientMsg::Click { pane, col, row } => {
+            terminal::send_mouse_event(
+                pane.clone(),
+                col,
+                row,
+                0,
+                0,
+                false,
+                true,
+                sessions.clone(),
+            )?;
+            terminal::send_mouse_event(pane, col, row, 0, 0, false, false, sessions)
+        }
     }
 }
 

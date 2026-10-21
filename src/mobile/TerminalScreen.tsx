@@ -16,6 +16,8 @@ import { showNotice } from "@/mobile/notice";
 import { useModernPreference } from "@/mobile/useModernPreference";
 import { footerRowCount } from "@/lib/terminalChrome";
 import { pasteData } from "@/mobile/typing";
+import { TAP_SLOP_PX, tapCell } from "@/mobile/tapCell";
+import { measureCellSize } from "@/lib/cellSize";
 import { DEFAULT_TOOL_DENSITY } from "@/types";
 import { Sheet, SheetRow } from "@/mobile/Sheet";
 import { send, useWatchedFrame, watchPane, type Status } from "@/mobile/remote";
@@ -126,6 +128,42 @@ export function TerminalScreen({
     reset: resetField,
   } = useTypingField(sendInput);
   const scroll = useScrollGestures(paneId, frameRef, rowHeight);
+  // Where the press began: a drag (a mouse selecting, on the old PC) is no
+  // click, and a mouse still focuses the field for its own keyboard.
+  const press = useRef<{ x: number; y: number; mouse: boolean } | null>(null);
+  const onGridPointerDown = (e: React.PointerEvent) => {
+    // Leaves the keyboard as it is, like the key row.
+    e.preventDefault();
+    press.current = {
+      x: e.clientX,
+      y: e.clientY,
+      mouse: e.pointerType === "mouse",
+    };
+  };
+  // A tap is a left click where it lands, sent before the screen takes the
+  // pane's size back so it hits what was shown. The keyboard opens from the
+  // key row.
+  const onGridClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const frame = frameRef.current;
+    const start = press.current;
+    press.current = null;
+    const moved =
+      !start ||
+      Math.hypot(e.clientX - start.x, e.clientY - start.y) > TAP_SLOP_PX;
+    if (!moved && paneId && frame && frame.mouse_protocol > 0) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const cellWidth = measureCellSize(TERMINAL_FONT_FAMILY, fontSize).width;
+      const cell = tapCell(
+        e.clientX - rect.left - PAD_X,
+        e.clientY - rect.top,
+        { width: cellWidth, height: rowHeight },
+        frame,
+      );
+      if (cell) send({ t: "click", pane: paneId, ...cell });
+    }
+    reclaim(frame);
+    if (start?.mouse) fieldRef.current?.focus();
+  };
   // Back online: whatever the field held may not have reached the prompt.
   useEffect(() => {
     if (status === "open") resetField();
@@ -245,10 +283,8 @@ export function TerminalScreen({
           ref={gridRef}
           className="absolute inset-0 touch-none overflow-hidden"
           style={{ backgroundColor: palette.bg }}
-          onClick={() => {
-            reclaim(frameRef.current);
-            fieldRef.current?.focus();
-          }}
+          onPointerDown={onGridPointerDown}
+          onClick={onGridClick}
           {...scroll}
         >
           <div
@@ -338,6 +374,10 @@ export function TerminalScreen({
         onKey={onKey}
         onPaste={() => void paste()}
         keyboardOpen={keyboardOpen}
+        onShowKeyboard={() => {
+          reclaim(frameRef.current);
+          fieldRef.current?.focus();
+        }}
         onHideKeyboard={() => fieldRef.current?.blur()}
       />
 
