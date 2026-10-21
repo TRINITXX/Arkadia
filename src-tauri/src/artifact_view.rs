@@ -205,7 +205,7 @@ pub(crate) fn active_window(app: &AppHandle, state: &ArtifactView) -> Option<Web
 }
 
 /// Puts artifact `key` on screen, signed in as `account`: built on first
-/// show, reloaded when `reload` (the same link clicked or opened again),
+/// show, reloaded when `reload` (Claude published it again),
 /// otherwise shown as it was left. Async, like the other commands here:
 /// building a window waits on the main thread, and no lock is held while it
 /// does, since `follow` runs there and takes the lock.

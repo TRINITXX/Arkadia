@@ -14,6 +14,28 @@ export function isArtifactUrl(url: string): boolean {
   }
 }
 
+/** The artifact's page, without query or fragment: Claude Code opens
+ *  `…/artifact/<id>?via=auto_preview`, the terminal prints the bare link, and
+ *  both must find the same tab of the panel. */
+export function artifactPageUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+/** Whether a link from the BROWSER relay is a republish: the
+ *  `artifact-refresh` Claude Code hook marks those `?arkadia=refresh`. */
+export function isRepublish(url: string): boolean {
+  try {
+    return new URL(url).searchParams.get("arkadia") === "refresh";
+  } catch {
+    return false;
+  }
+}
+
 /** `paneId` = the pane that printed the link, `null` = unknown (the main
  *  window then uses the active pane): the artifact opens in that pane's tab,
  *  signed in to its Claude account. */

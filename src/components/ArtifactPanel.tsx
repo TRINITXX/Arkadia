@@ -50,7 +50,7 @@ interface ArtifactPanelProps {
   activeKey: string;
   onSelect: (key: string) => void;
   onCloseItem: (key: string) => void;
-  /** Closes the panel: every artifact of this tab. */
+  /** Closes the panel: the artifact on screen stays loaded, hidden. */
   onCloseAll: () => void;
   /** The panel's width once settled (not on every step of a drag). */
   onWidthChange: (width: number) => void;
@@ -127,7 +127,7 @@ export function ArtifactPanel({
   }, []);
 
   // Put the active artifact on screen once the body is laid out: built the
-  // first time, reloaded when its link was opened again, else as it was left.
+  // first time, reloaded when Claude published it again, else as it was left.
   const activeItemKey = active?.key;
   const activeNonce = active?.nonce;
   useLayoutEffect(() => {
@@ -349,7 +349,7 @@ export function ArtifactPanel({
             type="button"
             onClick={onCloseAll}
             className={iconButton}
-            title="Fermer tous les artefacts de cet onglet"
+            title="Fermer le panneau (l'artefact affiché reste chargé)"
             aria-label="Fermer le panneau d'artefacts"
           >
             <X size={14} />

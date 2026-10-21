@@ -31,15 +31,22 @@ import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { NotepadPanel } from "@/components/NotepadPanel";
 import { ArtifactPanel } from "@/components/ArtifactPanel";
-import { setArtifactOpener } from "@/lib/openLink";
+import {
+  artifactPageUrl,
+  isRepublish,
+  setArtifactOpener,
+} from "@/lib/openLink";
 import { useAnyOverlayOpen } from "@/lib/overlays";
 import {
   closeArtifact,
+  closePanel,
   dropTab,
+  hasPanel,
   openArtifact,
   selectArtifact,
   setArtifactTitle,
   type ArtifactChange,
+  type OpenSource,
   type ArtifactsByTab,
 } from "@/lib/artifactTabs";
 import { snipTarget } from "@/lib/artifactSnip";
@@ -588,8 +595,10 @@ export function App() {
     (message: string) => pushToast("error", `Capture impossible : ${message}`),
     [pushToast],
   );
+  // A click only brings the artifact forward as it is; Claude publishing it
+  // (BROWSER relay) reloads it (see `openArtifact`).
   const openArtifactFor = useCallback(
-    (url: string, paneId: string | null) => {
+    (url: string, paneId: string | null, source: OpenSource = "click") => {
       const all = artifactTabsRef.current;
       const tab =
         (paneId
@@ -605,10 +614,17 @@ export function App() {
             : tab.activePaneId
         ];
       changeArtifacts((state) =>
-        openArtifact(state, tab.id, url, paneAccountId(pane?.accountId), () => {
-          artifactSeq.current += 1;
-          return `artifact-${artifactSeq.current}`;
-        }),
+        openArtifact(
+          state,
+          tab.id,
+          artifactPageUrl(url),
+          paneAccountId(pane?.accountId),
+          () => {
+            artifactSeq.current += 1;
+            return `artifact-${artifactSeq.current}`;
+          },
+          source,
+        ),
       );
     },
     [changeArtifacts],
@@ -638,7 +654,11 @@ export function App() {
       else unlisteners.push(fn);
     };
     void listen<{ paneId: string; url: string }>("artifact-open-request", (e) =>
-      openArtifactFor(e.payload.url, e.payload.paneId),
+      openArtifactFor(
+        e.payload.url,
+        e.payload.paneId,
+        isRepublish(e.payload.url) ? "republish" : "publish",
+      ),
     ).then(keep);
     void listen<{ key: string; title: string }>("artifact-title", (e) =>
       changeArtifacts((state) => ({
@@ -2702,7 +2722,8 @@ export function App() {
   useRemoteActions(handleRemoteAction);
 
   // The panel shows the artifacts of the tab on screen, if it has any.
-  const tabArtifacts = activeTabId ? artifacts[activeTabId] : undefined;
+  const tabEntry = activeTabId ? artifacts[activeTabId] : undefined;
+  const tabArtifacts = hasPanel(tabEntry) ? tabEntry : undefined;
 
   if (!loaded) {
     return (
@@ -2972,7 +2993,7 @@ export function App() {
             changeArtifacts((state) => closeArtifact(state, activeTabId, key))
           }
           onCloseAll={() =>
-            changeArtifacts((state) => dropTab(state, activeTabId))
+            changeArtifacts((state) => closePanel(state, activeTabId))
           }
           onWidthChange={setArtifactWidth}
           onSnipped={pasteSnipInClaude}
