@@ -17,6 +17,8 @@ Lu par toute review de ce repo. Une remarque de review qui revient s'ajoute ici.
 - **`BROWSER` des panes** : gh, Python et d'autres le découpent comme une commande shell. Chemin sans espace et en barres obliques `/` ; tout argument unique qui ne commence pas par `--` s'ouvre comme sans `BROWSER`, jamais en lançant un second Arkadia.
 - **Fonctions `unstable` de Tauri** : elles rendent toute fenêtre multi-vues, ce qui casse `get_webview_window("main")` et le focus clavier (relecture du 18/10/2026). Ne pas les activer.
 - **Liens et chemins cliquables** : un chemin coupé par un retour à la ligne, des espaces insécables, des crochets ou des guillemets qui n'ouvre plus rien (5 correctifs passés).
+- **Téléphone et PC éteint** : un PC éteint fait pendre les connexions au lieu de les refuser. Toute attente du téléphone vers le PC (socket, gate, cache hors ligne de `public/sw.js`) a un délai, sinon l'app reste blanche ou en attente (21/10/2026).
+- **Cache hors ligne du téléphone** (`public/sw.js`) : la page en cache ne cite jamais un fichier absent du cache (la page s'écrit en dernier), et toute écriture de cache passe par `waitUntil`. Changer ce comportement change aussi le nom du cache, pour que les téléphones repartent d'un cache propre.
 - **Rendu WebGPU** : un device par pane ou plusieurs présentations par frame (perte du device).
 - **Fond « glass »** : un menu ou une vue de lecture qui devient transparent.
 

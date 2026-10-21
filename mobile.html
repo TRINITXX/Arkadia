@@ -16,9 +16,30 @@
     <link rel="apple-touch-icon" href="/mobile/icon-180.png" />
     <link rel="manifest" href="/mobile/manifest.webmanifest" />
     <title>Arkadia</title>
+    <!-- Dark before the bundle loads: a page stuck there reads as such, not as a blank screen. -->
+    <style>
+      html,
+      body {
+        background: #0a0a0a;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <p
+        style="
+          margin-top: 45vh;
+          text-align: center;
+          font:
+            14px -apple-system,
+            system-ui,
+            sans-serif;
+          color: #71717a;
+        "
+      >
+        Chargement…
+      </p>
+    </div>
     <script type="module" src="/src/mobile/main.tsx"></script>
   </body>
 </html>

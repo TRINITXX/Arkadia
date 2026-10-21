@@ -71,6 +71,12 @@ const SEARCH_TIMEOUT_MS = 90_000;
 const STARTING_GRACE_MS = 30_000;
 /** How often a wake asks the relay, then the gate, how far the PC got. */
 const WAKE_POLL_MS = 2000;
+/**
+ * A PC that is off leaves connections hanging instead of refusing them: past
+ * these, the socket gives up and the gate counts as silent.
+ */
+const CONNECT_TIMEOUT_MS = 5000;
+const GATE_TIMEOUT_MS = 4000;
 
 let socket: WebSocket | null = null;
 let retryMs = 500;
@@ -84,6 +90,7 @@ let view: RemoteView = {
 let wakeTimer: ReturnType<typeof setTimeout> | null = null;
 let wakeRun = 0;
 let probeRun = 0;
+let probing = false;
 let watched: string | null = null;
 let frame: RenderPayload | null = null;
 let startingSince = 0;
@@ -124,8 +131,22 @@ function gateUrl(path: string): string {
   return host ? `http://${host}${path}` : `/gate${path}`;
 }
 
-/** Asks the gate why the socket is down. */
+/**
+ * Asks the gate why the socket is down. One at a time: with the PC off a
+ * probe lasts up to gate plus relay timeouts, longer than a reconnect cycle,
+ * and each newer probe would make the last one stale before it answered.
+ */
 async function probeGate() {
+  if (probing) return;
+  probing = true;
+  try {
+    await probeGateOnce();
+  } finally {
+    probing = false;
+  }
+}
+
+async function probeGateOnce() {
   const run = ++probeRun;
   // A newer probe, an open socket or Arkadia starting: this one is stale.
   const stale = () =>
@@ -135,7 +156,10 @@ async function probeGate() {
       Date.now() - startingSince < STARTING_GRACE_MS);
   if (stale()) return;
   try {
-    const res = await window.fetch(gateUrl("/status"), { cache: "no-store" });
+    const res = await window.fetch(gateUrl("/status"), {
+      cache: "no-store",
+      signal: AbortSignal.timeout(GATE_TIMEOUT_MS),
+    });
     if (stale()) return;
     // No gate behind Tailscale: the PC is there, its state is not known.
     if (!res.ok) return setView({ reach: "unknown" });
@@ -150,8 +174,32 @@ async function probeGate() {
     if (stale()) return;
     const wake = wakeAfterLostGate(view.wake);
     if (wake !== view.wake) stopWake();
-    setView({ reach: online === false ? "off" : "offline", wake });
+    // A relay that does not answer this time takes nothing back from « off ».
+    const off = online === false || (online === null && view.reach === "off");
+    setView({ reach: off ? "off" : "offline", wake });
   }
+}
+
+/**
+ * Asks the relay right away, alongside the socket: it answers in a moment,
+ * where a PC that is off leaves the socket hanging for CONNECT_TIMEOUT_MS.
+ * Only ever says « off »; the socket opening still wins.
+ */
+async function askRelayEarly() {
+  const relay = loadRelay();
+  // A probe under way asks the relay itself; a gate that answered (« closed »)
+  // knows better than a relay still catching up with Tailscale.
+  const settled = () =>
+    !!view.wake ||
+    probing ||
+    view.reach === "closed" ||
+    (view.reach === "starting" &&
+      Date.now() - startingSince < STARTING_GRACE_MS);
+  if (!relay || settled()) return;
+  const run = probeRun;
+  if ((await pcOnline(relay)) !== false) return;
+  if (run === probeRun && socket?.readyState !== WebSocket.OPEN && !settled())
+    setView({ reach: "off" });
 }
 
 /** Wakes the PC through the relay, then follows it until Windows answers. */
@@ -199,7 +247,7 @@ async function gateSaysArkadia(): Promise<boolean | null> {
   try {
     const res = await window.fetch(gateUrl("/status"), {
       cache: "no-store",
-      signal: AbortSignal.timeout(WAKE_POLL_MS * 2),
+      signal: AbortSignal.timeout(GATE_TIMEOUT_MS),
     });
     if (!res.ok) return null;
     return ((await res.json()) as { arkadia: boolean }).arkadia;
@@ -222,12 +270,18 @@ function stopWake() {
 /** Has the gate start Arkadia; the socket reconnects once it is up. */
 export async function openArkadia(): Promise<void> {
   stopWake();
-  startingSince = Date.now();
+  const since = Date.now();
+  startingSince = since;
   setView({ reach: "starting", wake: null });
   try {
-    await window.fetch(gateUrl("/open"), { method: "POST" });
+    await window.fetch(gateUrl("/open"), {
+      method: "POST",
+      signal: AbortSignal.timeout(GATE_TIMEOUT_MS),
+    });
   } catch {
-    setView({ reach: "offline" });
+    // Only if nothing newer was learned meanwhile.
+    if (view.reach === "starting" && startingSince === since)
+      setView({ reach: "offline" });
   }
 }
 
@@ -236,7 +290,13 @@ function connect() {
   retryTimer = null;
   const ws = new WebSocket(socketUrl());
   socket = ws;
+  // Closing a socket still connecting fires `onclose`, which asks the gate.
+  const giveUp = setTimeout(() => {
+    if (ws.readyState === WebSocket.CONNECTING) ws.close();
+  }, CONNECT_TIMEOUT_MS);
+  void askRelayEarly();
   ws.onopen = () => {
+    clearTimeout(giveUp);
     retryMs = 500;
     stopWake();
     setView({ status: "open", reach: "unknown", wake: null });
@@ -264,6 +324,7 @@ function connect() {
     else if (msg.t === "error") console.warn("[arkadia]", msg.message);
   };
   ws.onclose = () => {
+    clearTimeout(giveUp);
     if (socket !== ws) return;
     socket = null;
     for (const p of pending.values())
