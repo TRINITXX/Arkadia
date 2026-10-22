@@ -83,6 +83,11 @@ const RESET_MARGIN_S: f64 = 60.0;
 const HELLO_RETRY: Duration = Duration::from_secs(10 * 60);
 const HELLO_RETRY_MAX: Duration = Duration::from_secs(5 * 3600);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(60);
+/// The usage endpoint lists a new window a few seconds late (measured: not
+/// yet 4 s after the hello, there 20 s after): one read every this long, for
+/// about 30 s in all.
+const READ_BACK_EVERY: Duration = Duration::from_secs(10);
+const READ_BACK_TRIES: u32 = 3;
 
 /// Serialises every read-modify-write of the registry and of the shared files.
 static LOCK: Mutex<()> = Mutex::new(());
@@ -913,6 +918,21 @@ fn send_hello(id: &str) -> bool {
     }
 }
 
+/// Reads the usage back after a hello until the new window shows, so the
+/// account displays its next reset. False when it never shows.
+fn read_back_window(id: &str) -> bool {
+    for _ in 0..READ_BACK_TRIES {
+        std::thread::sleep(READ_BACK_EVERY);
+        if let Some(usage) = poll_usage(id) {
+            store_usage(id, &usage);
+            if !needs_window(Some(&usage), (now_ms() / 1000) as f64) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Background loop: every account whose usage is older than 30 min (no live
 /// session reporting it) gets one poll, at most once per 30 min per account.
 /// Then every signed-in account with no 5-hour window running gets a hello.
@@ -941,7 +961,8 @@ pub fn spawn_usage_poller() {
                 }
             }
             for id in &ids {
-                // Each hello can take up to a minute: the clock is read per account.
+                // A hello and its read-back can take two minutes: the clock is
+                // read per account.
                 let now = now_ms();
                 if !needs_window(stored_usage(id).as_ref(), (now / 1000) as f64) {
                     hello_misses.remove(id);
@@ -952,12 +973,7 @@ pub fn spawn_usage_poller() {
                 if waiting || !logged_in(id) {
                     continue;
                 }
-                // Read the new window back, so the account shows its next reset.
-                let opened = send_hello(id)
-                    && poll_usage(id).is_some_and(|usage| {
-                        store_usage(id, &usage);
-                        !needs_window(Some(&usage), (now_ms() / 1000) as f64)
-                    });
+                let opened = send_hello(id) && read_back_window(id);
                 if opened {
                     hello_misses.remove(id);
                 } else {
@@ -1257,11 +1273,15 @@ mod tests {
     #[ignore]
     fn real_hello_opens_a_window() {
         let id = std::env::var("ARKADIA_HELLO_ACCOUNT").unwrap_or_else(|_| MAIN_ID.into());
+        let sent_at = (now_ms() / 1000) as f64;
         assert!(send_hello(&id), "the CLI did not answer");
-        let usage = poll_usage(&id).expect("usage endpoint unreachable");
-        let resets_at = usage.five_hour.and_then(|w| w.resets_at).expect("no window");
-        let hours = (resets_at - (now_ms() / 1000) as f64) / 3600.0;
-        println!("next reset in {hours:.2} h");
-        assert!(hours > 4.9, "the hello opened no new window");
+        assert!(read_back_window(&id), "no window after the hello");
+        let usage = stored_usage(&id).expect("usage not stored");
+        let resets_at = usage.five_hour.and_then(|w| w.resets_at).unwrap();
+        let hours = (resets_at - sent_at) / 3600.0;
+        println!("hello at {sent_at}, next reset {resets_at} ({hours:.3} h later)");
+        // A window starts at the 20-minute slot of its first message: its
+        // reset comes 4 h 40 to 5 h after the hello.
+        assert!(hours > 4.6, "the hello opened no new window");
     }
 }
