@@ -13,14 +13,16 @@
 //!
 //! Usage (5-hour / weekly %) lands in `%LOCALAPPDATA%\Arkadia\usage\<id>.json`:
 //! written live by the status-line script of a running session, otherwise
-//! polled from the subscription usage endpoint every 30 min.
+//! polled from the subscription usage endpoint every 30 min. A signed-in
+//! account with no 5-hour window running gets a one-word headless message,
+//! so its next window starts at once instead of at its next real message.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -73,6 +75,14 @@ const SEEDED_PREFS: &[&str] = &[
 const POLL_EVERY: Duration = Duration::from_secs(30 * 60);
 /// Live data older than this no longer counts as live (the UI greys it).
 const STALE_AFTER_MS: i64 = 40 * 60 * 1000;
+/// A reset counts only this long after its announced time: a hello sent at
+/// that very second could land in the window that is ending.
+const RESET_MARGIN_S: f64 = 60.0;
+/// Pause after a hello whose window no fresh read confirms (refused, signed
+/// out, endpoint down): it doubles with each miss in a row, up to the max.
+const HELLO_RETRY: Duration = Duration::from_secs(10 * 60);
+const HELLO_RETRY_MAX: Duration = Duration::from_secs(5 * 3600);
+const HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Serialises every read-modify-write of the registry and of the shared files.
 static LOCK: Mutex<()> = Mutex::new(());
@@ -827,12 +837,91 @@ fn poll_usage(id: &str) -> Option<Usage> {
     })
 }
 
+/// Usage as last stored, passed resets included.
+fn stored_usage(id: &str) -> Option<Usage> {
+    serde_json::from_value(read_json(&usage_path(id))?).ok()
+}
+
+fn store_usage(id: &str, usage: &Usage) {
+    if let Ok(value) = serde_json::to_value(usage) {
+        let _ = write_json(&usage_path(id), &value);
+    }
+}
+
+/// Whether the account has no 5-hour window running. No data counts as no
+/// window: a hello sent where one already runs costs next to nothing. The
+/// weekly limit is not checked (the endpoint leaves `seven_day` empty): a
+/// hello it refuses is a miss, and misses space out (see [`hello_pause_ms`]).
+fn needs_window(usage: Option<&Usage>, now_s: f64) -> bool {
+    let resets_at = usage.and_then(|u| u.five_hour.as_ref()).and_then(|w| w.resets_at);
+    !resets_at.is_some_and(|r| r + RESET_MARGIN_S > now_s)
+}
+
+/// Pause before the next hello after `misses` hellos in a row opened no window.
+fn hello_pause_ms(misses: u32) -> i64 {
+    let first = HELLO_RETRY.as_millis() as i64;
+    let doublings = misses.saturating_sub(1).min(16);
+    (first << doublings).min(HELLO_RETRY_MAX.as_millis() as i64)
+}
+
+/// One tiny headless message as account `id`: the first message after a reset
+/// opens the next 5-hour window. Hooks are off (the Stop hook would ring
+/// "Claude finished"), and so are tools, MCP servers and the transcript.
+fn send_hello(id: &str) -> bool {
+    let Some(bin) = crate::ai_search::claude_binary() else {
+        return false;
+    };
+    let cwd = arkadia_dir().join("quota-ping");
+    let _ = fs::create_dir_all(&cwd);
+    let mut cmd = Command::new(bin);
+    match secondary_dir(id) {
+        Some(dir) => cmd.env("CLAUDE_CONFIG_DIR", dir),
+        None => cmd.env_remove("CLAUDE_CONFIG_DIR"),
+    };
+    cmd.current_dir(&cwd)
+        .args(["-p", "--model", "haiku", "--no-session-persistence"])
+        .args(["--tools", "", "--strict-mcp-config", "--mcp-config"])
+        .arg(r#"{"mcpServers":{}}"#)
+        .args(["--settings", r#"{"disableAllHooks":true}"#])
+        // The prompt follows a one-value option: after a list option such as
+        // `--tools`, it would be read as one more item of the list.
+        .args(["--system-prompt", "Reply with one word.", "hello"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let Ok(mut child) = cmd.spawn() else {
+        return false;
+    };
+    let deadline = Instant::now() + HELLO_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(500))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+}
+
 /// Background loop: every account whose usage is older than 30 min (no live
 /// session reporting it) gets one poll, at most once per 30 min per account.
+/// Then every signed-in account with no 5-hour window running gets a hello.
 pub fn spawn_usage_poller() {
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_secs(15));
         let mut last_attempt: HashMap<String, i64> = HashMap::new();
+        // Per account: time of the last missed hello, misses in a row.
+        let mut hello_misses: HashMap<String, (i64, u32)> = HashMap::new();
         loop {
             let ids: Vec<String> = {
                 let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -840,19 +929,40 @@ pub fn spawn_usage_poller() {
             };
             let now = now_ms();
             let every = POLL_EVERY.as_millis() as i64;
-            for id in ids {
-                let fresh = read_json(&usage_path(&id))
-                    .and_then(|v| serde_json::from_value::<Usage>(v).ok())
-                    .is_some_and(|u| now - u.updated_at < every);
-                let tried = last_attempt.get(&id).is_some_and(|t| now - t < every);
+            for id in &ids {
+                let fresh = stored_usage(id).is_some_and(|u| now - u.updated_at < every);
+                let tried = last_attempt.get(id).is_some_and(|t| now - t < every);
                 if fresh || tried {
                     continue;
                 }
                 last_attempt.insert(id.clone(), now);
-                if let Some(usage) = poll_usage(&id) {
-                    if let Ok(value) = serde_json::to_value(&usage) {
-                        let _ = write_json(&usage_path(&id), &value);
-                    }
+                if let Some(usage) = poll_usage(id) {
+                    store_usage(id, &usage);
+                }
+            }
+            for id in &ids {
+                // Each hello can take up to a minute: the clock is read per account.
+                let now = now_ms();
+                if !needs_window(stored_usage(id).as_ref(), (now / 1000) as f64) {
+                    hello_misses.remove(id);
+                    continue;
+                }
+                let misses = hello_misses.get(id).copied();
+                let waiting = misses.is_some_and(|(at, n)| now - at < hello_pause_ms(n));
+                if waiting || !logged_in(id) {
+                    continue;
+                }
+                // Read the new window back, so the account shows its next reset.
+                let opened = send_hello(id)
+                    && poll_usage(id).is_some_and(|usage| {
+                        store_usage(id, &usage);
+                        !needs_window(Some(&usage), (now_ms() / 1000) as f64)
+                    });
+                if opened {
+                    hello_misses.remove(id);
+                } else {
+                    let n = misses.map_or(0, |(_, n)| n);
+                    hello_misses.insert(id.clone(), (now, n + 1));
                 }
             }
             std::thread::sleep(Duration::from_secs(60));
@@ -1112,5 +1222,46 @@ mod tests {
         let mut own = json!({"autoMemoryDirectory": "D:/notes"});
         assert!(!with_memory_dir(&mut own, b));
         assert_eq!(own["autoMemoryDirectory"], "D:/notes");
+    }
+
+    #[test]
+    fn a_hello_is_due_only_with_no_window_running() {
+        let usage = |pct, resets_at| Usage {
+            five_hour: Some(UsageWindow { pct, resets_at }),
+            ..Default::default()
+        };
+        let now = 1_000_000.0;
+        assert!(needs_window(None, now));
+        assert!(needs_window(Some(&Usage::default()), now));
+        assert!(needs_window(Some(&usage(0.0, None)), now));
+        assert!(!needs_window(Some(&usage(100.0, Some(now + 600.0))), now));
+        // Reset ten seconds ago: the margin is not over yet.
+        assert!(!needs_window(Some(&usage(100.0, Some(now - 10.0))), now));
+        assert!(needs_window(Some(&usage(100.0, Some(now - 120.0))), now));
+    }
+
+    #[test]
+    fn missed_hellos_space_out_up_to_five_hours() {
+        let min = 60 * 1000;
+        assert_eq!(hello_pause_ms(1), 10 * min);
+        assert_eq!(hello_pause_ms(2), 20 * min);
+        assert_eq!(hello_pause_ms(5), 160 * min);
+        assert_eq!(hello_pause_ms(6), 300 * min);
+        assert_eq!(hello_pause_ms(u32::MAX), 300 * min);
+    }
+
+    /// Sends one real message. Run it on an account with no window running
+    /// (right after its reset): `ARKADIA_HELLO_ACCOUNT=<id> cargo test --release
+    /// --lib -- --ignored --nocapture real_hello_opens_a_window` (main by default).
+    #[test]
+    #[ignore]
+    fn real_hello_opens_a_window() {
+        let id = std::env::var("ARKADIA_HELLO_ACCOUNT").unwrap_or_else(|_| MAIN_ID.into());
+        assert!(send_hello(&id), "the CLI did not answer");
+        let usage = poll_usage(&id).expect("usage endpoint unreachable");
+        let resets_at = usage.five_hour.and_then(|w| w.resets_at).expect("no window");
+        let hours = (resets_at - (now_ms() / 1000) as f64) / 3600.0;
+        println!("next reset in {hours:.2} h");
+        assert!(hours > 4.9, "the hello opened no new window");
     }
 }

@@ -137,7 +137,7 @@ pub fn workspace_dir() -> Option<PathBuf> {
 
 /// The `claude` executable. `PATH` is not enough: an app started from Explorer
 /// does not inherit the shell's, and the binary lives in `~/.local/bin`.
-fn claude_binary() -> Option<PathBuf> {
+pub(crate) fn claude_binary() -> Option<PathBuf> {
     let mut roots = Vec::new();
     if let Some(home) = dirs::home_dir() {
         roots.push(home.join(".local").join("bin"));
