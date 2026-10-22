@@ -39,6 +39,7 @@ import {
 import { useAnyOverlayOpen } from "@/lib/overlays";
 import {
   closeArtifact,
+  closeArtifactByKey,
   closePanel,
   dropTab,
   hasPanel,
@@ -659,6 +660,11 @@ export function App() {
         e.payload.paneId,
         isRepublish(e.payload.url) ? "republish" : "publish",
       ),
+    ).then(keep);
+    // The artifact's reply reached Claude (`artifact_view.rs`'s bridge): it
+    // leaves the panel, parked like any closed artifact.
+    void listen<string>("artifact-sent", (e) =>
+      changeArtifacts((state) => closeArtifactByKey(state, e.payload)),
     ).then(keep);
     void listen<{ key: string; title: string }>("artifact-title", (e) =>
       changeArtifacts((state) => ({

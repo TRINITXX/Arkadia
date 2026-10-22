@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   MAX_ARTIFACTS_PER_TAB,
   closeArtifact,
+  closeArtifactByKey,
   closePanel,
   dropTab,
   hasPanel,
@@ -270,5 +271,31 @@ describe("artifact tabs", () => {
     expect(setArtifactTitle(state, "k1", "Kit visuel").t1.items[0].title).toBe(
       "Kit visuel",
     );
+  });
+
+  it("closes an artifact that reports its reply sent, in its own tab", () => {
+    const next = keys();
+    let state = openArtifact(
+      {},
+      "t1",
+      "https://claude.ai/artifact/a",
+      "main",
+      next,
+      "click",
+    ).state;
+    state = openArtifact(
+      state,
+      "t2",
+      "https://claude.ai/artifact/b",
+      "main",
+      next,
+      "click",
+    ).state;
+    const sent = closeArtifactByKey(state, "k2");
+    expect(hasPanel(sent.state.t2)).toBe(false);
+    expect(sent.state.t2.parked?.key).toBe("k2");
+    expect(hasPanel(sent.state.t1)).toBe(true);
+    // Already closed: nothing more happens.
+    expect(closeArtifactByKey(sent.state, "k2").state).toBe(sent.state);
   });
 });

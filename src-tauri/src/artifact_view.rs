@@ -149,6 +149,28 @@ fn data_dir(key: &str) -> PathBuf {
         .join(key)
 }
 
+/// Host of the signal an artifact sends once a reply went to Claude: a link
+/// that never loads (`.invalid`), caught by `on_new_window`.
+const SENT_HOST: &str = "arkadia.invalid";
+
+/// Runs in claude.ai's page and in the artifact's frames. The artifact kit
+/// (`artefact-visuel`) fires `k:sent` once a reply reached Claude; the frame
+/// passes it up to claude.ai's page, which opens the signal link. A window,
+/// not a navigation: leaving claude.ai's page could ask to confirm.
+const SENT_BRIDGE: &str = r#"(() => {
+  if (window.top === window) {
+    addEventListener('message', (e) => {
+      if (e.data && e.data.arkadia === 'k:sent') window.open('https://arkadia.invalid/artifact-sent');
+    });
+  } else {
+    addEventListener('k:sent', () => window.top.postMessage({ arkadia: 'k:sent' }, '*'));
+  }
+})();"#;
+
+fn is_sent_signal(url: &Url) -> bool {
+    url.host_str() == Some(SENT_HOST)
+}
+
 fn open_outside(url: &Url) {
     let _ = open::that_detached(url.as_str());
 }
@@ -268,6 +290,8 @@ pub async fn artifact_view_show(
     let label = format!("{LABEL_PREFIX}{ticket}");
     let title_app = app.clone();
     let title_key = key.clone();
+    let sent_app = app.clone();
+    let sent_key = key.clone();
     let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
         .parent(&main)
         .map_err(|e| e.to_string())?
@@ -296,7 +320,13 @@ pub async fn artifact_view_show(
             }
             keep
         })
-        .on_new_window(|url, _features| {
+        .initialization_script_for_all_frames(SENT_BRIDGE)
+        .on_new_window(move |url, _features| {
+            // The artifact sent its reply to Claude: the panel closes it.
+            if is_sent_signal(&url) {
+                let _ = sent_app.emit_to("main", "artifact-sent", sent_key.clone());
+                return NewWindowResponse::Deny;
+            }
             // Sign-in popups stay in WebView2; any other link opens outside.
             if stays_in_panel(&url) {
                 NewWindowResponse::Allow
@@ -540,6 +570,16 @@ mod tests {
         assert!(!stays_in_panel(&url("https://github.com/TRINITXX")));
         assert!(!stays_in_panel(&url("https://evilclaude.ai/")));
         assert!(!stays_in_panel(&url("http://claude.ai/")));
+    }
+
+    #[test]
+    fn the_bridge_opens_the_link_the_panel_catches() {
+        let link = SENT_BRIDGE
+            .split('\'')
+            .find(|s| s.starts_with("https://"))
+            .unwrap();
+        assert!(is_sent_signal(&url(link)));
+        assert!(!is_sent_signal(&url("https://claude.ai/artifact/x")));
     }
 
     #[test]

@@ -162,6 +162,18 @@ export function dropTab(state: ArtifactsByTab, tabId: string): ArtifactChange {
   return { state: next, closed: keys };
 }
 
+/** Closes artifact `key` in whichever tab shows it (it reported itself, by
+ *  its key alone); nothing when no tab shows it any more. */
+export function closeArtifactByKey(
+  state: ArtifactsByTab,
+  key: string,
+): ArtifactChange {
+  const tabId = Object.keys(state).find((id) =>
+    state[id].items.some((i) => i.key === key),
+  );
+  return tabId ? closeArtifact(state, tabId, key) : { state, closed: [] };
+}
+
 export function setArtifactTitle(
   state: ArtifactsByTab,
   key: string,
