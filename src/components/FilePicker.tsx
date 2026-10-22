@@ -108,6 +108,10 @@ interface FilePickerProps {
   /** Types the paths into the pane and closes; empty selections never reach it. */
   onInsert: (paths: string[]) => void;
   onClose: () => void;
+  /** Height of the panel's bottom above the rail's stack bottom, in px. */
+  bottom: number;
+  /** Room left above that bottom in the pane: the list shrinks to fit it. */
+  maxHeight: number;
 }
 
 /**
@@ -122,7 +126,12 @@ interface FilePickerProps {
  * the terminal afterwards. Closing on an outside click is the rail's job, since
  * its own button sits outside this subtree.
  */
-export function FilePicker({ onInsert, onClose }: FilePickerProps) {
+export function FilePicker({
+  onInsert,
+  onClose,
+  bottom,
+  maxHeight,
+}: FilePickerProps) {
   // The artifact page steps aside while this layer is open.
   useOverlay();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -311,11 +320,15 @@ export function FilePicker({ onInsert, onClose }: FilePickerProps) {
       // The rail blocks mousedown to keep the terminal focused; this panel wants
       // the focus, so its clicks must not reach that handler.
       onMouseDown={(e) => e.stopPropagation()}
-      className="pointer-events-auto absolute bottom-full right-0 mb-2 w-[512px] rounded border border-zinc-800 bg-zinc-950 p-2.5 shadow-xl outline-none"
+      // Beside the button column rather than above it: the column grows with
+      // each button, and stacking on top of it pushed the panel past the pane's
+      // top edge, which clips it.
+      className="pointer-events-auto absolute right-full mr-1 flex w-[512px] flex-col rounded border border-zinc-800 bg-zinc-950 p-2.5 shadow-xl outline-none"
+      style={{ bottom, maxHeight }}
       role="dialog"
       aria-label="Fichiers récents"
     >
-      <div className="mb-2 flex items-center gap-1" role="tablist">
+      <div className="mb-2 flex shrink-0 items-center gap-1" role="tablist">
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -352,7 +365,7 @@ export function FilePicker({ onInsert, onClose }: FilePickerProps) {
           key={tab}
           ref={scrollRef}
           onScroll={onScroll}
-          className="scrollbar-none max-h-80 overflow-y-auto"
+          className="scrollbar-none max-h-80 min-h-0 overflow-y-auto"
         >
           {tab === "photos" ? (
             <div className="grid grid-cols-5 gap-1.5">
@@ -398,7 +411,7 @@ export function FilePicker({ onInsert, onClose }: FilePickerProps) {
       )}
       {preview && <ImageHoverPreview preview={preview} elRef={previewElRef} />}
 
-      <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-zinc-800 pt-2">
+      <div className="mt-2.5 flex shrink-0 items-center justify-between gap-3 border-t border-zinc-800 pt-2">
         <span className="truncate text-[11px] text-zinc-500">
           {selected.length === 0
             ? "Clic pour sélectionner · Tab pour changer d'onglet · Échap pour fermer"

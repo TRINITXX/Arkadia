@@ -245,6 +245,8 @@ export function PaneInputRail({
   // Height between the pane's top edge and the stack's bottom: past it the
   // column wraps (`flex-wrap-reverse` keeps Enter's column on the right).
   const stackRoom = pad + (row + 1) * cellH - stackBottom - TOP_GAP_PX;
+  // The picker sits on the `❯` row's top edge, so the prompt stays readable.
+  const pickerBottom = cellH - stackBottom;
 
   return (
     <div
@@ -265,7 +267,14 @@ export function PaneInputRail({
         className="absolute right-0 flex flex-col-reverse flex-wrap-reverse items-center gap-1"
         style={{ bottom: stackBottom, maxHeight: stackRoom }}
       >
-        {picking && <FilePicker onInsert={insertFiles} onClose={closePicker} />}
+        {picking && (
+          <FilePicker
+            onInsert={insertFiles}
+            onClose={closePicker}
+            bottom={pickerBottom}
+            maxHeight={stackRoom - pickerBottom}
+          />
+        )}
         <button
           type="button"
           onClick={() => send([0x0d])}
