@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inputRowIndex } from "@/lib/terminalChrome";
+import { inputRowIndex, isPromptField } from "@/lib/terminalChrome";
 import type { CellRun, RenderPayload } from "@/types";
 
 function run(text: string): CellRun {
@@ -56,5 +56,28 @@ describe("inputRowIndex", () => {
   it("reports -1 with no prompt on screen (plain shell) and no frame at all", () => {
     expect(inputRowIndex(screenOf(["PS C:\\> ", "hello"]))).toBe(-1);
     expect(inputRowIndex(null)).toBe(-1);
+  });
+});
+
+describe("isPromptField", () => {
+  it("accepts the `❯` row under the box's top border, both border styles", () => {
+    expect(
+      isPromptField(screenOf(["● done", "────────", "❯ draft", "────────"])),
+    ).toBe(true);
+    expect(isPromptField(screenOf(["╭──────╮", "❯ /rc", "╰──────╯"]))).toBe(
+      true,
+    );
+  });
+
+  it("rejects an earlier message shown without the input box", () => {
+    expect(
+      isPromptField(screenOf(["● done", "", "❯ my previous message", ""])),
+    ).toBe(false);
+  });
+
+  it("rejects a selector's highlighted choice, even inside a box", () => {
+    expect(isPromptField(screenOf(["────────", "❯ 1. Yes", "  2. No"]))).toBe(
+      false,
+    );
   });
 });

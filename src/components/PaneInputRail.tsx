@@ -4,6 +4,7 @@ import {
   Check,
   CornerDownLeft,
   Copy,
+  Eraser,
   Images,
   MessagesSquare,
   Mic,
@@ -15,7 +16,8 @@ import { copiedCodeMessage } from "@/lib/codeCopy";
 import { usePaneFrameSelector } from "@/lib/frameStore";
 import { focusPaneElement } from "@/lib/paneFocus";
 import { quotePathsForPrompt } from "@/lib/pickerPrompt";
-import { inputRowIndex } from "@/lib/terminalChrome";
+import { CLEAR_CHUNK_GAP_MS, clearPromptChunks } from "@/lib/promptClear";
+import { inputRowIndex, isPromptField } from "@/lib/terminalChrome";
 import type { TerminalFont } from "@/types";
 
 /**
@@ -33,6 +35,9 @@ const MAX_TALK_MS = 10 * 60 * 1000;
 /** Side of a rail button (Tailwind `size-6`), needed to centre the stack. */
 const BUTTON_PX = 24;
 
+/** Gap kept between the stack's top and the pane's top edge. */
+const TOP_GAP_PX = 4;
+
 /** How long the copy button holds its ✓ before going back to its icon. */
 const COPIED_MS = 1200;
 
@@ -45,17 +50,19 @@ interface PaneInputRailProps {
 }
 
 /**
- * Five keyboard-free actions for the active pane: show the prompts and replies
+ * Six keyboard-free actions for the active pane: show the prompts and replies
  * alone (the display mod hides the rest), pick files from the camera roll or the
  * downloads folder, hold/release space for voice dictation (click to start,
- * click to stop), copy the last code block Claude wrote, and send the typed
- * prompt (Enter).
+ * click to stop), copy the last code block Claude wrote, erase the typed prompt,
+ * and send it (Enter).
  *
  * Stacked vertically against the right edge rather than laid out in a row, so
  * they cover one column of Claude Code's input box instead of three — a long
  * prompt used to run underneath them and become unreadable. Enter keeps the spot
  * it has always had, level with the `❯` line, and the others climb above it;
- * growing downwards would land on the hint row under the box.
+ * growing downwards would land on the hint row under the box. In a pane too
+ * short for the whole column, the top buttons wrap into a second column to
+ * the left rather than climb past the pane's edge, which clips them.
  *
  * Hidden whenever the pane shows no `❯` input line — except while dictating,
  * when Claude Code replaces that line with its recording UI.
@@ -67,6 +74,7 @@ export function PaneInputRail({
   onToast,
 }: PaneInputRailProps) {
   const rowIdx = usePaneFrameSelector(paneId, inputRowIndex);
+  const canClear = usePaneFrameSelector(paneId, isPromptField);
   const [talking, setTalking] = useState(false);
   const [picking, setPicking] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -78,6 +86,9 @@ export function PaneInputRail({
   const capRef = useRef(0);
   // Timer resetting the copy button's ✓.
   const copiedRef = useRef(0);
+  // A burst of erase keys is on its way: a second click would interleave its
+  // writes and could merge them into one read Claude Code takes for a paste.
+  const clearingRef = useRef(false);
 
   const send = useCallback(
     (bytes: number[]) => {
@@ -143,6 +154,30 @@ export function PaneInputRail({
     copiedRef.current = window.setTimeout(() => setCopied(false), COPIED_MS);
   }, [paneId, onToast]);
 
+  /**
+   * Empties Claude Code's prompt. Writes go one at a time, awaited and spaced,
+   * so they reach Claude Code in order and as separate reads. Runs to the end
+   * even if the rail unmounts meanwhile: it acts on the pane, not on React
+   * state. The first failed write (pane closed) stops it.
+   */
+  const clearPrompt = useCallback(async () => {
+    if (clearingRef.current) return;
+    clearingRef.current = true;
+    try {
+      const chunks = clearPromptChunks();
+      for (const [i, bytes] of chunks.entries()) {
+        if (i > 0) {
+          await new Promise((r) => window.setTimeout(r, CLEAR_CHUNK_GAP_MS));
+        }
+        await invoke("send_input", { sessionId: paneId, bytes });
+      }
+    } catch (e) {
+      onToast?.("error", String(e));
+    } finally {
+      clearingRef.current = false;
+    }
+  }, [paneId, onToast]);
+
   const stopTalking = useCallback(() => {
     window.clearInterval(repeatRef.current);
     window.clearTimeout(capRef.current);
@@ -206,6 +241,10 @@ export function PaneInputRail({
 
   const { height: cellH } = measureCellSize(font.family, font.size);
   const pad = useWebGPU ? 20 : 12;
+  const stackBottom = (cellH - BUTTON_PX) / 2;
+  // Height between the pane's top edge and the stack's bottom: past it the
+  // column wraps (`flex-wrap-reverse` keeps Enter's column on the right).
+  const stackRoom = pad + (row + 1) * cellH - stackBottom - TOP_GAP_PX;
 
   return (
     <div
@@ -220,10 +259,11 @@ export function PaneInputRail({
           the spot it has always had, level with the `❯` line, and the others
           climb above it. The offset centres that bottom button on the row rather
           than letting it hang below. Read top to bottom, the order is the one the
-          row used to have left to right, « Messages seuls » added on top. */}
+          row used to have left to right, « Messages seuls » added on top and
+          « Effacer » slipped in just above Enter. */}
       <div
-        className="absolute right-0 flex flex-col-reverse items-center gap-1"
-        style={{ bottom: (cellH - BUTTON_PX) / 2 }}
+        className="absolute right-0 flex flex-col-reverse flex-wrap-reverse items-center gap-1"
+        style={{ bottom: stackBottom, maxHeight: stackRoom }}
       >
         {picking && <FilePicker onInsert={insertFiles} onClose={closePicker} />}
         <button
@@ -234,6 +274,18 @@ export function PaneInputRail({
           className="pointer-events-auto flex size-6 items-center justify-center rounded bg-[rgba(34,197,94,0.10)] text-zinc-400 transition-colors hover:bg-[rgba(34,197,94,0.20)] hover:text-zinc-100"
         >
           <CornerDownLeft size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => void clearPrompt()}
+          // Off while the `❯` line isn't the text field (transcript, selector):
+          // there the same keys toggle views and scroll.
+          disabled={!canClear}
+          title="Effacer tout le message en cours d'écriture"
+          aria-label="Effacer le message"
+          className="pointer-events-auto flex size-6 items-center justify-center rounded bg-[rgba(148,163,184,0.10)] text-zinc-400 transition-colors enabled:hover:bg-[rgba(148,163,184,0.20)] enabled:hover:text-zinc-100 disabled:opacity-40"
+        >
+          <Eraser size={12} />
         </button>
         <button
           type="button"

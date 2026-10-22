@@ -19,6 +19,7 @@ Lu par toute review de ce repo. Une remarque de review qui revient s'ajoute ici.
 - **Liens et chemins cliquables** : un chemin coupé par un retour à la ligne, des espaces insécables, des crochets ou des guillemets qui n'ouvre plus rien (5 correctifs passés).
 - **Téléphone et PC éteint** : un PC éteint fait pendre les connexions au lieu de les refuser. Toute attente du téléphone vers le PC (socket, gate, cache hors ligne de `public/sw.js`) a un délai, sinon l'app reste blanche ou en attente (21/10/2026).
 - **Cache hors ligne du téléphone** (`public/sw.js`) : la page en cache ne cite jamais un fichier absent du cache (la page s'écrit en dernier), et toute écriture de cache passe par `waitUntil`. Changer ce comportement change aussi le nom du cache, pour que les téléphones repartent d'un cache propre.
+- **Rafale de touches vers Claude Code** : une écriture de plus de ~40 octets est lue comme un collage et ses touches de contrôle sont ignorées (mesuré sur v2.1.307 : 41 octets passent, 81 non). Découper en petites écritures espacées (`promptClear.ts`).
 - **Rendu WebGPU** : un device par pane ou plusieurs présentations par frame (perte du device).
 - **Fond « glass »** : un menu ou une vue de lecture qui devient transparent.
 

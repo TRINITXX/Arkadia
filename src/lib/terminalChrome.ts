@@ -13,6 +13,23 @@ export function inputRowIndex(screen: RenderPayload | null): number {
   return -1;
 }
 
+/**
+ * Whether that `❯` row is Claude Code's text field — drawn right under the
+ * input box's top border. An earlier message quoted in the transcript (Ctrl+O)
+ * or a selector's highlighted choice starts with `❯` too, and editing keys
+ * mean something else there (Ctrl+E toggles show-all, Ctrl+U scrolls).
+ */
+export function isPromptField(screen: RenderPayload | null): boolean {
+  const r = inputRowIndex(screen);
+  if (!screen || r < 1) return false;
+  if (isOptionRow(screen.lines[r] ?? [])) return false;
+  const above = (screen.lines[r - 1] ?? [])
+    .map((run) => run.text)
+    .join("")
+    .trim();
+  return above.startsWith("─") || above.startsWith("╭");
+}
+
 /** Column of the first non-space cell of a row, or null when the row is blank. */
 export function firstContentCol(runs: CellRun[]): number | null {
   let col = 0;
