@@ -348,10 +348,12 @@ pub async fn artifact_view_show(
         })
         .build()
         .map_err(|e| e.to_string())?;
-    window.on_window_event(|event| {
-        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-        }
+    let focus_app = app.clone();
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::CloseRequested { api, .. } => api.prevent_close(),
+        // Reading an artifact is being back in Arkadia, for the notifications too.
+        tauri::WindowEvent::Focused(true) => crate::popup::user_is_back(&focus_app),
+        _ => {}
     });
 
     let (on_screen, bounds) = {

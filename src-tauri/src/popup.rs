@@ -11,6 +11,7 @@
 //! The popup shows one pane at a time with a queue counter; replying or
 //! dismissing advances to the next waiting pane.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -66,6 +67,25 @@ fn chime_allowed(elapsed_since_last: Option<Duration>, kind: &str) -> bool {
     match elapsed_since_last {
         Some(elapsed) => elapsed >= window,
         None => true,
+    }
+}
+
+/// One notification per pane while the user is away: a turn Claude started on
+/// its own (a background task ended, another session wrote, a scheduled wakeup)
+/// stays silent — no chime, no popup — when that pane already notified since
+/// Arkadia's main window last had focus. Coming back shows its latest reply.
+fn mute_self_woken(self_woken: bool, foreground: bool, already_told: bool) -> bool {
+    self_woken && !foreground && already_told
+}
+
+/// Records a pane that just rang: a finished turn while the user is away arms
+/// `mute_self_woken`. A question disarms it: the user may answer it from the popup
+/// or the phone without focusing Arkadia, and Claude's next turn answers them.
+fn note_told(told: &mut HashSet<String>, pane_id: &str, kind: &str, away: bool) {
+    if kind == "question" {
+        told.remove(pane_id);
+    } else if away {
+        told.insert(pane_id.to_string());
     }
 }
 
@@ -126,6 +146,9 @@ pub struct PopupQueue {
     /// Code fires around one completion (Stop, then Notification) into a single
     /// chime — see `chime_allowed`.
     pub last_sound: parking_lot::Mutex<Option<Instant>>,
+    /// Panes that notified while the user was away, cleared when Arkadia's main
+    /// window regains focus — see `mute_self_woken`.
+    pub told_while_away: parking_lot::Mutex<HashSet<String>>,
 }
 
 impl Default for PopupQueue {
@@ -137,6 +160,7 @@ impl Default for PopupQueue {
             notif_width: std::sync::atomic::AtomicU32::new(NOTIF_W as u32),
             auto_scroll: std::sync::atomic::AtomicBool::new(true),
             last_sound: parking_lot::Mutex::new(None),
+            told_while_away: parking_lot::Mutex::new(HashSet::new()),
         }
     }
 }
@@ -159,6 +183,10 @@ struct Signal {
     pane_id: Option<String>,
     /// Hook timestamp in ms (used as a per-signal nonce).
     ts: Option<u64>,
+    /// `done` only: Claude started this turn on its own, not the user (see
+    /// `mute_self_woken`). Absent → the user's turn.
+    #[serde(rename = "selfWoken")]
+    self_woken: Option<bool>,
 }
 
 /// `%LOCALAPPDATA%/Arkadia/notify` — the directory the hook drops signals into.
@@ -341,6 +369,7 @@ fn handle_signal(
     let app = app.clone();
     let registry = Arc::clone(registry);
     let kind = derive_kind(sig);
+    let self_woken = kind == "done" && sig.self_woken.unwrap_or(false);
     let cwd = cwd.to_string();
     let ts = sig.ts.unwrap_or(0);
     log_line(&format!(
@@ -349,7 +378,7 @@ fn handle_signal(
     ));
     std::thread::spawn(move || {
         std::thread::sleep(NOTIFY_GRACE);
-        show_after_grace(&app, &registry, pane_id, kind, cwd, ts);
+        show_after_grace(&app, &registry, pane_id, kind, self_woken, cwd, ts);
     });
 }
 
@@ -364,8 +393,9 @@ fn main_is_foreground(app: &AppHandle) -> bool {
     focused || crate::artifact_view::has_focus(app) || main_is_effective_foreground(app)
 }
 
-/// Fires `NOTIFY_GRACE` after a signal. The chime ALWAYS plays (debounced) — the
-/// user wants an audible cue no matter what. The POPUP is subject to the grace:
+/// Fires `NOTIFY_GRACE` after a signal. The chime plays (debounced) whatever the
+/// focus, style or fullscreen — the user wants an audible cue — unless
+/// `mute_self_woken` silences the whole signal. The POPUP is subject to the grace:
 /// it appears only if the user is still away and notifications are on/allowed. All
 /// the style/fullscreen/enrich gates run here, at fire time, so they honor the
 /// current state — not the state when the signal first arrived.
@@ -374,24 +404,35 @@ fn show_after_grace(
     registry: &Arc<AgentRegistry>,
     pane_id: String,
     kind: String,
+    self_woken: bool,
     cwd: String,
     ts: u64,
 ) {
-    // Sound first, unconditionally (debounced against the multi-hook double-fire).
-    // It ignores focus, notification style and fullscreen on purpose — "quoi qu'il
-    // arrive".
+    let queue = app.state::<PopupQueue>();
+    let already_told = queue.told_while_away.lock().contains(&pane_id);
+    if mute_self_woken(self_woken, main_is_foreground(app), already_told) {
+        log_line(&format!(
+            "pane {pane_id} restarted on its own and already notified while away — silent"
+        ));
+        return;
+    }
+
+    // Sound first (debounced against the multi-hook double-fire). It ignores
+    // focus, notification style and fullscreen on purpose — "quoi qu'il arrive".
     maybe_play_sound(app, &kind);
 
     // The popup, however, IS cancelled if the user came back (or answered the pane,
-    // which requires focusing Arkadia) during the grace window.
-    if main_is_foreground(app) {
+    // which requires focusing Arkadia) during the grace window. Read after the
+    // chime, which blocks ~0.7 s: the user may come back while it plays.
+    let away = !main_is_foreground(app);
+    note_told(&mut queue.told_while_away.lock(), &pane_id, &kind, away);
+    if !away {
         log_line(&format!(
             "grace elapsed but Arkadia has focus — chimed, no popup for pane {pane_id}"
         ));
         return;
     }
 
-    let queue = app.state::<PopupQueue>();
     let style = queue.style.load(Ordering::Acquire);
     if style == STYLE_OFF {
         log_line("notifications off — chimed, no popup");
@@ -815,11 +856,18 @@ fn close_all_popups(app: &AppHandle) {
     }
 }
 
+/// The user is back in Arkadia (main window or an artifact focused): the next
+/// notification of any pane rings again — see `mute_self_woken`.
+pub fn user_is_back(app: &AppHandle) {
+    app.state::<PopupQueue>().told_while_away.lock().clear();
+}
+
 /// Dismiss every notification and clear the queue. Called when Arkadia's main
 /// window regains focus (the user alt-tabbed back), so a pending notification
 /// doesn't linger once they're already looking at Arkadia. No-op (and silent)
 /// when nothing is queued — `Focused(true)` fires on every normal focus gain.
 pub fn dismiss_all(app: &AppHandle) {
+    user_is_back(app);
     let had = {
         let queue = app.state::<PopupQueue>();
         let mut items = queue.items.lock();
@@ -944,8 +992,33 @@ pub fn popup_open_in_main(pane_id: String, app: AppHandle, queue: State<'_, Popu
 
 #[cfg(test)]
 mod tests {
-    use super::{chime_allowed, suppress_for_fullscreen, FullscreenKind};
+    use super::{
+        chime_allowed, mute_self_woken, note_told, suppress_for_fullscreen, FullscreenKind,
+    };
+    use std::collections::HashSet;
     use std::time::Duration;
+
+    #[test]
+    fn a_question_lifts_the_mute_since_it_can_be_answered_outside_arkadia() {
+        let mut told = HashSet::new();
+        note_told(&mut told, "p", "done", false);
+        assert!(told.is_empty(), "in Arkadia, nothing to remember");
+        note_told(&mut told, "p", "done", true);
+        assert!(told.contains("p"));
+        note_told(&mut told, "p", "question", true);
+        assert!(!told.contains("p"));
+    }
+
+    #[test]
+    fn self_woken_turn_stays_silent_once_the_pane_notified_while_away() {
+        assert!(mute_self_woken(true, false, true));
+        // First notice of this pane since the user left: it rings.
+        assert!(!mute_self_woken(true, false, false));
+        // A turn the user started (typed, or an artifact reply) always rings.
+        assert!(!mute_self_woken(false, false, true));
+        // In Arkadia: the usual chime without popup.
+        assert!(!mute_self_woken(true, true, true));
+    }
 
     #[test]
     fn first_chime_always_allowed() {

@@ -22,6 +22,7 @@ Lu par toute review de ce repo. Une remarque de review qui revient s'ajoute ici.
 - **Cache hors ligne du téléphone** (`public/sw.js`) : la page en cache ne cite jamais un fichier absent du cache (la page s'écrit en dernier), et toute écriture de cache passe par `waitUntil`. Changer ce comportement change aussi le nom du cache, pour que les téléphones repartent d'un cache propre.
 - **Rafale de touches vers Claude Code** : une écriture de plus de ~40 octets est lue comme un collage et ses touches de contrôle sont ignorées (mesuré sur v2.1.307 : 41 octets passent, 81 non). Découper en petites écritures espacées (`promptClear.ts`).
 - **Claude lancé en arrière-plan par Arkadia** (`claude -p`) : hooks coupés (`--settings {"disableAllHooks":true}`), sinon le hook Stop fait sonner « Claude a fini ». Toute relance automatique espace ses essais (`hello_pause_ms`) : un compte qui refuse ne doit pas recevoir un message toutes les 10 min (relecture du 22/10/2026).
+- **Notification en double** : Claude Code annonce une même pause plusieurs fois (fin de tour, rappel `idle_prompt` 60 s après, `permission_prompt` 9 s après une question encore ouverte), et se relance seul (tâche de fond, autre session, réveil planifié). Tout nouveau chemin de notification garde une seule notif par onglet tant qu'Alexis n'est pas revenu dans Arkadia (`mute_self_woken`, hook `arkadia-notify.ps1`, 23/10/2026).
 - **Rendu WebGPU** : un device par pane ou plusieurs présentations par frame (perte du device).
 - **Fond « glass »** : un menu ou une vue de lecture qui devient transparent.
 
