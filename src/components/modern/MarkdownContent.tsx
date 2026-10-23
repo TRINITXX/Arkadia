@@ -1,4 +1,12 @@
-import { isValidElement, memo, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  isValidElement,
+  memo,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { backendInvoke, openUrl } from "@/lib/bridge";
 import { Check, Copy, SquareArrowOutUpRight } from "lucide-react";
 import Markdown, { type Components } from "react-markdown";
@@ -15,11 +23,25 @@ import {
   rehypeInlineImages,
   type HastNode,
 } from "@/lib/rehypeInlineImages";
-import { splitImagePaths } from "@/lib/imagePaths";
+import { imageCaptions } from "@/lib/imageCaption";
+import { imagePathKey, splitImagePaths } from "@/lib/imagePaths";
 
 export type ToastFn = (level: "info" | "error", message: string) => void;
 
 const REMARK_PLUGINS = [remarkGfm];
+
+/** The captions of the message being rendered, keyed by `imagePathKey`. */
+const CaptionsContext = createContext<Map<string, string>>(new Map());
+
+/** An image path mention, carrying its caption to the lightbox. */
+function MentionImage(
+  props: Omit<React.ComponentProps<typeof InlineImage>, "caption">,
+) {
+  const captions = useContext(CaptionsContext);
+  return (
+    <InlineImage {...props} caption={captions.get(imagePathKey(props.path))} />
+  );
+}
 
 /**
  * A fenced code block with a hover-revealed "copy" button in its bottom-right
@@ -98,7 +120,7 @@ function buildComponents(
       if (typeof path === "string") {
         const label = props?.[IMAGE_LABEL_PROP];
         return (
-          <InlineImage
+          <MentionImage
             path={path}
             label={typeof label === "string" ? label : path}
             onOpen={onOpen}
@@ -140,7 +162,7 @@ function buildComponents(
         const segments = splitImagePaths(children, baseDir);
         if (segments.length === 1 && segments[0].path) {
           return (
-            <InlineImage
+            <MentionImage
               path={segments[0].path}
               label={children}
               onOpen={onOpen}
@@ -190,6 +212,9 @@ export const MarkdownContent = memo(function MarkdownContent({
     () => buildComponents(onOpen, onToast, baseDir),
     [onOpen, onToast, baseDir],
   );
+  // Through context, not `components`: rebuilding those on every streamed
+  // chunk would remount every image and diagram of the message.
+  const captions = useMemo(() => imageCaptions(text, baseDir), [text, baseDir]);
   // Only explicitly-tagged fences highlight; auto-detection would run on every
   // untagged block for little value.
   const rehypePlugins = useMemo(
@@ -201,12 +226,14 @@ export const MarkdownContent = memo(function MarkdownContent({
     [text, baseDir],
   );
   return (
-    <Markdown
-      remarkPlugins={REMARK_PLUGINS}
-      rehypePlugins={rehypePlugins}
-      components={components}
-    >
-      {text}
-    </Markdown>
+    <CaptionsContext.Provider value={captions}>
+      <Markdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={rehypePlugins}
+        components={components}
+      >
+        {text}
+      </Markdown>
+    </CaptionsContext.Provider>
   );
 });

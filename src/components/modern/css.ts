@@ -158,12 +158,17 @@ export const HLJS_CSS = `
 // The lightbox ships its own styles: it also opens from the terminal, where
 // the modern view (and so MODERN_CSS) may not be mounted.
 export const LIGHTBOX_CSS = `
-.modern-lightbox { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); cursor: zoom-out; animation: lb-fade .16s ease-out both; }
-.modern-lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 10px; box-shadow: 0 12px 48px rgba(0,0,0,.6); animation: lb-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
+.modern-lightbox { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); cursor: zoom-out; animation: lb-fade .16s ease-out both; }
+.modern-lightbox img { max-width: 92vw; max-height: calc(92vh - var(--lb-cap, 0px)); border-radius: 10px; box-shadow: 0 12px 48px rgba(0,0,0,.6); animation: lb-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
 .modern-lightbox .svgbox { max-width: 92vw; max-height: 92vh; overflow: auto; background: #16161a; border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 18px; animation: lb-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
 .modern-lightbox .svgbox svg { max-width: none; }
 .modern-lightbox { overflow: hidden; touch-action: none; user-select: none; }
 .modern-lightbox .lb-zoom { display: flex; align-items: center; justify-content: center; transform-origin: center; }
+.modern-lightbox .lb-cap { flex: none; box-sizing: border-box; max-width: min(92vw, 860px); padding-bottom: 12px; text-align: center; cursor: auto; user-select: text; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+.modern-lightbox .lb-cap .txt { font-size: 14px; line-height: 1.45; color: #ececf1; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.modern-lightbox .lb-cap .path { margin-top: 3px; font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 11.5px; color: #a1a1aa; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.modern-lightbox .lb-cap .path.open { white-space: normal; overflow-wrap: anywhere; }
+.modern-lightbox .lb-cap .path:hover { color: #e4e4ea; text-decoration: underline; text-underline-offset: 2px; }
 .modern-lightbox .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 50%; color: #e8e8ee; background: rgba(20,20,24,0.72); border: 1px solid rgba(255,255,255,0.14); cursor: pointer; transition: background .12s; }
 .modern-lightbox .lb-nav:hover { background: rgba(40,40,48,0.9); }
 .modern-lightbox .lb-nav.prev { left: 18px; }

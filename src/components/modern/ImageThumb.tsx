@@ -4,8 +4,12 @@ import { fetchImageUrl } from "@/lib/imageUrlCache";
 
 /** What the lightbox displays. */
 export type LightboxContent =
-  /** `path` places the image in the conversation gallery (arrow navigation). */
-  { kind: "image"; url: string; path?: string } | { kind: "svg"; html: string };
+  /**
+   * `path` places the image in the conversation gallery (arrow navigation);
+   * `caption` is the prose around the mention that was clicked.
+   */
+  | { kind: "image"; url: string; path?: string; caption?: string }
+  | { kind: "svg"; html: string };
 
 interface ImageThumbProps {
   path: string;
@@ -85,11 +89,14 @@ export const ImageThumb = memo(function ImageThumb({
 export const InlineImage = memo(function InlineImage({
   path,
   label,
+  caption,
   onOpen,
 }: {
   path: string;
   /** The path as written in the message — the fallback, and the expanded form. */
   label: string;
+  /** The prose around the mention, shown above the image in the lightbox. */
+  caption?: string;
   onOpen: (content: LightboxContent) => void;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
@@ -146,7 +153,7 @@ export const InlineImage = memo(function InlineImage({
         title={path}
         onClick={(e) => {
           e.stopPropagation();
-          onOpen({ kind: "image", url, path });
+          onOpen({ kind: "image", url, path, caption });
         }}
       />
     </span>

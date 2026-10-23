@@ -3,18 +3,21 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { ConvBlock } from "@/components/ModernConversationView";
-import { findImagePaths } from "@/lib/imagePaths";
+import { imageCaptions } from "@/lib/imageCaption";
+import { findImagePaths, imagePathKey } from "@/lib/imagePaths";
 
 /** One displayable image: a transcript image or an on-disk path. */
 export interface ImageRef {
   path: string;
   mediaType?: string;
+  /** The prose the message writes around the path, shown in the lightbox. */
+  caption?: string;
 }
 
 /**
  * A message's images: the ones pasted in the turn, else the on-disk image
- * paths its text mentions. `baseDir` (the session's working directory)
- * resolves relative mentions like `.screenshots/x.png`.
+ * paths its text mentions, each with its caption. `baseDir` (the session's
+ * working directory) resolves relative mentions like `.screenshots/x.png`.
  */
 export function messageImages(
   block: ConvBlock,
@@ -25,9 +28,13 @@ export function messageImages(
     mediaType: img.media_type,
   }));
   if (pasted.length > 0 || !block.text) return pasted;
-  return findImagePaths(block.text, undefined, baseDir).map((path) => ({
-    path,
-  }));
+  const paths = findImagePaths(block.text, undefined, baseDir);
+  if (paths.length === 0) return [];
+  const captions = imageCaptions(block.text, baseDir);
+  return paths.map((path) => {
+    const caption = captions.get(imagePathKey(path));
+    return caption ? { path, caption } : { path };
+  });
 }
 
 /**
@@ -93,14 +100,18 @@ function withoutFences(text: string): string {
   return text.replace(/^ *(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ *\1[^\n]*$/gm, "");
 }
 
-/** Every image of `blocks`, in reading order, each path once (first wins). */
+/**
+ * Every image of `blocks`, in reading order, each path once (first wins). An
+ * image first met without a caption (a tool listing the capture before the
+ * report) takes the first caption a later mention gives it.
+ */
 export function galleryImages(
   blocks: ConvBlock[],
   showResults: boolean,
   baseDir?: string | null,
 ): ImageRef[] {
   const out: ImageRef[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, number>();
   for (const b of blocks) {
     const refs =
       b.kind === "tool"
@@ -108,9 +119,13 @@ export function galleryImages(
         : messageImages(b, baseDir);
     for (const ref of refs) {
       const key = ref.path.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(ref);
+      const at = seen.get(key);
+      if (at === undefined) {
+        seen.set(key, out.length);
+        out.push(ref);
+      } else if (ref.caption && !out[at].caption) {
+        out[at] = { ...out[at], caption: ref.caption };
+      }
     }
   }
   return out;
@@ -142,9 +157,8 @@ export function galleryPathOf(
   gallery: ImageRef[],
   path: string,
 ): string | null {
-  const key = (p: string) => p.replace(/\//g, "\\").toLowerCase();
-  const want = key(path);
-  return gallery.find((g) => key(g.path) === want)?.path ?? null;
+  const want = imagePathKey(path);
+  return gallery.find((g) => imagePathKey(g.path) === want)?.path ?? null;
 }
 
 function parseInput(json?: string): Record<string, unknown> {

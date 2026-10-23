@@ -37,10 +37,10 @@ describe("messageImages", () => {
     ).toEqual([{ path: "C:\\cache\\1.png", mediaType: "image/png" }]);
   });
 
-  it("falls back to paths mentioned in the text", () => {
+  it("falls back to paths mentioned in the text, with their caption", () => {
     expect(
       messageImages({ kind: "assistant", text: "capture C:\\a\\x.png" }),
-    ).toEqual([{ path: "C:\\a\\x.png" }]);
+    ).toEqual([{ path: "C:\\a\\x.png", caption: "capture" }]);
   });
 });
 
@@ -71,6 +71,18 @@ describe("galleryImages", () => {
         false,
       ).map((r) => r.path),
     ).toEqual(["C:\\a\\1.png", "C:\\a\\2.png", "C:\\a\\3.png"]);
+  });
+
+  it("gives a path first met bare the caption a later mention brings", () => {
+    expect(
+      galleryImages(
+        [
+          { kind: "tool", tool_output: "C:\\a\\logo.png" },
+          { kind: "assistant", text: "Logo visible :\nC:\\a\\logo.png" },
+        ],
+        true,
+      ),
+    ).toEqual([{ path: "C:\\a\\logo.png", caption: "Logo visible" }]);
   });
 });
 

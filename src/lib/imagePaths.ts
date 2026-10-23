@@ -23,6 +23,11 @@ const IMG_PATH_RE =
 const REL_IMG_PATH_RE =
   /(?<![\w.\\/:~-])(?:[\w.-]+[\\/])+[\w.-]+\.(?:png|jpe?g|gif|webp|bmp)\b/gi;
 
+/** How a path is compared: case and slash style ignored. */
+export function imagePathKey(path: string): string {
+  return path.replace(/\//g, "\\").toLowerCase();
+}
+
 /** True when `path` looks like an absolute Windows path to an image file. */
 export function isImagePath(path: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(path) && IMAGE_EXT_RE.test(path.trim());
@@ -53,7 +58,7 @@ export function findImagePaths(
   const out: string[] = [];
   const seen = new Set<string>();
   for (const { path } of found) {
-    const key = path.replace(/\//g, "\\").toLowerCase();
+    const key = imagePathKey(path);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(path);

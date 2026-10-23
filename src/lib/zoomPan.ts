@@ -1,6 +1,6 @@
-// Zoom/pan maths for the lightbox. The content is laid out centred in its
-// stage and drawn with `translate(x, y) scale(scale)` around its own centre,
-// so a screen point relative to the stage centre is `(x, y) + scale * local`.
+// Zoom/pan maths for the lightbox. The content is drawn with
+// `translate(x, y) scale(scale)` around its own laid-out centre, so a screen
+// point relative to that centre is `(x, y) + scale * local`.
 
 export interface ZoomView {
   scale: number;
@@ -14,7 +14,7 @@ export const MAX_SCALE = 12;
 
 /**
  * `view` zoomed by `factor` so that the point under the cursor stays put.
- * `(px, py)` is the cursor relative to the stage centre. Back at scale 1 the
+ * `(px, py)` is the cursor relative to the content's laid-out centre. Back at scale 1 the
  * offset is dropped: an unzoomed image always sits centred.
  */
 export function zoomAt(
