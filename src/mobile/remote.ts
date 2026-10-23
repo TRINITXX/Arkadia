@@ -444,6 +444,9 @@ export const phoneBridge: Bridge = {
     if (/^https?:\/\//i.test(url)) window.open(url, "_blank", "noopener");
     return Promise.resolve();
   },
+  mediaUrl(path: string) {
+    return `/video?path=${encodeURIComponent(path)}`;
+  },
 };
 
 /** Streams `paneId`'s frames (one pane at a time); null stops. */

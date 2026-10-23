@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { findImagePaths, isImagePath, splitImagePaths } from "./imagePaths";
+import {
+  findImagePaths,
+  isImagePath,
+  isVideoPath,
+  splitImagePaths,
+} from "./imagePaths";
 
 describe("splitImagePaths", () => {
   it("cuts the prose around each mention, resolving relative ones", () => {
@@ -36,6 +41,36 @@ describe("isImagePath", () => {
     expect(isImagePath("shots/screen.png")).toBe(false);
     expect(isImagePath("C:\\code\\main.rs")).toBe(false);
     expect(isImagePath("C:\\x\\tool.exe")).toBe(false);
+  });
+});
+
+describe("video paths", () => {
+  it("are found in prose like images, and told apart from them", () => {
+    const text =
+      "Preuve : C:\\Desktop\\.screenshots\\essai_v1.mp4 et C:\\a\\x.png";
+    expect(findImagePaths(text)).toEqual([
+      "C:\\Desktop\\.screenshots\\essai_v1.mp4",
+      "C:\\a\\x.png",
+    ]);
+    expect(isVideoPath("C:\\Desktop\\.screenshots\\essai_v1.mp4")).toBe(true);
+    expect(isVideoPath("D:/clips/demo.WEBM")).toBe(true);
+    expect(isVideoPath("C:\\a\\x.png")).toBe(false);
+    expect(isImagePath("C:\\a\\demo.mp4")).toBe(false);
+  });
+
+  it("never cut an image path short at a video extension inside it", () => {
+    expect(
+      findImagePaths(
+        "C:\\clips\\demo.mp4.png et C:\\x\\clip.mov-frames\\1.png",
+      ),
+    ).toEqual(["C:\\clips\\demo.mp4.png", "C:\\x\\clip.mov-frames\\1.png"]);
+  });
+
+  it("never take a TypeScript file for a video", () => {
+    expect(
+      findImagePaths("voir C:\\src\\main.ts et src\\lib\\x.ts", 12, "C:\\p"),
+    ).toEqual([]);
+    expect(isVideoPath("C:\\src\\main.ts")).toBe(false);
   });
 });
 

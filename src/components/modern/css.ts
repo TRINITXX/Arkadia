@@ -113,6 +113,22 @@ export const MODERN_CSS = `
 .modern-gallery-cell .modern-inline-img { display: block; margin: 0; }
 .modern-gallery-cell .modern-inline-img img { max-height: 150px; }
 .modern-gallery-cell .cap { white-space: normal; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* A video path, shown as a still of itself: play mark, file name and length
+   in a band over the picture. Inline-level, like the images above. Nothing to
+   select: a drag over the name would end in the click that plays it. */
+.modern-video { position: relative; display: inline-block; vertical-align: top; max-width: 100%; margin: 4px 0 6px; overflow: hidden; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); cursor: pointer; user-select: none; }
+.modern-video img { display: block; max-height: 170px; max-width: 100%; }
+.modern-video .blank { display: flex; align-items: center; justify-content: center; height: 170px; aspect-ratio: 16 / 9; max-width: 100%; background: #26262e; color: #5f5f68; }
+.modern-video .band { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 6px; padding: 18px 8px 5px; background: linear-gradient(transparent, rgba(0,0,0,0.82)); color: #fff; font-size: 11px; line-height: 1.3; transition: background .12s; }
+.modern-video:hover .band { background: linear-gradient(transparent, rgba(0,0,0,0.95)); }
+.modern-video .band svg { flex-shrink: 0; }
+.modern-video .band .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 10.5px; }
+.modern-video .band small { flex-shrink: 0; margin-left: auto; padding-left: 4px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.modern-gallery-cell .modern-video { margin: 0; }
+.modern-gallery-cell .modern-video img { max-height: 150px; }
+.modern-gallery-cell .modern-video .blank { height: 150px; }
+.modern-thumbs .modern-video { margin: 0; }
+.modern-thumbs .modern-video img { max-height: 240px; }
 .modern-thumb-ph { display: flex; align-items: center; justify-content: center; width: 160px; height: 120px; border: 1px dashed rgba(255,255,255,0.16); border-radius: 8px; color: #6f6f78; }
 
 /* Entrance for blocks appended live (never on initial load). transform +
@@ -162,6 +178,7 @@ export const LIGHTBOX_CSS = `
 .modern-lightbox img { max-width: 92vw; max-height: calc(92vh - var(--lb-cap, 0px)); border-radius: 10px; box-shadow: 0 12px 48px rgba(0,0,0,.6); animation: lb-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
 .modern-lightbox .svgbox { max-width: 92vw; max-height: 92vh; overflow: auto; background: #16161a; border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 18px; animation: lb-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
 .modern-lightbox .svgbox svg { max-width: none; }
+.modern-lightbox video { max-width: 92vw; max-height: calc(92vh - var(--lb-cap, 0px)); border-radius: 10px; background: #000; box-shadow: 0 12px 48px rgba(0,0,0,.6); cursor: auto; animation: lb-pop .18s cubic-bezier(0.23, 1, 0.32, 1) both; }
 .modern-lightbox { overflow: hidden; touch-action: none; user-select: none; }
 .modern-lightbox .lb-zoom { display: flex; align-items: center; justify-content: center; transform-origin: center; }
 .modern-lightbox .lb-cap { flex: none; box-sizing: border-box; max-width: min(92vw, 860px); padding-bottom: 12px; text-align: center; cursor: auto; user-select: text; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
@@ -176,6 +193,6 @@ export const LIGHTBOX_CSS = `
 @keyframes lb-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes lb-pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .modern-lightbox, .modern-lightbox img, .modern-lightbox .svgbox { animation-duration: .01ms; }
+  .modern-lightbox, .modern-lightbox img, .modern-lightbox video, .modern-lightbox .svgbox { animation-duration: .01ms; }
 }
 `;

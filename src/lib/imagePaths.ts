@@ -1,18 +1,23 @@
 // Detection of on-disk image paths mentioned in conversation text, so the
 // modern view can try to render them inline. Absolute Windows paths only
 // (tool inputs are near-always absolute; relative would need cwd plumbing).
+// Videos count as images here: they show as a still of themselves and the
+// lightbox plays them (`isVideoPath` tells them apart).
 
 const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp)$/i;
+/** Mirrors `video_mime` in `src-tauri/src/media.rs`. Never `.ts`: TypeScript. */
+const VIDEO_EXT_RE = /\.(?:mp4|m4v|mov|webm|mkv|avi|wmv|flv|mpe?g|ogv|3gp)$/i;
 
 /**
  * Absolute Windows paths ending in an image extension, both slash styles.
  * Spaces are allowed (`…\Claude Desktop\…` is a real project root): the match
  * is lazy from the drive letter to the first image extension, and `:` can only
- * follow the drive letter, so two paths on one line never merge. A prose
+ * follow the drive letter, so two paths on one line never merge. An extension
+ * that goes on (`demo.mp4.png`, `clip.mov-frames\1.png`) is not the end. A prose
  * false positive (`C:\dir then shot.png`) just fails its probe silently.
  */
 const IMG_PATH_RE =
-  /(?<![A-Za-z])[A-Za-z]:[\\/][^\n\r"'`<>|?*:]*?\.(?:png|jpe?g|gif|webp|bmp)\b/gi;
+  /(?<![A-Za-z])[A-Za-z]:[\\/][^\n\r"'`<>|?*:]*?\.(?:png|jpe?g|gif|webp|bmp|mp4|m4v|mov|webm|mkv|avi|wmv|flv|mpe?g|ogv|3gp)\b(?![.-]\w)/gi;
 
 /**
  * Relative image paths with at least one directory (`.screenshots/x.png`,
@@ -21,7 +26,7 @@ const IMG_PATH_RE =
  * or a URL (`C:\a\b.png`, `https://x/y.png`).
  */
 const REL_IMG_PATH_RE =
-  /(?<![\w.\\/:~-])(?:[\w.-]+[\\/])+[\w.-]+\.(?:png|jpe?g|gif|webp|bmp)\b/gi;
+  /(?<![\w.\\/:~-])(?:[\w.-]+[\\/])+[\w.-]+\.(?:png|jpe?g|gif|webp|bmp|mp4|m4v|mov|webm|mkv|avi|wmv|flv|mpe?g|ogv|3gp)\b/gi;
 
 /** How a path is compared: case and slash style ignored. */
 export function imagePathKey(path: string): string {
@@ -31,6 +36,11 @@ export function imagePathKey(path: string): string {
 /** True when `path` looks like an absolute Windows path to an image file. */
 export function isImagePath(path: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(path) && IMAGE_EXT_RE.test(path.trim());
+}
+
+/** True when `path` looks like an absolute Windows path to a video file. */
+export function isVideoPath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(path) && VIDEO_EXT_RE.test(path.trim());
 }
 
 /**

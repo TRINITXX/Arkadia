@@ -72,13 +72,15 @@ function fetchWithTimeout(request, timeoutMs = NETWORK_TIMEOUT_MS) {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  // The gate answers live questions ("is Arkadia running?") and /image serves
-  // the conversation's pictures: never cached, never answered with the page.
+  // The gate answers live questions ("is Arkadia running?"), /image and
+  // /video serve the conversation's pictures and recordings: never cached,
+  // never answered with the page, and a video streams far past the timeout.
   if (
     event.request.method !== "GET" ||
     url.origin !== self.location.origin ||
     url.pathname.startsWith("/gate/") ||
-    url.pathname === "/image"
+    url.pathname === "/image" ||
+    url.pathname === "/video"
   )
     return;
   // Cache writes run under waitUntil: iOS may stop the worker as soon as the

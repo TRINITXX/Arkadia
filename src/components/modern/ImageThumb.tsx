@@ -1,6 +1,8 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { Image as ImageIcon } from "lucide-react";
 import { fetchImageUrl } from "@/lib/imageUrlCache";
+import { isVideoPath } from "@/lib/imagePaths";
+import { VideoThumb } from "@/components/modern/VideoThumb";
 
 /** What the lightbox displays. */
 export type LightboxContent =
@@ -9,6 +11,8 @@ export type LightboxContent =
    * `caption` is the prose around the mention that was clicked.
    */
   | { kind: "image"; url: string; path?: string; caption?: string }
+  /** `poster` is the still the thumbnail showed, held up while it loads. */
+  | { kind: "video"; path: string; poster?: string; caption?: string }
   | { kind: "svg"; html: string };
 
 interface ImageThumbProps {
@@ -160,7 +164,7 @@ export const InlineImage = memo(function InlineImage({
   );
 });
 
-/** A wrapping strip of thumbnails; renders nothing for an empty list. */
+/** A wrapping strip of thumbnails, videos included; nothing for an empty list. */
 export function ThumbStrip({
   paths,
   onOpen,
@@ -171,14 +175,18 @@ export function ThumbStrip({
   if (paths.length === 0) return null;
   return (
     <div className="modern-thumbs">
-      {paths.map((p) => (
-        <ImageThumb
-          key={p.path}
-          path={p.path}
-          mediaType={p.mediaType}
-          onOpen={onOpen}
-        />
-      ))}
+      {paths.map((p) =>
+        isVideoPath(p.path) ? (
+          <VideoThumb key={p.path} path={p.path} onOpen={onOpen} />
+        ) : (
+          <ImageThumb
+            key={p.path}
+            path={p.path}
+            mediaType={p.mediaType}
+            onOpen={onOpen}
+          />
+        ),
+      )}
     </div>
   );
 }

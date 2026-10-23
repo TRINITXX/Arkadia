@@ -10,6 +10,9 @@ import { LIGHTBOX_CSS } from "@/components/modern/css";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
 import type { ImageRef } from "@/lib/imageGallery";
 import { fetchImageUrl } from "@/lib/imageUrlCache";
+import { isVideoPath } from "@/lib/imagePaths";
+import { fetchVideoPoster } from "@/lib/videoPoster";
+import { mediaUrl } from "@/lib/bridge";
 import { IDENTITY_VIEW, zoomAt, type ZoomView } from "@/lib/zoomPan";
 import { useOverlay } from "@/lib/overlays";
 
@@ -47,31 +50,77 @@ function hasSelection(): boolean {
   return sel !== null && !sel.isCollapsed;
 }
 
+/** What the lightbox shows of the gallery: an image, or a video it plays. */
+interface Media {
+  kind: "image" | "video";
+  /** The image's bytes, or where the video streams from. */
+  url: string;
+  path?: string;
+  caption?: string;
+  /** A video's still, shown until its first frame is in. */
+  poster?: string;
+}
+
+function initialMedia(content: LightboxContent): Media | null {
+  if (content.kind === "image") {
+    return {
+      kind: "image",
+      url: content.url,
+      path: content.path,
+      caption: content.caption,
+    };
+  }
+  if (content.kind === "video") {
+    return {
+      kind: "video",
+      url: mediaUrl(content.path),
+      path: content.path,
+      caption: content.caption,
+      poster: content.poster,
+    };
+  }
+  return null;
+}
+
 /**
- * Full-screen zoom overlay for images and mermaid SVGs. Follows the app's
+ * The gallery entry `ref` as the lightbox shows it; null when it no longer
+ * loads, or is a video this view can't decode (it opens from its thumbnail).
+ */
+async function loadMedia(ref: ImageRef): Promise<Media | null> {
+  if (isVideoPath(ref.path)) {
+    const poster = await fetchVideoPoster(ref.path);
+    if (!poster?.url) return null;
+    return {
+      kind: "video",
+      url: mediaUrl(ref.path),
+      path: ref.path,
+      poster: poster.url,
+    };
+  }
+  const url = await fetchImageUrl(ref.path, ref.mediaType);
+  return url ? { kind: "image", url, path: ref.path } : null;
+}
+
+/**
+ * Full-screen zoom overlay for images and mermaid SVGs, and player for
+ * videos (no zoom: they play at the size that fits). Follows the app's
  * overlay idiom (fixed inset-0, no portal). Keyboard is captured on `window`
  * while open so Escape (and anything else) never leaks into the focused
  * terminal's PTY.
  *
  * Wheel zooms around the cursor, drag pans once zoomed, double-click toggles
- * a 2.5× zoom. An image that belongs to the gallery steps through it with the
- * arrow keys or the side buttons, skipping paths that no longer load. Above
- * an image sit the prose its message wrote around it and its file name, which
- * expands to the full path on click.
+ * a 2.5× zoom. An image or video that belongs to the gallery steps through it
+ * with the arrow keys or the side buttons, skipping paths that no longer load.
+ * Above it sit the prose its message wrote around it and its file name, which
+ * expands to the full path on click. Space plays or pauses a video.
  */
 export function Lightbox({ content, gallery, onClose }: LightboxProps) {
   // The artifact page steps aside while this layer is open.
   useOverlay();
   // `caption` is the clicked mention's; a step clears it for the gallery's.
-  const [image, setImage] = useState<{
-    url: string;
-    path?: string;
-    caption?: string;
-  } | null>(
-    content.kind === "image"
-      ? { url: content.url, path: content.path, caption: content.caption }
-      : null,
-  );
+  const [image, setImage] = useState<Media | null>(() => initialMedia(content));
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const isVideo = image?.kind === "video";
   const [view, setView] = useState<ZoomView>(IDENTITY_VIEW);
   const [dragging, setDragging] = useState(false);
   const [pathExpanded, setPathExpanded] = useState(false);
@@ -108,14 +157,13 @@ export function Lightbox({ content, gallery, onClose }: LightboxProps) {
       const token = ++navToken.current;
       const tryAt = (i: number) => {
         if (i < 0 || i >= gallery.length) return;
-        const ref = gallery[i];
-        void fetchImageUrl(ref.path, ref.mediaType).then((url) => {
+        void loadMedia(gallery[i]).then((media) => {
           if (token !== navToken.current) return;
-          if (!url) {
+          if (!media) {
             tryAt(i + dir);
             return;
           }
-          setImage({ url, path: ref.path });
+          setImage(media);
           setView(IDENTITY_VIEW);
           setPathExpanded(false);
         });
@@ -134,6 +182,12 @@ export function Lightbox({ content, gallery, onClose }: LightboxProps) {
       } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         e.preventDefault();
         step(e.key === "ArrowLeft" ? -1 : 1);
+      } else if (e.key === " " && videoRef.current) {
+        // The player's own keys never see this event: it is stopped above.
+        e.preventDefault();
+        const video = videoRef.current;
+        if (video.paused) void video.play().catch(() => {});
+        else video.pause();
       }
     };
     window.addEventListener("keydown", onKey, true);
@@ -158,20 +212,21 @@ export function Lightbox({ content, gallery, onClose }: LightboxProps) {
   }, [captionShown]);
 
   // Native listener: React's onWheel is passive, and the wheel must not scroll
-  // anything behind the overlay.
+  // anything behind the overlay. A video plays at the size that fits.
   useEffect(() => {
     const el = stageRef.current;
     const layer = zoomRef.current;
     if (!el || !layer) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      if (isVideo) return;
       const [px, py] = fromCentre(el, layer, e.clientX, e.clientY);
       const factor = Math.exp(-e.deltaY * 0.0015);
       setView((v) => zoomAt(v, factor, px, py));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [isVideo]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -279,7 +334,18 @@ export function Lightbox({ content, gallery, onClose }: LightboxProps) {
           transition: dragging ? "none" : "transform .08s ease-out",
         }}
       >
-        {image ? (
+        {image?.kind === "video" ? (
+          <video
+            key={image.url}
+            ref={videoRef}
+            src={image.url}
+            poster={image.poster}
+            controls
+            autoPlay
+            playsInline
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : image ? (
           <img
             key={image.url}
             src={image.url}
@@ -307,8 +373,8 @@ export function Lightbox({ content, gallery, onClose }: LightboxProps) {
         <button
           type="button"
           className="lb-nav prev"
-          title="Image précédente (←)"
-          aria-label="Image précédente"
+          title="Précédente (←)"
+          aria-label="Précédente"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
@@ -322,8 +388,8 @@ export function Lightbox({ content, gallery, onClose }: LightboxProps) {
         <button
           type="button"
           className="lb-nav next"
-          title="Image suivante (→)"
-          aria-label="Image suivante"
+          title="Suivante (→)"
+          aria-label="Suivante"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();

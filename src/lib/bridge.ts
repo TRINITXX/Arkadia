@@ -4,7 +4,7 @@
  * rendering. Only what the modern conversation view needs goes through here.
  */
 
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import { openLink } from "@/lib/openLink";
 
@@ -22,12 +22,17 @@ export interface Bridge {
   ): Promise<() => void>;
   /** Opens a web link: a claude.ai artifact in the panel, the rest outside the app. */
   openUrl(url: string): Promise<void>;
+  /** Where a `<video>` streams a video file of the PC from, in byte ranges. */
+  mediaUrl(path: string): string;
 }
 
 let bridge: Bridge = {
   invoke: (cmd, args) => tauriInvoke(cmd, args),
   listen: (event, handler) => tauriListen(event, handler),
   openUrl: (url) => openLink(url),
+  // The backend's `arkmedia` protocol (`src-tauri/src/media.rs`).
+  mediaUrl: (path) =>
+    `${convertFileSrc("", "arkmedia")}?path=${encodeURIComponent(path)}`,
 };
 
 export function setBridge(next: Bridge): void {
@@ -50,4 +55,8 @@ export function backendListen<T>(
 
 export function openUrl(url: string): Promise<void> {
   return bridge.openUrl(url);
+}
+
+export function mediaUrl(path: string): string {
+  return bridge.mediaUrl(path);
 }

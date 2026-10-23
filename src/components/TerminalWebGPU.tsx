@@ -28,7 +28,8 @@ import {
   type ClickableMatch,
   type PathMatch,
 } from "@/lib/urlDetect";
-import { isImagePath } from "@/lib/imagePaths";
+import { isImagePath, isVideoPath } from "@/lib/imagePaths";
+import { fetchVideoPoster } from "@/lib/videoPoster";
 import { imageTagAt } from "@/lib/imageTag";
 import {
   galleryPathOf,
@@ -656,8 +657,8 @@ export function TerminalWebGPU({
   const autoScrollDeltaRef = useRef(0);
   const hoveredUrlRef = useRef<HoverRange | null>(null);
   const pendingClickRef = useRef<ClickableMatch | null>(null);
-  // Hovering an image path previews it; clicking the path or the preview
-  // opens it full screen, the arrows walking the conversation's images.
+  // Hovering an image or video path previews it; clicking the path or the
+  // preview opens it full screen, the arrows walking the conversation's images.
   const {
     preview: imagePreview,
     api: imagePreviewApi,
@@ -667,12 +668,38 @@ export function TerminalWebGPU({
     content: LightboxContent;
     gallery: ImageRef[];
   } | null>(null);
+  // Bumped by every open and every key press: a video slow to decode must not
+  // pop up (sound on, keys captured) once the user has moved on.
+  const openTokenRef = useRef(0);
   const openImage = async (path: string) => {
     imagePreviewApi.hide();
+    const token = ++openTokenRef.current;
+    if (isVideoPath(path)) {
+      const [poster, gallery] = await Promise.all([
+        fetchVideoPoster(path),
+        loadPaneGallery(pane.id),
+      ]);
+      if (token !== openTokenRef.current) return;
+      // Missing, or a format this view can't decode: the PC's own player.
+      if (!poster?.url) {
+        void invoke("open_path", { path }).catch(() => {});
+        return;
+      }
+      setLightbox({
+        content: {
+          kind: "video",
+          path: galleryPathOf(gallery, path) ?? path,
+          poster: poster.url,
+        },
+        gallery,
+      });
+      return;
+    }
     const [url, gallery] = await Promise.all([
       fetchImageUrl(path),
       loadPaneGallery(pane.id),
     ]);
+    if (token !== openTokenRef.current) return;
     if (!url) {
       void invoke("open_path", { path }).catch(() => {});
       return;
@@ -1023,6 +1050,7 @@ export function TerminalWebGPU({
 
   const onKeyDown = async (e: React.KeyboardEvent<HTMLDivElement>) => {
     imagePreviewApi.hide();
+    openTokenRef.current++;
     const r = rendererRef.current;
 
     // Ctrl+F: open search overlay.
@@ -1222,10 +1250,10 @@ export function TerminalWebGPU({
         try {
           if (
             match.kind === "path" &&
-            isImagePath(match.absPath) &&
+            (isImagePath(match.absPath) || isVideoPath(match.absPath)) &&
             !e.ctrlKey
           ) {
-            // Images open in-app (Ctrl+click keeps the OS viewer).
+            // Images and videos open in-app (Ctrl+click keeps the OS viewer).
             await openImage(match.absPath);
           } else if (match.kind === "path") {
             // Open with the OS default app; absPath was already resolved +
@@ -1539,7 +1567,10 @@ export function TerminalWebGPU({
             }
           : null,
       );
-      if (match?.kind === "path" && isImagePath(match.absPath)) {
+      if (
+        match?.kind === "path" &&
+        (isImagePath(match.absPath) || isVideoPath(match.absPath))
+      ) {
         const rect = wrapperRef.current?.getBoundingClientRect();
         const { w, h } = cellRef.current;
         imagePreviewApi.hover(

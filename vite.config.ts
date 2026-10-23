@@ -42,6 +42,7 @@ export default defineConfig(async () => ({
     proxy: {
       "/ws": { target: "ws://127.0.0.1:47601", ws: true, changeOrigin: true },
       "/image": { target: "http://127.0.0.1:47601", changeOrigin: true },
+      "/video": { target: "http://127.0.0.1:47601", changeOrigin: true },
       "/gate": {
         target: "http://127.0.0.1:47611",
         changeOrigin: true,

@@ -13,6 +13,7 @@ mod conversation;
 mod external_action;
 mod fonts;
 pub mod gate;
+mod media;
 mod messages_only;
 mod pane_background;
 mod photos;
@@ -133,6 +134,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        // Videos mentioned in conversations, streamed to the views.
+        .register_asynchronous_uri_scheme_protocol(media::PROTOCOL, media::serve_protocol)
         .manage(SessionMap::default())
         .manage(terminal::ScrollbackConfig::default())
         .manage(conversation::ConvCacheMap::default())

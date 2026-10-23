@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Query, State as AxState};
-use axum::http::{header, HeaderMap, StatusCode, Uri};
+use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -22,6 +22,7 @@ use super::{RemoteHub, PORT};
 use crate::conversation::{
     evict_phone_cache, image_bytes, read_conversation_delta_for_phone, ConvCacheMap,
 };
+use crate::media::{read_video, MediaError};
 use crate::popup::log_line;
 use crate::sessions::{self, SessionIndex};
 use crate::terminal::{self, SessionMap};
@@ -92,6 +93,7 @@ pub async fn serve(app: AppHandle, hub: Arc<RemoteHub>, access: Arc<Access>) {
     let router = Router::new()
         .route("/ws", get(ws_route))
         .route("/image", get(image_route))
+        .route("/video", get(video_route))
         .fallback(get(static_route))
         .with_state(Ctx { app, hub, access });
     let service = router.into_make_service_with_connect_info::<SocketAddr>();
@@ -212,6 +214,70 @@ async fn image_route(
 #[derive(Deserialize)]
 struct ImageQuery {
     path: String,
+}
+
+/// A video the conversation mentions, in the byte ranges the phone's player
+/// asks for: it seeks without the whole file crossing the network.
+async fn video_route(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    method: Method,
+    Query(query): Query<ImageQuery>,
+    headers: HeaderMap,
+    AxState(ctx): AxState<Ctx>,
+) -> Response {
+    if ctx.check(peer, &headers, false).is_err() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    // As for /image, another site open on the phone must not probe the PC's
+    // files. A request without the header is refused too: the header is all
+    // that tells the phone page from a page elsewhere playing the same URL.
+    let same_origin =
+        headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("same-origin");
+    if !same_origin {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let head = method == Method::HEAD;
+    let read = tauri::async_runtime::spawn_blocking(move || {
+        read_video(&query.path, range.as_deref(), head)
+    })
+    .await;
+    let common = [
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (
+            header::HeaderName::from_static("cross-origin-resource-policy"),
+            "same-origin",
+        ),
+    ];
+    match read {
+        Ok(Ok(chunk)) => {
+            let status = StatusCode::from_u16(chunk.status).unwrap_or(StatusCode::OK);
+            let mut res = (
+                status,
+                common,
+                [
+                    (header::CONTENT_TYPE, chunk.mime),
+                    (header::ACCEPT_RANGES, "bytes"),
+                ],
+            )
+                .into_response();
+            if let Some(range) = chunk.content_range().and_then(|r| r.parse().ok()) {
+                res.headers_mut().insert(header::CONTENT_RANGE, range);
+            }
+            *res.body_mut() = chunk.body.into();
+            res
+        }
+        Ok(Err(MediaError::Unsatisfiable { total })) => (
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            common,
+            [(header::CONTENT_RANGE, format!("bytes */{total}"))],
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn ws_route(

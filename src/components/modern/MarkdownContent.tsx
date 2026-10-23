@@ -24,7 +24,8 @@ import {
   type HastNode,
 } from "@/lib/rehypeInlineImages";
 import { imageCaptions } from "@/lib/imageCaption";
-import { imagePathKey, splitImagePaths } from "@/lib/imagePaths";
+import { InlineVideo } from "@/components/modern/VideoThumb";
+import { imagePathKey, isVideoPath, splitImagePaths } from "@/lib/imagePaths";
 
 export type ToastFn = (level: "info" | "error", message: string) => void;
 
@@ -33,13 +34,16 @@ const REMARK_PLUGINS = [remarkGfm];
 /** The captions of the message being rendered, keyed by `imagePathKey`. */
 const CaptionsContext = createContext<Map<string, string>>(new Map());
 
-/** An image path mention, carrying its caption to the lightbox. */
+/** An image or video path mention, carrying its caption to the lightbox. */
 function MentionImage(
   props: Omit<React.ComponentProps<typeof InlineImage>, "caption">,
 ) {
   const captions = useContext(CaptionsContext);
-  return (
-    <InlineImage {...props} caption={captions.get(imagePathKey(props.path))} />
+  const caption = captions.get(imagePathKey(props.path));
+  return isVideoPath(props.path) ? (
+    <InlineVideo {...props} caption={caption} />
+  ) : (
+    <InlineImage {...props} caption={caption} />
   );
 }
 

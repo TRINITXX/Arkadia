@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Play } from "lucide-react";
 import { fetchImageUrl } from "@/lib/imageUrlCache";
+import { isVideoPath } from "@/lib/imagePaths";
+import { fetchVideoPoster, formatDuration } from "@/lib/videoPoster";
 
 /** Viewport box (CSS px) of the hovered path the preview hangs from. */
 export interface PreviewAnchor {
@@ -17,8 +20,25 @@ export interface PreviewAnchor {
 
 interface PreviewState {
   path: string;
+  /** The image, or a still of the video. */
   url: string;
   anchor: PreviewAnchor;
+  video?: boolean;
+  /** A video's length in seconds, when known. */
+  duration?: number;
+}
+
+/** What hovering `path` shows; null when it doesn't load (or won't play). */
+async function loadPreview(
+  path: string,
+): Promise<Pick<PreviewState, "url" | "video" | "duration"> | null> {
+  if (!isVideoPath(path)) {
+    const url = await fetchImageUrl(path);
+    return url ? { url } : null;
+  }
+  const poster = await fetchVideoPoster(path);
+  if (!poster?.url) return null;
+  return { url: poster.url, video: true, duration: poster.duration };
 }
 
 /** Hover this long before the preview shows: sweeping the mouse must not flash images. */
@@ -96,10 +116,10 @@ export function useImageHoverPreview() {
         setPreview(null);
         cur.showTimer = window.setTimeout(() => {
           cur.showTimer = null;
-          void fetchImageUrl(path).then((url) => {
-            if (cur.wanted !== path || !url) return;
+          void loadPreview(path).then((got) => {
+            if (cur.wanted !== path || !got) return;
             cur.shown = path;
-            setPreview({ path, url, anchor });
+            setPreview({ path, anchor, ...got });
           });
         }, SHOW_DELAY_MS);
       },
@@ -202,7 +222,10 @@ export function ImageHoverPreview({
       ref={elRef}
       onMouseEnter={onEnter}
       onClick={onOpen && (() => onOpen(preview.path))}
-      title={onOpen && "Cliquer pour agrandir"}
+      title={
+        onOpen &&
+        (preview.video ? "Cliquer pour lire" : "Cliquer pour agrandir")
+      }
       style={{
         position: "fixed",
         ...position,
@@ -215,7 +238,9 @@ export function ImageHoverPreview({
         border: "1px solid rgba(255,255,255,0.14)",
         borderRadius: 8,
         boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
-        ...(onOpen ? { cursor: "zoom-in" } : { pointerEvents: "none" }),
+        ...(onOpen
+          ? { cursor: preview.video ? "pointer" : "zoom-in" }
+          : { pointerEvents: "none" }),
         animation: "img-preview-in .12s ease-out both",
       }}
     >
@@ -224,17 +249,39 @@ export function ImageHoverPreview({
           "@keyframes img-preview-in { from { opacity: 0; } to { opacity: 1; } }"
         }
       </style>
-      <img
-        src={preview.url}
-        alt=""
-        draggable={false}
-        style={{
-          display: "block",
-          maxWidth,
-          maxHeight: Math.max(120, maxHeight - 26),
-          borderRadius: 5,
-        }}
-      />
+      <div style={{ position: "relative" }}>
+        <img
+          src={preview.url}
+          alt=""
+          draggable={false}
+          style={{
+            display: "block",
+            maxWidth,
+            maxHeight: Math.max(120, maxHeight - 26),
+            borderRadius: 5,
+          }}
+        />
+        {preview.video && (
+          <span
+            style={{
+              position: "absolute",
+              inset: 0,
+              margin: "auto",
+              width: 46,
+              height: 46,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: "50%",
+              color: "#fff",
+              background: "rgba(10,10,16,0.62)",
+              border: "1px solid rgba(255,255,255,0.28)",
+            }}
+          >
+            <Play size={20} fill="currentColor" style={{ marginLeft: 3 }} />
+          </span>
+        )}
+      </div>
       <div
         style={{
           maxWidth,
@@ -247,6 +294,8 @@ export function ImageHoverPreview({
         }}
       >
         {name}
+        {preview.duration !== undefined &&
+          ` · ${formatDuration(preview.duration)}`}
       </div>
     </div>,
     document.body,
