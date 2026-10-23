@@ -30,6 +30,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::media::is_on_local_disk;
+
 /// Camera roll, relative to the home directory.
 const ROLL: [&str; 3] = ["Pictures", "iCloud Photos", "Photos"];
 /// Where downloads land on this machine, preferred over the OS default below.
@@ -204,6 +206,10 @@ pub fn photo_thumbnail(app: AppHandle, path: String) -> Result<tauri::ipc::Respo
     let src = PathBuf::from(&path);
     if !is_still_image(&src) {
         return Err("not a still image".into());
+    }
+    // A network path would make the PC sign in to another machine.
+    if !is_on_local_disk(&src) {
+        return Err("not a local path".into());
     }
     let meta = fs::metadata(&src).map_err(|e| e.to_string())?;
     if !meta.is_file() {

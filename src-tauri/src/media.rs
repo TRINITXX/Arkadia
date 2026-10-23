@@ -310,14 +310,24 @@ mod tests {
             missing
         );
         assert_eq!(read_video("relative\\clip.mp4", None, false), missing);
-        // Windows reads these as network shares or devices too.
+    }
+
+    #[test]
+    fn only_drive_letter_paths_count_as_local() {
+        assert!(is_on_local_disk(Path::new("C:\\x\\clip.mp4")));
+        assert!(is_on_local_disk(Path::new("D:/clips/demo.webm")));
+        // Windows reads these as network shares or devices.
         for path in [
+            "\\\\server\\share\\clip.mp4",
+            "//server/share/clip.mp4",
             "/\\server\\share\\clip.mp4",
             "\\/server\\share\\clip.mp4",
             "/\\.\\pipe\\x.mp4",
+            "\\\\?\\UNC\\server\\share\\clip.mp4",
             "C:clip.mp4",
+            "relative\\clip.mp4",
         ] {
-            assert_eq!(read_video(path, None, false), missing, "{path}");
+            assert!(!is_on_local_disk(Path::new(path)), "{path}");
         }
     }
 

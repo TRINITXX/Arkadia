@@ -19,6 +19,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::agent_registry::AgentRegistry;
+use crate::media::is_on_local_disk;
 
 #[derive(Serialize)]
 pub struct ConvMessage {
@@ -818,6 +819,11 @@ pub(crate) fn image_bytes(path: &str) -> Result<Vec<u8>, String> {
     const ALLOWED: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
     const MAX_BYTES: u64 = 25 * 1024 * 1024;
     let p = Path::new(path);
+    // Checked before any disk access: a network path would make the PC sign
+    // in to another machine just to look the file up.
+    if !is_on_local_disk(p) {
+        return Err("not a local path".into());
+    }
     let ext = p
         .extension()
         .and_then(|e| e.to_str())
@@ -1482,6 +1488,13 @@ mod tests {
         assert!(read_image_bytes("C:\\x\\tool.exe".into()).is_err());
         assert!(read_image_bytes("C:\\x\\noext".into()).is_err());
         assert!(read_image_bytes("C:\\definitely\\missing.png".into()).is_err());
+    }
+
+    #[test]
+    fn image_bytes_never_looks_up_a_network_path() {
+        for path in ["\\\\server\\share\\x.png", "/\\server\\share\\x.png"] {
+            assert_eq!(image_bytes(path), Err("not a local path".into()), "{path}");
+        }
     }
 
     // ─── last code block ───

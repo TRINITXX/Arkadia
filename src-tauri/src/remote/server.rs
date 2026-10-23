@@ -164,11 +164,9 @@ async fn image_route(
     if !same_origin {
         return StatusCode::FORBIDDEN.into_response();
     }
+    // `image_bytes` refuses network paths, which would make the PC sign in
+    // to another machine.
     let path = query.path;
-    // A network path would make the PC sign in to another machine.
-    if path.starts_with("\\\\") || path.starts_with("//") {
-        return StatusCode::NOT_FOUND.into_response();
-    }
     match tauri::async_runtime::spawn_blocking(move || {
         let bytes = image_bytes(&path)?;
         let ext = path
