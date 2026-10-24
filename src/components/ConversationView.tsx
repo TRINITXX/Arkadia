@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { coalescedRunner } from "@/lib/coalescedRunner";
 import { openLink } from "@/lib/openLink";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -68,23 +69,59 @@ const MD_COMPONENTS = {
 export function useConversation(paneId: string | null, bump?: number) {
   const [messages, setMessages] = useState<ConvMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const paneRef = useRef(paneId);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    paneRef.current = paneId;
+  }, [paneId]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-  const refresh = useCallback(() => {
-    if (!paneId) {
-      setMessages([]);
-      setError(null);
-      return;
-    }
-    void invoke<ConvMessage[]>("read_conversation", { paneId })
-      .then((msgs) => {
+  // One read at a time: `read_conversation` parses the whole transcript (up to
+  // hundreds of MB) off the main thread, and every `agent-state-changed` of any
+  // session asks again. Overlapping reads piled up and could answer out of
+  // order, an older one overwriting the reply Claude had just finished.
+  const readRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    // A remount (StrictMode, Fast Refresh) builds a new runner: the old one
+    // must neither apply its answer nor start its queued run alongside it.
+    let disposed = false;
+    readRef.current = coalescedRunner(async () => {
+      const pane = paneRef.current;
+      if (disposed || !mountedRef.current) return;
+      if (!pane) {
+        setMessages([]);
+        setError(null);
+        return;
+      }
+      // A pane switched or a view unmounted meanwhile drops this answer; the
+      // run queued by that switch reads the new pane.
+      const current = () =>
+        !disposed && mountedRef.current && paneRef.current === pane;
+      try {
+        const msgs = await invoke<ConvMessage[]>("read_conversation", {
+          paneId: pane,
+        });
+        if (!current()) return;
         setMessages(msgs);
         setError(null);
-      })
-      .catch((e) => {
+      } catch (e) {
+        if (!current()) return;
         setMessages([]);
         setError(String(e));
-      });
-  }, [paneId]);
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+  // Identity follows the pane, so the effects below re-read on a switch.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const refresh = useCallback(() => readRef.current?.(), [paneId]);
 
   useEffect(() => {
     refresh();

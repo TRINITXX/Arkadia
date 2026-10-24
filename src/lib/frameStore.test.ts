@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RenderPayload } from "@/types";
 import {
+  displayedFrame,
   dropFrame,
   getFrame,
   publishFrame,
@@ -81,5 +82,26 @@ describe("frameStore", () => {
     expect(sizeToReclaim("a")).toBeNull();
     publishFrame({ ...frame("a"), cols: 52, rows: 30 });
     expect(sizeToReclaim("a")).toEqual({ cols: 80, rows: 24 });
+  });
+
+  it("keeps a hidden pane on the frame it last displayed", () => {
+    const held = { current: null };
+    const f1 = frame("a", "one");
+    publishFrame(f1);
+    expect(displayedFrame(held, "a", true)).toBe(f1);
+    publishFrame(frame("a", "two"));
+    expect(displayedFrame(held, "a", false)).toBe(f1);
+    const f3 = frame("a", "three");
+    publishFrame(f3);
+    expect(displayedFrame(held, "a", true)).toBe(f3);
+  });
+
+  it("serves a pane hidden from the start the frame it has", () => {
+    const held = { current: null };
+    const f1 = frame("b", "one");
+    publishFrame(f1);
+    expect(displayedFrame(held, "b", false)).toBe(f1);
+    publishFrame(frame("b", "two"));
+    expect(displayedFrame(held, "b", false)).toBe(f1);
   });
 });

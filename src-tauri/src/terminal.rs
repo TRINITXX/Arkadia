@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
@@ -15,6 +15,7 @@ use uuid::Uuid;
 use termwiz::color::ColorAttribute;
 
 use crate::agent_registry::AgentRegistry;
+use crate::pane_viewers::{frame_due, PaneViewers};
 use crate::terminal_state::{
     encode_mouse, MessageMarker, MouseEncoding, MouseProtocol, SearchHit, TerminalCell,
     TerminalState, DEFAULT_SCROLLBACK_CAP, SCROLLBACK_CAP_MAX, SCROLLBACK_CAP_MIN,
@@ -30,6 +31,13 @@ const MAX_INPUT_BYTES: usize = 65_536;
 /// realistic terminal size and prevents the PTY from being asked to allocate
 /// absurd buffers if the renderer reports a bogus dimension.
 const MAX_TERM_DIM: u16 = 1000;
+
+/// Frames sent to the webviews since launch, for the watchdog's load line.
+static FRAMES_EMITTED: AtomicU64 = AtomicU64::new(0);
+
+pub fn frames_emitted() -> u64 {
+    FRAMES_EMITTED.load(Ordering::Relaxed)
+}
 
 type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 type SharedTerm = Arc<Mutex<TerminalState>>;
@@ -48,6 +56,10 @@ pub struct Session {
     /// is stale — so a second button press or a wheel scroll cancels it.
     nav_gen: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
+    /// Screen changed since the last frame sent (read by the flush thread).
+    dirty: Arc<AtomicBool>,
+    /// Some window shows this pane: full frame rate (see `pane_viewers`).
+    shown: Arc<AtomicBool>,
     _child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
@@ -67,6 +79,48 @@ impl SessionMap {
     pub fn has_session(&self, id: &str) -> bool {
         self.sessions.lock().contains_key(id)
     }
+
+    /// Flags the panes on screen. One that just appeared is marked dirty, so
+    /// the next tick sends it rather than up to half a second later.
+    fn apply_shown(&self, shown: &HashSet<String>) {
+        for (id, session) in self.sessions.lock().iter() {
+            if !shown.contains(id) {
+                session.shown.store(false, Ordering::Release);
+            } else if !session.shown.swap(true, Ordering::AcqRel) {
+                session.dirty.store(true, Ordering::Release);
+            }
+        }
+    }
+
+    /// (live panes, panes on screen), for the watchdog's load line. Never
+    /// waits: the watchdog must keep running whatever holds this lock, and a
+    /// count is not worth blocking on.
+    pub fn try_counts(&self) -> Option<(usize, usize)> {
+        let sessions = self.sessions.try_lock()?;
+        let shown = sessions
+            .values()
+            .filter(|s| s.shown.load(Ordering::Acquire))
+            .count();
+        Some((sessions.len(), shown))
+    }
+}
+
+/// The panes the calling webview shows right now — the whole set each time.
+#[tauri::command]
+pub fn set_shown_panes(
+    panes: Vec<String>,
+    webview: tauri::Webview,
+    viewers: State<'_, PaneViewers>,
+    state: State<'_, SessionMap>,
+) {
+    let shown = viewers.set(webview.label(), panes.into_iter().collect());
+    state.apply_shown(&shown);
+}
+
+/// A destroyed window shows nothing any more.
+pub fn forget_window_panes(app: &AppHandle, label: &str) {
+    let shown = app.state::<PaneViewers>().forget(label);
+    app.state::<SessionMap>().apply_shown(&shown);
 }
 
 /// User-configured scrollback line cap (Settings → "Scrollback"), applied to
@@ -309,8 +363,10 @@ fn resolve_wezterm_dir() -> Option<PathBuf> {
 
 // Tauri commands take each managed state as its own parameter; grouping them
 // into a struct would only obscure the injection.
+// Off the main thread: starting a shell creates a process and a pseudo-console,
+// and the main thread also serves every window's events.
 #[allow(clippy::too_many_arguments)]
-#[tauri::command]
+#[tauri::command(async)]
 pub fn spawn_terminal(
     cwd: String,
     cols: u16,
@@ -492,20 +548,33 @@ pub fn spawn_terminal(
     let flush_scroll = scroll_offset.clone();
     let flush_session_id = session_id.clone();
     let flush_app = app.clone();
+    let shown = Arc::new(AtomicBool::new(false));
+    let flush_shown = shown.clone();
     // Grabbed once here rather than looked up on every 16 ms tick.
-    let flush_wedged = app.state::<crate::uiwatch::UiHealth>().wedged_flag();
+    let flush_held = app.state::<crate::uiwatch::UiHealth>().frames_held_flag();
+    let flush_hub = app
+        .try_state::<Arc<crate::remote::RemoteHub>>()
+        .map(|hub| hub.inner().clone());
     thread::spawn(move || {
+        let mut last_sent = Instant::now();
         while !flush_stop.load(Ordering::Acquire) {
             thread::sleep(FRAME_INTERVAL);
             // A wedged webview never drains its event queue, so emitting into
             // it only grows the backlog — measured at +7 MB/s in the renderer
             // until the app was killed. `dirty` is deliberately left set: the
             // first frame after recovery then carries the whole screen.
-            if flush_wedged.load(Ordering::Acquire) {
+            if flush_held.load(Ordering::Acquire) || !flush_dirty.load(Ordering::Acquire) {
                 continue;
             }
-            if flush_dirty.swap(false, Ordering::AcqRel) {
+            // Hidden panes keep their changes pending until their slower pace
+            // comes round; a phone watching the pane counts as showing it.
+            let due = frame_due(flush_shown.load(Ordering::Acquire), last_sent.elapsed())
+                || flush_hub
+                    .as_ref()
+                    .is_some_and(|hub| hub.is_watching(&flush_session_id));
+            if due && flush_dirty.swap(false, Ordering::AcqRel) {
                 emit_render(&flush_app, &flush_session_id, &flush_term, &flush_scroll);
+                last_sent = Instant::now();
             }
         }
     });
@@ -545,6 +614,8 @@ pub fn spawn_terminal(
             nav_target: Arc::new(Mutex::new(None)),
             nav_gen: Arc::new(AtomicU64::new(0)),
             stop,
+            dirty,
+            shown,
             _child: child,
         },
     );
@@ -785,6 +856,7 @@ fn emit_render(
     if let Some(hub) = app.try_state::<Arc<crate::remote::RemoteHub>>() {
         hub.publish_frame(&payload);
     }
+    FRAMES_EMITTED.fetch_add(1, Ordering::Relaxed);
     let _ = app.emit("terminal-render", payload);
 }
 
@@ -801,13 +873,19 @@ pub fn send_input(
             MAX_INPUT_BYTES
         ));
     }
-    let sessions = state.sessions.lock();
-    let session = sessions
-        .get(&session_id)
-        .ok_or_else(|| format!("unknown session {session_id}"))?;
-    // Auto-scroll back to live (bottom) on input.
-    session.scroll_offset.store(0, Ordering::Release);
-    let mut w = session.writer.lock();
+    // The map's lock is released before writing: a PTY that stops reading its
+    // input would otherwise hold every other command (and the watchdog's pane
+    // count) behind this write.
+    let writer = {
+        let sessions = state.sessions.lock();
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| format!("unknown session {session_id}"))?;
+        // Auto-scroll back to live (bottom) on input.
+        session.scroll_offset.store(0, Ordering::Release);
+        session.writer.clone()
+    };
+    let mut w = writer.lock();
     w.write_all(&bytes).map_err(|e| format!("write: {e}"))?;
     w.flush().map_err(|e| format!("flush: {e}"))?;
     Ok(())
@@ -889,7 +967,10 @@ pub fn close_terminal(
     registry: State<'_, Arc<AgentRegistry>>,
     conv_cache: State<'_, crate::conversation::ConvCacheMap>,
 ) -> Result<(), String> {
-    state.sessions.lock().remove(&session_id);
+    // Dropped once the map's lock is released: closing the pseudo-console can
+    // wait on the child, and every other command needs that lock.
+    let closed = state.sessions.lock().remove(&session_id);
+    drop(closed);
     if let Ok(uuid) = Uuid::parse_str(&session_id) {
         registry.forget_pane(uuid);
     }
@@ -1212,19 +1293,24 @@ pub fn send_mouse_event(
 ) -> Result<(), String> {
     let col = col.min(MAX_TERM_DIM);
     let row = row.min(MAX_TERM_DIM);
-    let sessions = state.sessions.lock();
-    let session = sessions
-        .get(&session_id)
-        .ok_or_else(|| format!("unknown session {session_id}"))?;
+    // Map lock released before the PTY write, as in `send_input`.
+    let (writer, protocol, encoding) = {
+        let sessions = state.sessions.lock();
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| format!("unknown session {session_id}"))?;
 
-    // A wheel scroll (button 64/65) supersedes any in-flight message navigation.
-    if button >= 64 {
-        session.nav_gen.fetch_add(1, Ordering::Release);
-    }
+        // A wheel scroll (button 64/65) supersedes any in-flight message navigation.
+        if button >= 64 {
+            session.nav_gen.fetch_add(1, Ordering::Release);
+        }
 
-    let (protocol, encoding) = {
         let term = session.term.lock();
-        (term.mouse_protocol(), term.mouse_encoding())
+        (
+            session.writer.clone(),
+            term.mouse_protocol(),
+            term.mouse_encoding(),
+        )
     };
 
     if !should_forward_mouse(protocol, button, motion, pressed) {
@@ -1232,7 +1318,7 @@ pub fn send_mouse_event(
     }
 
     let bytes = encode_mouse(button, col, row, modifiers, motion, pressed, encoding);
-    let mut w = session.writer.lock();
+    let mut w = writer.lock();
     w.write_all(&bytes).map_err(|e| format!("write: {e}"))?;
     w.flush().map_err(|e| format!("flush: {e}"))?;
     Ok(())
@@ -1262,7 +1348,10 @@ pub fn scroll_terminal(
             return Ok(());
         }
         let seq: &[u8] = if delta > 0 { b"\x1b[5~" } else { b"\x1b[6~" };
-        let mut w = session.writer.lock();
+        // Map lock released before the PTY write, as in `send_input`.
+        let writer = session.writer.clone();
+        drop(sessions);
+        let mut w = writer.lock();
         w.write_all(seq).map_err(|e| format!("write: {e}"))?;
         w.flush().map_err(|e| format!("flush: {e}"))?;
         return Ok(());

@@ -16,6 +16,7 @@ pub mod gate;
 mod media;
 mod messages_only;
 mod pane_background;
+mod pane_viewers;
 mod photos;
 mod popup;
 mod remote;
@@ -36,7 +37,7 @@ use tauri::{Emitter, Manager};
 use terminal::{
     close_terminal, get_text_range, list_live_panes, list_message_markers, navigate_message,
     request_render, resize_terminal, scroll_reply_to_top, scroll_terminal, search_terminal,
-    send_input, send_mouse_event, set_scrollback_cap, spawn_terminal, SessionMap,
+    send_input, send_mouse_event, set_scrollback_cap, set_shown_panes, spawn_terminal, SessionMap,
 };
 
 /// Window-level wiring that must be re-applied every time the main window is
@@ -137,6 +138,7 @@ pub fn run() {
         // Videos mentioned in conversations, streamed to the views.
         .register_asynchronous_uri_scheme_protocol(media::PROTOCOL, media::serve_protocol)
         .manage(SessionMap::default())
+        .manage(pane_viewers::PaneViewers::default())
         .manage(terminal::ScrollbackConfig::default())
         .manage(conversation::ConvCacheMap::default())
         .manage(sessions::SessionIndex::default())
@@ -266,6 +268,7 @@ pub fn run() {
             resize_terminal,
             set_scrollback_cap,
             request_render,
+            set_shown_panes,
             list_live_panes,
             uiwatch::ui_heartbeat,
             close_terminal,
@@ -340,7 +343,10 @@ pub fn run() {
                 label,
                 event: tauri::WindowEvent::Destroyed,
                 ..
-            } => popup::log_line(&format!("[run] window destroyed: {label}")),
+            } => {
+                popup::log_line(&format!("[run] window destroyed: {label}"));
+                terminal::forget_window_panes(app, label);
+            }
             tauri::RunEvent::WindowEvent {
                 label,
                 event: tauri::WindowEvent::CloseRequested { .. },

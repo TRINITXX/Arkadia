@@ -74,10 +74,10 @@ function loadFontBytes(family: string): Promise<Uint8Array | null> {
   if (!primary) return Promise.resolve(null);
   let promise = fontBytesCache.get(primary);
   if (!promise) {
-    promise = invoke<number[] | Uint8Array>("get_font_data", {
+    promise = invoke<ArrayBuffer>("get_font_data", {
       family: primary,
     })
-      .then((raw) => (raw instanceof Uint8Array ? raw : new Uint8Array(raw)))
+      .then((raw) => new Uint8Array(raw))
       .catch((e) => {
         console.warn(`[arkadia] '${primary}' not found on system:`, e);
         return null;
@@ -600,6 +600,9 @@ export function TerminalWebGPU({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<Renderer | null>(null);
   const readyRef = useRef(false);
+  // Font family the current renderer already holds, so the swap effect below
+  // does not load and parse the same 2.4 MB font a second time per pane.
+  const appliedFontRef = useRef<string | null>(null);
   const [rendererVersion, setRendererVersion] = useState(0);
   // Bumped when the GPU device is lost: re-runs the creation effect below so
   // the pane comes back on a fresh device instead of staying blank for good.
@@ -879,9 +882,11 @@ export function TerminalWebGPU({
           renderer.free();
           return;
         }
+        appliedFontRef.current = null;
         if (fontBytes) {
           const ok = renderer.set_primary_font(fontBytes);
           if (ok) {
+            appliedFontRef.current = font.family;
             const cell2 = measureCellSize(font.family, font.size);
             renderer.set_cell_size(cell2.width * dpr, cell2.height * dpr);
           }
@@ -932,35 +937,24 @@ export function TerminalWebGPU({
     let cancelled = false;
     const r = rendererRef.current;
     if (!readyRef.current || !r) return;
-    const primary =
-      font.family
-        .split(",")[0]
-        ?.trim()
-        .replace(/^["']|["']$/g, "") ?? "";
-    if (!primary) return;
+    if (appliedFontRef.current === font.family) return;
     void (async () => {
-      try {
-        const raw = await invoke<number[] | Uint8Array>("get_font_data", {
-          family: primary,
-        });
-        if (cancelled) return;
-        const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
-        const live = rendererRef.current;
-        if (!live || !readyRef.current) return;
-        const ok = live.set_primary_font(bytes);
-        if (!ok) {
-          console.warn(
-            `[arkadia] '${primary}' rejected by renderer, keeping previous font`,
-          );
-          return;
-        }
-        const dpr = window.devicePixelRatio || 1;
-        const cell = measureCellSize(font.family, font.size);
-        live.set_cell_size(cell.width * dpr, cell.height * dpr);
-        redraw();
-      } catch (e) {
-        console.warn(`[arkadia] '${primary}' not found on system:`, e);
+      const bytes = await loadFontBytes(font.family);
+      if (cancelled || !bytes) return;
+      const live = rendererRef.current;
+      if (!live || !readyRef.current) return;
+      const ok = live.set_primary_font(bytes);
+      if (!ok) {
+        console.warn(
+          `[arkadia] '${font.family}' rejected by renderer, keeping previous font`,
+        );
+        return;
       }
+      appliedFontRef.current = font.family;
+      const dpr = window.devicePixelRatio || 1;
+      const cell = measureCellSize(font.family, font.size);
+      live.set_cell_size(cell.width * dpr, cell.height * dpr);
+      redraw();
     })();
     return () => {
       cancelled = true;

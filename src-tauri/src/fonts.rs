@@ -4,8 +4,11 @@ use font_kit::properties::Properties;
 use font_kit::source::SystemSource;
 use std::fs;
 
-#[tauri::command]
-pub fn get_font_data(family: String) -> Result<Vec<u8>, String> {
+/// The font file of `family`, as raw bytes. A `Vec<u8>` result would travel
+/// as a JSON array of numbers: 6.9 MB of text for the 2.4 MB Maple Mono NF,
+/// built here and parsed by the page. Off the main thread for the same reason.
+#[tauri::command(async)]
+pub fn get_font_data(family: String) -> Result<tauri::ipc::Response, String> {
     let primary = family
         .split(',')
         .next()
@@ -20,10 +23,11 @@ pub fn get_font_data(family: String) -> Result<Vec<u8>, String> {
         .select_best_match(&[FamilyName::Title(primary.clone())], &Properties::new())
         .map_err(|e| format!("font '{}' not found: {}", primary, e))?;
 
-    match handle {
+    let bytes = match handle {
         Handle::Path { path, .. } => {
-            fs::read(&path).map_err(|e| format!("failed to read '{}': {}", path.display(), e))
+            fs::read(&path).map_err(|e| format!("failed to read '{}': {}", path.display(), e))?
         }
-        Handle::Memory { bytes, .. } => Ok((*bytes).clone()),
-    }
+        Handle::Memory { bytes, .. } => (*bytes).clone(),
+    };
+    Ok(tauri::ipc::Response::new(bytes))
 }

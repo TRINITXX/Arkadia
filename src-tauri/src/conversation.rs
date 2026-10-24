@@ -274,7 +274,11 @@ fn find_transcript(session_id: &str) -> Option<PathBuf> {
 /// oldest first. Each Claude text block is its own message (so replies split
 /// around tool calls read as separate bubbles); only consecutive user turns are
 /// merged.
-#[tauri::command]
+///
+/// `(async)`: it parses the whole transcript, 100 MB and more for a long
+/// session, on every refresh. The reading popup runs one read at a time
+/// (`useConversation`), so answers cannot cross.
+#[tauri::command(async)]
 pub fn read_conversation(
     pane_id: String,
     registry: State<'_, Arc<AgentRegistry>>,
@@ -683,9 +687,35 @@ impl ConvCacheEntry {
     }
 }
 
-/// Managed map pane-id → incremental parse state.
+/// One cached parse, locked on its own: a read holds it for the whole parse,
+/// and the map's lock only for the lookup.
+type SharedEntry = Arc<std::sync::Mutex<ConvCacheEntry>>;
+
+/// Managed map pane-id → incremental parse state. An eviction during a parse
+/// really drops the entry (the parse finishes on its own handle and nothing
+/// puts it back), and two readers of one entry take turns instead of each
+/// re-parsing the transcript from zero.
 #[derive(Default)]
-pub struct ConvCacheMap(std::sync::Mutex<HashMap<String, ConvCacheEntry>>);
+pub struct ConvCacheMap(std::sync::Mutex<ConvCache>);
+
+#[derive(Default)]
+struct ConvCache {
+    entries: HashMap<String, SharedEntry>,
+    /// Owners that are gone — a closed pane's key, a disconnected phone's
+    /// `phone:<id>:` prefix. A read sent just before must not create their
+    /// entry again: nothing would ever evict it. Ids are never reused.
+    gone: std::collections::HashSet<String>,
+}
+
+impl ConvCache {
+    fn is_gone(&self, key: &str) -> bool {
+        self.gone.contains(key)
+            || self
+                .gone
+                .iter()
+                .any(|g| g.ends_with(':') && key.starts_with(g.as_str()))
+    }
+}
 
 /// One incremental response: the client keeps its first `base` blocks and
 /// appends `blocks` after them (`base` = 0 replaces everything).
@@ -702,10 +732,11 @@ pub struct ConvDelta {
     pub cwd: Option<String>,
 }
 
-/// Drops a pane's cached parse state (its terminal closed).
+/// Drops a pane's cached parse state (its terminal closed), for good.
 pub fn evict_conversation_cache(cache: &ConvCacheMap, pane_id: &str) {
-    if let Ok(mut map) = cache.0.lock() {
-        map.remove(pane_id);
+    if let Ok(mut cache) = cache.0.lock() {
+        cache.entries.remove(pane_id);
+        cache.gone.insert(pane_id.to_string());
     }
 }
 
@@ -713,7 +744,11 @@ pub fn evict_conversation_cache(cache: &ConvCacheMap, pane_id: &str) {
 /// every typed block (prose, thinking, tool calls paired with their results),
 /// oldest first, but only reads/parses the bytes appended since the last call.
 /// `generation`/`have` describe what the client already holds (0/0 = nothing).
-#[tauri::command]
+///
+/// `(async)`: the first call on a pane parses the whole transcript (100 MB and
+/// more for a long session), and the image gallery makes that call on a click.
+/// Each cache entry has its own lock, so concurrent reads stay consistent.
+#[tauri::command(async)]
 pub fn read_conversation_delta(
     pane_id: String,
     generation: u64,
@@ -751,8 +786,10 @@ pub fn read_transcript_delta(
         return Err("transcript introuvable".into());
     }
     let key = format!("{TRANSCRIPT_KEY_PREFIX}{session_id}");
-    if let Ok(mut map) = cache.0.lock() {
-        map.retain(|k, _| !k.starts_with(TRANSCRIPT_KEY_PREFIX) || k == &key);
+    if let Ok(mut cache) = cache.0.lock() {
+        cache
+            .entries
+            .retain(|k, _| !k.starts_with(TRANSCRIPT_KEY_PREFIX) || k == &key);
     }
     delta_from_path(&cache, &key, p, generation, have)
 }
@@ -786,19 +823,27 @@ fn phone_key(phone: u64, pane_id: &str) -> String {
 }
 
 /// Drops what a phone had parsed, but for `keep` (the pane it shows now).
+/// Without `keep` the phone is gone, and so is anything it could still read.
 pub(crate) fn evict_phone_cache(cache: &ConvCacheMap, phone: u64, keep: Option<&str>) {
     let prefix = format!("{PHONE_KEY_PREFIX}{phone}:");
     let kept = keep.map(|pane| phone_key(phone, pane));
-    if let Ok(mut map) = cache.0.lock() {
-        map.retain(|k, _| !k.starts_with(&prefix) || Some(k) == kept.as_ref());
+    if let Ok(mut cache) = cache.0.lock() {
+        cache
+            .entries
+            .retain(|k, _| !k.starts_with(&prefix) || Some(k) == kept.as_ref());
+        if keep.is_none() {
+            cache.gone.insert(prefix);
+        }
     }
 }
 
 /// Drops the overlay's parsed transcript (it closed) — panes keep theirs.
 #[tauri::command]
 pub fn evict_transcript_cache(cache: State<'_, ConvCacheMap>) {
-    if let Ok(mut map) = cache.0.lock() {
-        map.retain(|k, _| !k.starts_with(TRANSCRIPT_KEY_PREFIX));
+    if let Ok(mut cache) = cache.0.lock() {
+        cache
+            .entries
+            .retain(|k, _| !k.starts_with(TRANSCRIPT_KEY_PREFIX));
     }
 }
 
@@ -850,19 +895,30 @@ fn delta_from_path(
     generation: u64,
     have: usize,
 ) -> Result<ConvDelta, String> {
-    // The entry is taken out while it is read and parsed, so the map's lock is
-    // only held for an instant: a phone opening a long conversation never
-    // stalls the desktop view, whose reads run on the main thread.
-    let mut entry = {
-        let mut map = cache.0.lock().map_err(|e| e.to_string())?;
-        map.remove(pane_id)
-            .unwrap_or_else(|| ConvCacheEntry::new(path.clone(), 1))
+    // The map's lock is only held for the lookup: a phone opening a long
+    // conversation never stalls another pane's read.
+    let shared = {
+        let mut cache = cache.0.lock().map_err(|e| e.to_string())?;
+        if cache.is_gone(pane_id) {
+            return Err("this conversation's reader is gone".into());
+        }
+        cache
+            .entries
+            .entry(pane_id.to_string())
+            .or_insert_with(|| {
+                Arc::new(std::sync::Mutex::new(ConvCacheEntry::new(path.clone(), 1)))
+            })
+            .clone()
     };
-    let delta = advance(&mut entry, &path, generation, have);
-    if let Ok(mut map) = cache.0.lock() {
-        map.insert(pane_id.to_string(), entry);
-    }
-    delta
+    let mut entry = shared.lock().unwrap_or_else(|poisoned| {
+        // A parse panicked halfway: start this entry over rather than append
+        // to a half-updated state, once — the next reads find it healthy.
+        shared.clear_poison();
+        let mut entry = poisoned.into_inner();
+        *entry = ConvCacheEntry::new(path.clone(), entry.generation + 1);
+        entry
+    });
+    advance(&mut entry, &path, generation, have)
 }
 
 /// Reads what was appended to `path` into `entry` and returns the delta for
@@ -883,6 +939,8 @@ fn advance(
     if file_len < entry.offset {
         *entry = ConvCacheEntry::new(path.clone(), entry.generation + 1);
     }
+    // Nothing parsed yet: no reader can hold blocks of this entry.
+    let fresh = entry.offset == 0;
 
     if file_len > entry.offset {
         use std::io::{Read, Seek, SeekFrom};
@@ -930,7 +988,12 @@ fn advance(
         0
     };
     let blocks = entry.blocks[base..].to_vec();
-    entry.dirty_floor = entry.blocks.len();
+    // Only the reader that holds this generation consumes the pending
+    // mutations. A full read for anyone else (the image gallery) leaves them
+    // for it: consuming them there lost a tool's result in the modern view.
+    if generation == entry.generation || fresh {
+        entry.dirty_floor = entry.blocks.len();
+    }
     Ok(ConvDelta {
         generation: entry.generation,
         base,
@@ -1145,8 +1208,56 @@ mod tests {
         assert_eq!(d2.blocks[0].tool_output.as_deref(), Some("ok"));
 
         evict_phone_cache(&cache, 7, None);
-        let keys: Vec<String> = cache.0.lock().unwrap().keys().cloned().collect();
+        let keys: Vec<String> = cache.0.lock().unwrap().entries.keys().cloned().collect();
         assert_eq!(keys, ["p1"]);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// The image gallery reads the pane's whole conversation from scratch: it
+    /// must not take the tool result the modern view is still owed.
+    #[test]
+    fn a_full_read_leaves_the_view_its_pending_tool_result() {
+        let cache = ConvCacheMap::default();
+        let path = tmp_jsonl("gallery", &format!("{USER_LINE}\n{TOOL_LINE}\n"));
+        let d1 = delta_from_path(&cache, "p1", path.clone(), 0, 0).unwrap();
+
+        let mut content = std::fs::read_to_string(&path).unwrap();
+        content.push_str(&format!("{RESULT_LINE}\n"));
+        std::fs::write(&path, &content).unwrap();
+        let gallery = delta_from_path(&cache, "p1", path.clone(), 0, 0).unwrap();
+        assert_eq!(gallery.base, 0);
+
+        let d2 = delta_from_path(&cache, "p1", path.clone(), d1.generation, 2).unwrap();
+        assert_eq!(d2.base, 1);
+        assert_eq!(d2.blocks[0].tool_output.as_deref(), Some("ok"));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// An eviction that lands while a read holds the entry must stick.
+    #[test]
+    fn an_entry_evicted_during_a_read_is_not_put_back() {
+        let cache = ConvCacheMap::default();
+        let path = tmp_jsonl("evict", &format!("{USER_LINE}\n"));
+        delta_from_path(&cache, "p1", path.clone(), 0, 0).unwrap();
+        let held = cache.0.lock().unwrap().entries.get("p1").cloned().unwrap();
+        let reading = held.lock().unwrap();
+        evict_conversation_cache(&cache, "p1");
+        drop(reading);
+        assert!(cache.0.lock().unwrap().entries.is_empty());
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A read sent just before its pane closed must not bring the entry back.
+    #[test]
+    fn a_closed_pane_gets_no_entry_back() {
+        let cache = ConvCacheMap::default();
+        let path = tmp_jsonl("closed", &format!("{USER_LINE}\n"));
+        evict_conversation_cache(&cache, "p1");
+        assert!(delta_from_path(&cache, "p1", path.clone(), 0, 0).is_err());
+        evict_phone_cache(&cache, 7, None);
+        assert!(delta_from_path(&cache, &phone_key(7, "p2"), path.clone(), 0, 0).is_err());
+        assert!(delta_from_path(&cache, "p2", path.clone(), 0, 0).is_ok());
+        assert_eq!(cache.0.lock().unwrap().entries.len(), 1);
         std::fs::remove_file(&path).ok();
     }
 

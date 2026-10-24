@@ -9,6 +9,7 @@ import {
 import { readText as readClipboard } from "@tauri-apps/plugin-clipboard-manager";
 import { resolveColor } from "@/lib/palettes";
 import { keyEventToBytes } from "@/lib/keymap";
+import { holdPaneShown } from "@/lib/shownPanes";
 import {
   askQuestionTabBar,
   isBoxRow,
@@ -198,6 +199,8 @@ export function PopupReading({
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let active = true;
+    // On screen here, whatever the main window shows: full frame rate.
+    const releaseShown = holdPaneShown(paneId);
     void listen<RenderPayload>("terminal-render", (event) => {
       if (!active || event.payload.session_id !== paneId) return;
       screenRef.current = event.payload;
@@ -213,6 +216,7 @@ export function PopupReading({
     return () => {
       active = false;
       unlisten?.();
+      releaseShown();
     };
   }, [paneId]);
 

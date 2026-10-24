@@ -197,8 +197,13 @@ pub fn signal_dir() -> PathBuf {
         .join("notify")
 }
 
+/// Size past which `popup.log` moves to `popup.old.log` and starts over.
+const LOG_ROTATE_BYTES: u64 = 5 * 1024 * 1024;
+
 /// Appends a diagnostic line to `%LOCALAPPDATA%/Arkadia/popup.log` (and stderr).
-/// Lets us trace the popup decision path without a visible dev console.
+/// Lets us trace the popup decision path without a visible dev console. Each
+/// line carries its time: without it, a freeze could only be dated from the
+/// notification timestamps around it.
 pub(crate) fn log_line(msg: &str) {
     eprintln!("[arkadia popup] {msg}");
     let path = dirs::data_local_dir()
@@ -208,13 +213,28 @@ pub(crate) fn log_line(msg: &str) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
+    // Built before taking the lock: the panic hook logs through here, so
+    // nothing that can panic (the clock reads the time zone) may run while it
+    // is held — a panic there would deadlock the hook on the same thread.
+    let line = format!(
+        "{} {msg}\n",
+        chrono::Local::now().format("%m-%d %H:%M:%S%.3f")
+    );
+    // Several threads log at once during a freeze: without this, two could
+    // both see the file full and the second would rotate the fresh one-line
+    // file over the history just saved.
+    static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_ROTATE_BYTES) {
+        let _ = std::fs::rename(&path, path.with_file_name("popup.old.log"));
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
     {
         use std::io::Write;
-        let _ = writeln!(f, "{msg}");
+        let _ = f.write_all(line.as_bytes());
     }
 }
 

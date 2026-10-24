@@ -9,8 +9,9 @@
  * beyond a map write.
  */
 
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import type { RenderPayload } from "@/types";
+import { holdPaneShown } from "@/lib/shownPanes";
 
 const frames = new Map<string, RenderPayload>();
 const listeners = new Map<string, Set<() => void>>();
@@ -71,20 +72,50 @@ export function sizeToReclaim(
   return frame.cols === want.cols && frame.rows === want.rows ? null : want;
 }
 
+/** The frame a pane last displayed, kept while it is hidden. */
+export interface HeldFrame {
+  paneId: string;
+  frame: RenderPayload | null;
+}
+
+/**
+ * What a pane displays: the latest frame while live; while hidden, the frame it
+ * last displayed. A hidden pane still re-renders with its parent — every title
+ * change of any session re-renders the app — and reading the latest frame then
+ * redrew every hidden terminal each time: 23% of the page's CPU samples with
+ * fifteen busy sessions (measured 24/10/2026).
+ */
+export function displayedFrame(
+  held: { current: HeldFrame | null },
+  paneId: string,
+  live: boolean,
+): RenderPayload | null {
+  if (live || held.current?.paneId !== paneId) {
+    held.current = { paneId, frame: getFrame(paneId) };
+  }
+  return held.current.frame;
+}
+
 /**
  * The live frame of a pane. When `live` is false (pane hidden), the
- * subscription is suspended: no re-render per frame; on re-show the snapshot
- * immediately serves the latest frame.
+ * subscription is suspended and the frame stays the one last displayed; on
+ * re-show the snapshot immediately serves the latest frame. A live pane is
+ * also declared on screen, which keeps its frames at full rate (see
+ * `shownPanes`).
  */
 export function usePaneFrame(
   paneId: string,
   live: boolean = true,
 ): RenderPayload | null {
+  useEffect(() => (live ? holdPaneShown(paneId) : undefined), [paneId, live]);
+  const held = useRef<HeldFrame | null>(null);
   const subscribe = useCallback(
     (cb: () => void) => (live ? subscribeFrame(paneId, cb) : () => {}),
     [paneId, live],
   );
-  return useSyncExternalStore(subscribe, () => getFrame(paneId));
+  return useSyncExternalStore(subscribe, () =>
+    displayedFrame(held, paneId, live),
+  );
 }
 
 /**

@@ -66,6 +66,14 @@ impl RemoteHub {
         }
     }
 
+    /// Whether a connected phone shows `pane` right now.
+    pub fn is_watching(&self, pane: &str) -> bool {
+        self.frames
+            .lock()
+            .get(pane)
+            .is_some_and(|tx| tx.receiver_count() > 0)
+    }
+
     fn watch_frames(&self, pane: &str) -> watch::Receiver<Option<Arc<str>>> {
         let mut frames = self.frames.lock();
         frames.retain(|_, tx| tx.receiver_count() > 0);

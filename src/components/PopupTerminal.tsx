@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText as readClipboard } from "@tauri-apps/plugin-clipboard-manager";
 import { resolveColor } from "@/lib/palettes";
 import { keyEventToBytes } from "@/lib/keymap";
+import { holdPaneShown } from "@/lib/shownPanes";
 import { isChromeRow, isJumpPill } from "@/lib/terminalChrome";
 import type {
   CellRun,
@@ -252,6 +253,8 @@ export function PopupTerminal({
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let active = true;
+    // On screen here, whatever the main window shows: full frame rate.
+    const releaseShown = holdPaneShown(paneId);
     void listen<RenderPayload>("terminal-render", (event) => {
       if (!active) return;
       if (event.payload.session_id !== paneId) return;
@@ -270,6 +273,7 @@ export function PopupTerminal({
     return () => {
       active = false;
       unlisten?.();
+      releaseShown();
     };
   }, [paneId]);
 
