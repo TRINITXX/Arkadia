@@ -13,11 +13,16 @@ import {
 import { FilePicker, prefetchPhotos } from "@/components/FilePicker";
 import { measureCellSize } from "@/lib/cellSize";
 import { copiedCodeMessage } from "@/lib/codeCopy";
-import { usePaneFrameSelector } from "@/lib/frameStore";
+import { waitForDictationEnd } from "@/lib/dictationEnd";
+import { getFrame, usePaneFrameSelector } from "@/lib/frameStore";
 import { focusPaneElement } from "@/lib/paneFocus";
 import { quotePathsForPrompt } from "@/lib/pickerPrompt";
 import { CLEAR_CHUNK_GAP_MS, clearPromptChunks } from "@/lib/promptClear";
-import { inputRowIndex, isPromptField } from "@/lib/terminalChrome";
+import {
+  inputRowIndex,
+  isDictating,
+  isPromptField,
+} from "@/lib/terminalChrome";
 import type { TerminalFont } from "@/types";
 
 /**
@@ -54,7 +59,7 @@ interface PaneInputRailProps {
  * alone (the display mod hides the rest), pick files from the camera roll or the
  * downloads folder, hold/release space for voice dictation (click to start,
  * click to stop), copy the last code block Claude wrote, erase the typed prompt,
- * and send it (Enter).
+ * and send it (Enter — mid-dictation, once the transcript is in).
  *
  * Stacked vertically against the right edge rather than laid out in a row, so
  * they cover one column of Claude Code's input box instead of three — a long
@@ -76,6 +81,8 @@ export function PaneInputRail({
   const rowIdx = usePaneFrameSelector(paneId, inputRowIndex);
   const canClear = usePaneFrameSelector(paneId, isPromptField);
   const [talking, setTalking] = useState(false);
+  // Send was clicked mid-dictation: Enter waits for the transcript.
+  const [sending, setSending] = useState(false);
   const [picking, setPicking] = useState(false);
   const [copied, setCopied] = useState(false);
   const [onlyMessages, setOnlyMessages] = useState(false);
@@ -89,6 +96,8 @@ export function PaneInputRail({
   // A burst of erase keys is on its way: a second click would interleave its
   // writes and could merge them into one read Claude Code takes for a paste.
   const clearingRef = useRef(false);
+  // A second Enter would land mid-transcription and send half the prompt.
+  const sendingRef = useRef(false);
 
   const send = useCallback(
     (bytes: number[]) => {
@@ -189,6 +198,37 @@ export function PaneInputRail({
   // A pane switch (or the rail unmounting) must never leave spaces flowing.
   useEffect(() => stopTalking, [stopTalking, paneId]);
 
+  /**
+   * Sends the prompt (Enter). Mid-dictation, first releases the space key, then
+   * holds Enter until Claude Code has written the transcript into the prompt:
+   * sent earlier, it would go out without it. Like `clearPrompt`, the wait acts
+   * on the pane and finishes even if the rail unmounts meanwhile.
+   */
+  const submit = useCallback(async () => {
+    if (sendingRef.current) return;
+    // Spaces were flowing: wait even if this frame shows no voice status yet.
+    const wasTalking = talking;
+    stopTalking();
+    if (wasTalking || isDictating(getFrame(paneId))) {
+      sendingRef.current = true;
+      setSending(true);
+      const ended = await waitForDictationEnd(paneId);
+      sendingRef.current = false;
+      setSending(false);
+      if (!ended) {
+        // A closed pane has no frame left: nothing to tell.
+        if (getFrame(paneId)) {
+          onToast?.(
+            "error",
+            "La dictée ne se termine pas : message non envoyé",
+          );
+        }
+        return;
+      }
+    }
+    send([0x0d]);
+  }, [paneId, onToast, send, stopTalking, talking]);
+
   const closePicker = useCallback(() => {
     setPicking(false);
     focusPaneElement(paneId);
@@ -234,9 +274,10 @@ export function PaneInputRail({
     capRef.current = window.setTimeout(stopTalking, MAX_TALK_MS);
   };
 
-  // While dictating or picking, hold the last known spot rather than vanishing
-  // mid-interaction on a frame that momentarily has no `❯`.
-  const row = rowIdx >= 0 ? rowIdx : talking || picking ? lastRow : -1;
+  // While dictating, sending or picking, hold the last known spot rather than
+  // vanishing mid-interaction on a frame that momentarily has no `❯`.
+  const row =
+    rowIdx >= 0 ? rowIdx : talking || sending || picking ? lastRow : -1;
   if (row < 0) return null;
 
   const { height: cellH } = measureCellSize(font.family, font.size);
@@ -277,10 +318,19 @@ export function PaneInputRail({
         )}
         <button
           type="button"
-          onClick={() => send([0x0d])}
-          title="Envoyer le message (Entrée)"
+          onClick={() => void submit()}
+          title={
+            sending
+              ? "Envoi dès la fin de la dictée…"
+              : "Envoyer le message (Entrée)"
+          }
           aria-label="Envoyer le message"
-          className="pointer-events-auto flex size-6 items-center justify-center rounded bg-[rgba(34,197,94,0.10)] text-zinc-400 transition-colors hover:bg-[rgba(34,197,94,0.20)] hover:text-zinc-100"
+          aria-busy={sending}
+          className={`pointer-events-auto flex size-6 items-center justify-center rounded transition-colors ${
+            sending
+              ? "animate-pulse bg-[rgba(34,197,94,0.28)] text-green-200"
+              : "bg-[rgba(34,197,94,0.10)] text-zinc-400 hover:bg-[rgba(34,197,94,0.20)] hover:text-zinc-100"
+          }`}
         >
           <CornerDownLeft size={12} />
         </button>

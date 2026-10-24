@@ -145,7 +145,10 @@ export function PaneTreeView({
       <div className="relative h-full w-full">
         {terminal}
         {isActive && inputRailEnabled && (
+          // Keyed: a pane swapped in place gets a fresh rail, not the previous
+          // pane's pending send.
           <PaneInputRail
+            key={pane.id}
             paneId={pane.id}
             font={font}
             useWebGPU={useWebGPU}

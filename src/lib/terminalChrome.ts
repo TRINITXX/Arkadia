@@ -30,6 +30,29 @@ export function isPromptField(screen: RenderPayload | null): boolean {
   return above.startsWith("─") || above.startsWith("╭");
 }
 
+/**
+ * What Claude Code's voice mode prints (v2.1.310), alone on its row, while
+ * warming up, recording and transcribing.
+ */
+const VOICE_STATUS = /^(?:keep holding|listening|Voice: processing)…$/;
+
+/**
+ * Whether a dictation is still under way — recording or being transcribed —
+ * i.e. its text isn't in the prompt yet. Claude Code prints its voice status
+ * right-aligned on the row above the input box, where the effort badge sits
+ * otherwise (seen through a PTY on v2.1.310). Matching the whole row keeps out
+ * a transcript line that merely quotes those words.
+ */
+export function isDictating(screen: RenderPayload | null): boolean {
+  const r = inputRowIndex(screen);
+  if (!screen || r < 2) return false;
+  const status = (screen.lines[r - 2] ?? [])
+    .map((run) => run.text)
+    .join("")
+    .trim();
+  return VOICE_STATUS.test(status);
+}
+
 /** Column of the first non-space cell of a row, or null when the row is blank. */
 export function firstContentCol(runs: CellRun[]): number | null {
   let col = 0;

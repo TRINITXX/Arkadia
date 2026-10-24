@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { inputRowIndex, isPromptField } from "@/lib/terminalChrome";
+import {
+  inputRowIndex,
+  isDictating,
+  isPromptField,
+} from "@/lib/terminalChrome";
 import type { CellRun, RenderPayload } from "@/types";
 
 function run(text: string): CellRun {
@@ -79,5 +83,49 @@ describe("isPromptField", () => {
     expect(isPromptField(screenOf(["────────", "❯ 1. Yes", "  2. No"]))).toBe(
       false,
     );
+  });
+});
+
+describe("isDictating", () => {
+  /** Rows as seen through a PTY on v2.1.310: the status sits right-aligned
+   * above the box. */
+  const box = (status: string, prompt = "❯ ▂", width = 80) =>
+    screenOf([
+      "● done",
+      status.padStart(width),
+      "────────",
+      prompt,
+      "────────",
+      "  ⏵⏵ auto mode on",
+    ]);
+
+  it("sees warm-up, recording and transcribing above the input box", () => {
+    expect(isDictating(box("keep holding…"))).toBe(true);
+    expect(isDictating(box("listening…"))).toBe(true);
+    expect(isDictating(box("Voice: processing…"))).toBe(true);
+  });
+
+  it("sees it in a pane too narrow to push it past the middle", () => {
+    expect(isDictating(box("Voice: processing…", "❯ ▂", 24))).toBe(true);
+  });
+
+  it("is over once the effort badge or the outcome comes back", () => {
+    expect(isDictating(box("◉ xhigh · /effort"))).toBe(false);
+    expect(isDictating(box("No speech detected."))).toBe(false);
+    expect(isDictating(null)).toBe(false);
+  });
+
+  it("ignores the same words in the transcript and in the prompt", () => {
+    expect(
+      isDictating(
+        screenOf([
+          "● listening… then processing…",
+          "────────",
+          "❯ ",
+          "────────",
+        ]),
+      ),
+    ).toBe(false);
+    expect(isDictating(box("", "❯ still processing… the logs"))).toBe(false);
   });
 });
