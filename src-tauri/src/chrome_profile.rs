@@ -137,11 +137,19 @@ fn open_in_profile(url: &str, email: &str) -> bool {
     let Some(chrome) = chrome_exe() else {
         return false;
     };
-    Command::new(chrome)
-        .arg(format!("--profile-directory={dir}"))
-        .arg(url)
-        .spawn()
-        .is_ok()
+    Command::new(chrome).args(launch_args(&dir, url)).spawn().is_ok()
+}
+
+/// Chrome only reads flags when its first process starts: a closed Chrome
+/// opened from here must carry the flag `chrome-profile-open.ps1` passes too,
+/// or the "Claude started debugging this browser" bar shows for the whole
+/// session.
+fn launch_args(dir: &str, url: &str) -> [String; 3] {
+    [
+        format!("--profile-directory={dir}"),
+        "--silent-debugger-extension-api".to_owned(),
+        url.to_owned(),
+    ]
 }
 
 /// The panel's "open in browser": the artifact opens in the Chrome profile of
@@ -188,6 +196,15 @@ mod tests {
         assert_eq!(profile_dir(&state, "Alexis").as_deref(), Some("Profile 9"));
         assert_eq!(profile_dir(&state, "Nobody"), None);
         assert_eq!(unsuffixed("Nom ()"), "Nom ()");
+    }
+
+    #[test]
+    fn launches_chrome_with_the_debugging_bar_hidden() {
+        let args = launch_args("Profile 3", "https://claude.ai/artifact/x");
+        assert!(args.contains(&"--silent-debugger-extension-api".to_owned()));
+        assert_eq!(args[0], "--profile-directory=Profile 3");
+        // The link comes last, after every flag.
+        assert_eq!(args.last().map(String::as_str), Some("https://claude.ai/artifact/x"));
     }
 
     #[test]
