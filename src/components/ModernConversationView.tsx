@@ -19,6 +19,7 @@ import {
   type Row,
 } from "@/lib/domHighlight";
 import { queryTerms } from "@/lib/searchTerms";
+import { followsAfterScroll, UNFOLD_WINDOW_MS } from "@/lib/followBottom";
 import { HLJS_CSS, MODERN_CSS } from "@/components/modern/css";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
 import { Lightbox } from "@/components/modern/Lightbox";
@@ -416,7 +417,10 @@ export const ModernConversationView = memo(function ModernConversationView({
   );
   const { blocks, generation, cwd, loaded } = useConversationBlocks(source);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const atBottomRef = useRef(true);
+  // Wraps the rows: its size changes whenever any row sizes in or is added.
+  const contentRef = useRef<HTMLDivElement>(null);
+  // Following the end of the conversation (see `followsAfterScroll`).
+  const followingRef = useRef(true);
   // Last offset seen while on screen, restored when a hidden tab comes back.
   const savedTopRef = useRef(0);
   // Every visible row's element, by visible index, for search scroll /
@@ -564,17 +568,19 @@ export const ModernConversationView = memo(function ModernConversationView({
     setMatchIdx((i) => (i + dir + total) % total);
   };
 
-  // Follow the conversation only when already pinned near the bottom.
-  useLayoutEffect(() => {
+  // The stick is the next scroll event's starting point: the browser sends one
+  // event per frame with the net move, so a step up taken in the same frame as
+  // a stick would otherwise read as a move down.
+  const stickToBottom = useCallback(() => {
     const el = scrollRef.current;
-    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [visible]);
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    if (el.clientHeight > 0) savedTopRef.current = el.scrollTop;
+  }, []);
 
-  // The view opens at the bottom of the conversation. Land there once, then
-  // hold it while the rows keep sizing (images decoding, code highlighting):
-  // without that the transcript grows under the scroll and you get dropped
-  // above the end. Any wheel/drag from the user, or a second of quiet,
-  // releases the hold.
+  // The view always opens at the bottom of the conversation, whatever was
+  // scrolled before. Rows that size in afterwards are followed by the
+  // resize observer below.
   // Which conversation we already landed on — swapping the source on this
   // instance (pane change, another session previewed) lands again.
   const landedRef = useRef<string | null>(null);
@@ -582,36 +588,24 @@ export const ModernConversationView = memo(function ModernConversationView({
   useLayoutEffect(() => {
     const key = sourceKey(source);
     if (landedRef.current === key || !hasRows) return;
-    const el = scrollRef.current;
-    if (!el) return;
     landedRef.current = key;
-    let timer = 0;
-    const ro = new ResizeObserver(() => pin());
-    const release = () => {
-      window.clearTimeout(timer);
-      ro.disconnect();
-      el.removeEventListener("wheel", release);
-      el.removeEventListener("pointerdown", release);
-    };
-    const pin = () => {
-      el.scrollTop = el.scrollHeight;
-      atBottomRef.current = true;
-      window.clearTimeout(timer);
-      timer = window.setTimeout(release, 1000);
-    };
-    for (const r of rowEls.current.values()) ro.observe(r);
-    pin();
-    el.addEventListener("wheel", release, { passive: true });
-    el.addEventListener("pointerdown", release);
-    return release;
-  }, [hasRows, source]);
+    followingRef.current = true;
+    stickToBottom();
+  }, [hasRows, source, stickToBottom]);
 
   const onScroll = () => {
     const el = scrollRef.current;
     // A hidden (display:none) view reports zero sizes: nothing to learn there.
     if (!el || el.clientHeight === 0) return;
-    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    savedTopRef.current = el.scrollTop;
+    const top = el.scrollTop;
+    followingRef.current = followsAfterScroll(
+      followingRef.current,
+      top,
+      savedTopRef.current,
+      el.scrollHeight - top - el.clientHeight,
+      current ? 0 : undefined,
+    );
+    savedTopRef.current = top;
   };
 
   // Ctrl/Cmd+F opens search — but only on the active pane's view.
@@ -636,7 +630,7 @@ export const ModernConversationView = memo(function ModernConversationView({
       current.range.startContainer.parentElement ??
       rowEls.current.get(current.rowIndex);
     if (!anchor) return;
-    atBottomRef.current = false;
+    followingRef.current = false;
     anchor.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [current]);
 
@@ -656,6 +650,15 @@ export const ModernConversationView = memo(function ModernConversationView({
   const hasConversation = blocks.length > 0;
   const seeThrough = loaded && !hasConversation;
 
+  // While following, any change of size sticks to the bottom again: new rows,
+  // and rows skipped by `content-visibility`, estimated at 90px until drawn, so
+  // a single pin lands short of the real end. Images and code colouring keep
+  // growing the list after it too.
+  //
+  // Except a growth right after a press in the list: a tool card or a caption
+  // unfolding under the pointer. Sticking would push what was clicked up and
+  // out of sight, so the view stops following and stays put.
+  //
   // An inactive tab is display:none, which throws the scroll offset away:
   // coming back to it showed the top of the conversation. Put it back — at the
   // bottom when it was following, else where it was left. The observer runs
@@ -663,20 +666,34 @@ export const ModernConversationView = memo(function ModernConversationView({
   const hasScroller = hasConversation && visible.length > 0;
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
+    const content = contentRef.current;
+    if (!el || !content) return;
     let wasHidden = el.clientHeight === 0;
-    const ro = new ResizeObserver(() => {
-      const hidden = el.clientHeight === 0;
-      if (wasHidden && !hidden) {
-        el.scrollTop = atBottomRef.current
-          ? el.scrollHeight
-          : savedTopRef.current;
+    let pressedAt = -Infinity;
+    const onPress = () => {
+      pressedAt = performance.now();
+    };
+    const ro = new ResizeObserver((entries) => {
+      if (el.clientHeight === 0) {
+        wasHidden = true;
+        return;
       }
-      wasHidden = hidden;
+      const unfolded =
+        performance.now() - pressedAt < UNFOLD_WINDOW_MS &&
+        entries.some((e) => e.target === content);
+      if (followingRef.current && unfolded) followingRef.current = false;
+      else if (followingRef.current) stickToBottom();
+      else if (wasHidden) el.scrollTop = savedTopRef.current;
+      wasHidden = false;
     });
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [hasScroller]);
+    ro.observe(content);
+    content.addEventListener("pointerdown", onPress);
+    return () => {
+      ro.disconnect();
+      content.removeEventListener("pointerdown", onPress);
+    };
+  }, [hasScroller, stickToBottom]);
 
   // Live activity indicator, driven by Arkadia's agent state (reliable, unlike
   // scraping the terminal spinner): "busy" while Claude works (with the current
@@ -771,28 +788,30 @@ export const ModernConversationView = memo(function ModernConversationView({
           onScroll={onScroll}
           className="modern-scroll min-h-0 flex-1 overflow-y-auto px-3 py-3"
         >
-          {visible.map(({ block: b, blockIndex }, i) => (
-            <BlockRow
-              key={i}
-              block={b}
-              index={i}
-              speakerChange={i > 0 && visible[i - 1].block.kind !== b.kind}
-              density={density}
-              showResults={filters.results}
-              baseDir={cwd}
-              matchState={
-                (matchSet.has(i)
-                  ? i === currentVisIdx
-                    ? 2
-                    : 1
-                  : 0) as MatchState
-              }
-              animate={blockIndex >= initialCount}
-              registerEl={registerEl}
-              onOpen={openLightbox}
-              onToast={onToast}
-            />
-          ))}
+          <div ref={contentRef}>
+            {visible.map(({ block: b, blockIndex }, i) => (
+              <BlockRow
+                key={i}
+                block={b}
+                index={i}
+                speakerChange={i > 0 && visible[i - 1].block.kind !== b.kind}
+                density={density}
+                showResults={filters.results}
+                baseDir={cwd}
+                matchState={
+                  (matchSet.has(i)
+                    ? i === currentVisIdx
+                      ? 2
+                      : 1
+                    : 0) as MatchState
+                }
+                animate={blockIndex >= initialCount}
+                registerEl={registerEl}
+                onOpen={openLightbox}
+                onToast={onToast}
+              />
+            ))}
+          </div>
         </div>
       )}
       {hasConversation && working && (

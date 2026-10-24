@@ -34,6 +34,7 @@ Lu par toute review de ce repo. Une remarque de review qui revient s'ajoute ici.
 - **Chrome ouvert par Arkadia** (`chrome_profile.rs`) : tout lancement explicite de `chrome.exe` porte `--silent-debugger-extension-api`. Chrome ne lit ses options qu'au démarrage de son 1er processus : un Chrome fermé ouvert sans elle affiche « Claude a démarré le débogage de ce navigateur » pour toute la session (24/10/2026). Les ouvertures par le navigateur par défaut (`open::that_detached`) ne peuvent pas la porter : connu, non traité.
 - **Rendu WebGPU** : un device par pane ou plusieurs présentations par frame (perte du device).
 - **Fond « glass »** : un menu ou une vue de lecture qui devient transparent.
+- **Vue lecture arrêtée au-dessus de la fin** (`ModernConversationView`) : un message pas encore dessiné compte 90 px (`content-visibility`), donc un seul calage en bas tombe court. Tant que la vue suit la fin, tout changement de taille la recale. Seul un défilement de l'utilisateur vers le haut la décroche (`followsAfterScroll`), jamais l'écart au bas à lui seul (25/10/2026).
 
 ## Zones sensibles
 
