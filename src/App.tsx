@@ -93,6 +93,7 @@ import {
   stateFromTitle,
   withBackgroundShells,
   withBackgroundTasks,
+  withOpenArtifact,
   type AgentStateValue,
 } from "@/lib/agentState";
 import { findProjectsByPath, parentOf } from "@/lib/externalAction";
@@ -478,43 +479,6 @@ export function App() {
     [activeProjectIds, tabs, tabStates, hiddenSidebarTabIds],
   );
 
-  // Phone companion: the Rust server relays this picture of the desktop.
-  const remoteSnapshotInput = useMemo(
-    () => ({
-      projects,
-      workspaces,
-      tabs,
-      paneStates: effectivePaneStates,
-      activeProjectIds: sidebarActiveProjectIds,
-      palette,
-      toolbarButtons,
-      promptButtons,
-      promptBarEnabled,
-      claudePaneIds,
-      accountMarks,
-      accounts: accounts.state,
-      autoSwitch: autoSwitchOnLimit,
-      toolDensity,
-    }),
-    [
-      projects,
-      workspaces,
-      tabs,
-      effectivePaneStates,
-      sidebarActiveProjectIds,
-      palette,
-      toolbarButtons,
-      promptButtons,
-      promptBarEnabled,
-      claudePaneIds,
-      accountMarks,
-      accounts.state,
-      autoSwitchOnLimit,
-      toolDensity,
-    ],
-  );
-  useRemoteSnapshot(loaded, remoteSnapshotInput);
-
   const visibleTabs = useMemo(
     () =>
       activeProjectId
@@ -551,6 +515,59 @@ export function App() {
   const [artifactWidth, setArtifactWidth] = useState(0);
   // Source of truth for the handlers below, which outlive any render.
   const artifactsRef = useRef<ArtifactsByTab>({});
+  // The sidebar and the phone ring the Claude panes of a tab whose artifact
+  // panel is open.
+  const badgePaneStates = useMemo(() => {
+    let merged: Record<string, AgentStateValue> | null = null;
+    for (const tab of tabs) {
+      if (!hasPanel(artifacts[tab.id])) continue;
+      for (const paneId of Object.keys(tab.panes)) {
+        const state = effectivePaneStates[paneId];
+        if (!state) continue;
+        merged ??= { ...effectivePaneStates };
+        merged[paneId] = withOpenArtifact(state, true);
+      }
+    }
+    return merged ?? effectivePaneStates;
+  }, [tabs, artifacts, effectivePaneStates]);
+
+  // Phone companion: the Rust server relays this picture of the desktop.
+  const remoteSnapshotInput = useMemo(
+    () => ({
+      projects,
+      workspaces,
+      tabs,
+      paneStates: badgePaneStates,
+      activeProjectIds: sidebarActiveProjectIds,
+      palette,
+      toolbarButtons,
+      promptButtons,
+      promptBarEnabled,
+      claudePaneIds,
+      accountMarks,
+      accounts: accounts.state,
+      autoSwitch: autoSwitchOnLimit,
+      toolDensity,
+    }),
+    [
+      projects,
+      workspaces,
+      tabs,
+      badgePaneStates,
+      sidebarActiveProjectIds,
+      palette,
+      toolbarButtons,
+      promptButtons,
+      promptBarEnabled,
+      claudePaneIds,
+      accountMarks,
+      accounts.state,
+      autoSwitchOnLimit,
+      toolDensity,
+    ],
+  );
+  useRemoteSnapshot(loaded, remoteSnapshotInput);
+
   const artifactSeq = useRef(0);
   const artifactTabsRef = useRef(tabs);
   const activeTabIdRef = useRef(activeTabId);
@@ -2791,7 +2808,7 @@ export function App() {
             onActivateProjectTab(projectId, tabId);
           }}
           tabs={tabs}
-          paneAgentStates={effectivePaneStates}
+          paneAgentStates={badgePaneStates}
           activeTabIdByProject={activeTabIdByProject}
           activeProjectIds={sidebarActiveProjectIds}
           hiddenTabIds={hiddenSidebarTabIds}

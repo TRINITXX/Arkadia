@@ -5,6 +5,8 @@ import {
   aggregate,
   withBackgroundShells,
   withBackgroundTasks,
+  withOpenArtifact,
+  type AgentStateValue,
 } from "@/lib/agentState";
 
 describe("stateFromTitle", () => {
@@ -71,6 +73,33 @@ describe("aggregate", () => {
     expect(aggregate([plain, ringed])).toBe(ringed);
     expect(aggregate([ringed, plain])).toBe(ringed);
   });
+
+  it("keeps the pane carrying both rings over one carrying a single ring", () => {
+    const shell = { kind: "waiting", session_id: "a", shellRunning: true };
+    const both = {
+      kind: "waiting",
+      session_id: "b",
+      shellRunning: true,
+      artifactOpen: true,
+    };
+    expect(aggregate([shell, both] as AgentStateValue[])).toBe(both);
+  });
+
+  it("carries a shell ring and an artifact ring found on different panes", () => {
+    const artifact = { kind: "waiting", session_id: "a", artifactOpen: true };
+    const shell = { kind: "waiting", session_id: "b", shellRunning: true };
+    expect(aggregate([artifact, shell] as AgentStateValue[])).toEqual({
+      ...artifact,
+      shellRunning: true,
+    });
+  });
+
+  it("keeps a plain waiting pane over a busy pane with an artifact", () => {
+    const waiting = { kind: "waiting", session_id: "a" } as const;
+    expect(aggregate([{ kind: "busy", artifactOpen: true }, waiting])).toBe(
+      waiting,
+    );
+  });
 });
 
 describe("withBackgroundTasks", () => {
@@ -110,5 +139,26 @@ describe("withBackgroundShells", () => {
   it("never rings a busy pane", () => {
     const busy = { kind: "busy" } as const;
     expect(withBackgroundShells(busy, 2)).toBe(busy);
+  });
+});
+
+describe("withOpenArtifact", () => {
+  it("rings a waiting or busy pane whose tab shows an artifact", () => {
+    const waiting = { kind: "waiting", session_id: "", shellRunning: true };
+    expect(withOpenArtifact(waiting as AgentStateValue, true)).toEqual({
+      ...waiting,
+      artifactOpen: true,
+    });
+    expect(withOpenArtifact({ kind: "busy" }, true)).toEqual({
+      kind: "busy",
+      artifactOpen: true,
+    });
+  });
+
+  it("leaves the pane plain without an artifact, and idle panes alone", () => {
+    const busy = { kind: "busy" } as const;
+    expect(withOpenArtifact(busy, false)).toBe(busy);
+    const idle = { kind: "idle", session_id: "" } as const;
+    expect(withOpenArtifact(idle, true)).toBe(idle);
   });
 });

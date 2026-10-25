@@ -23,8 +23,16 @@ import type {
   Workspace,
 } from "@/types";
 
-/** The sidebar badge: amber = working, green = waiting (ring: a shell runs). */
-export type RemoteBadge = "busy" | "waiting" | "waiting-shell" | null;
+/** The sidebar badge: amber = working, green = waiting. Rings: a shell runs
+ *  (waiting only), an artifact is open in the tab. */
+export type RemoteBadge =
+  | "busy"
+  | "busy-artifact"
+  | "waiting"
+  | "waiting-shell"
+  | "waiting-artifact"
+  | "waiting-shell-artifact"
+  | null;
 
 export interface RemotePane {
   id: string;
@@ -102,9 +110,13 @@ export interface RemoteSnapshotInput {
 }
 
 export function badgeOf(state: AgentStateValue | undefined): RemoteBadge {
-  if (state?.kind === "busy") return "busy";
-  if (state?.kind === "waiting")
-    return state.shellRunning ? "waiting-shell" : "waiting";
+  if (state?.kind === "busy")
+    return state.artifactOpen ? "busy-artifact" : "busy";
+  if (state?.kind === "waiting") {
+    if (state.shellRunning)
+      return state.artifactOpen ? "waiting-shell-artifact" : "waiting-shell";
+    return state.artifactOpen ? "waiting-artifact" : "waiting";
+  }
   return null;
 }
 

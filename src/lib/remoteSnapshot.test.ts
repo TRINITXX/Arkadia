@@ -7,9 +7,12 @@ import type {
   Workspace,
 } from "@/types";
 import type { AgentStateValue } from "./agentState";
+import { agentStateOf } from "@/mobile/RemoteBadgeDot";
 import {
+  badgeOf,
   buildRemoteSnapshot,
   plainTitle,
+  type RemoteBadge,
   type RemoteSnapshotInput,
 } from "./remoteSnapshot";
 
@@ -54,6 +57,32 @@ const waitingWithShell: AgentStateValue = {
   session_id: "",
   shellRunning: true,
 };
+
+describe("badgeOf", () => {
+  it("names the artifact ring, alone or with the shell ring", () => {
+    expect(badgeOf({ kind: "busy", artifactOpen: true })).toBe("busy-artifact");
+    expect(badgeOf({ ...waitingWithShell, artifactOpen: true })).toBe(
+      "waiting-shell-artifact",
+    );
+    expect(
+      badgeOf({ kind: "waiting", session_id: "", artifactOpen: true }),
+    ).toBe("waiting-artifact");
+  });
+
+  it("reads back on the phone as the same rings", () => {
+    const badges: RemoteBadge[] = [
+      "busy",
+      "busy-artifact",
+      "waiting",
+      "waiting-shell",
+      "waiting-artifact",
+      "waiting-shell-artifact",
+      null,
+    ];
+    for (const badge of badges)
+      expect(badgeOf(agentStateOf(badge))).toBe(badge);
+  });
+});
 
 describe("plainTitle", () => {
   it("drops Claude's status glyph, keeps plain titles", () => {

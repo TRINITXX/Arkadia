@@ -1,8 +1,13 @@
 export type AgentStateValue =
   | { kind: "none" }
   | { kind: "idle"; session_id: string }
-  | { kind: "busy"; tool?: string | null }
-  | { kind: "waiting"; session_id: string; shellRunning?: boolean };
+  | { kind: "busy"; tool?: string | null; artifactOpen?: boolean }
+  | {
+      kind: "waiting";
+      session_id: string;
+      shellRunning?: boolean;
+      artifactOpen?: boolean;
+    };
 
 export interface AgentEventPayload {
   session_id: string;
@@ -64,6 +69,22 @@ export function withBackgroundShells(
   return { ...state, shellRunning: true };
 }
 
+// The pane's tab shows the artifact panel: the badge gets a ring saying so,
+// whether Claude works or waits.
+export function withOpenArtifact(
+  state: AgentStateValue,
+  artifactOpen: boolean,
+): AgentStateValue {
+  if ((state.kind !== "busy" && state.kind !== "waiting") || !artifactOpen)
+    return state;
+  return { ...state, artifactOpen: true };
+}
+
+const hasShellRing = (s: AgentStateValue) =>
+  s.kind === "waiting" && !!s.shellRunning;
+const hasArtifactRing = (s: AgentStateValue) =>
+  (s.kind === "busy" || s.kind === "waiting") && !!s.artifactOpen;
+
 export function aggregate(states: AgentStateValue[]): AgentStateValue {
   // waiting outranks busy because it requires user action (AskUserQuestion,
   // ExitPlanMode) — it must be surfaced even when other agents are working.
@@ -73,11 +94,23 @@ export function aggregate(states: AgentStateValue[]): AgentStateValue {
     idle: 2,
     none: 1,
   };
-  // Between two waiting panes, the one with a shell open keeps its ring.
+  // Between two panes of the same kind, the one with more rings (shell open,
+  // artifact open) wins.
   const rank = (s: AgentStateValue) =>
-    order[s.kind] * 2 + (s.kind === "waiting" && s.shellRunning ? 1 : 0);
-  return states.reduce<AgentStateValue>(
-    (best, s) => (rank(s) > rank(best) ? s : best),
+    order[s.kind] * 3 + Number(hasShellRing(s)) + Number(hasArtifactRing(s));
+  const best = states.reduce<AgentStateValue>(
+    (top, s) => (rank(s) > rank(top) ? s : top),
     { kind: "none" },
   );
+  // Rings are independent: the badge carries every ring found among the panes
+  // of its kind, even when no single pane has them all.
+  const peers = states.filter((s) => s.kind === best.kind);
+  const shell = peers.some(hasShellRing);
+  const artifact = peers.some(hasArtifactRing);
+  if (shell === hasShellRing(best) && artifact === hasArtifactRing(best))
+    return best;
+  if (best.kind === "waiting")
+    return { ...best, shellRunning: shell, artifactOpen: artifact };
+  if (best.kind === "busy") return { ...best, artifactOpen: artifact };
+  return best;
 }

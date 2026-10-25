@@ -4,12 +4,14 @@ import type { RemoteBadge } from "@/lib/remoteSnapshot";
 
 /** A badge back as the desktop's agent state (what the shared views read). */
 export function agentStateOf(badge: RemoteBadge): AgentStateValue {
-  if (badge === "busy") return { kind: "busy" };
   if (badge === null) return { kind: "none" };
+  const artifactOpen = badge.endsWith("-artifact");
+  if (badge.startsWith("busy")) return { kind: "busy", artifactOpen };
   return {
     kind: "waiting",
     session_id: "",
-    shellRunning: badge === "waiting-shell",
+    shellRunning: badge.startsWith("waiting-shell"),
+    artifactOpen,
   };
 }
 
