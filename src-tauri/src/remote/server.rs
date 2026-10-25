@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 
 use super::access::{decide, wake_relay, Access, RequestInfo};
 use super::peer::is_tailscale_daemon;
+use super::phone::{save_push_token, FOLLOW};
 use super::{RemoteHub, PORT};
 use crate::conversation::{
     evict_phone_cache, image_bytes, read_conversation_delta_for_phone, ConvCacheMap,
@@ -33,6 +34,10 @@ const FRAME_GAP: Duration = Duration::from_millis(33);
 /// Keeps the socket alive through proxies and the phone's network.
 const PING_EVERY: Duration = Duration::from_secs(25);
 const BIND_RETRY: Duration = Duration::from_secs(3);
+/// Bounds of one `Inputs` sequence: enough to clear a long prompt
+/// (`promptClear`, 21 writes 20 ms apart), never a stall of the socket.
+const MAX_INPUT_PARTS: usize = 64;
+const MAX_INPUT_GAP_MS: u64 = 200;
 
 #[derive(Clone)]
 struct Ctx {
@@ -71,6 +76,7 @@ impl Ctx {
 }
 
 pub async fn serve(app: AppHandle, hub: Arc<RemoteHub>, access: Arc<Access>) {
+    super::activity::spawn(hub.clone());
     // The port may still be held for a moment (a previous Arkadia closing):
     // keep trying rather than leave the phone without a server.
     let mut warned = false;
@@ -93,6 +99,7 @@ pub async fn serve(app: AppHandle, hub: Arc<RemoteHub>, access: Arc<Access>) {
     let router = Router::new()
         .route("/ws", get(ws_route))
         .route("/image", get(image_route))
+        .route("/thumb", get(thumb_route))
         .route("/video", get(video_route))
         .fallback(get(static_route))
         .with_state(Ctx { app, hub, access });
@@ -214,6 +221,44 @@ struct ImageQuery {
     path: String,
 }
 
+/// A photo or download's thumbnail for the iPhone's picker, with the desktop
+/// picker's checks (still images, local disk, size cap) and /image's guard.
+async fn thumb_route(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Query(query): Query<ImageQuery>,
+    headers: HeaderMap,
+    AxState(ctx): AxState<Ctx>,
+) -> Response {
+    if ctx.check(peer, &headers, false).is_err() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let same_origin =
+        headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("same-origin");
+    if !same_origin {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let app = ctx.app.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        crate::photos::thumbnail_bytes(&app, &query.path)
+    })
+    .await
+    {
+        Ok(Ok(bytes)) => (
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                (
+                    header::HeaderName::from_static("cross-origin-resource-policy"),
+                    "same-origin",
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 /// A video the conversation mentions, in the byte ranges the phone's player
 /// asks for: it seeks without the whole file crossing the network.
 async fn video_route(
@@ -307,6 +352,14 @@ enum ClientMsg {
         pane: String,
         data: String,
     },
+    /// Writes spaced on the PC itself: Claude Code reads a write of over
+    /// ~40 bytes as a paste and drops its control keys (REVIEW.md « Rafale de
+    /// touches »), and the network may bunch writes the phone spaced.
+    Inputs {
+        pane: String,
+        parts: Vec<String>,
+        gap_ms: u64,
+    },
     Resize {
         pane: String,
         cols: u16,
@@ -351,6 +404,26 @@ enum ClientMsg {
         pane: String,
         generation: u64,
         have: usize,
+    },
+    /// The picker's recent photos or downloads (`list_recent_files`).
+    Files {
+        id: u64,
+        source: String,
+        limit: usize,
+    },
+    /// The last code block Claude wrote in the pane (`read_last_code_block`).
+    Code {
+        id: u64,
+        pane: String,
+    },
+    /// The iPhone app's push token, for the panes it drives (`phone`).
+    Push {
+        token: String,
+    },
+    /// The Live Activity's push token once the app started it; `None` when
+    /// it ended it (`activity`).
+    Activity {
+        token: Option<String>,
     },
 }
 
@@ -397,6 +470,9 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
     let client = ctx.hub.add_client(out.clone());
     let mut state_rx = ctx.hub.watch_state();
     state_rx.mark_changed();
+    // The tabs it drives: the app shows their dots in its Live Activity.
+    let mut follow_rx = FOLLOW.subscribe();
+    follow_rx.mark_changed();
     let mut frames: Option<tokio::task::JoinHandle<()>> = None;
     let mut ping = tokio::time::interval(PING_EVERY);
 
@@ -417,6 +493,7 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
                 };
                 match msg {
                     ClientMsg::Watch { pane } => {
+                        FOLLOW.set_watching(client, pane.clone());
                         if let Some(task) = frames.take() {
                             task.abort();
                         }
@@ -425,6 +502,10 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
                         }
                     }
                     ClientMsg::Action { id, action } => {
+                        // A button the phone pressed for a pane: the phone drives it.
+                        if let Some(pane) = action.get("paneId").and_then(|v| v.as_str()) {
+                            FOLLOW.phone_action(pane, std::time::Instant::now());
+                        }
                         let relayed = RelayedAction { client, id, action };
                         if let Err(e) = ctx.app.emit_to("main", "remote-action", relayed) {
                             let _ = out.send(error(&format!("desktop window unreachable: {e}"))).await;
@@ -443,6 +524,23 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
                             let _ = out.blocking_send(text(reply.to_string()));
                         });
                     }
+                    ClientMsg::Files { id, source, limit } => {
+                        let app = ctx.app.clone();
+                        let out = out.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let listed = crate::photos::list_recent_files(app, source, limit);
+                            let _ = out.blocking_send(text(reply(id, listed).to_string()));
+                        });
+                    }
+                    ClientMsg::Code { id, pane } => {
+                        let out = out.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let block = crate::conversation::read_last_code_block(pane);
+                            let _ = out.blocking_send(text(reply(id, block).to_string()));
+                        });
+                    }
+                    ClientMsg::Push { token } => save_push_token(&token),
+                    ClientMsg::Activity { token } => super::activity::set_token(token),
                     ClientMsg::Sessions { .. } | ClientMsg::Search { .. } => {
                         // A full scan can take seconds: off the socket loop.
                         let app = ctx.app.clone();
@@ -470,6 +568,16 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
                     }
                 }
             }
+            changed = follow_rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                let panes = follow_rx.borrow_and_update().clone();
+                let msg = serde_json::json!({ "t": "follow", "panes": panes });
+                if out.send(text(msg.to_string())).await.is_err() {
+                    break;
+                }
+            }
             _ = ping.tick() => {
                 if device.is_some_and(|ip| !ctx.access.tailnet().allowed_ips.contains(&ip)) {
                     log_line("[remote] device no longer allowed, closing its session");
@@ -481,6 +589,7 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
             }
         }
     }
+    FOLLOW.set_watching(client, None);
     ctx.hub.remove_client(client);
     evict_phone_cache(&ctx.app.state::<ConvCacheMap>(), client, None);
     if let Some(task) = frames {
@@ -543,8 +652,31 @@ fn run(app: &AppHandle, msg: ClientMsg) -> Result<(), String> {
         | ClientMsg::Action { .. }
         | ClientMsg::Sessions { .. }
         | ClientMsg::Search { .. }
-        | ClientMsg::Conv { .. } => Ok(()),
-        ClientMsg::Input { pane, data } => terminal::send_input(pane, data.into_bytes(), sessions),
+        | ClientMsg::Conv { .. }
+        | ClientMsg::Files { .. }
+        | ClientMsg::Code { .. }
+        | ClientMsg::Push { .. }
+        | ClientMsg::Activity { .. } => Ok(()),
+        ClientMsg::Input { pane, data } => {
+            FOLLOW.phone_input(&pane);
+            terminal::write_input(pane, data.into_bytes(), sessions)
+        }
+        ClientMsg::Inputs {
+            pane,
+            parts,
+            gap_ms,
+        } => {
+            FOLLOW.phone_input(&pane);
+            let gap = Duration::from_millis(gap_ms.min(MAX_INPUT_GAP_MS));
+            for (i, part) in parts.into_iter().take(MAX_INPUT_PARTS).enumerate() {
+                if i > 0 {
+                    // Off the socket loop (spawn_blocking): the next message waits.
+                    std::thread::sleep(gap);
+                }
+                terminal::write_input(pane.clone(), part.into_bytes(), sessions.clone())?;
+            }
+            Ok(())
+        }
         ClientMsg::Resize { pane, cols, rows } => {
             terminal::resize_terminal(pane, cols, rows, sessions, app.clone())
         }
@@ -561,6 +693,7 @@ fn run(app: &AppHandle, msg: ClientMsg) -> Result<(), String> {
         }
         ClientMsg::Wheel { button, .. } => Err(format!("not a wheel button: {button}")),
         ClientMsg::Click { pane, col, row } => {
+            FOLLOW.phone_input(&pane);
             terminal::send_mouse_event(
                 pane.clone(),
                 col,
@@ -573,6 +706,14 @@ fn run(app: &AppHandle, msg: ClientMsg) -> Result<(), String> {
             )?;
             terminal::send_mouse_event(pane, col, row, 0, 0, false, false, sessions)
         }
+    }
+}
+
+/// A request's answer: its result, or the error the phone shows.
+fn reply<T: Serialize>(id: u64, result: Result<T, String>) -> serde_json::Value {
+    match result {
+        Ok(value) => serde_json::json!({ "t": "reply", "id": id, "result": value }),
+        Err(e) => serde_json::json!({ "t": "reply", "id": id, "error": e }),
     }
 }
 

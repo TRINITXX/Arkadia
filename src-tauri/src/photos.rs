@@ -203,7 +203,12 @@ const MAX_SOURCE_BYTES: u64 = 50 * 1024 * 1024;
 /// in place changes its mtime and therefore its key.
 #[tauri::command(async)]
 pub fn photo_thumbnail(app: AppHandle, path: String) -> Result<tauri::ipc::Response, String> {
-    let src = PathBuf::from(&path);
+    thumbnail_bytes(&app, &path).map(tauri::ipc::Response::new)
+}
+
+/// The thumbnail's JPEG bytes, for the desktop picker and the phone's.
+pub fn thumbnail_bytes(app: &AppHandle, path: &str) -> Result<Vec<u8>, String> {
+    let src = PathBuf::from(path);
     if !is_still_image(&src) {
         return Err("not a still image".into());
     }
@@ -230,9 +235,9 @@ pub fn photo_thumbnail(app: AppHandle, path: String) -> Result<tauri::ipc::Respo
         .app_data_dir()
         .map_err(|e| format!("app data dir: {e}"))?
         .join("thumbs");
-    let cached = dir.join(format!("{}.jpg", cache_key(&path, stamp, meta.len())));
+    let cached = dir.join(format!("{}.jpg", cache_key(path, stamp, meta.len())));
     if let Ok(bytes) = fs::read(&cached) {
-        return Ok(tauri::ipc::Response::new(bytes));
+        return Ok(bytes);
     }
 
     let bytes = encode_thumbnail(&src)?;
@@ -240,7 +245,7 @@ pub fn photo_thumbnail(app: AppHandle, path: String) -> Result<tauri::ipc::Respo
     if fs::create_dir_all(&dir).is_ok() {
         let _ = fs::write(&cached, &bytes);
     }
-    Ok(tauri::ipc::Response::new(bytes))
+    Ok(bytes)
 }
 
 fn cache_key(path: &str, mtime: u128, len: u64) -> String {

@@ -860,8 +860,24 @@ fn emit_render(
     let _ = app.emit("terminal-render", payload);
 }
 
+/// The desktop's own writes: Alexis typing on the PC hands a pane the phone
+/// was driving back to the PC (no more phone notifications for it). An
+/// `automatic` write (Arkadia resuming Claude after a usage limit) is not him.
 #[tauri::command]
 pub fn send_input(
+    session_id: String,
+    bytes: Vec<u8>,
+    automatic: Option<bool>,
+    state: State<'_, SessionMap>,
+) -> Result<(), String> {
+    if automatic != Some(true) {
+        crate::remote::phone::FOLLOW.desktop_input(&session_id, std::time::Instant::now());
+    }
+    write_input(session_id, bytes, state)
+}
+
+/// Writes to a pane's PTY, from the desktop or the phone.
+pub fn write_input(
     session_id: String,
     bytes: Vec<u8>,
     state: State<'_, SessionMap>,

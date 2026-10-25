@@ -16,6 +16,8 @@ export default [
       "crates/terminal-renderer/pkg/**",
       "crates/**",
       "src-tauri/**",
+      // The iPhone app has its own toolchain (`npx expo lint`).
+      "iphone/**",
       // Tests are excluded from tsconfig (kept out of the production typecheck),
       // so the type-aware parser can't resolve them — skip them here too.
       // Vitest runs them; type-checking of the tested API happens via its imports.

@@ -1607,6 +1607,8 @@ export function App() {
       dropHeldConv(oldId);
       void invoke("close_terminal", { sessionId: oldId }).catch(() => {});
       paneToTab.current.set(newId, tabId);
+      // A tab driven from the iPhone keeps its notifications.
+      void invoke("remote_pane_replaced", { oldId, newId }).catch(() => {});
       setTabs((prev) =>
         prev.map((t) => {
           if (t.id !== tabId) return t;
@@ -1822,9 +1824,12 @@ export function App() {
         }
         lastLimitContinue.current.set(sid, now);
         const bytes = Array.from(new TextEncoder().encode("continue\r"));
-        await invoke("send_input", { sessionId: paneId, bytes }).catch(
-          () => {},
-        );
+        // Automatic: a tab Alexis drives from the iPhone stays his there.
+        await invoke("send_input", {
+          sessionId: paneId,
+          bytes,
+          automatic: true,
+        }).catch(() => {});
         pushToast("info", `▶ reprise sur ${label(from)}`);
         return;
       }

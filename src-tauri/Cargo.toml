@@ -45,6 +45,8 @@ image = { version = "0.25", default-features = false, features = [
     "gif",
     "webp",
 ] }
+reqwest = { version = "0.12", default-features = false, features = ["http2", "native-tls-alpn", "json"] }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "pem", "std"] }
 
 # Win32 z-order inspection so the notification popup can tell when Arkadia is
 # only behind an always-on-top overlay (Picture-in-Picture) vs a real window.

@@ -7,10 +7,55 @@
 
 const BACKSPACE = "\x7f";
 
-const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const graphemes =
+  typeof Intl.Segmenter === "function"
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+
+const ZWJ = 0x200d;
+/** Code points that belong to the character before them: combining marks,
+ *  variation selectors, the keycap, skin tones, tag characters. */
+const EXTENDS: [number, number][] = [
+  [0x0300, 0x036f],
+  [0x1ab0, 0x1aff],
+  [0x1dc0, 0x1dff],
+  [0x20d0, 0x20ff],
+  [0xfe00, 0xfe0f],
+  [0xfe20, 0xfe2f],
+  [0x1f3fb, 0x1f3ff],
+  [0xe0020, 0xe007f],
+];
+
+const extendsPrevious = (cp: number) =>
+  cp === ZWJ || EXTENDS.some(([lo, hi]) => cp >= lo && cp <= hi);
+const isRegional = (cp: number) => cp >= 0x1f1e6 && cp <= 0x1f1ff;
+
+/**
+ * Characters as iOS erases them, for an engine without Intl.Segmenter (the
+ * iPhone app's Hermes may lack it): code points, with what extends or joins
+ * an emoji kept on it, and flags as pairs of letters.
+ */
+function splitFallback(text: string): string[] {
+  const out: string[] = [];
+  let joined = false;
+  // A flag's first letter, still waiting for its second.
+  let lonelyRegional = false;
+  for (const char of text) {
+    const cp = char.codePointAt(0) ?? 0;
+    const pairs: boolean = lonelyRegional && isRegional(cp);
+    if (out.length > 0 && (joined || extendsPrevious(cp) || pairs))
+      out[out.length - 1] += char;
+    else out.push(char);
+    lonelyRegional = isRegional(cp) && !pairs;
+    joined = cp === ZWJ;
+  }
+  return out;
+}
 
 function split(text: string): string[] {
-  return Array.from(graphemes.segment(text), (s) => s.segment);
+  return graphemes
+    ? Array.from(graphemes.segment(text), (s) => s.segment)
+    : splitFallback(text);
 }
 
 /**

@@ -35,6 +35,13 @@ Lu par toute review de ce repo. Une remarque de review qui revient s'ajoute ici.
 - **Rendu WebGPU** : un device par pane ou plusieurs présentations par frame (perte du device).
 - **Fond « glass »** : un menu ou une vue de lecture qui devient transparent.
 - **Vue lecture arrêtée au-dessus de la fin** (`ModernConversationView`) : un message pas encore dessiné compte 90 px (`content-visibility`), donc un seul calage en bas tombe court. Tant que la vue suit la fin, tout changement de taille la recale. Seul un défilement de l'utilisateur vers le haut la décroche (`followsAfterScroll`), jamais l'écart au bas à lui seul (25/10/2026).
+- **App iPhone : écran du terminal** (`iphone/src/terminal/`) : seul `LiveTerminal` s'abonne aux images du volet (30 par seconde). Un abonnement plus haut redessine l'en-tête natif, ses menus et la rangée de touches à chaque image (relecture du 25/10/2026). Ailleurs, lire la dernière image avec `latestFrame(paneId)`.
+- **App iPhone : ordre des effets** : un effet qui remet une ref à zéro se déclare avant l'effet qui la lit. React les exécute dans l'ordre d'écriture : déclaré après, le changement de volet comparait la nouvelle taille à l'ancienne et n'envoyait aucun `resize` (relecture du 25/10/2026).
+- **App iPhone et page web, même comportement** : l'app reprend les gestes et la saisie de `src/mobile/` (toucher = clic, champ caché vidé à l'ouverture du clavier, reprise de la taille du terminal). Une divergence perd ou décale des touches dans l'invite de Claude.
+- **App iPhone : écritures espacées** : l'espacement anti-collage (« Rafale de touches ») se fait sur le PC, pas sur le téléphone : le réseau regroupe les envois espacés. Toute suite d'écritures du téléphone (effacer l'invite, dictée puis Entrée) passe par le message `inputs` (relecture du 25/10/2026).
+- **App iPhone : écrans de terminal empilés** : un écran de terminal prend le flux de son volet par `acquireWatch` et le rend à l'écran du dessous en partant. Un `watch null` au démontage laissait l'écran du dessous figé sur « Chargement… » (relecture du 25/10/2026).
+- **App iPhone : Face ID** : une absence ne compte qu'une fois. L'heure de départ s'efface dès qu'elle a été vérifiée, sinon le retour de l'invite Face ID elle-même reverrouille, en boucle (relecture du 25/10/2026).
+- **Onglets suivis par l'iPhone** (`remote/phone.rs`) : seule une frappe d'Alexis sur le PC rend l'onglet au PC. Une écriture automatique d'Arkadia passe `automatic: true` à `send_input`, et un volet relancé sous un autre id appelle `remote_pane_replaced`. Sinon les notifications et la Live Activity s'arrêtent sans raison (relecture du 25/10/2026).
 
 ## Zones sensibles
 
@@ -42,7 +49,7 @@ Un changement qui touche une de ces zones se propose en `/review-maison` :
 
 - Comptes et lancement des terminaux : `src-tauri/src/accounts.rs`, `src-tauri/src/terminal.rs`
 - Fenêtres et chien de garde : `src-tauri/src/uiwatch.rs`, `src-tauri/src/popup.rs`
-- Compagnon téléphone (accès distant par Tailscale) : `src-tauri/src/remote/`, `src-tauri/src/gate.rs`, `src/mobile/`
+- Compagnon téléphone (accès distant par Tailscale) : `src-tauri/src/remote/`, `src-tauri/src/gate.rs`, `src/mobile/`, `src/lib/remoteProtocol.ts`, `iphone/src/remote/`
 - Contenu distant : `src-tauri/src/artifact_view.rs`, `src-tauri/capabilities/`
 
 ## Décisions à ne pas signaler
@@ -54,4 +61,4 @@ Un changement qui touche une de ces zones se propose en `/review-maison` :
 
 ## Chemins à ignorer
 
-`target/`, `target-verify/`, `dist/`, `node_modules/`, `crates/terminal-renderer/pkg/`
+`target/`, `target-verify/`, `dist/`, `node_modules/`, `crates/terminal-renderer/pkg/`, `iphone/node_modules/`, `iphone/ios/`

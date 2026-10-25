@@ -437,6 +437,18 @@ fn show_after_grace(
         return;
     }
 
+    // The iPhone rings for the panes Alexis drives from it, whatever the PC
+    // shows (`remote::phone`): he is away from the PC then.
+    if crate::remote::phone::FOLLOW.should_notify(&pane_id) {
+        let project = uuid::Uuid::parse_str(&pane_id)
+            .ok()
+            .and_then(|u| registry.project_name_for_pane(u))
+            .unwrap_or_default();
+        let sessions = app.state::<crate::terminal::SessionMap>();
+        let tab = crate::terminal::session_title(sessions.inner(), &pane_id).unwrap_or_default();
+        crate::remote::phone::notify(&pane_id, &kind, self_woken, &project, &tab);
+    }
+
     // Sound first (debounced against the multi-hook double-fire). It ignores
     // focus, notification style and fullscreen on purpose — "quoi qu'il arrive".
     maybe_play_sound(app, &kind);

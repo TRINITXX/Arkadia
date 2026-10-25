@@ -8,7 +8,26 @@
  * it re-reads the whole transcript.
  */
 
-import type { ConvBlock } from "@/components/ModernConversationView";
+/** One transcript image, materialized in the backend's imgcache. */
+export interface ConvImage {
+  path: string;
+  media_type: string;
+}
+
+/** One structured block from `read_conversation_delta`. */
+export interface ConvBlock {
+  kind: "user" | "assistant" | "thinking" | "tool";
+  text?: string;
+  tool_name?: string;
+  tool_input?: string;
+  tool_output?: string;
+  /** Images pasted in this turn (user blocks). */
+  images?: ConvImage[];
+  /** Images inside the paired tool_result (screenshots, image reads). */
+  tool_output_images?: ConvImage[];
+  /** ISO-8601 UTC instant of the transcript line this block came from. */
+  ts?: string;
+}
 
 /** A conversation as the client holds it (mirrors the backend cache contract). */
 export interface HeldConv {

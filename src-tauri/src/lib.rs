@@ -317,6 +317,7 @@ pub fn run() {
             popup::popup_dismiss,
             popup::popup_open_in_main,
             remote::remote_publish_state,
+            remote::remote_pane_replaced,
             remote::remote_reply,
         ]))
         .build(tauri::generate_context!())

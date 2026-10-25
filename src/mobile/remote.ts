@@ -22,26 +22,7 @@ import {
   type WakeProgress,
   type WakeRelay,
 } from "@/mobile/wake";
-
-export type ClientMsg =
-  | { t: "watch"; pane: string | null }
-  | { t: "input"; pane: string; data: string }
-  | { t: "resize"; pane: string; cols: number; rows: number }
-  | { t: "scroll"; pane: string; delta: number }
-  | { t: "wheel"; pane: string; col: number; row: number; button: 64 | 65 }
-  | { t: "click"; pane: string; col: number; row: number }
-  | { t: "action"; id: number; action: RemoteAction }
-  | { t: "sessions"; id: number }
-  | { t: "search"; id: number; query: string }
-  | { t: "conv"; id: number; pane: string; generation: number; have: number };
-
-type ServerMsg =
-  | { t: "state"; state: RemoteSnapshot }
-  | { t: "frame"; frame: RenderPayload }
-  | { t: "reply"; id: number; result?: unknown; error?: string }
-  | { t: "event"; name: string; payload: unknown }
-  | ({ t: "wake" } & WakeRelay)
-  | { t: "error"; message: string };
+import type { ClientMsg, ServerMsg } from "@/lib/remoteProtocol";
 
 /** `connecting` until the first open, `lost` while retrying after a drop. */
 export type Status = "connecting" | "open" | "lost";

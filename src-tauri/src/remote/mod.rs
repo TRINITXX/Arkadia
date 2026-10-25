@@ -9,7 +9,9 @@
 //! `remote-action` event; it answers with `remote_reply`.
 
 pub(crate) mod access;
+mod activity;
 pub(crate) mod peer;
+pub(crate) mod phone;
 mod server;
 
 use std::collections::HashMap;
@@ -107,6 +109,13 @@ impl RemoteHub {
             let _ = out.try_send(Message::Text(text.clone().into()));
         }
     }
+}
+
+/// The desktop relaunched a pane under a new id (another account): a tab the
+/// phone drives keeps its notifications and Live Activity row.
+#[tauri::command]
+pub fn remote_pane_replaced(old_id: String, new_id: String) {
+    phone::FOLLOW.replace(&old_id, &new_id);
 }
 
 /// The desktop window's snapshot (JSON built by `buildRemoteSnapshot`).

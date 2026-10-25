@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { pasteData, typingDelta } from "./typing";
 
 const DEL = "\x7f";
@@ -24,5 +24,37 @@ describe("typingDelta", () => {
 
   it("counts an emoji as one character to erase", () => {
     expect(typingDelta("ok 👍🏽", "ok ")).toBe(DEL);
+  });
+});
+
+// The iPhone app's engine may lack Intl.Segmenter: the fallback must erase
+// what iOS erases in one stroke.
+describe("typingDelta without Intl.Segmenter", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  async function fallbackDelta(): Promise<typeof typingDelta> {
+    vi.stubGlobal("Intl", { ...Intl, Segmenter: undefined });
+    vi.resetModules();
+    return (await import("./typing")).typingDelta;
+  }
+
+  it.each([
+    ["skin tone", "👍🏽"],
+    ["variation selector", "❤️"],
+    ["joined family", "👨‍👩‍👧"],
+    ["flag", "🇫🇷"],
+    ["keycap", "1️⃣"],
+    ["accent typed as a combining mark", "é"],
+  ])("erases a %s as one character", async (_, glyph) => {
+    const delta = await fallbackDelta();
+    expect(delta(`ok ${glyph}`, "ok ")).toBe(DEL);
+  });
+
+  it("keeps two flags apart", async () => {
+    const delta = await fallbackDelta();
+    expect(delta("🇫🇷🇮🇹", "🇫🇷")).toBe(DEL);
   });
 });
