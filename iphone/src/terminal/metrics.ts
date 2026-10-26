@@ -14,9 +14,3 @@ export const ROW_STYLE: TextStyle = {
   lineHeight: LINE_HEIGHT,
   height: LINE_HEIGHT,
 };
-
-/** Lines per scroll step, like one desktop wheel notch. */
-export const STEP_ROWS = 3;
-/** Claude Code accelerates wheel notches that arrive too close together. */
-export const WHEEL_GAP_MS = 110;
-export const SCROLL_GAP_MS = 40;

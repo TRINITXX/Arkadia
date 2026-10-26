@@ -9,6 +9,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // runtimeVersion follows this version: bump it with every native change, so
   // over-the-air updates never reach a build that lacks their native modules.
   version: "0.1.0",
+  // Also at the top level: EAS Update reads it there (same value as iOS's).
+  runtimeVersion: { policy: "appVersion" },
   updates: {
     url: "https://u.expo.dev/2bb93e11-a0fa-4145-a7e1-4336a84154d5",
   },
