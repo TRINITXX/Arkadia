@@ -18,6 +18,7 @@ import { getFrame, usePaneFrameSelector } from "@/lib/frameStore";
 import { focusPaneElement } from "@/lib/paneFocus";
 import { quotePathsForPrompt } from "@/lib/pickerPrompt";
 import { CLEAR_CHUNK_GAP_MS, clearPromptChunks } from "@/lib/promptClear";
+import { claimEnter } from "@/lib/railEnter";
 import {
   inputRowIndex,
   isDictating,
@@ -59,7 +60,8 @@ interface PaneInputRailProps {
  * alone (the display mod hides the rest), pick files from the camera roll or the
  * downloads folder, hold/release space for voice dictation (click to start,
  * click to stop), copy the last code block Claude wrote, erase the typed prompt,
- * and send it (Enter — mid-dictation, once the transcript is in).
+ * and send it (Enter — mid-dictation, once the transcript is in; a typed Enter
+ * then goes the same way).
  *
  * Stacked vertically against the right edge rather than laid out in a row, so
  * they cover one column of Claude Code's input box instead of three — a long
@@ -207,7 +209,7 @@ export function PaneInputRail({
   const submit = useCallback(async () => {
     if (sendingRef.current) return;
     // Spaces were flowing: wait even if this frame shows no voice status yet.
-    const wasTalking = talking;
+    const wasTalking = repeatRef.current !== 0;
     stopTalking();
     if (wasTalking || isDictating(getFrame(paneId))) {
       sendingRef.current = true;
@@ -227,7 +229,19 @@ export function PaneInputRail({
       }
     }
     send([0x0d]);
-  }, [paneId, onToast, send, stopTalking, talking]);
+  }, [paneId, onToast, send, stopTalking]);
+
+  // A typed Enter while this rail dictates, or waits to send, goes the send
+  // button's way. A dictation held on the real space bar is left alone.
+  useEffect(
+    () =>
+      claimEnter(paneId, () => {
+        const mine = repeatRef.current !== 0 || sendingRef.current;
+        if (mine) void submit();
+        return mine;
+      }),
+    [paneId, submit],
+  );
 
   const closePicker = useCallback(() => {
     setPicking(false);

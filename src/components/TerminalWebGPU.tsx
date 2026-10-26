@@ -15,6 +15,7 @@ import {
 } from "@/lib/gpuPresenter";
 import { measureCellSize } from "@/lib/cellSize";
 import { keyEventToBytes } from "@/lib/keymap";
+import { railTakesKey } from "@/lib/railEnter";
 import { getFrame, rememberDesktopSize, usePaneFrame } from "@/lib/frameStore";
 import { useElementVisible } from "@/lib/useElementVisible";
 import { CLAUDE_TINT, hexToRgba, USER_TINT } from "@/lib/messageTint";
@@ -1112,6 +1113,13 @@ export function TerminalWebGPU({
       return;
     }
     const bytes = keyEventToBytes(e);
+    // Enter while the input rail dictates is the rail's: it sends once the
+    // transcript is in.
+    if (bytes && railTakesKey(pane.id, bytes)) {
+      e.preventDefault();
+      onUserInput?.();
+      return;
+    }
     if (bytes) {
       e.preventDefault();
       onUserInput?.();
