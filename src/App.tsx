@@ -91,10 +91,13 @@ import { DEFAULT_CUSTOM_PALETTE, resolveActivePalette } from "@/lib/palettes";
 import { resolveBackground } from "@/lib/backgrounds";
 import {
   stateFromTitle,
+  mergePaneBackground,
   withBackgroundShells,
   withBackgroundTasks,
   withOpenArtifact,
+  withPendingQuestion,
   type AgentStateValue,
+  type PaneBackground,
 } from "@/lib/agentState";
 import { findProjectsByPath, parentOf } from "@/lib/externalAction";
 import { resolveProjectTarget, type ClaudeSession } from "@/lib/sessionsIndex";
@@ -278,7 +281,7 @@ export function App() {
   // phantom badge. The title is the only reliable per-pane signal, refined by
   // the hook's per-pane count of background tasks (keyed by the same pane id).
   const [backgroundTasks, setBackgroundTasks] = useState<
-    Record<string, Omit<PaneBackgroundPayload, "paneId">>
+    Record<string, PaneBackground>
   >({});
   const effectivePaneStates = useMemo(() => {
     const merged: Record<string, AgentStateValue> = {};
@@ -287,9 +290,12 @@ export function App() {
         const fromTitle = stateFromTitle(pane.title);
         if (fromTitle) {
           const bg = backgroundTasks[paneId];
-          merged[paneId] = withBackgroundShells(
-            withBackgroundTasks(fromTitle, bg?.count ?? 0),
-            bg?.shells ?? 0,
+          merged[paneId] = withPendingQuestion(
+            withBackgroundShells(
+              withBackgroundTasks(fromTitle, bg?.count ?? 0),
+              bg?.shells ?? 0,
+            ),
+            bg?.question ?? false,
           );
         }
       }
@@ -2072,12 +2078,16 @@ export function App() {
       subscribeStable<PaneBackgroundPayload>(
         listen,
         "pane-background",
-        ({ paneId, count, shells }) => {
-          setBackgroundTasks((prev) =>
-            prev[paneId]?.count === count && prev[paneId]?.shells === shells
+        (payload) => {
+          setBackgroundTasks((prev) => {
+            const last = prev[payload.paneId];
+            const next = mergePaneBackground(last, payload);
+            return last?.count === next.count &&
+              last.shells === next.shells &&
+              last.question === next.question
               ? prev
-              : { ...prev, [paneId]: { count, shells } },
-          );
+              : { ...prev, [payload.paneId]: next };
+          });
         },
       ),
       // The terminal auto-scroll to the reply start is driven entirely in the

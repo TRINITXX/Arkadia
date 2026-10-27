@@ -26,24 +26,35 @@ struct PaneMapCount {
     background_tasks: Option<u32>,
     #[serde(rename = "backgroundShells", default)]
     background_shells: u32,
+    /// Claude asked a ❓ question the user hasn't answered. Absent on events
+    /// that don't check (keep the last).
+    #[serde(rename = "questionPending")]
+    question_pending: Option<bool>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PaneBackground {
     pane_id: String,
-    count: u32,
+    /// None: this write didn't recount, keep the last count and shells.
+    count: Option<u32>,
     shells: u32,
+    /// None: keep the last.
+    question: Option<bool>,
 }
 
-/// The count a pane-map file carries, or None when it has none (keep the last).
+/// What a pane-map file carries, or None when it has nothing new (keep the last).
 fn parse_pane_map(raw: &str) -> Option<PaneBackground> {
     // PowerShell 5.1 may prepend a UTF-8 BOM, which serde_json rejects.
     let m: PaneMapCount = serde_json::from_str(raw.trim_start_matches('\u{feff}')).ok()?;
+    if m.background_tasks.is_none() && m.question_pending.is_none() {
+        return None;
+    }
     Some(PaneBackground {
         pane_id: m.pane_id.filter(|s| !s.is_empty())?,
-        count: m.background_tasks?,
+        count: m.background_tasks,
         shells: m.background_shells,
+        question: m.question_pending,
     })
 }
 
@@ -103,8 +114,23 @@ mod tests {
             parse_pane_map(raw),
             Some(PaneBackground {
                 pane_id: "p1".into(),
-                count: 2,
-                shells: 1
+                count: Some(2),
+                shells: 1,
+                question: None
+            })
+        );
+    }
+
+    #[test]
+    fn a_question_alone_is_relayed_without_a_count() {
+        let raw = "{\"paneId\":\"p1\",\"sessionId\":\"s\",\"questionPending\":false}";
+        assert_eq!(
+            parse_pane_map(raw),
+            Some(PaneBackground {
+                pane_id: "p1".into(),
+                count: None,
+                shells: 0,
+                question: Some(false)
             })
         );
     }

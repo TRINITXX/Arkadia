@@ -3,9 +3,11 @@ import {
   stateFromTitle,
   isStatusGlyph,
   aggregate,
+  mergePaneBackground,
   withBackgroundShells,
   withBackgroundTasks,
   withOpenArtifact,
+  withPendingQuestion,
   type AgentStateValue,
 } from "@/lib/agentState";
 
@@ -100,6 +102,23 @@ describe("aggregate", () => {
       waiting,
     );
   });
+
+  it("carries a question ring found on another busy pane", () => {
+    const busy = { kind: "busy" } as const;
+    expect(aggregate([busy, { kind: "busy", questionPending: true }])).toEqual({
+      kind: "busy",
+      questionPending: true,
+    });
+  });
+
+  it("carries an artifact ring and a question ring from different panes", () => {
+    expect(
+      aggregate([
+        { kind: "busy", artifactOpen: true },
+        { kind: "busy", questionPending: true },
+      ]),
+    ).toEqual({ kind: "busy", artifactOpen: true, questionPending: true });
+  });
 });
 
 describe("withBackgroundTasks", () => {
@@ -160,5 +179,42 @@ describe("withOpenArtifact", () => {
     expect(withOpenArtifact(busy, false)).toBe(busy);
     const idle = { kind: "idle", session_id: "" } as const;
     expect(withOpenArtifact(idle, true)).toBe(idle);
+  });
+});
+
+describe("withPendingQuestion", () => {
+  it("rings a busy or waiting pane while a question waits", () => {
+    expect(withPendingQuestion({ kind: "busy" }, true)).toEqual({
+      kind: "busy",
+      questionPending: true,
+    });
+    const waiting = { kind: "waiting", session_id: "" } as const;
+    expect(withPendingQuestion(waiting, true)).toEqual({
+      ...waiting,
+      questionPending: true,
+    });
+  });
+
+  it("leaves the pane plain once answered, and idle panes alone", () => {
+    const busy = { kind: "busy" } as const;
+    expect(withPendingQuestion(busy, false)).toBe(busy);
+    const idle = { kind: "idle", session_id: "" } as const;
+    expect(withPendingQuestion(idle, true)).toBe(idle);
+  });
+});
+
+describe("mergePaneBackground", () => {
+  const last = { count: 2, shells: 1, question: true };
+
+  it("keeps the count and shells when the hook didn't recount", () => {
+    expect(
+      mergePaneBackground(last, { count: null, shells: 0, question: false }),
+    ).toEqual({ count: 2, shells: 1, question: false });
+  });
+
+  it("keeps the question when the hook didn't check it", () => {
+    expect(
+      mergePaneBackground(last, { count: 0, shells: 0, question: null }),
+    ).toEqual({ count: 0, shells: 0, question: true });
   });
 });

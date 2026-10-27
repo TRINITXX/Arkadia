@@ -1,12 +1,20 @@
+import type { PaneBackgroundPayload } from "@/types";
+
 export type AgentStateValue =
   | { kind: "none" }
   | { kind: "idle"; session_id: string }
-  | { kind: "busy"; tool?: string | null; artifactOpen?: boolean }
+  | {
+      kind: "busy";
+      tool?: string | null;
+      artifactOpen?: boolean;
+      questionPending?: boolean;
+    }
   | {
       kind: "waiting";
       session_id: string;
       shellRunning?: boolean;
       artifactOpen?: boolean;
+      questionPending?: boolean;
     };
 
 export interface AgentEventPayload {
@@ -80,10 +88,44 @@ export function withOpenArtifact(
   return { ...state, artifactOpen: true };
 }
 
+/** What the notify hook last said about a pane (see PaneBackgroundPayload). */
+export interface PaneBackground {
+  count: number;
+  shells: number;
+  question: boolean;
+}
+
+// A hook write that didn't recount (prompt submitted) or didn't check the
+// question (an ask) keeps the last value of that field.
+export function mergePaneBackground(
+  last: PaneBackground | undefined,
+  { count, shells, question }: Omit<PaneBackgroundPayload, "paneId">,
+): PaneBackground {
+  return {
+    count: count ?? last?.count ?? 0,
+    shells: count === null ? (last?.shells ?? 0) : shells,
+    question: question ?? last?.question ?? false,
+  };
+}
+
+// Claude asked questions (❓) the user hasn't answered yet: the badge gets a
+// ring saying so, amber included, since Claude often asks while background
+// work keeps it busy.
+export function withPendingQuestion(
+  state: AgentStateValue,
+  questionPending: boolean,
+): AgentStateValue {
+  if ((state.kind !== "busy" && state.kind !== "waiting") || !questionPending)
+    return state;
+  return { ...state, questionPending: true };
+}
+
 const hasShellRing = (s: AgentStateValue) =>
   s.kind === "waiting" && !!s.shellRunning;
 const hasArtifactRing = (s: AgentStateValue) =>
   (s.kind === "busy" || s.kind === "waiting") && !!s.artifactOpen;
+const hasQuestionRing = (s: AgentStateValue) =>
+  (s.kind === "busy" || s.kind === "waiting") && !!s.questionPending;
 
 export function aggregate(states: AgentStateValue[]): AgentStateValue {
   // waiting outranks busy because it requires user action (AskUserQuestion,
@@ -95,9 +137,12 @@ export function aggregate(states: AgentStateValue[]): AgentStateValue {
     none: 1,
   };
   // Between two panes of the same kind, the one with more rings (shell open,
-  // artifact open) wins.
+  // artifact open, question pending) wins.
   const rank = (s: AgentStateValue) =>
-    order[s.kind] * 3 + Number(hasShellRing(s)) + Number(hasArtifactRing(s));
+    order[s.kind] * 4 +
+    Number(hasShellRing(s)) +
+    Number(hasArtifactRing(s)) +
+    Number(hasQuestionRing(s));
   const best = states.reduce<AgentStateValue>(
     (top, s) => (rank(s) > rank(top) ? s : top),
     { kind: "none" },
@@ -107,10 +152,18 @@ export function aggregate(states: AgentStateValue[]): AgentStateValue {
   const peers = states.filter((s) => s.kind === best.kind);
   const shell = peers.some(hasShellRing);
   const artifact = peers.some(hasArtifactRing);
-  if (shell === hasShellRing(best) && artifact === hasArtifactRing(best))
+  const question = peers.some(hasQuestionRing);
+  if (
+    shell === hasShellRing(best) &&
+    artifact === hasArtifactRing(best) &&
+    question === hasQuestionRing(best)
+  )
     return best;
+  // Only a ring found sets its flag: a pane without any keeps its shape.
+  const asked = question ? { questionPending: true } : {};
   if (best.kind === "waiting")
-    return { ...best, shellRunning: shell, artifactOpen: artifact };
-  if (best.kind === "busy") return { ...best, artifactOpen: artifact };
+    return { ...best, shellRunning: shell, artifactOpen: artifact, ...asked };
+  if (best.kind === "busy")
+    return { ...best, artifactOpen: artifact, ...asked };
   return best;
 }
