@@ -26,18 +26,25 @@ const PROJECT_FONT = 12;
 
 /**
  * The compact notification window (`index.html?window=notif`). Two lines for the
- * pane bound to its URL — project name on top, tab name below — with the same
+ * queue's single item — project name on top, tab name below — with the same
  * colored dot as the mirror popup (violet = Claude is asking, green = finished).
  * The tab line auto-shrinks so the full name always fits (no ellipsis). Clicking
  * the body opens Arkadia on that conversation; ✕ dismisses it.
  *
+ * One window serves every pane: the backend builds it once and only hides and
+ * shows it (building a webview froze Arkadia for seconds), and the compact
+ * style never queues more than one item.
+ *
  * Read-only w.r.t. the store, like `PopupApp`: `loadState({ heal: false })`.
  */
 export function NotifApp() {
-  const paneId = new URLSearchParams(window.location.search).get("pane") ?? "";
   const [items, setItems] = useState<WaitingItem[]>([]);
   const [palette, setPalette] = useState<TerminalPalette | null>(null);
+  const current = items[0] ?? null;
+  const paneId = current?.pane_id ?? "";
 
+  // Read at mount (the window is built hidden at startup), then again on each
+  // notification: the window outlives palette changes.
   useEffect(() => {
     let cancelled = false;
     void loadState({ heal: false }).then((s) => {
@@ -47,7 +54,7 @@ export function NotifApp() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [paneId, current?.ts]);
 
   useEffect(
     () =>
@@ -62,10 +69,8 @@ export function NotifApp() {
     [],
   );
 
-  const current = items.find((i) => i.pane_id === paneId) ?? null;
-
-  // Bound to the URL's pane id so ✕ can always close the frameless window, even
-  // once this pane has left the queue.
+  // With the queue empty the window is hidden; ✕ still hides it if a click
+  // lands in between (the backend re-syncs on any dismiss).
   const dismiss = () =>
     void invoke("popup_dismiss", { paneId }).catch(() => {});
   const openInMain = () =>
@@ -125,15 +130,17 @@ export function NotifApp() {
         color: fg,
         cursor: "pointer",
       }}
-      // Bound to the URL's pane id, so this works even when the pane has left
-      // the queue (the "Conversation introuvable" fallback): the click still
-      // brings Arkadia to the front and closes this window.
+      // Without an item the click still brings Arkadia to the front and hides
+      // this window.
       onClick={openInMain}
       title={current ? "Ouvrir dans Arkadia" : "Ouvrir Arkadia"}
     >
+      {/* Blank without an item: the hidden window then keeps no stale tab
+          name for the next show to flash before the new one paints. */}
       <div
         ref={colRef}
         className="flex w-full min-w-0 flex-col items-center text-center leading-tight"
+        style={{ visibility: current ? "visible" : "hidden" }}
       >
         <div className="flex max-w-full items-center gap-1.5">
           <span

@@ -345,8 +345,15 @@ pub fn run() {
                 event: tauri::WindowEvent::Destroyed,
                 ..
             } => {
+                // Read first: a watchdog rebuild may end while this logs.
+                let rebuilding = app.state::<uiwatch::UiHealth>().is_rebuilding();
                 popup::log_line(&format!("[run] window destroyed: {label}"));
                 terminal::forget_window_panes(app, label);
+                // Arkadia closed, not rebuilt: the hidden notification window
+                // must not keep the process alive (`popup::close_with_main`).
+                if label == "main" && !rebuilding && app.get_webview_window("main").is_none() {
+                    popup::close_with_main(app);
+                }
             }
             tauri::RunEvent::WindowEvent {
                 label,

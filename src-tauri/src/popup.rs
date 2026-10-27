@@ -149,6 +149,10 @@ pub struct PopupQueue {
     /// Panes that notified while the user was away, cleared when Arkadia's main
     /// window regains focus — see `mute_self_woken`.
     pub told_while_away: parking_lot::Mutex<HashSet<String>>,
+    /// True while a thread builds the compact window. Tauri only refuses a
+    /// label once its window exists, so a second build started meanwhile
+    /// would make a twin.
+    notif_building: std::sync::atomic::AtomicBool,
 }
 
 impl Default for PopupQueue {
@@ -161,6 +165,7 @@ impl Default for PopupQueue {
             auto_scroll: std::sync::atomic::AtomicBool::new(true),
             last_sound: parking_lot::Mutex::new(None),
             told_while_away: parking_lot::Mutex::new(HashSet::new()),
+            notif_building: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -717,29 +722,70 @@ fn popup_dims(compact: bool, notif_w: f64) -> (f64, f64) {
     }
 }
 
-/// Creates the notification window for a pane, or returns the existing one.
-/// `compact` picks the two-line toast (`window=notif`) vs the terminal-mirror
-/// popup (`window=popup`); both share the `popup-<id>` label so dismiss/open and
-/// the cleanup sweeps work regardless of style.
+/// The compact toast is one window for every pane, built once, then only hidden
+/// and shown again. Building a webview runs on the main thread and took up to
+/// 7.7 s while terminals were busy, every window frozen meanwhile (27/10/2026).
+/// Its page shows the queue's single item. Mirror popups keep one window per
+/// pane, closed with it.
+const NOTIF_LABEL: &str = "popup-notif";
+
+/// Label of the window showing `pane_id` in the given style. The `popup-`
+/// prefix is shared, so the sweeps reach every notification window.
+fn window_label(pane_id: &str, compact: bool) -> String {
+    if compact {
+        NOTIF_LABEL.to_string()
+    } else {
+        popup_label(pane_id)
+    }
+}
+
+/// Creates the window showing a pane, or returns the existing one. `compact`
+/// picks the two-line toast (`window=notif`, the shared `NOTIF_LABEL` window)
+/// vs the terminal-mirror popup (`window=popup`, one per pane). `None` while
+/// another thread builds the toast: that thread shows the queue once done.
 fn ensure_pane_window(
     app: &AppHandle,
     pane_id: &str,
     compact: bool,
     notif_w: f64,
-) -> tauri::Result<WebviewWindow> {
-    let label = popup_label(pane_id);
+) -> tauri::Result<Option<WebviewWindow>> {
+    let label = window_label(pane_id, compact);
     if let Some(w) = app.get_webview_window(&label) {
-        return Ok(w);
+        return Ok(Some(w));
     }
+    if !compact {
+        return build_pane_window(app, &label, pane_id, false, notif_w).map(Some);
+    }
+    let queue = app.state::<PopupQueue>();
+    if queue.notif_building.swap(true, Ordering::AcqRel) {
+        return Ok(None);
+    }
+    let built = build_pane_window(app, &label, pane_id, true, notif_w);
+    queue.notif_building.store(false, Ordering::Release);
+    built.map(Some)
+}
+
+/// Builds a notification window, hidden. On the main thread, however long
+/// WebView2 takes: hence the toast built once (`NOTIF_LABEL`).
+fn build_pane_window(
+    app: &AppHandle,
+    label: &str,
+    pane_id: &str,
+    compact: bool,
+    notif_w: f64,
+) -> tauri::Result<WebviewWindow> {
     let (w, h) = popup_dims(compact, notif_w);
-    let kind = if compact { "notif" } else { "popup" };
-    let url = format!("index.html?window={kind}&pane={pane_id}");
+    let url = if compact {
+        "index.html?window=notif".to_string()
+    } else {
+        format!("index.html?window=popup&pane={pane_id}")
+    };
     let (min_w, min_h) = if compact {
         (240.0, 52.0)
     } else {
         (320.0, 160.0)
     };
-    let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+    let win = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
         .title("Arkadia")
         .inner_size(w, h)
         .min_inner_size(min_w, min_h)
@@ -771,6 +817,64 @@ fn ensure_pane_window(
         }
     }
     Ok(win)
+}
+
+/// Shows or hides `win` as the queue stands when the main thread gets to it.
+/// `dismiss_all` and the dismiss commands run there: a sync started on an
+/// older queue can no longer show a window they just hid (the toast is only
+/// hidden now, so a late show brought it back empty), nor hide one a newer
+/// notification needs. Showing never activates: built `focused(false)`, the
+/// window keeps tao's no-activate show for good.
+fn show_if_queued(app: &AppHandle, win: WebviewWindow, compact: bool) {
+    let app2 = app.clone();
+    let label = win.label().to_string();
+    let _ = app.run_on_main_thread(move || {
+        let queued = app2
+            .state::<PopupQueue>()
+            .items
+            .lock()
+            .iter()
+            .any(|i| window_label(&i.pane_id, compact) == label);
+        let _ = if queued { win.show() } else { win.hide() };
+    });
+}
+
+/// Builds the compact toast ahead of its first notification, hidden, so no
+/// notification pays the build (`NOTIF_LABEL`). Off the caller's thread: the
+/// caller, `popup_set_style`, is a sync command on the main thread.
+fn prebuild_notif_window(app: AppHandle) {
+    std::thread::spawn(move || {
+        let queue = app.state::<PopupQueue>();
+        let notif_w = queue.notif_width.load(Ordering::Acquire) as f64;
+        match ensure_pane_window(&app, "", true, notif_w) {
+            Ok(Some(_)) => log_line("compact notification window ready"),
+            Ok(None) => log_line("compact notification window already being built"),
+            Err(e) => log_line(&format!("compact notification window build failed: {e}")),
+        }
+        // The style changed during the build: the toast has no use left.
+        if queue.style.load(Ordering::Acquire) != STYLE_COMPACT {
+            if let Some(w) = app.get_webview_window(NOTIF_LABEL) {
+                let _ = w.destroy();
+            }
+            return;
+        }
+        // A notification that came during the build waited for it.
+        if !queue.items.lock().is_empty() {
+            sync_popups(&app);
+        }
+    });
+}
+
+/// `main` closed for good (not a watchdog rebuild): the notification windows
+/// go with it. The toast lives hidden all session and is not owned by `main`
+/// (an owned window hides when `main` is minimized). Left alive, it kept the
+/// process running without a window, and the watchdog then rebuilt `main`.
+pub fn close_with_main(app: &AppHandle) {
+    for (label, win) in app.webview_windows() {
+        if label.starts_with("popup-") {
+            let _ = win.destroy();
+        }
+    }
 }
 
 /// Positions a popup at its stack `index`: index 0 (active) sits bottom-right;
@@ -828,11 +932,21 @@ fn sync_popups(app: &AppHandle) {
         (q.clone(), compact, notif_w)
     };
     let (fresh_w, fresh_h) = popup_dims(compact, notif_w);
-    let wanted: std::collections::HashSet<String> =
-        items.iter().map(|i| popup_label(&i.pane_id)).collect();
-    // Close windows whose pane is no longer queued.
+    let wanted: std::collections::HashSet<String> = items
+        .iter()
+        .map(|i| window_label(&i.pane_id, compact))
+        .collect();
+    // First, so a toast about to hide gets its empty state before it does, and
+    // the reused toast never shows its previous pane.
+    emit_state(app);
+    // Close windows whose pane is no longer queued; the toast only hides.
     for (label, win) in app.webview_windows() {
-        if label.starts_with("popup-") && !wanted.contains(&label) {
+        if !label.starts_with("popup-") || wanted.contains(&label) {
+            continue;
+        }
+        if compact && label == NOTIF_LABEL {
+            show_if_queued(app, win, compact);
+        } else {
             let _ = win.close();
         }
     }
@@ -840,28 +954,28 @@ fn sync_popups(app: &AppHandle) {
     // style keeps at most one item, so this is a single bottom-right window.)
     for (index, item) in items.iter().enumerate() {
         match ensure_pane_window(app, &item.pane_id, compact, notif_w) {
-            Ok(win) => {
+            Ok(Some(win)) => {
                 let fresh = !win.is_visible().unwrap_or(false);
                 if fresh {
                     let _ = win.set_size(tauri::LogicalSize::new(fresh_w, fresh_h));
                 }
                 cascade_position(&win, index);
                 if fresh {
-                    let _ = win.show();
+                    show_if_queued(app, win, compact);
                 }
             }
+            Ok(None) => log_line("compact notification window still building"),
             Err(e) => log_line(&format!("popup window create failed: {e}")),
         }
     }
     // Re-raise z-order back-to-front so index 0 ends up on top of the stack.
     for item in items.iter().rev() {
-        if let Some(win) = app.get_webview_window(&popup_label(&item.pane_id)) {
+        if let Some(win) = app.get_webview_window(&window_label(&item.pane_id, compact)) {
             let _ = win.set_always_on_top(false);
             let _ = win.set_always_on_top(true);
         }
     }
     log_line(&format!("sync_popups: {} window(s)", items.len()));
-    emit_state(app);
 }
 
 fn emit_state(app: &AppHandle) {
@@ -871,7 +985,8 @@ fn emit_state(app: &AppHandle) {
         q.clone()
     };
     let payload = PopupStatePayload { items };
-    // Each popup window filters the queue down to its own pane.
+    // Each mirror popup filters the queue down to its own pane; the compact
+    // toast shows its single item.
     for (label, win) in app.webview_windows() {
         if label.starts_with("popup-") {
             let _ = win.emit("popup-state", payload.clone());
@@ -879,10 +994,16 @@ fn emit_state(app: &AppHandle) {
     }
 }
 
-/// Closes every popup window (used when the feature is turned off).
-fn close_all_popups(app: &AppHandle) {
+/// Closes every popup window, except the compact toast when `keep_toast`: it
+/// only hides, ready for the next notification (`NOTIF_LABEL`).
+fn close_all_popups(app: &AppHandle, keep_toast: bool) {
     for (label, win) in app.webview_windows() {
-        if label.starts_with("popup-") {
+        if !label.starts_with("popup-") {
+            continue;
+        }
+        if keep_toast && label == NOTIF_LABEL {
+            let _ = win.hide();
+        } else {
             let _ = win.close();
         }
     }
@@ -908,8 +1029,9 @@ pub fn dismiss_all(app: &AppHandle) {
         n
     };
     if had > 0 {
-        close_all_popups(app);
+        // Empty state first, so the toast hides already blank.
         emit_state(app);
+        close_all_popups(app, true);
         log_line("main window focused — dismissed all notifications");
     }
 }
@@ -929,14 +1051,18 @@ pub fn popup_log_ui(msg: String) {
 
 /// Set the notification style from the frontend (`off` / `mirror` / `compact`).
 /// On an actual change we clear the queue and close any open windows, so we
-/// never leave a stale window of the previous style around.
+/// never leave a stale window of the previous style around. The frontend sends
+/// the saved style at startup, which builds the compact toast ahead of time.
 #[tauri::command]
 pub fn popup_set_style(style: String, app: AppHandle, queue: State<'_, PopupQueue>) {
     let next = style_from_str(&style);
     let prev = queue.style.swap(next, Ordering::Release);
     if prev != next {
         queue.items.lock().clear();
-        close_all_popups(&app);
+        close_all_popups(&app, false);
+        if next == STYLE_COMPACT {
+            prebuild_notif_window(app);
+        }
     }
 }
 
@@ -1025,7 +1151,8 @@ pub fn popup_open_in_main(pane_id: String, app: AppHandle, queue: State<'_, Popu
 #[cfg(test)]
 mod tests {
     use super::{
-        chime_allowed, mute_self_woken, note_told, suppress_for_fullscreen, FullscreenKind,
+        chime_allowed, mute_self_woken, note_told, suppress_for_fullscreen, window_label,
+        FullscreenKind, NOTIF_LABEL,
     };
     use std::collections::HashSet;
     use std::time::Duration;
@@ -1095,5 +1222,15 @@ mod tests {
     fn no_fullscreen_never_suppresses() {
         assert!(!suppress_for_fullscreen(true, FullscreenKind::None));
         assert!(!suppress_for_fullscreen(false, FullscreenKind::None));
+    }
+
+    /// Every compact notification reuses one window: building one per pane
+    /// froze Arkadia up to 7.7 s each time (27/10/2026).
+    #[test]
+    fn compact_notifications_share_one_window() {
+        assert_eq!(window_label("a", true), NOTIF_LABEL);
+        assert_eq!(window_label("b", true), NOTIF_LABEL);
+        assert_ne!(window_label("a", false), window_label("b", false));
+        assert!(NOTIF_LABEL.starts_with("popup-"), "the sweeps match on it");
     }
 }
