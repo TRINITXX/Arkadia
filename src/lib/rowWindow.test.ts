@@ -17,14 +17,14 @@ describe("firstDrawnRow", () => {
   });
 
   it("moves back when the list shrinks under it", () => {
-    expect(firstDrawnRow(4930, 300)).toBe(100);
+    expect(firstDrawnRow(4930, 300)).toBe(300 - ROW_WINDOW);
   });
 });
 
 describe("olderStart", () => {
   it("steps back one window, down to the first row", () => {
     expect(olderStart(4930)).toBe(4930 - ROW_WINDOW);
-    expect(olderStart(120)).toBe(0);
+    expect(olderStart(ROW_WINDOW - 10)).toBe(0);
   });
 });
 

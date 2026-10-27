@@ -6,7 +6,7 @@
  */
 
 /** Rows drawn when a conversation opens, and added per step back. */
-export const ROW_WINDOW = 200;
+export const ROW_WINDOW = 50;
 
 /** Older rows are drawn once the view is this close to the top (px). */
 export const LOAD_OLDER_PX = 1500;
