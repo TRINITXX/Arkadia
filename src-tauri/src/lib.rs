@@ -487,7 +487,13 @@ fn run_detached(command: String, cwd: String) -> Result<(), String> {
 /// cwd (OSC 7), then against the folder of the pane's Claude session. A tab
 /// that starts Claude straight away never prints a shell prompt, so its OSC 7
 /// cwd stays unknown, and Claude names files relative to its own folder anyway.
-#[tauri::command]
+///
+/// `(async)`: the terminal probes every cell the mouse enters, up to three
+/// lines per cell, and a line of prose costs 7 to 46 ms of disk checks. On the
+/// main thread a sweep across Claude's text queued seconds of probes and the
+/// window stopped answering (27/10/2026). Stale answers are dropped by the
+/// caller's `probeSeq`.
+#[tauri::command(async)]
 fn resolve_path_in_pane(
     line: String,
     cwd: Option<String>,
@@ -504,7 +510,9 @@ fn resolve_path_in_pane(
             }
         }
     }
-    if line.contains('…') {
+    // Only a `…/` token under the cursor is worth the transcript read: a
+    // transcript weighs up to hundreds of MB, and `…` shows up all over prose.
+    if elided_token_at(&line, click).is_some() {
         let elided = conversation::pane_transcript(&pane_id)
             .and_then(|t| std::fs::read_to_string(t).ok())
             .and_then(|transcript| resolve_elided_path(&line, click, &transcript));
@@ -520,28 +528,7 @@ fn resolve_path_in_pane(
 /// of a path outside the project. The full spelling is the latest `file_path`
 /// of the transcript that ends with what the row shows.
 fn resolve_elided_path(line: &str, click: usize, transcript: &str) -> Option<ResolvedPath> {
-    let chars: Vec<char> = line.chars().collect();
-    let n = chars.len();
-    if click >= n {
-        return None;
-    }
-    let mut start = click;
-    while start > 0 && chars[start - 1] != ' ' {
-        start -= 1;
-    }
-    let mut end = click + 1;
-    while end < n && chars[end] != ' ' {
-        end += 1;
-    }
-    let token: String = chars[start..end].iter().collect();
-    let tail = token
-        .strip_prefix("…/")
-        .or_else(|| token.strip_prefix("…\\"))?
-        .replace('\\', "/")
-        .to_lowercase();
-    if tail.is_empty() {
-        return None;
-    }
+    let (start, end, tail) = elided_token_at(line, click)?;
     const KEY: &str = "\"file_path\":";
     for (at, _) in transcript.rmatch_indices(KEY) {
         let Some(Ok(path)) = serde_json::Deserializer::from_str(&transcript[at + KEY.len()..])
@@ -562,6 +549,31 @@ fn resolve_elided_path(line: &str, click: usize, transcript: &str) -> Option<Res
         }
     }
     None
+}
+
+/// The space-bounded token under `click` when it is an elided `…/` path: its
+/// char extent, and what follows the `…/` (slashes forward, lowercase).
+fn elided_token_at(line: &str, click: usize) -> Option<(usize, usize, String)> {
+    let chars: Vec<char> = line.chars().collect();
+    let n = chars.len();
+    if click >= n {
+        return None;
+    }
+    let mut start = click;
+    while start > 0 && chars[start - 1] != ' ' {
+        start -= 1;
+    }
+    let mut end = click + 1;
+    while end < n && chars[end] != ' ' {
+        end += 1;
+    }
+    let token: String = chars[start..end].iter().collect();
+    let tail = token
+        .strip_prefix("…/")
+        .or_else(|| token.strip_prefix("…\\"))?
+        .replace('\\', "/")
+        .to_lowercase();
+    (!tail.is_empty()).then_some((start, end, tail))
 }
 
 /// A file path located inside a terminal line by `resolve_path_at`. `start`/`end`
@@ -881,6 +893,118 @@ mod tests {
         // Arkadia sets this one itself, per pane (accounts).
         assert!(!marker("CLAUDE_CONFIG_DIR"));
         assert!(!marker("PATH"));
+    }
+
+    /// A sync command runs on the main thread: while it works, no window
+    /// answers. The hover path probe did disk checks there and froze Arkadia
+    /// for seconds at a time (27/10/2026). A new command that reads the disk,
+    /// starts a process or waits is `(async)`; only one that does none of that
+    /// joins this list. Already listed exceptions, run on a click or rarely:
+    /// the accounts, `open_path`, `run_detached`, `artifact_open_in_browser`,
+    /// `save_screenshot`, `pane_session_id`, `pane_resume_cwd`, `popup_log_ui`.
+    #[test]
+    fn only_listed_commands_run_on_the_main_thread() {
+        const SYNC: &[&str] = &[
+            "account_set_current",
+            "account_update",
+            "accounts_state",
+            "agent_state_for_pane",
+            "agent_state_for_project",
+            "ai_search_forget",
+            "artifact_open_in_browser",
+            "close_terminal",
+            "evict_transcript_cache",
+            "get_text_range",
+            "list_live_panes",
+            "list_message_markers",
+            "navigate_message",
+            "open_path",
+            "pane_resume_cwd",
+            "pane_session_id",
+            "popup_dismiss",
+            "popup_log_ui",
+            "popup_open_in_main",
+            "popup_request_state",
+            "popup_set_auto_scroll",
+            "popup_set_fullscreen",
+            "popup_set_notif_width",
+            "popup_set_style",
+            "remote_pane_replaced",
+            "remote_publish_state",
+            "remote_reply",
+            "request_render",
+            "resize_terminal",
+            "run_detached",
+            "save_screenshot",
+            "scroll_reply_to_top",
+            "scroll_terminal",
+            "search_terminal",
+            "search_terms",
+            "send_input",
+            "send_mouse_event",
+            "set_pane_projects",
+            "set_scrollback_cap",
+            "set_shown_panes",
+            "ui_heartbeat",
+        ];
+        fn sync_commands(dir: &std::path::Path, out: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    sync_commands(&path, out);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&path).unwrap();
+                let mut lines = src.lines();
+                while let Some(line) = lines.next() {
+                    let attr = line.trim();
+                    if !attr.starts_with("#[tauri::command") || attr.contains("async") {
+                        continue;
+                    }
+                    let Some(sig) = lines.by_ref().find(|l| l.contains("fn ")) else {
+                        break;
+                    };
+                    if !sig.contains("async fn") {
+                        let name = sig.split("fn ").nth(1).unwrap();
+                        let name = name.split(['(', '<']).next().unwrap().trim();
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+        let mut found = Vec::new();
+        sync_commands(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut found,
+        );
+        let unlisted: Vec<&String> = found
+            .iter()
+            .filter(|n| !SYNC.contains(&n.as_str()))
+            .collect();
+        assert!(
+            unlisted.is_empty(),
+            "sync commands not listed (make them `(async)` if they touch the disk): {unlisted:?}"
+        );
+        // An entry the scan no longer finds would let that name turn sync again.
+        let stale: Vec<&&str> = SYNC
+            .iter()
+            .filter(|n| !found.iter().any(|f| f == *n))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "listed but not sync (drop them): {stale:?}"
+        );
+    }
+
+    #[test]
+    fn reads_the_transcript_only_for_an_elided_path_under_the_cursor() {
+        let line = "● Voir src/App.tsx… puis …/.screenshots/vue.png";
+        assert!(elided_token_at(line, click_at(line, "App", 1)).is_none());
+        let (_, _, tail) = elided_token_at(line, click_at(line, "vue", 1)).expect("elided token");
+        assert_eq!(tail, ".screenshots/vue.png");
     }
 
     use super::*;
