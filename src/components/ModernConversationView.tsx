@@ -20,6 +20,12 @@ import {
 } from "@/lib/domHighlight";
 import { queryTerms } from "@/lib/searchTerms";
 import { followsAfterScroll, UNFOLD_WINDOW_MS } from "@/lib/followBottom";
+import {
+  firstDrawnRow,
+  LOAD_OLDER_PX,
+  olderStart,
+  prependCorrection,
+} from "@/lib/rowWindow";
 import { HLJS_CSS, MODERN_CSS } from "@/components/modern/css";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
 import { Lightbox } from "@/components/modern/Lightbox";
@@ -369,8 +375,9 @@ export interface ExternalSearch {
 }
 
 /**
- * The structured "modern" conversation view: renders every block (prose,
- * thinking, tool cards) filtered by `filters`, live.
+ * The structured "modern" conversation view: renders the blocks (prose,
+ * thinking, tool cards) filtered by `filters`, live. A long conversation draws
+ * its end first, older rows as the reader scrolls up (`rowWindow`).
  */
 export const ModernConversationView = memo(function ModernConversationView({
   paneId,
@@ -460,7 +467,8 @@ export const ModernConversationView = memo(function ModernConversationView({
     return out;
   }, [blocks, filters]);
 
-  // What the lightbox arrows walk: every image currently on screen.
+  // What the lightbox arrows walk: every image of the shown kinds, drawn yet
+  // or not.
   const gallery = useMemo(
     () =>
       galleryImages(
@@ -475,6 +483,35 @@ export const ModernConversationView = memo(function ModernConversationView({
   const activeQuery = search ? search.query : query;
   const terms = useMemo(() => queryTerms(activeQuery), [activeQuery]);
   const searching = search !== null && search !== undefined ? true : searchOpen;
+
+  // Only the end of a long conversation is drawn, older rows as the view
+  // nears the top (`rowWindow`). The start is fixed at the first non-empty
+  // render of a (conversation, filter set), so live rows add to the end, and
+  // reset with either (row indices change meaning). A search draws every row:
+  // its occurrences live in the rendered DOM.
+  const windowKey = `${animKey}:${filters.user}${filters.assistant}${filters.thinking}${filters.tools}`;
+  const searchAll = searching && terms.length > 0;
+  const [rowStart, setRowStart] = useState<{
+    key: string;
+    start: number | null;
+  }>({ key: windowKey, start: null });
+  if (rowStart.key !== windowKey) {
+    setRowStart({
+      key: windowKey,
+      start: visible.length > 0 ? firstDrawnRow(null, visible.length) : null,
+    });
+  } else if (rowStart.start === null && visible.length > 0) {
+    setRowStart({ key: windowKey, start: firstDrawnRow(null, visible.length) });
+  } else if (searchAll && rowStart.start !== 0) {
+    // Kept once the search closes: the passage it found stays under the
+    // reader, and the next search costs nothing more.
+    setRowStart({ key: windowKey, start: 0 });
+  }
+  const firstDrawn = searchAll
+    ? 0
+    : firstDrawnRow(rowStart.start, visible.length);
+  // Where the reader stood when older rows were asked for, to keep the place.
+  const prependRef = useRef<{ top: number; height: number } | null>(null);
 
   // Which visible rows may hold a match: prose only — what the user and Claude
   // actually said. Tool inputs and outputs match on nearly every session and
@@ -589,7 +626,33 @@ export const ModernConversationView = memo(function ModernConversationView({
       current ? 0 : undefined,
     );
     savedTopRef.current = top;
+    // Older rows go in above the reader, who keeps the place (effect below).
+    if (top < LOAD_OLDER_PX && firstDrawn > 0 && !prependRef.current) {
+      prependRef.current = { top, height: el.scrollHeight };
+      setRowStart({ key: windowKey, start: olderStart(firstDrawn) });
+    }
   };
+
+  // Chromium's scroll anchoring keeps the reader's place as older rows go in,
+  // but not from offset 0 (a quick drag to the top lands there), and Safari
+  // before 27 has none (the phone page): the offset then stays put over the
+  // new rows, and the view shows rows the reader never scrolled to. Only that
+  // case is corrected here, so the two never add up.
+  useLayoutEffect(() => {
+    const pending = prependRef.current;
+    prependRef.current = null;
+    const el = scrollRef.current;
+    if (!pending || !el) return;
+    const shift = prependCorrection(
+      pending.top,
+      el.scrollTop,
+      el.scrollHeight - pending.height,
+    );
+    if (shift > 0) {
+      el.scrollTop += shift;
+      savedTopRef.current = el.scrollTop;
+    }
+  }, [firstDrawn]);
 
   // Ctrl/Cmd+F opens search — but only on the active pane's view.
   useEffect(() => {
@@ -772,28 +835,31 @@ export const ModernConversationView = memo(function ModernConversationView({
           className="modern-scroll min-h-0 flex-1 overflow-y-auto px-3 py-3"
         >
           <div ref={contentRef}>
-            {visible.map(({ block: b, blockIndex }, i) => (
-              <BlockRow
-                key={i}
-                block={b}
-                index={i}
-                speakerChange={i > 0 && visible[i - 1].block.kind !== b.kind}
-                density={density}
-                showResults={filters.results}
-                baseDir={cwd}
-                matchState={
-                  (matchSet.has(i)
-                    ? i === currentVisIdx
-                      ? 2
-                      : 1
-                    : 0) as MatchState
-                }
-                animate={blockIndex >= initialCount}
-                registerEl={registerEl}
-                onOpen={openLightbox}
-                onToast={onToast}
-              />
-            ))}
+            {visible.slice(firstDrawn).map(({ block: b, blockIndex }, j) => {
+              const i = firstDrawn + j;
+              return (
+                <BlockRow
+                  key={i}
+                  block={b}
+                  index={i}
+                  speakerChange={i > 0 && visible[i - 1].block.kind !== b.kind}
+                  density={density}
+                  showResults={filters.results}
+                  baseDir={cwd}
+                  matchState={
+                    (matchSet.has(i)
+                      ? i === currentVisIdx
+                        ? 2
+                        : 1
+                      : 0) as MatchState
+                  }
+                  animate={blockIndex >= initialCount}
+                  registerEl={registerEl}
+                  onOpen={openLightbox}
+                  onToast={onToast}
+                />
+              );
+            })}
           </div>
         </div>
       )}
