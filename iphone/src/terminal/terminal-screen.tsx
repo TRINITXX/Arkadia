@@ -289,6 +289,7 @@ export function TerminalScreen({
         />
         <LiveTerminal
           paneId={paneId}
+          claude={pane?.claude ?? false}
           status={status}
           palette={snapshot.palette}
           areaRef={areaRef}

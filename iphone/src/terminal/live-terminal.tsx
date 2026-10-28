@@ -8,14 +8,16 @@ import {
   type LayoutChangeEvent,
   type TextLayoutEvent,
 } from "react-native";
-import { footerRowCount } from "@/lib/terminalChrome";
-import { useWatchedFrame, type Status } from "~/remote/connection";
+import { footerRowCount, isJumpPill } from "@/lib/terminalChrome";
+import { send, useWatchedFrame, type Status } from "~/remote/connection";
 import { LINE_HEIGHT } from "~/terminal/metrics";
 import { TerminalGrid } from "~/terminal/terminal-grid";
 import type { RenderPayload, TerminalPalette } from "@/types";
 
 interface LiveTerminalProps {
   paneId: string | null;
+  /** Claude Code runs in the pane: its "Jump to bottom" pill can be trusted. */
+  claude: boolean;
   status: Status;
   palette: TerminalPalette;
   areaRef: RefObject<HostInstance | null>;
@@ -37,6 +39,7 @@ interface LiveTerminalProps {
  */
 export function LiveTerminal({
   paneId,
+  claude,
   status,
   palette,
   areaRef,
@@ -52,6 +55,12 @@ export function LiveTerminal({
   // The pane may carry another screen's size when it opens or after a
   // reconnect: the first frame tells, take it to this screen.
   const fitted = useRef(false);
+  // Arriving on the pane, not reconnecting: a drop or a return to the app
+  // must not lose the place Alexis scrolled to.
+  const arrived = useRef(false);
+  useEffect(() => {
+    arrived.current = false;
+  }, [paneId]);
   useEffect(() => {
     fitted.current = false;
   }, [paneId, status]);
@@ -59,7 +68,15 @@ export function LiveTerminal({
     if (!screen || fitted.current) return;
     fitted.current = true;
     reclaim(screen);
-  }, [screen, reclaim]);
+    if (arrived.current || !paneId) return;
+    arrived.current = true;
+    // The latest messages, not where the pane was left. The offset counts
+    // only off the alt screen (`scroll_max` 0 there), and the pill only in
+    // Claude Code: elsewhere ctrl+End would reach vim or less.
+    const scrolledBack = screen.scroll_max > 0 && screen.scroll_offset > 0;
+    if (scrolledBack || (claude && screen.lines.some(isJumpPill)))
+      send({ t: "bottom", pane: paneId });
+  }, [screen, reclaim, paneId, claude]);
 
   // Sized from the top, like the rows, so it ends above the footer even when
   // the PTY still has another screen's size.

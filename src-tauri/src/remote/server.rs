@@ -369,6 +369,10 @@ enum ClientMsg {
         pane: String,
         delta: i32,
     },
+    /// Back to the live bottom: the phone opened a pane left scrolled up.
+    Bottom {
+        pane: String,
+    },
     /// A wheel notch for an app that tracks the mouse (button 64 up, 65 down).
     Wheel {
         pane: String,
@@ -683,6 +687,7 @@ fn run(app: &AppHandle, msg: ClientMsg) -> Result<(), String> {
         ClientMsg::Scroll { pane, delta } => {
             terminal::scroll_terminal(pane, delta, sessions, app.clone())
         }
+        ClientMsg::Bottom { pane } => terminal::scroll_to_bottom(pane, sessions, app.clone()),
         ClientMsg::Wheel {
             pane,
             col,

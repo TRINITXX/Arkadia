@@ -17,6 +17,8 @@ export type ClientMsg =
   | { t: "inputs"; pane: string; parts: string[]; gap_ms: number }
   | { t: "resize"; pane: string; cols: number; rows: number }
   | { t: "scroll"; pane: string; delta: number }
+  /** Back to the live bottom (Claude Code's own ctrl+End on the alt screen). */
+  | { t: "bottom"; pane: string }
   | { t: "wheel"; pane: string; col: number; row: number; button: 64 | 65 }
   | { t: "click"; pane: string; col: number; row: number }
   | { t: "action"; id: number; action: RemoteAction }

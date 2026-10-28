@@ -1380,3 +1380,34 @@ pub fn scroll_terminal(
     emit_render(&app, &session_id, &session.term, &session.scroll_offset);
     Ok(())
 }
+
+/// Back to the live bottom. On the alt screen the running app owns its
+/// history: ctrl+End is Claude Code's "Jump to bottom" (`scroll:bottom`).
+/// Not typing: the pane is not handed to the phone (`remote/phone.rs`).
+pub fn scroll_to_bottom(
+    session_id: String,
+    state: State<'_, SessionMap>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let sessions = state.sessions.lock();
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("unknown session {session_id}"))?;
+    session.nav_gen.fetch_add(1, Ordering::Release);
+
+    if session.term.lock().is_on_alt_screen() {
+        // An offset left from before the alt screen would read as scrolled
+        // back in every frame.
+        session.scroll_offset.store(0, Ordering::Release);
+        let writer = session.writer.clone();
+        drop(sessions);
+        let mut w = writer.lock();
+        w.write_all(b"\x1b[1;5F").map_err(|e| format!("write: {e}"))?;
+        w.flush().map_err(|e| format!("flush: {e}"))?;
+        return Ok(());
+    }
+
+    session.scroll_offset.store(0, Ordering::Release);
+    emit_render(&app, &session_id, &session.term, &session.scroll_offset);
+    Ok(())
+}
