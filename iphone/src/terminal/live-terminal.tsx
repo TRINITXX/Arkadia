@@ -11,7 +11,6 @@ import {
 import { footerRowCount } from "@/lib/terminalChrome";
 import { useWatchedFrame, type Status } from "~/remote/connection";
 import { LINE_HEIGHT } from "~/terminal/metrics";
-import { StatsBadge } from "~/terminal/stats-badge";
 import { TerminalGrid } from "~/terminal/terminal-grid";
 import type { RenderPayload, TerminalPalette } from "@/types";
 
@@ -86,7 +85,6 @@ export function LiveTerminal({
           {overlay}
         </View>
       )}
-      <StatsBadge />
       {status !== "open" && (
         <View pointerEvents="none" style={styles.notice}>
           <Text style={styles.noticeText}>

@@ -1,6 +1,9 @@
 import { NativeTabs } from "expo-router/native-tabs";
 
-// Apple's tab bar: Projets, Sessions, Comptes (choice of 25/10/2026).
+// Apple's tab bar: Projets, Sessions, Comptes (choice of 25/10/2026). Only
+// Projets has an `index`: the app opens on the list that owns "/", and with
+// three of them the first folder by name won, Comptes (an `anchor` does not
+// change that, checked on 28/10/2026).
 // Expo Router needs the layout as the module's default export.
 export default function TabsLayout() {
   return (

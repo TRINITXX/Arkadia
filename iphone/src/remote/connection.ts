@@ -26,7 +26,6 @@ import {
   probeGate,
   saveRelay,
 } from "~/remote/reach";
-import { noteFrame, noteInput, noteNetwork } from "~/terminal/stats";
 
 /** `connecting` until the first open, `lost` while retrying after a drop. */
 export type Status = "connecting" | "open" | "lost";
@@ -50,8 +49,6 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const SEARCH_TIMEOUT_MS = 90_000;
 /** A PC that is off leaves connections hanging instead of refusing them. */
 const CONNECT_TIMEOUT_MS = 5000;
-const NETWORK_PROBE_EVERY_MS = 5000;
-const PROBE_TIMEOUT_MS = 4000;
 /** Away from the app longer than this, the socket is not trusted any more. */
 const STALE_AFTER_MS = 20_000;
 
@@ -61,7 +58,6 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let view: RemoteView = { status: "connecting", snapshot: null };
 let watched: string | null = null;
 let frame: RenderPayload | null = null;
-let frameReceivedAt = 0;
 let started = false;
 let openedBefore = false;
 /** In front: the PC counts the watched pane as on screen (no push for it). */
@@ -72,7 +68,6 @@ let activityToken: string | null | undefined;
 /** Null until the PC said which panes the iPhone drives. */
 let followed: string[] | null = null;
 const followSubs = new Set<() => void>();
-let probing = false;
 const viewSubs = new Set<() => void>();
 const frameSubs = new Set<() => void>();
 
@@ -87,9 +82,8 @@ function setView(next: Partial<RemoteView>) {
   for (const cb of viewSubs) cb();
 }
 
-function setFrame(next: RenderPayload | null, receivedAt = 0) {
+function setFrame(next: RenderPayload | null) {
   frame = next;
-  frameReceivedAt = receivedAt;
   for (const cb of frameSubs) cb();
 }
 
@@ -133,11 +127,9 @@ function connect() {
   ws.onmessage = (e) => {
     const msg = JSON.parse(String(e.data)) as ServerMsg;
     if (msg.t === "state") setView({ snapshot: msg.state });
-    else if (msg.t === "frame" && msg.frame.session_id === watched) {
-      const now = performance.now();
-      noteFrame(now);
-      setFrame(msg.frame, now);
-    } else if (msg.t === "reply") {
+    else if (msg.t === "frame" && msg.frame.session_id === watched)
+      setFrame(msg.frame);
+    else if (msg.t === "reply") {
       const waiting = pending.get(msg.id);
       pending.delete(msg.id);
       if (msg.error !== undefined) waiting?.reject(new Error(msg.error));
@@ -178,27 +170,6 @@ export function reconnectNow() {
   connect();
 }
 
-/** A bare HTTP round trip to the PC: the network's share of the echo. */
-async function probeNetwork() {
-  if (view.status !== "open" || probing) return;
-  probing = true;
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), PROBE_TIMEOUT_MS);
-  const start = performance.now();
-  try {
-    const res = await fetch(
-      `https://${ARKADIA_HOST}/mobile/icon-180.png?probe=${Date.now()}`,
-      { method: "HEAD", cache: "no-store", signal: abort.signal },
-    );
-    if (res.ok) noteNetwork(performance.now() - start);
-  } catch {
-    // Down or slow: the socket's own status says so.
-  } finally {
-    clearTimeout(timer);
-    probing = false;
-  }
-}
-
 /** Opens the connection and keeps it up (iOS drops it in the background). */
 export function startRemote() {
   if (started) return;
@@ -226,7 +197,6 @@ export function startRemote() {
     // reads as open: start over rather than show a frozen terminal.
     if (!socket || away > STALE_AFTER_MS) reconnectNow();
   });
-  setInterval(() => void probeNetwork(), NETWORK_PROBE_EVERY_MS);
 }
 
 export function hostConfigured(): boolean {
@@ -237,7 +207,6 @@ export function hostConfigured(): boolean {
 export function send(msg: ClientMsg): boolean {
   if (socket?.readyState !== WebSocket.OPEN) return false;
   socket.send(JSON.stringify(msg));
-  if (msg.t === "input") noteInput();
   return true;
 }
 
@@ -354,9 +323,7 @@ export function onEvent(
 
 /** Writes spaced on the PC itself (the network may bunch spaced sends). */
 export function sendInputs(paneId: string, parts: string[], gapMs: number) {
-  const sent = send({ t: "inputs", pane: paneId, parts, gap_ms: gapMs });
-  if (sent) noteInput();
-  return sent;
+  return send({ t: "inputs", pane: paneId, parts, gap_ms: gapMs });
 }
 
 function setWatched(paneId: string | null) {
@@ -409,9 +376,4 @@ export function useWatchedFrame(): RenderPayload | null {
 /** The latest frame of `paneId`, read outside rendering (taps, keys). */
 export function latestFrame(paneId: string | null): RenderPayload | null {
   return frame && frame.session_id === paneId ? frame : null;
-}
-
-/** When the frame on screen arrived, for the display measure. */
-export function watchedFrameReceivedAt(): number {
-  return frameReceivedAt;
 }

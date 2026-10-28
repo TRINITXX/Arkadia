@@ -5,6 +5,7 @@ import { StatusBar } from "expo-status-bar";
 import { useLiveActivity } from "~/activity/use-live-activity";
 import { LockScreen } from "~/lock/lock-screen";
 import { useAppLock } from "~/lock/use-app-lock";
+import { useReopenLastTab } from "~/navigation/use-reopen-last-tab";
 import { usePushNotifications } from "~/notifications/use-push-notifications";
 import { startRemote, useRemoteView } from "~/remote/connection";
 import { useReach } from "~/remote/reach";
@@ -16,6 +17,7 @@ export default function RootLayout() {
   useEffect(() => startRemote(), []);
   const { status, snapshot } = useRemoteView();
   usePushNotifications(snapshot);
+  useReopenLastTab(snapshot);
   useLiveActivity(snapshot);
   const { reach, wake } = useReach();
   const lock = useAppLock();

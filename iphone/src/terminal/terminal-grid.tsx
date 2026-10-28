@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type RefObject } from "react";
+import { useMemo, type RefObject } from "react";
 import {
   StyleSheet,
   Text,
@@ -8,9 +8,7 @@ import {
   type LayoutChangeEvent,
   type TextLayoutEvent,
 } from "react-native";
-import { watchedFrameReceivedAt } from "~/remote/connection";
 import { ROW_STYLE, PAD_X } from "~/terminal/metrics";
-import { noteDisplayed } from "~/terminal/stats";
 import { TerminalRow } from "~/terminal/terminal-row";
 import { RULER } from "~/terminal/use-pane-fit";
 import type { RenderPayload, TerminalPalette } from "@/types";
@@ -41,13 +39,6 @@ export function TerminalGrid({
     () => screen?.lines.map((runs) => JSON.stringify(runs)) ?? [],
     [screen],
   );
-
-  // Drawn: how long since the frame arrived (the display's share of the echo).
-  useEffect(() => {
-    if (!screen) return;
-    const receivedAt = watchedFrameReceivedAt();
-    requestAnimationFrame(() => noteDisplayed(receivedAt));
-  }, [screen]);
 
   return (
     <View

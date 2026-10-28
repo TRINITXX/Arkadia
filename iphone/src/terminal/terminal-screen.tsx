@@ -35,7 +35,6 @@ import { ConversationView } from "~/messages/conversation-view";
 import { clearPrompt } from "~/terminal/clear-prompt";
 import { KeyRow } from "~/terminal/key-row";
 import { LiveTerminal } from "~/terminal/live-terminal";
-import { measureEcho } from "~/terminal/stats";
 import { usePaneFit } from "~/terminal/use-pane-fit";
 import { useTerminalGestures } from "~/terminal/use-terminal-gestures";
 import { useTypingInput } from "~/terminal/use-typing-input";
@@ -102,9 +101,6 @@ export function TerminalScreen({
     },
     [],
   );
-
-  const busy = pane?.badge?.startsWith("busy") ?? false;
-  useEffect(() => measureEcho(!busy), [busy]);
 
   const { cellWidth, onRulerLayout, onAreaLayout, reclaim } =
     usePaneFit(paneId);
