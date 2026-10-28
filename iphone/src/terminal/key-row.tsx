@@ -7,11 +7,12 @@ import type { RemoteButton } from "@/lib/remoteSnapshot";
 import { sfIcon } from "~/ui/sf-icon";
 
 /**
- * Visible keys (layout 3 chosen on 25/10/2026), then Dictation in blue
- * (choice C of the V1): the rest is in the + menu.
+ * Visible keys (layout 3 chosen on 25/10/2026, Tab swapped with Échap on
+ * 28/10/2026), then Dictation in blue (choice C of the V1): the rest is in
+ * the + menu.
  */
 const KEYS: { label: string; data: string }[] = [
-  { label: "Échap", data: "\x1b" },
+  { label: "Tab", data: "\t" },
   { label: "↑", data: "\x1b[A" },
   { label: "↓", data: "\x1b[B" },
   { label: "Entrée", data: "\r" },
@@ -24,7 +25,7 @@ const MORE_KEYS: {
   icon: MenuAction["image"];
   data: string | "paste";
 }[] = [
-  { id: "key:tab", label: "Tab", icon: "arrow.right.to.line", data: "\t" },
+  { id: "key:esc", label: "Échap", icon: "escape", data: "\x1b" },
   { id: "key:paste", label: "Coller", icon: "doc.on.clipboard", data: "paste" },
   { id: "key:ctrlc", label: "Ctrl+C", icon: "xmark.octagon", data: "\x03" },
 ];
