@@ -30,6 +30,11 @@ export default function RootLayout() {
         screenOptions={{
           contentStyle: { backgroundColor: "#000000" },
           headerTintColor: "#ffffff",
+          // Left unset, iOS 26 draws a see-through Liquid Glass bar and the
+          // terminal's first rows slide under it (seen on 28/10/2026).
+          headerTransparent: false,
+          headerShadowVisible: false,
+          headerStyle: { backgroundColor: "#000000" },
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
