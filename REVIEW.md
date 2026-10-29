@@ -51,7 +51,7 @@ Lu par toute review de ce repo. Une remarque de review qui revient s'ajoute ici.
 
 ## Zones sensibles
 
-Un changement qui touche une de ces zones se propose en `/review-maison` :
+Un changement qui touche une de ces zones passe d'office, avant le commit, par une relecture que Claude choisit sans demander (`/review-maison`, ou sous-agent Opus pour une correction courte) :
 
 - Comptes et lancement des terminaux : `src-tauri/src/accounts.rs`, `src-tauri/src/terminal.rs`
 - Fenêtres et chien de garde : `src-tauri/src/uiwatch.rs`, `src-tauri/src/popup.rs`
