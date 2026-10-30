@@ -3,6 +3,7 @@ import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatView } from "@/components/chat/chat-view";
 import { appendDictation, usePaneDraft } from "@/lib/chat/chatDrafts";
 import { folderOf } from "@/lib/chat/chatLabels";
+import { usePaneMessagesOnly } from "@/lib/chat/chatMessagesOnly";
 import { useChatSession } from "@/lib/chat/useChatSession";
 import { useHiddenVoice } from "@/lib/useHiddenVoice";
 import type { PaneChat, PaneState } from "@/types";
@@ -39,6 +40,7 @@ export function ChatPane({
   const session = useChatSession(pane.id, pane.accountId, chat);
   const { state } = session;
   const [draft, setDraft] = usePaneDraft(pane.id);
+  const [messagesOnly, setMessagesOnly] = usePaneMessagesOnly(pane.id);
   // A dictation still lands in this pane's draft if the pane unmounted
   // meanwhile (another project on screen).
   const paneId = pane.id;
@@ -91,6 +93,8 @@ export function ChatPane({
       draft={draft}
       onDraft={setDraft}
       voice={voice}
+      messagesOnly={messagesOnly}
+      onMessagesOnly={setMessagesOnly}
       onHidden={onHidden}
       onToast={onToast}
     />

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   groupChatItems,
+  messagesOnly,
   questionAnswers,
   toolLabel,
   workSummary,
@@ -55,6 +56,30 @@ describe("groupChatItems", () => {
       tool("Agent", { description: "d" }),
     ]);
     expect(units.map((u) => u.kind)).toEqual(["plan", "question", "agent"]);
+  });
+});
+
+describe("messagesOnly", () => {
+  it("keeps the user, Claude's replies and the errors, nothing else", () => {
+    const units = messagesOnly(
+      groupChatItems([
+        { kind: "user", id: "u", text: "Corrige le test", images: 0 },
+        { kind: "thinking", id: "th", text: "Je cherche", streaming: false },
+        tool("Bash", { command: "ls" }, "b1"),
+        tool("Edit", { file_path: "C:/a.ts" }, "e1"),
+        tool("Agent", { description: "d" }, "a1"),
+        tool("AskUserQuestion", {}, "q1"),
+        tool("ExitPlanMode", {}, "p1"),
+        { kind: "notice", id: "n1", text: "Compacté", tone: "info" },
+        { kind: "notice", id: "n2", text: "Erreur API", tone: "error" },
+        text("C'est corrigé."),
+      ]),
+    );
+    expect(units.map((u) => ("item" in u ? u.item.id : u.id))).toEqual([
+      "u",
+      "n2",
+      "C'est corrigé.",
+    ]);
   });
 });
 

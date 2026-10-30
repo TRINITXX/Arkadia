@@ -112,6 +112,11 @@ interface FilePickerProps {
   bottom: number;
   /** Room left above that bottom in the pane: the list shrinks to fit it. */
   maxHeight: number;
+  /**
+   * Opens above its container's top edge instead (the chat's input card),
+   * `bottom` px over it, left-aligned and no wider than the container.
+   */
+  above?: boolean;
 }
 
 /**
@@ -123,14 +128,15 @@ interface FilePickerProps {
  * The selection spans both tabs, so a screenshot and a log file can go into the
  * same prompt. It takes keyboard focus on open — arrows move, space toggles, Tab
  * switches tab, Enter inserts, Escape cancels — and the rail hands focus back to
- * the terminal afterwards. Closing on an outside click is the rail's job, since
- * its own button sits outside this subtree.
+ * the terminal afterwards (the chat, to its input). Closing on an outside click
+ * is the owner's job, since its own button sits outside this subtree.
  */
 export function FilePicker({
   onInsert,
   onClose,
   bottom,
   maxHeight,
+  above = false,
 }: FilePickerProps) {
   // The artifact page steps aside while this layer is open.
   useOverlay();
@@ -320,11 +326,14 @@ export function FilePicker({
       // The rail blocks mousedown to keep the terminal focused; this panel wants
       // the focus, so its clicks must not reach that handler.
       onMouseDown={(e) => e.stopPropagation()}
-      // Beside the button column rather than above it: the column grows with
-      // each button, and stacking on top of it pushed the panel past the pane's
-      // top edge, which clips it.
-      className="pointer-events-auto absolute right-full mr-1 flex w-[512px] flex-col rounded border border-zinc-800 bg-zinc-950 p-2.5 shadow-xl outline-none"
-      style={{ bottom, maxHeight }}
+      // In the rail, beside the button column rather than above it: the column
+      // grows with each button, and stacking on top of it pushed the panel past
+      // the pane's top edge, which clips it. The chat's input is a wide card,
+      // with the room above it.
+      className={`pointer-events-auto absolute flex flex-col rounded border border-zinc-800 bg-zinc-950 p-2.5 shadow-xl outline-none ${
+        above ? "left-0 z-20 w-[min(512px,100%)]" : "right-full mr-1 w-[512px]"
+      }`}
+      style={{ bottom: above ? `calc(100% + ${bottom}px)` : bottom, maxHeight }}
       role="dialog"
       aria-label="Fichiers récents"
     >

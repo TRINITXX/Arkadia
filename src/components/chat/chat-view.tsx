@@ -49,6 +49,9 @@ export interface ChatViewProps {
   draft: ChatDraft;
   onDraft: React.Dispatch<React.SetStateAction<ChatDraft>>;
   voice: ChatVoice;
+  /** « Messages seuls »: the column shows the user's and Claude's words alone. */
+  messagesOnly: boolean;
+  onMessagesOnly: (on: boolean) => void;
   /** The pane stopped showing (its tab hidden): nothing on screen any more. */
   onHidden?: () => void;
   onToast?: ToastFn;
@@ -73,6 +76,8 @@ export function ChatView({
   draft,
   onDraft,
   voice,
+  messagesOnly,
+  onMessagesOnly,
   onHidden,
   onToast,
 }: ChatViewProps) {
@@ -80,6 +85,8 @@ export function ChatView({
   const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState<Subagent | null>(null);
   const [stuck, setStuck] = useState(true);
+  // Off while its tab is hidden (the pane sized to nothing).
+  const [shown, setShown] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -129,7 +136,9 @@ export function ChatView({
     if (!root) return;
     const ro = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
-      if (width === 0 && height === 0) onHiddenRef.current?.();
+      const hidden = width === 0 && height === 0;
+      setShown(!hidden);
+      if (hidden) onHiddenRef.current?.();
     });
     ro.observe(root);
     return () => ro.disconnect();
@@ -209,6 +218,7 @@ export function ChatView({
   } else {
     bottom = (
       <ChatComposer
+        items={state.items}
         working={state.working}
         mode={state.mode}
         model={state.model}
@@ -217,6 +227,7 @@ export function ChatView({
         onDraft={onDraft}
         voice={voice}
         focusKey={isActive}
+        active={isActive && shown}
         onSend={(text, images) => {
           stuckRef.current = true;
           onSend(text, images);
@@ -224,6 +235,9 @@ export function ChatView({
         onInterrupt={onInterrupt}
         onMode={onMode}
         onModel={onModel}
+        messagesOnly={messagesOnly}
+        onMessagesOnly={onMessagesOnly}
+        onToast={onToast}
       />
     );
   }
@@ -258,6 +272,7 @@ export function ChatView({
             cwd={cwd}
             subagents={state.subagents}
             pendingToolIds={pendingToolIds}
+            messagesOnly={messagesOnly}
             onOpenAgents={openAgents}
             onOpen={open}
             onToast={onToast}

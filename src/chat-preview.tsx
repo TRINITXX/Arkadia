@@ -57,14 +57,22 @@ const SCENARIOS: Record<string, () => ChatState> = {
 
 const params = new URLSearchParams(window.location.search);
 const name = params.get("s") ?? "tools";
+const nowSeconds = Math.round(Date.now() / 1000);
 const state = {
   ...(SCENARIOS[name] ?? SCENARIOS.tools)(),
   title: "Refonte de la vue lecture",
   gitBranch: "master-lab",
+  // The status line's figures: the recorded resets are long past.
+  context: { percentage: 45.2 },
+  limits: {
+    fiveHour: { utilization: 0.37, resetsAt: nowSeconds + 135 * 60 + 30 },
+    sevenDay: { utilization: 0.12, resetsAt: nowSeconds + 4 * 86_400 },
+  },
 };
 
 function Preview() {
   const [draft, setDraft] = useState<ChatDraft>(EMPTY_DRAFT);
+  const [messagesOnly, setMessagesOnly] = useState(false);
   const [status, setStatus] = useState<VoiceStatus>(
     params.get("voice") === "listening" ? "listening" : "idle",
   );
@@ -102,6 +110,8 @@ function Preview() {
         draft={draft}
         onDraft={setDraft}
         voice={voice}
+        messagesOnly={messagesOnly}
+        onMessagesOnly={setMessagesOnly}
       />
     </div>
   );

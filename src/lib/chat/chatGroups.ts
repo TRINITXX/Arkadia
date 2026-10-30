@@ -74,6 +74,20 @@ export function groupChatItems(items: ChatItem[]): ChatUnit[] {
   return units;
 }
 
+/**
+ * « Messages seuls » (the terminal rail's button): the user's words, Claude's
+ * replies and the errors. Thinking, tool work, edits, subagents, question
+ * recaps, plans and info notices drop out.
+ */
+export function messagesOnly(units: ChatUnit[]): ChatUnit[] {
+  return units.filter(
+    (u) =>
+      u.kind === "user" ||
+      u.kind === "text" ||
+      (u.kind === "notice" && u.item.tone === "error"),
+  );
+}
+
 const CATEGORIES: [RegExp, string, string][] = [
   [/^(Bash|PowerShell|BashOutput|KillShell|Monitor)$/, "commande", "commandes"],
   [/^(Read|NotebookRead)$/, "fichier lu", "fichiers lus"],

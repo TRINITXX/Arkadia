@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, Mic, Plus, Square, X, Zap } from "lucide-react";
+import { ArrowUp, Mic, Square, X, Zap } from "lucide-react";
+import type { ToastFn } from "@/components/modern/MarkdownContent";
+import { ChatRailActions } from "@/components/chat/chat-rail-actions";
 import type { ChatImage } from "@/lib/chat/useChatSession";
+import type { ChatItem } from "@/lib/chat/chatState";
 import type {
   ChatDraft,
   DraftImage as Attachment,
@@ -44,11 +47,13 @@ function readImage(file: File): Promise<Attachment> {
 
 /**
  * The input card: text (Enter sends, Shift+Enter breaks the line), images by
- * paste or the + button, `/` commands, and the session's mode and model.
+ * paste, `/` commands, the terminal rail's actions (`ChatRailActions`), and
+ * the session's mode and model.
  * Esc interrupts a working Claude, Shift+Tab cycles the mode, as in the
  * terminal. A message sent while Claude works waits for its turn.
  */
 export function ChatComposer({
+  items,
   working,
   mode,
   model,
@@ -61,7 +66,13 @@ export function ChatComposer({
   onInterrupt,
   onMode,
   onModel,
+  messagesOnly,
+  onMessagesOnly,
+  active,
+  onToast,
 }: {
+  /** The conversation, for the copy of Claude's last code block. */
+  items: ChatItem[];
   working: boolean;
   mode: string | null;
   model: string | null;
@@ -75,6 +86,11 @@ export function ChatComposer({
   onInterrupt: () => void;
   onMode: (mode: PermissionMode) => void;
   onModel: (model: string) => void;
+  messagesOnly: boolean;
+  onMessagesOnly: (on: boolean) => void;
+  /** The pane is the active one and on screen (`ChatRailActions`). */
+  active: boolean;
+  onToast?: ToastFn;
 }) {
   const { text, images } = draft;
   const setText = (value: string) => onDraft((d) => ({ ...d, text: value }));
@@ -83,7 +99,6 @@ export function ChatComposer({
   const [slashIndex, setSlashIndex] = useState(0);
   const [menu, setMenu] = useState<"model" | null>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   // The mic button lives here: whatever takes the input away (a request, the
   // chat ending) stops the recording it would no longer show.
@@ -249,31 +264,22 @@ export function ChatComposer({
         }}
       />
       <div className="chat-tools-row">
-        <button
-          type="button"
-          className="chat-ib"
-          title="Ajouter une image"
-          onClick={() => fileRef.current?.click()}
-        >
-          <Plus />
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept={IMAGE_TYPES.join(",")}
-          multiple
-          hidden
-          onChange={(e) => {
-            if (e.target.files) void addFiles(e.target.files);
-            e.target.value = "";
-          }}
+        <ChatRailActions
+          items={items}
+          draft={draft}
+          onDraft={onDraft}
+          areaRef={areaRef}
+          messagesOnly={messagesOnly}
+          onMessagesOnly={onMessagesOnly}
+          active={active}
+          onToast={onToast}
         />
         <span
           className="chat-chip"
           title="Changer de mode (Maj+Tab)"
           onClick={() => onMode(nextMode(mode))}
         >
-          <Zap /> {modeLabel(mode)}
+          <Zap /> <span className="lbl">{modeLabel(mode)}</span>
         </span>
         <span className="chat-anchor">
           <span
@@ -281,7 +287,7 @@ export function ChatComposer({
             title="Changer de modèle"
             onClick={() => setMenu((m) => (m ? null : "model"))}
           >
-            {modelLabel(model)}
+            <span className="lbl">{modelLabel(model)}</span>
           </span>
           {menu === "model" && (
             <div

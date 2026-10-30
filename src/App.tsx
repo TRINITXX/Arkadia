@@ -126,6 +126,10 @@ import {
 } from "@/lib/chat/chatEvents";
 import { dropDraft, moveDraft } from "@/lib/chat/chatDrafts";
 import {
+  dropMessagesOnly,
+  moveMessagesOnly,
+} from "@/lib/chat/chatMessagesOnly";
+import {
   chatBusyReason,
   chatForCommand,
   chatLabelOf,
@@ -1448,6 +1452,7 @@ export function App() {
         dropFrame(pid);
         dropHeldConv(pid);
         dropDraft(pid);
+        dropMessagesOnly(pid);
         try {
           await invoke("close_terminal", { sessionId: pid });
         } catch {
@@ -1493,6 +1498,7 @@ export function App() {
           dropFrame(pid);
           dropHeldConv(pid);
           dropDraft(pid);
+          dropMessagesOnly(pid);
           try {
             await invoke("close_terminal", { sessionId: pid });
           } catch {
@@ -1535,6 +1541,7 @@ export function App() {
       dropFrame(paneId);
       dropHeldConv(paneId);
       dropDraft(paneId);
+      dropMessagesOnly(paneId);
       try {
         await invoke("close_terminal", { sessionId: paneId });
       } catch {
@@ -1685,6 +1692,7 @@ export function App() {
         () => {},
       );
       moveDraft(old.id, newId);
+      moveMessagesOnly(old.id, newId);
       // Its own session or the folder's latest: never the pane map's, which
       // may hold a terminal session that ran in this pane before the chat.
       const next: PaneChat = chat.resume
@@ -2471,6 +2479,8 @@ export function App() {
       paneIds.forEach((pid) => {
         paneToTab.current.delete(pid);
         dropHeldConv(pid);
+        dropDraft(pid);
+        dropMessagesOnly(pid);
         void invoke("close_terminal", { sessionId: pid });
       });
     });

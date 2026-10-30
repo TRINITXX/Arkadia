@@ -9,7 +9,11 @@ import { ChatAgentRow } from "@/components/chat/chat-agent-row";
 import { ChatEditCard } from "@/components/chat/chat-edit-card";
 import { ChatPlanCard } from "@/components/chat/chat-plan-card";
 import { ChatWorkGroup } from "@/components/chat/chat-work-group";
-import { groupChatItems, questionAnswers } from "@/lib/chat/chatGroups";
+import {
+  groupChatItems,
+  messagesOnly as onlyMessages,
+  questionAnswers,
+} from "@/lib/chat/chatGroups";
 import { latestPlan, type ChatItem, type Subagent } from "@/lib/chat/chatState";
 
 interface ChatTimelineProps {
@@ -18,6 +22,8 @@ interface ChatTimelineProps {
   subagents: Subagent[];
   /** Tool calls a pending request is about (its question or plan). */
   pendingToolIds: Set<string>;
+  /** « Messages seuls » (`messagesOnly` in `chatGroups`). */
+  messagesOnly?: boolean;
   onOpenAgents: () => void;
   onOpen: (content: LightboxContent) => void;
   onToast?: ToastFn;
@@ -29,11 +35,15 @@ export const ChatTimeline = memo(function ChatTimeline({
   cwd,
   subagents,
   pendingToolIds,
+  messagesOnly = false,
   onOpenAgents,
   onOpen,
   onToast,
 }: ChatTimelineProps) {
-  const units = useMemo(() => groupChatItems(items), [items]);
+  const units = useMemo(() => {
+    const all = groupChatItems(items);
+    return messagesOnly ? onlyMessages(all) : all;
+  }, [items, messagesOnly]);
   return (
     <>
       {units.map((unit) => {

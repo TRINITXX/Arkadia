@@ -90,8 +90,16 @@ export const CHAT_CSS = `
 .chat-attach .img img { width: 100%; height: 100%; object-fit: cover; }
 .chat-attach .img button { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: 0; background: rgba(0,0,0,.7); color: #fff; display: grid; place-items: center; cursor: pointer; padding: 0; }
 .chat-tools-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #2b2e33; color: var(--chat-dim); font-size: 12.5px; }
+.chat-tools-row > .chat-chip, .chat-tools-row > .chat-anchor, .chat-anchor > .chat-chip { min-width: 0; }
+.chat-tools-row .chat-chip .lucide { flex-shrink: 0; }
+.chat-chip .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chat-ib { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: #2a2d32; border: 0; color: var(--chat-dim); cursor: pointer; flex-shrink: 0; }
-.chat-ib:hover { color: var(--chat-ink); }
+.chat-ib:not(:disabled):hover { color: var(--chat-ink); }
+.chat-rail { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.chat-ib.sky { background: rgba(56,189,248,.10); } .chat-ib.sky:hover { background: rgba(56,189,248,.20); } .chat-ib.sky.on { background: rgba(56,189,248,.28); color: #bae6fd; }
+.chat-ib.amber { background: rgba(245,158,11,.10); } .chat-ib.amber:hover { background: rgba(245,158,11,.20); } .chat-ib.amber.on { background: rgba(245,158,11,.28); color: #fde68a; }
+.chat-ib.rose { background: rgba(244,63,94,.10); } .chat-ib.rose:hover { background: rgba(244,63,94,.20); } .chat-ib.rose.on { background: rgba(244,63,94,.28); color: #fecdd3; }
+.chat-ib.slate { background: rgba(148,163,184,.10); } .chat-ib.slate:not(:disabled):hover { background: rgba(148,163,184,.20); }
 .chat-ib:disabled { opacity: .45; cursor: default; }
 .chat-ib .lucide { width: 16px; height: 16px; }
 .chat-round { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; border: 0; cursor: pointer; flex-shrink: 0; }
