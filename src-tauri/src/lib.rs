@@ -26,6 +26,7 @@ mod sessions;
 mod terminal;
 pub mod terminal_state;
 mod uiwatch;
+pub mod voice;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -152,6 +153,7 @@ pub fn run() {
         .manage(registry.clone())
         .manage(popup::PopupQueue::default())
         .manage(uiwatch::UiHealth::default())
+        .manage(voice::VoicePane::default())
         .manage(remote_hub.clone())
         .setup({
             let registry = registry.clone();
@@ -258,6 +260,8 @@ pub fn run() {
         // The artifact page is remote: `guard` refuses it every app command.
         .invoke_handler(artifact_view::guard(tauri::generate_handler![
             spawn_terminal,
+            voice::voice_pane,
+            voice::voice_take,
             accounts::accounts_state,
             accounts::account_add,
             accounts::account_remove,

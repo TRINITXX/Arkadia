@@ -7,6 +7,10 @@ fn main() {
     arkadia_lib::forget_parent_claude_session();
     // Nor what the other Arkadia (daily or Lab) left for its own (see `lab`).
     arkadia_lib::lab::forget_foreign_vars();
+    // Run by the hidden dictation Claude Code as its prompt hook (see `voice`).
+    if let Some(dir) = arkadia_lib::voice::capture_dir_arg() {
+        return arkadia_lib::voice::capture(&dir);
+    }
     // Started as a pane's BROWSER: hand the link on and leave (see `artifact_inbox`).
     if let Some((target, pane)) = arkadia_lib::artifact_inbox::forward_request() {
         return arkadia_lib::artifact_inbox::forward(&target, pane.as_deref());

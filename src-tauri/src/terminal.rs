@@ -60,7 +60,7 @@ pub struct Session {
     dirty: Arc<AtomicBool>,
     /// Some window shows this pane: full frame rate (see `pane_viewers`).
     shown: Arc<AtomicBool>,
-    _child: Box<dyn portable_pty::Child + Send + Sync>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
 impl Drop for Session {
@@ -78,6 +78,16 @@ impl SessionMap {
     /// Whether this Arkadia runs the pane `id` (another instance may).
     pub fn has_session(&self, id: &str) -> bool {
         self.sessions.lock().contains_key(id)
+    }
+
+    /// Whether the pane `id` still has its shell. Not the reader's `stop`:
+    /// under ConPTY the output only ends once the pane is dropped, never when
+    /// its shell exits (measured with portable-pty 0.8.1).
+    pub fn is_running(&self, id: &str) -> bool {
+        self.sessions
+            .lock()
+            .get_mut(id)
+            .is_some_and(|s| matches!(s.child.try_wait(), Ok(None)))
     }
 
     /// Flags the panes on screen. One that just appeared is marked dirty, so
@@ -622,7 +632,7 @@ pub fn spawn_terminal(
             stop,
             dirty,
             shown,
-            _child: child,
+            child,
         },
     );
 

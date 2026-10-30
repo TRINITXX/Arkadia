@@ -8,6 +8,11 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 
+  // Arkadia Lab's build script sets this flag, as for the Rust side (`lab.rs`).
+  define: {
+    __ARKADIA_LAB__: JSON.stringify(process.env.ARKADIA_LAB_BUILD === "1"),
+  },
+
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

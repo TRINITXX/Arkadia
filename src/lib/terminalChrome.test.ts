@@ -3,6 +3,7 @@ import {
   inputRowIndex,
   isDictating,
   isPromptField,
+  voiceFailure,
 } from "@/lib/terminalChrome";
 import type { CellRun, RenderPayload } from "@/types";
 
@@ -113,6 +114,19 @@ describe("isDictating", () => {
     expect(isDictating(box("◉ xhigh · /effort"))).toBe(false);
     expect(isDictating(box("No speech detected."))).toBe(false);
     expect(isDictating(null)).toBe(false);
+  });
+
+  it("reads a dictation that brought no text", () => {
+    expect(voiceFailure(box("No speech detected."))).toBe(
+      "No speech detected.",
+    );
+    expect(voiceFailure(box("No audio detected from microphone"))).toBe(
+      "No audio detected from microphone",
+    );
+    expect(voiceFailure(box("◉ xhigh · /effort"))).toBeNull();
+    expect(
+      voiceFailure(box("", "❯ No speech detected in the logs")),
+    ).toBeNull();
   });
 
   it("ignores the same words in the transcript and in the prompt", () => {

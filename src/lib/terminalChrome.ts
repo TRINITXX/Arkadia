@@ -44,13 +44,30 @@ const VOICE_STATUS = /^(?:keep holding|listening|Voice: processing)…$/;
  * a transcript line that merely quotes those words.
  */
 export function isDictating(screen: RenderPayload | null): boolean {
+  return VOICE_STATUS.test(voiceStatusRow(screen));
+}
+
+/** The text of the row where Claude Code prints its voice status. */
+function voiceStatusRow(screen: RenderPayload | null): string {
   const r = inputRowIndex(screen);
-  if (!screen || r < 2) return false;
-  const status = (screen.lines[r - 2] ?? [])
+  if (!screen || r < 2) return "";
+  return (screen.lines[r - 2] ?? [])
     .map((run) => run.text)
     .join("")
     .trim();
-  return VOICE_STATUS.test(status);
+}
+
+/**
+ * How Claude Code reports, in the same spot, a dictation that brought no text
+ * (wording from its voice dictation docs, v2.1.314).
+ */
+const VOICE_FAILURE =
+  /^(?:No speech detected|No audio detected|Voice connection failed|Voice stream error|Dictation error)/;
+
+/** Claude Code's notice of a dictation that brought no text, or null. */
+export function voiceFailure(screen: RenderPayload | null): string | null {
+  const status = voiceStatusRow(screen);
+  return VOICE_FAILURE.test(status) ? status : null;
 }
 
 /** Column of the first non-space cell of a row, or null when the row is blank. */

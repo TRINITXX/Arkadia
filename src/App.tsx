@@ -53,6 +53,7 @@ import {
 import { snipTarget } from "@/lib/artifactSnip";
 import { SessionsOverlay } from "@/components/SessionsOverlay";
 import { Toaster, useToasts } from "@/components/Toaster";
+import { VoiceTestPanel } from "@/components/voice-test-panel";
 import {
   DEFAULT_CONV_FILTERS,
   ModernConversationView,
@@ -105,6 +106,7 @@ import { subscribeStable } from "@/lib/tauriEvents";
 import {
   dropFrame,
   getFrame,
+  isAdoptedPane,
   publishFrame,
   sizeToReclaim,
 } from "@/lib/frameStore";
@@ -2017,12 +2019,12 @@ export function App() {
       subscribeStable<RenderPayload>(listen, "terminal-render", (payload) => {
         const paneId = payload.session_id;
         const tabId = paneToTab.current.get(paneId);
-        if (!tabId) return;
+        if (!tabId && !isAdoptedPane(paneId)) return;
         // Frames live in the external frame store: only the pane's own
         // terminal component re-renders. React state (the whole App tree)
         // is only touched for the rare title change.
         publishFrame(payload);
-        if (!payload.title) return;
+        if (!tabId || !payload.title) return;
         setTabs((prev) => {
           // Bail out with the SAME reference when nothing changes, so the
           // per-frame call never re-renders the app.
@@ -3249,6 +3251,7 @@ export function App() {
         toasts={toasts}
         right={16 + (tabArtifacts ? artifactWidth : 0)}
       />
+      {__ARKADIA_LAB__ && <VoiceTestPanel />}
     </div>
   );
 }

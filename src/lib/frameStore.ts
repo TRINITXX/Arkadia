@@ -43,6 +43,25 @@ export function subscribeFrame(paneId: string, cb: () => void): () => void {
   };
 }
 
+// Panes with no tab whose frames the page still needs: the hidden Claude
+// Code of the dictation (see `useHiddenVoice`). App drops other tabless frames.
+const adopted = new Set<string>();
+
+/** Keeps `paneId`'s frames coming although no tab holds it. */
+export function adoptPane(paneId: string): void {
+  adopted.add(paneId);
+}
+
+export function isAdoptedPane(paneId: string): boolean {
+  return adopted.has(paneId);
+}
+
+/** Lets go of an adopted pane that was replaced, frame included. */
+export function releaseAdoptedPane(paneId: string): void {
+  adopted.delete(paneId);
+  dropFrame(paneId);
+}
+
 /** Forgets a closed pane's frame and subscribers. */
 export function dropFrame(paneId: string): void {
   frames.delete(paneId);

@@ -36,6 +36,8 @@ export default [
         project: "./tsconfig.json",
       },
       globals: {
+        // Build flag set by vite.config.ts `define` (Arkadia Lab).
+        __ARKADIA_LAB__: "readonly",
         window: "readonly",
         document: "readonly",
         console: "readonly",
