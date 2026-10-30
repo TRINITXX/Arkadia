@@ -64,8 +64,17 @@ export function tokensLabel(n: number): string {
   return n < 1000 ? String(n) : `${(n / 1000).toFixed(1).replace(".", ",")} k`;
 }
 
-/** "21:00" for an epoch-seconds reset. */
-export function resetLabel(epochSeconds: number): string {
-  const d = new Date(epochSeconds * 1000);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+/**
+ * Time left before an epoch-seconds reset, whole minutes down as the
+ * terminal's "2hr 15m": "2 h 15 min", "45 min", "< 1 min"; null once past.
+ */
+export function resetLabel(epochSeconds: number, now: number): string | null {
+  const ms = epochSeconds * 1000 - now;
+  if (ms <= 0) return null;
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return "< 1 min";
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h === 0) return `${m} min`;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }

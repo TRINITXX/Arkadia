@@ -31,7 +31,10 @@ export type ChatEvent =
       totalTokens: number;
       maxTokens: number;
     }
-  | { type: "info"; chatId: string; title?: string; gitBranch?: string }
+  /** `gitBranch` null: detached, or not a repository. */
+  | { type: "info"; chatId: string; title?: string; gitBranch?: string | null }
+  /** The plan's `/usage` windows, at boot and after each turn. */
+  | { type: "usage"; chatId: string; rateLimits: JsonObject | null }
   | {
       type: "history";
       chatId: string;

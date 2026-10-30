@@ -65,6 +65,7 @@ export interface ChatState {
   status: "requesting" | "compacting" | null;
   requests: PendingRequest[];
   subagents: Subagent[];
+  /** 0-100 of the window usable before auto-compact. */
   context: { percentage: number } | null;
   limits: { fiveHour?: RateWindow; sevenDay?: RateWindow };
   historyLoaded: boolean;
@@ -449,6 +450,71 @@ function addRateLimit(state: ChatState, m: JsonObject): ChatState {
   return { ...state, limits };
 }
 
+/** A `/usage` reset in epoch seconds: Claude Code sends ISO text or seconds. */
+function epochSeconds(v: unknown): number | undefined {
+  if (typeof v === "number") return v;
+  const ms = Date.parse(str(v) ?? "");
+  return Number.isNaN(ms) ? undefined : Math.round(ms / 1000);
+}
+
+/**
+ * The plan's windows from `/usage` (percent 0-100), read as the terminal's
+ * status line reads them: `five_hour` and `seven_day`, else the server's
+ * `session` and `weekly_all` rows. A window it lacks stays as the last rate
+ * limit event left it.
+ */
+function addUsage(state: ChatState, rateLimits: JsonObject | null): ChatState {
+  if (!rateLimits) return state;
+  const rows = arr(rateLimits.limits).map(obj);
+  const read = (bucket: unknown, kind: string): RateWindow | undefined => {
+    const b = obj(bucket);
+    // A row at 0 % with no reset is a placeholder (ccstatusline skips it).
+    const row = rows.find(
+      (r) =>
+        r.kind === kind &&
+        (!!num(r.percent) || epochSeconds(r.resets_at) !== undefined),
+    );
+    const percent = num(b.utilization) ?? num(row?.percent);
+    if (percent === undefined) return undefined;
+    return {
+      utilization: percent / 100,
+      resetsAt: epochSeconds(b.resets_at) ?? epochSeconds(row?.resets_at),
+    };
+  };
+  return {
+    ...state,
+    limits: {
+      fiveHour: read(rateLimits.five_hour, "session") ?? state.limits.fiveHour,
+      sevenDay:
+        read(rateLimits.seven_day, "weekly_all") ?? state.limits.sevenDay,
+    },
+  };
+}
+
+/**
+ * A window as it stands at `now`: past its reset, the next one starts with
+ * the next request, so nothing of it is used and its reset isn't known yet.
+ */
+export function liveWindow(
+  win: RateWindow | undefined,
+  now: number,
+): RateWindow | undefined {
+  if (win?.resetsAt === undefined || win.resetsAt * 1000 > now) return win;
+  return { utilization: 0 };
+}
+
+/** The share of the window usable before auto-compact, as ccstatusline counts it. */
+const USABLE_CONTEXT = 0.8;
+
+/** Context used, 0-100, of the usable window: the terminal's "Ctx(u)". */
+function usableContextPercent(
+  event: Extract<ChatEvent, { type: "context" }>,
+): number {
+  const usable = Math.floor(event.maxTokens * USABLE_CONTEXT);
+  if (usable <= 0) return event.percentage;
+  return Math.min(100, (event.totalTokens / usable) * 100);
+}
+
 /** Closes the turn: nothing streams any more. */
 function endTurn(state: ChatState): ChatState {
   return {
@@ -577,12 +643,15 @@ export function reduceChat(
         requests: state.requests.filter((r) => r.requestId !== event.requestId),
       };
     case "context":
-      return { ...state, context: { percentage: event.percentage } };
+      return { ...state, context: { percentage: usableContextPercent(event) } };
+    case "usage":
+      return addUsage(state, event.rateLimits);
     case "info":
       return {
         ...state,
         title: event.title ?? state.title,
-        gitBranch: event.gitBranch ?? state.gitBranch,
+        gitBranch:
+          event.gitBranch === undefined ? state.gitBranch : event.gitBranch,
       };
     case "history":
       return event.agentId

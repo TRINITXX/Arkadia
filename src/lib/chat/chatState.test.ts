@@ -5,6 +5,7 @@ import type { ChatEvent } from "@/lib/chat/chatProtocol";
 import {
   EMPTY_CHAT,
   latestPlan,
+  liveWindow,
   reduceChat,
   tasksOf,
   visibleUserText,
@@ -65,22 +66,9 @@ describe("reduceChat on a turn with tools", () => {
     );
   });
 
-  it("keeps the session, model, context and rate limits", () => {
+  it("keeps the session, model and rate limits", () => {
     expect(state.sessionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(state.model).toBe("claude-haiku-5-5");
-    expect(
-      reduceChat(
-        state,
-        {
-          type: "context",
-          chatId: "rec",
-          percentage: 21,
-          totalTokens: 42_000,
-          maxTokens: 200_000,
-        },
-        0,
-      ).context,
-    ).toEqual({ percentage: 21 });
     expect(state.limits.fiveHour?.utilization).toBeGreaterThanOrEqual(0);
   });
 
@@ -170,6 +158,139 @@ describe("reduceChat on a subagent", () => {
     expect(
       state.items.some((i) => i.kind === "tool" && i.name === "Glob"),
     ).toBe(false);
+  });
+});
+
+describe("reduceChat on the status bar's figures", () => {
+  const usage = (rateLimits: Record<string, unknown> | null): ChatEvent => ({
+    type: "usage",
+    chatId: "rec",
+    rateLimits,
+  });
+  // Rows of a `/usage` reply, as Claude Code 2.1.314 sent them (team plan).
+  const sessionRow = {
+    kind: "session",
+    group: "session",
+    percent: 5,
+    resets_at: "2026-10-31T00:20:00.856556+00:00",
+  };
+  const fableRow = {
+    kind: "weekly_scoped",
+    group: "weekly",
+    percent: 19,
+    resets_at: "2026-11-05T09:59:59.856729+00:00",
+  };
+
+  it("fills the five-hour window from /usage, before any turn", () => {
+    const state = reduceChat(
+      EMPTY_CHAT,
+      usage({
+        five_hour: { utilization: 5, resets_at: "2026-10-31T00:20:00+00:00" },
+        seven_day: null,
+        limits: [sessionRow],
+      }),
+      0,
+    );
+    expect(state.limits.fiveHour).toEqual({
+      utilization: 0.05,
+      resetsAt: Date.parse("2026-10-31T00:20:00Z") / 1000,
+    });
+  });
+
+  it("reads the weekly window from the weekly_all row when seven_day is null", () => {
+    const state = reduceChat(
+      EMPTY_CHAT,
+      usage({
+        seven_day: null,
+        limits: [
+          sessionRow,
+          {
+            kind: "weekly_all",
+            group: "weekly",
+            percent: 12,
+            resets_at: "2026-11-05T10:00:00+00:00",
+          },
+        ],
+      }),
+      0,
+    );
+    expect(state.limits.sevenDay?.utilization).toBe(0.12);
+    expect(state.limits.fiveHour?.utilization).toBe(0.05);
+  });
+
+  it("shows no weekly window for a plan with only a per-model one", () => {
+    const state = reduceChat(
+      EMPTY_CHAT,
+      usage({ seven_day: null, limits: [sessionRow, fableRow] }),
+      0,
+    );
+    expect(state.limits.sevenDay).toBeUndefined();
+  });
+
+  it("takes a row's reset given in epoch seconds", () => {
+    const state = reduceChat(
+      EMPTY_CHAT,
+      usage({
+        five_hour: null,
+        limits: [{ ...sessionRow, resets_at: 1_793_406_000 }],
+      }),
+      0,
+    );
+    expect(state.limits.fiveHour).toEqual({
+      utilization: 0.05,
+      resetsAt: 1_793_406_000,
+    });
+  });
+
+  it("keeps the rate limit event's windows when /usage has none (API key)", () => {
+    const seen: ChatState = {
+      ...EMPTY_CHAT,
+      limits: { fiveHour: { utilization: 0.37, resetsAt: 1_793_394_600 } },
+    };
+    expect(reduceChat(seen, usage(null), 0)).toBe(seen);
+  });
+
+  it("measures the context against 80 % of the window, as the terminal's Ctx(u)", () => {
+    const context = (totalTokens: number) =>
+      reduceChat(
+        EMPTY_CHAT,
+        {
+          type: "context",
+          chatId: "rec",
+          percentage: 21,
+          totalTokens,
+          maxTokens: 200_000,
+        },
+        0,
+      ).context;
+    expect(context(42_000)).toEqual({ percentage: 26.25 });
+    expect(context(190_000)).toEqual({ percentage: 100 });
+  });
+
+  it("drops the branch when the folder has none any more", () => {
+    const onBranch = reduceChat(
+      EMPTY_CHAT,
+      { type: "info", chatId: "rec", gitBranch: "master-lab" },
+      0,
+    );
+    const titled = reduceChat(
+      onBranch,
+      { type: "info", chatId: "rec", title: "Refonte" },
+      0,
+    );
+    expect(titled.gitBranch).toBe("master-lab");
+    expect(
+      reduceChat(titled, { type: "info", chatId: "rec", gitBranch: null }, 0)
+        .gitBranch,
+    ).toBeNull();
+  });
+});
+
+describe("liveWindow", () => {
+  it("reads a window past its reset as unused, its next reset unknown", () => {
+    const win = { utilization: 0.9, resetsAt: 1_000 };
+    expect(liveWindow(win, 999_000)).toBe(win);
+    expect(liveWindow(win, 1_000_000)).toEqual({ utilization: 0 });
   });
 });
 

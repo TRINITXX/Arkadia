@@ -8,6 +8,7 @@
 // its life, and a page that reloads (Arkadia's watchdog rebuilds its window)
 // gets them again by starting the same chat, while Claude goes on working.
 
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +23,7 @@ import {
   type PermissionMode,
   type PermissionResult,
   type Query,
+  type SDKControlGetUsageResponse,
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -92,8 +94,14 @@ export type ServerEvent =
       totalTokens: number;
       maxTokens: number;
     }
-  /** The session's title and git branch, for the column and status bar. */
-  | { type: "info"; chatId: string; title?: string; gitBranch?: string }
+  /** The session's title and the folder's git branch (null: none). */
+  | { type: "info"; chatId: string; title?: string; gitBranch?: string | null }
+  /** The plan's quota windows (`/usage`); null where none apply (API key). */
+  | {
+      type: "usage";
+      chatId: string;
+      rateLimits: SDKControlGetUsageResponse["rate_limits"];
+    }
   | {
       type: "history";
       chatId: string;
@@ -118,6 +126,27 @@ function claudeExecutable(): string | undefined {
     if (dir && existsSync(exe)) return exe;
   }
   return undefined;
+}
+
+/** The terminal's status line caches the branch 5 s; a chat looks every 10 s. */
+const BRANCH_POLL_MS = 10_000;
+
+/**
+ * The folder's branch as the status line reads it: null when detached or no
+ * repo (git exits 128), undefined when git failed otherwise (timeout, spawn).
+ */
+function gitBranch(cwd: string): Promise<string | null | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      ["symbolic-ref", "--short", "HEAD"],
+      { cwd, windowsHide: true, timeout: 5_000 },
+      (error, stdout) => {
+        if (!error) resolve(stdout.trim() || null);
+        else resolve(error.code === 128 ? null : undefined);
+      },
+    );
+  });
 }
 
 /** A queue the SDK reads as its prompt stream: one message per user turn. */
@@ -177,6 +206,10 @@ class Chat {
   /** Everything sent to the page, for a page that comes back. */
   private log: ServerEvent[] = [];
   private sessionId: string | undefined;
+  /** The branch last sent; undefined before the first look. */
+  private branch: string | null | undefined;
+  private branchTimer: ReturnType<typeof setInterval> | undefined;
+  private branchLooking = false;
 
   // No parameter properties: Node runs this file by stripping its types.
   constructor(chatId: string, start: Extract<Command, { type: "start" }>) {
@@ -231,6 +264,11 @@ class Chat {
     });
     this.query = q;
     void this.pump(q);
+    // The status bar's figures before any turn: these answer without one.
+    void this.reportUsage(q);
+    void this.reportContext(q);
+    void this.reportBranch();
+    this.branchTimer = setInterval(() => void this.reportBranch(), BRANCH_POLL_MS);
     return q;
   }
 
@@ -246,6 +284,16 @@ class Chat {
     emit({ type: "attached", chatId: this.chatId });
     for (const event of this.log) emit(event);
     emit({ type: "replayed", chatId: this.chatId });
+    // The status bar's figures again: a long turn may have pushed them out of
+    // the log, and the quotas replayed may date from long ago.
+    this.branch = undefined;
+    void this.reportBranch();
+    void this.ready
+      .then((q) => {
+        void this.reportUsage(q);
+        void this.reportContext(q);
+      })
+      .catch(() => {});
   }
 
   private async pump(q: Query): Promise<void> {
@@ -262,20 +310,24 @@ class Chat {
             (e) => e.type !== "sdk" || e.message.type !== "stream_event",
           );
           void this.reportContext(q);
+          void this.reportUsage(q);
           void this.reportInfo();
+          void this.reportBranch();
         }
       }
       this.out({ type: "closed", chatId: this.chatId });
     } catch (e) {
       this.out({ type: "closed", chatId: this.chatId, error: String(e) });
     } finally {
+      clearInterval(this.branchTimer);
       if (chats.get(this.chatId) === this) chats.delete(this.chatId);
     }
   }
 
+  /** 'summary': from the last response's usage, without token-count calls. */
   private async reportContext(q: Query): Promise<void> {
     try {
-      const usage = await q.getContextUsage();
+      const usage = await q.getContextUsage({ detail: "summary" });
       this.out({
         type: "context",
         chatId: this.chatId,
@@ -288,6 +340,20 @@ class Chat {
     }
   }
 
+  /** The account's 5-hour and weekly windows, as the terminal's `/usage`. */
+  private async reportUsage(q: Query): Promise<void> {
+    try {
+      // Experimental in the SDK: a CLI that lacks it fails here, harmlessly.
+      const usage = await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
+        skipBehaviors: true,
+      });
+      this.out({ type: "usage", chatId: this.chatId, rateLimits: usage.rate_limits });
+    } catch {
+      // The chat closed meanwhile, or the usage endpoint failed.
+    }
+  }
+
+  /** Only the title: the transcript's branch is the one of its last message. */
   private async reportInfo(): Promise<void> {
     if (!this.sessionId) return;
     try {
@@ -297,10 +363,23 @@ class Chat {
         type: "info",
         chatId: this.chatId,
         title: info.customTitle ?? info.summary,
-        gitBranch: info.gitBranch,
       });
     } catch {
       // No transcript yet.
+    }
+  }
+
+  /** The live branch, sent only when it changes; a failed look keeps it. */
+  private async reportBranch(): Promise<void> {
+    if (this.branchLooking) return;
+    this.branchLooking = true;
+    try {
+      const branch = await gitBranch(this.cwd);
+      if (branch === undefined || branch === this.branch) return;
+      this.branch = branch;
+      this.out({ type: "info", chatId: this.chatId, gitBranch: branch });
+    } finally {
+      this.branchLooking = false;
     }
   }
 
@@ -375,6 +454,7 @@ class Chat {
   }
 
   close(): void {
+    clearInterval(this.branchTimer);
     for (const resolve of this.pending.values()) {
       resolve({ behavior: "deny", message: "Chat closed" });
     }
