@@ -13,6 +13,7 @@ mod conversation;
 mod external_action;
 mod fonts;
 pub mod gate;
+pub mod lab;
 mod media;
 mod messages_only;
 mod pane_background;
@@ -101,6 +102,9 @@ pub fn run() {
         popup::log_line(&format!("[panic] thread={name} at {loc}: {msg}"));
     }));
 
+    // Arkadia Lab only: its first launch starts from the daily projects.
+    lab::seed_store();
+
     let registry: Arc<AgentRegistry> = Arc::new(AgentRegistry::default());
     let remote_hub = Arc::new(remote::RemoteHub::default());
 
@@ -158,13 +162,16 @@ pub fn run() {
                 }
                 // Phone companion server (loopback, behind `tailscale serve`),
                 // and the always-on gate that can start Arkadia for the phone.
-                remote::spawn(app_handle.clone(), remote_hub);
-                std::thread::spawn(gate::install);
+                // Arkadia Lab leaves both to the daily instance (see `lab`).
+                if !lab::LAB {
+                    remote::spawn(app_handle.clone(), remote_hub);
+                    std::thread::spawn(gate::install);
+                }
 
                 // Background-notification popup: watch the hook signal dir and
                 // surface a reply popup when Claude is waiting and the main
                 // window is unfocused.
-                {
+                if !lab::LAB {
                     let popup_app = app_handle.clone();
                     let popup_registry = registry.clone();
                     std::thread::spawn(move || {
@@ -174,7 +181,7 @@ pub fn run() {
                     });
                 }
                 // Artifacts Claude Code opens by itself, for the panel of their tab.
-                {
+                if !lab::LAB {
                     let inbox_app = app_handle.clone();
                     std::thread::spawn(move || {
                         if let Err(e) = artifact_inbox::run_watcher(inbox_app) {
@@ -195,7 +202,10 @@ pub fn run() {
                 // watchdog lives out here (see `uiwatch`).
                 uiwatch::spawn_watchdog(app.handle().clone());
                 // Usage of the accounts no running session reports (see `accounts`).
-                accounts::spawn_usage_poller();
+                // Its quota hellos would go out twice from Arkadia Lab.
+                if !lab::LAB {
+                    accounts::spawn_usage_poller();
+                }
                 // Transcript-image cache housekeeping, off the setup path.
                 std::thread::spawn(|| conversation::prune_imgcache(30));
                 let claude_root = dirs::home_dir()

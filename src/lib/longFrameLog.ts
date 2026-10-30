@@ -35,7 +35,8 @@ export function describeLongFrame(entry: LoafEntry): string {
 }
 
 /**
- * Writes every page frame blocked over `LONG_FRAME_MS` to `popup.log`, with
+ * Writes every page frame blocked over `LONG_FRAME_MS` to `popup.log`
+ * (`popup.lab.log` in Arkadia Lab), with
  * the scripts that ran in it. The watchdog only speaks after 5 s of page
  * silence, so the 1 to 3 s freezes on a tab switch left no trace (27/10/2026).
  * `sourceCharPosition` points into the built bundle under `dist/assets`.

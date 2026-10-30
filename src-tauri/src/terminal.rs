@@ -411,7 +411,13 @@ pub fn spawn_terminal(
     cmd.env("ARKADIA_PANE_ID", &session_id);
     // Links the pane's programs open go through Arkadia: a claude.ai artifact
     // lands in this tab's panel, anything else in the browser (`artifact_inbox`).
-    if let Some(browser) = crate::artifact_inbox::browser_command() {
+    // Arkadia Lab has no inbox: its links open in the browser, and its panes
+    // carry the marker that keeps their hooks off the daily notifications.
+    // What the other instance left in the environment is already gone
+    // (`lab::forget_foreign_vars`).
+    if crate::lab::LAB {
+        cmd.env(crate::lab::PANE_MARKER, "1");
+    } else if let Some(browser) = crate::artifact_inbox::browser_command() {
         cmd.env("BROWSER", browser);
     }
     // The pane's Claude account: a secondary one is its own config dir; the

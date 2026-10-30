@@ -208,13 +208,19 @@ const LOG_ROTATE_BYTES: u64 = 5 * 1024 * 1024;
 /// Appends a diagnostic line to `%LOCALAPPDATA%/Arkadia/popup.log` (and stderr).
 /// Lets us trace the popup decision path without a visible dev console. Each
 /// line carries its time: without it, a freeze could only be dated from the
-/// notification timestamps around it.
+/// notification timestamps around it. Arkadia Lab keeps its own pair of files,
+/// so its freezes never count as the daily instance's.
 pub(crate) fn log_line(msg: &str) {
     eprintln!("[arkadia popup] {msg}");
+    let (name, old) = if crate::lab::LAB {
+        ("popup.lab.log", "popup.lab.old.log")
+    } else {
+        ("popup.log", "popup.old.log")
+    };
     let path = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Arkadia")
-        .join("popup.log");
+        .join(name);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
@@ -231,7 +237,7 @@ pub(crate) fn log_line(msg: &str) {
     static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_ROTATE_BYTES) {
-        let _ = std::fs::rename(&path, path.with_file_name("popup.old.log"));
+        let _ = std::fs::rename(&path, path.with_file_name(old));
     }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -1060,7 +1066,8 @@ pub fn popup_set_style(style: String, app: AppHandle, queue: State<'_, PopupQueu
     if prev != next {
         queue.items.lock().clear();
         close_all_popups(&app, false);
-        if next == STYLE_COMPACT {
+        // Arkadia Lab shows no notification: no window to keep ready.
+        if next == STYLE_COMPACT && !crate::lab::LAB {
             prebuild_notif_window(app);
         }
     }
