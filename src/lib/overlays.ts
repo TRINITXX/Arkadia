@@ -2,7 +2,7 @@ import { useEffect, useSyncExternalStore } from "react";
 
 /**
  * Layers of the main window that are open right now (dialogs, menus, the
- * image viewer, the notepad). The artifact panel's page is a separate window
+ * image viewer). The artifact panel's page is a separate window
  * that covers anything under it, so it steps aside while one is open.
  * Every layer that can reach the right edge of the window calls `useOverlay`.
  */

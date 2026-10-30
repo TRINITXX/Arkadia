@@ -29,7 +29,6 @@ import { SidebarTabContextMenu } from "@/components/SidebarTabContextMenu";
 import { RenameDialog } from "@/components/RenameDialog";
 import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
-import { NotepadPanel } from "@/components/NotepadPanel";
 import { ArtifactPanel } from "@/components/ArtifactPanel";
 import {
   artifactPageUrl,
@@ -143,7 +142,6 @@ import {
 } from "@/lib/sessionSnapshot";
 import { planReattach } from "@/lib/paneReattach";
 import {
-  COMPACT_TERMINAL_FONT_SIZE,
   DEFAULT_BACKGROUND_ID,
   DEFAULT_EDITOR_PROTOCOL,
   DEFAULT_NOTIF_STYLE,
@@ -249,8 +247,6 @@ export function App() {
   const [navRailEnabled, setNavRailEnabled] = useState(true);
   const [messageFramesEnabled, setMessageFramesEnabled] = useState(true);
   const [autoScrollReplyEnabled, setAutoScrollReplyEnabled] = useState(true);
-  // Global: render every pane as the structured modern view instead of the terminal.
-  const [modernViewEnabled, setModernViewEnabled] = useState(false);
   const [toolDensity, setToolDensity] =
     useState<ToolDensity>(DEFAULT_TOOL_DENSITY);
   // Layout of the "recent sessions" overlay: flat by date, or by project.
@@ -354,7 +350,6 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [notepadOpen, setNotepadOpen] = useState(false);
   const [projectMenu, setProjectMenu] = useState<ProjectMenuState | null>(null);
   const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuState | null>(
     null,
@@ -533,7 +528,7 @@ export function App() {
 
   // A phone watching a pane resizes it to its own screen. Any click or key in
   // this window gives the desktop's size back: to the pane under the pointer,
-  // else to the active one (the prompt bar, rail and notepad type there).
+  // else to the active one (the prompt bar and rail type there).
   const activePaneIdRef = useRef(activePaneIdOfActiveTab);
   useEffect(() => {
     activePaneIdRef.current = activePaneIdOfActiveTab;
@@ -684,7 +679,7 @@ export function App() {
   useEffect(() => {
     void invoke("artifact_view_close_all").catch(() => {});
   }, []);
-  // A layer over the panel (dialog, menu, image viewer, notepad) hides the
+  // A layer over the panel (dialog, menu, image viewer) hides the
   // artifact on screen. Tracked here, not in the panel, so it stays right
   // while a tab without artifacts is shown.
   const overlayOpen = useAnyOverlayOpen();
@@ -775,8 +770,8 @@ export function App() {
     return () => cancelAnimationFrame(raf);
   }, [activeTabId, activePaneIdOfActiveTab]);
 
-  // Hand the keyboard back to the terminal (e.g. after validating a notepad
-  // prompt). rAF defers until the layout settles after the panel unmounts.
+  // Hand the keyboard back to the terminal (e.g. after a prompt-bar button).
+  // rAF defers until the layout settles.
   const focusActivePane = useCallback(() => {
     if (!activePaneIdOfActiveTab) return;
     focusPaneElement(activePaneIdOfActiveTab);
@@ -864,7 +859,6 @@ export function App() {
         setNavRailEnabled(state.navRailEnabled);
         setMessageFramesEnabled(state.messageFramesEnabled);
         setAutoScrollReplyEnabled(state.autoScrollReplyEnabled);
-        setModernViewEnabled(state.modernViewEnabled);
         setToolDensity(state.toolDensity);
         setSessionsGrouping(state.sessionsGrouping);
         setSidepanelOpen(state.sidepanelOpen);
@@ -960,7 +954,6 @@ export function App() {
         navRailEnabled,
         messageFramesEnabled,
         autoScrollReplyEnabled,
-        modernViewEnabled,
         toolDensity,
         sessionsGrouping,
         sidepanelOpen,
@@ -991,7 +984,6 @@ export function App() {
     navRailEnabled,
     messageFramesEnabled,
     autoScrollReplyEnabled,
-    modernViewEnabled,
     toolDensity,
     sessionsGrouping,
     sidepanelOpen,
@@ -1056,25 +1048,6 @@ export function App() {
       enabled: autoScrollReplyEnabled,
     }).catch(() => {});
   }, [loaded, autoScrollReplyEnabled]);
-
-  // ─── Compact-font toggle ────────────────────────────────────────
-
-  // Size to come back to when the compact toggle is switched off. Session-only:
-  // after a restart with a compact font persisted, we fall back to the default.
-  const fontSizeBeforeCompactRef = useRef<number | null>(null);
-  const compactFont = font.size === COMPACT_TERMINAL_FONT_SIZE;
-
-  const toggleCompactFont = useCallback(() => {
-    if (font.size === COMPACT_TERMINAL_FONT_SIZE) {
-      const restored =
-        fontSizeBeforeCompactRef.current ?? DEFAULT_TERMINAL_FONT.size;
-      fontSizeBeforeCompactRef.current = null;
-      setFont((f) => ({ ...f, size: restored }));
-    } else {
-      fontSizeBeforeCompactRef.current = font.size;
-      setFont((f) => ({ ...f, size: COMPACT_TERMINAL_FONT_SIZE }));
-    }
-  }, [font.size]);
 
   // ─── Pane / tab spawning ────────────────────────────────────────
 
@@ -3073,10 +3046,6 @@ export function App() {
           onRunAction={runToolbarAction}
           onOpenSettings={() => setSettingsOpen(true)}
           disabled={!activeProject}
-          notepadOpen={notepadOpen}
-          onToggleNotepad={() => setNotepadOpen((v) => !v)}
-          modernViewEnabled={modernViewEnabled}
-          onToggleModernView={() => setModernViewEnabled((v) => !v)}
           sidepanelOpen={sidepanelOpen}
           onToggleSidepanel={() => setSidepanelOpen((v) => !v)}
           accountChip={
@@ -3087,8 +3056,6 @@ export function App() {
               />
             ) : null
           }
-          compactFont={compactFont}
-          onToggleCompactFont={toggleCompactFont}
         />
 
         {error && (
@@ -3180,14 +3147,8 @@ export function App() {
                   font={font}
                   palette={palette}
                   useWebGPU={useWebGPU}
-                  backgroundCss={background.glass ? background.css : undefined}
                   editorProtocol={editorProtocol}
                   showMessageFrames={messageFramesEnabled}
-                  modernViewEnabled={modernViewEnabled}
-                  toolDensity={toolDensity}
-                  paneAgentStates={effectivePaneStates}
-                  convFilters={convFilters}
-                  onConvFiltersChange={setConvFilters}
                   onToast={pushToast}
                   inputRailEnabled={navRailEnabled}
                   onActivate={(paneId) => focusPane(tab.id, paneId)}
@@ -3238,18 +3199,6 @@ export function App() {
           onWidthChange={setArtifactWidth}
           onSnipped={pasteSnipInClaude}
           onSnipFailed={onSnipFailed}
-        />
-      )}
-
-      {notepadOpen && (
-        <NotepadPanel
-          projectId={activeProject?.id ?? null}
-          projectName={activeProject?.name ?? null}
-          onClose={() => setNotepadOpen(false)}
-          onValidated={() => {
-            setNotepadOpen(false);
-            focusActivePane();
-          }}
         />
       )}
 

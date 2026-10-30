@@ -68,7 +68,7 @@ Un changement qui touche une de ces zones passe d'office, avant le commit, par u
 ## Décisions à ne pas signaler
 
 - Libellés d'interface mêlant français et anglais : existant, hors sujet d'une review.
-- Composants en PascalCase (`NotepadPanel.tsx`) : convention du repo.
+- Composants en PascalCase (`PaneTreeView.tsx`) : convention du repo.
 - Fermer un artefact (son onglet, le X du panneau, « ouvrir dans le navigateur ») le garde chargé et caché, son de la page compris : choix d'Alexis du 21/10/2026, pour un retour instantané.
 - Le panneau d'artefacts est une fenêtre séparée posée sur le panneau React, et non une vue enfant : voulu, voir « Fonctions `unstable` ».
 

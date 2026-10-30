@@ -6,7 +6,7 @@ import type { ArtifactItem } from "@/lib/artifactTabs";
 import { useAnyOverlayOpen } from "@/lib/overlays";
 import { useArtifactSnip } from "@/lib/useArtifactSnip";
 
-/** Own store file: the main saveState() never rewrites it (see notepadStore). */
+/** Own store file: the main saveState() never rewrites it. */
 const STORE_FILE = "artifact-panel.json";
 const KEY_WIDTH = "width";
 const WIDTH_DEFAULT = 560;

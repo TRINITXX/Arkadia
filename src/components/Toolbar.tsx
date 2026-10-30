@@ -1,22 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  ALargeSmall,
   ArrowLeft,
-  BookOpen,
   ChevronDown,
   ChevronRight,
-  NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
   Settings as SettingsIcon,
 } from "lucide-react";
-import {
-  COMPACT_TERMINAL_FONT_SIZE,
-  DEFAULT_TERMINAL_FONT,
-  type ActionButton,
-  type FolderButton,
-  type ToolbarButton,
-} from "@/types";
+import type { ActionButton, FolderButton, ToolbarButton } from "@/types";
 import { getIcon } from "@/icons";
 
 interface ToolbarProps {
@@ -24,16 +15,10 @@ interface ToolbarProps {
   onRunAction: (button: ActionButton) => void;
   onOpenSettings: () => void;
   disabled?: boolean;
-  notepadOpen: boolean;
-  onToggleNotepad: () => void;
-  modernViewEnabled: boolean;
-  onToggleModernView: () => void;
   sidepanelOpen: boolean;
   onToggleSidepanel: () => void;
   /** Shown only while the sidepanel (and its accounts block) is hidden. */
   accountChip: React.ReactNode;
-  compactFont: boolean;
-  onToggleCompactFont: () => void;
 }
 
 export function Toolbar({
@@ -41,19 +26,10 @@ export function Toolbar({
   onRunAction,
   onOpenSettings,
   disabled = false,
-  notepadOpen,
-  onToggleNotepad,
-  modernViewEnabled,
-  onToggleModernView,
   sidepanelOpen,
   onToggleSidepanel,
   accountChip,
-  compactFont,
-  onToggleCompactFont,
 }: ToolbarProps) {
-  const compactFontLabel = compactFont
-    ? `Police ${DEFAULT_TERMINAL_FONT.size} — taille normale`
-    : `Police ${COMPACT_TERMINAL_FONT_SIZE} — plus de lignes à l'écran`;
   return (
     <div className="chrome-surface flex h-9 items-center gap-1 border-b border-zinc-800 bg-zinc-950 px-2">
       <button
@@ -101,41 +77,6 @@ export function Toolbar({
             ),
           )}
       </div>
-      <button
-        onClick={onToggleModernView}
-        className={`ml-1 flex size-7 items-center justify-center rounded hover:bg-zinc-900 hover:text-zinc-100 ${
-          modernViewEnabled ? "bg-zinc-900 text-sky-300" : "text-zinc-400"
-        }`}
-        title="Lecture — conversation structurée, filtrable"
-        aria-label="Mode lecture"
-        aria-pressed={modernViewEnabled}
-        type="button"
-      >
-        <BookOpen size={14} />
-      </button>
-      <button
-        onClick={onToggleNotepad}
-        className={`ml-1 flex size-7 items-center justify-center rounded hover:bg-zinc-900 hover:text-zinc-100 ${
-          notepadOpen ? "bg-zinc-900 text-zinc-100" : "text-zinc-400"
-        }`}
-        title="Notepad"
-        aria-label="Notepad"
-        type="button"
-      >
-        <NotebookPen size={14} />
-      </button>
-      <button
-        onClick={onToggleCompactFont}
-        className={`ml-1 flex size-7 items-center justify-center rounded hover:bg-zinc-900 hover:text-zinc-100 ${
-          compactFont ? "bg-zinc-900 text-sky-300" : "text-zinc-400"
-        }`}
-        title={compactFontLabel}
-        aria-label={compactFontLabel}
-        aria-pressed={compactFont}
-        type="button"
-      >
-        <ALargeSmall size={14} />
-      </button>
       <button
         onClick={onOpenSettings}
         className="ml-1 flex size-7 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"

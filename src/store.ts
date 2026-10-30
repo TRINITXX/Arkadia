@@ -69,7 +69,6 @@ const KEY_NOTIF_WIDTH = "notifWidth";
 const KEY_NAV_RAIL_ENABLED = "navRailEnabled";
 const KEY_MESSAGE_FRAMES_ENABLED = "messageFramesEnabled";
 const KEY_AUTO_SCROLL_REPLY = "autoScrollReplyEnabled";
-const KEY_MODERN_VIEW_ENABLED = "modernViewEnabled";
 const KEY_TOOL_DENSITY = "toolDensity";
 const KEY_SESSIONS_GROUPING = "sessionsGrouping";
 const KEY_SIDEPANEL_OPEN = "sidepanelOpen";
@@ -131,8 +130,6 @@ export interface PersistedState {
   messageFramesEnabled: boolean;
   /** Scroll to the start of Claude's reply when it finishes. */
   autoScrollReplyEnabled: boolean;
-  /** Global: render every pane as the structured modern view instead of the terminal. */
-  modernViewEnabled: boolean;
   /** Default expand state of tool-call cards in the modern view. */
   toolDensity: ToolDensity;
   /** Layout of the "recent sessions" overlay: flat by date, or one section per project. */
@@ -168,7 +165,6 @@ const DEFAULT_STATE: PersistedState = {
   navRailEnabled: true,
   messageFramesEnabled: true,
   autoScrollReplyEnabled: true,
-  modernViewEnabled: false,
   toolDensity: DEFAULT_TOOL_DENSITY,
   sessionsGrouping: DEFAULT_SESSIONS_GROUPING,
   sidepanelOpen: true,
@@ -501,9 +497,6 @@ export async function loadState(
   const rawNavRailEnabled = await store.get<unknown>(KEY_NAV_RAIL_ENABLED);
   const rawMessageFrames = await store.get<unknown>(KEY_MESSAGE_FRAMES_ENABLED);
   const rawAutoScrollReply = await store.get<unknown>(KEY_AUTO_SCROLL_REPLY);
-  const rawModernViewEnabled = await store.get<unknown>(
-    KEY_MODERN_VIEW_ENABLED,
-  );
   const rawToolDensity = await store.get<unknown>(KEY_TOOL_DENSITY);
   const rawSessionsGrouping = await store.get<unknown>(KEY_SESSIONS_GROUPING);
   const rawSidepanelOpen = await store.get<unknown>(KEY_SIDEPANEL_OPEN);
@@ -556,10 +549,6 @@ export async function loadState(
     autoScrollReplyEnabled: boolOr(
       rawAutoScrollReply,
       DEFAULT_STATE.autoScrollReplyEnabled,
-    ),
-    modernViewEnabled: boolOr(
-      rawModernViewEnabled,
-      DEFAULT_STATE.modernViewEnabled,
     ),
     toolDensity: normalizeToolDensity(rawToolDensity),
     sessionsGrouping: normalizeSessionsGrouping(rawSessionsGrouping),
@@ -632,7 +621,6 @@ export async function saveState(state: PersistedState): Promise<void> {
   await store.set(KEY_NAV_RAIL_ENABLED, state.navRailEnabled);
   await store.set(KEY_MESSAGE_FRAMES_ENABLED, state.messageFramesEnabled);
   await store.set(KEY_AUTO_SCROLL_REPLY, state.autoScrollReplyEnabled);
-  await store.set(KEY_MODERN_VIEW_ENABLED, state.modernViewEnabled);
   await store.set(KEY_TOOL_DENSITY, state.toolDensity);
   await store.set(KEY_SESSIONS_GROUPING, state.sessionsGrouping);
   await store.set(KEY_SIDEPANEL_OPEN, state.sidepanelOpen);

@@ -465,7 +465,7 @@ pub fn has_focus(app: &AppHandle) -> bool {
 }
 
 /// Hides the artifact on screen while a layer of `main` (dialog, menu, image
-/// viewer, notepad) is open, since a separate window always covers it.
+/// viewer) is open, since a separate window always covers it.
 #[tauri::command]
 pub async fn artifact_view_set_hidden(
     app: AppHandle,

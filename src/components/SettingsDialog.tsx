@@ -777,7 +777,7 @@ function GeneralSettings({
         </h4>
         <p className="mb-3 text-[11px] text-zinc-500">
           {
-            "Densité par défaut des cartes d'appel d'outil dans la vue moderne (toggle dans la barre d'outils)."
+            "Densité par défaut des cartes d'appel d'outil dans la vue moderne (sessions récentes, téléphone)."
           }
         </p>
         <div className="grid grid-cols-3 gap-2">
