@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { GitBranch } from "lucide-react";
+import { GitBranch, Timer } from "lucide-react";
+import { ChatRing } from "@/components/chat/chat-ring";
 import { modelLabel, resetLabel } from "@/lib/chat/chatLabels";
 import { liveWindow, type ChatState } from "@/lib/chat/chatState";
 
@@ -11,7 +12,11 @@ const TICK_MS = 30_000;
 
 const pct = (n: number) => `${Math.round(n)} %`;
 
-/** The terminal's status line, under the input: model, context, quotas, reset, branch. */
+/**
+ * The terminal's status line, under the input: model, context, quotas, reset,
+ * branch. Context and quotas as rings with their figure inside (the user's
+ * pick of 30/10/2026), the reset as a short countdown.
+ */
 export function ChatStatusBar({ state }: { state: ChatState }) {
   const [now, setNow] = useState(() => Date.now());
   const fiveReset = state.limits.fiveHour?.resetsAt;
@@ -36,25 +41,38 @@ export function ChatStatusBar({ state }: { state: ChatState }) {
         <b>{modelLabel(state.model)}</b>
       </span>
       {state.context && (
-        <span
-          className={state.context.percentage >= HOT * 100 ? "hot" : undefined}
-        >
-          Contexte <b>{pct(state.context.percentage)}</b>
+        <span title={`Contexte utilisé : ${pct(state.context.percentage)}`}>
+          <ChatRing
+            percent={state.context.percentage}
+            hot={state.context.percentage >= HOT * 100}
+          />
+          Contexte
         </span>
       )}
       {fiveHour && (
-        <span className={fiveHour.utilization >= HOT ? "hot" : undefined}>
-          Session <b>{pct(fiveHour.utilization * 100)}</b>
+        <span
+          title={`Session de 5 h utilisée : ${pct(fiveHour.utilization * 100)}`}
+        >
+          <ChatRing
+            percent={fiveHour.utilization * 100}
+            hot={fiveHour.utilization >= HOT}
+          />
+          Session
         </span>
       )}
       {sevenDay && (
-        <span className={sevenDay.utilization >= HOT ? "hot" : undefined}>
-          Semaine <b>{pct(sevenDay.utilization * 100)}</b>
+        <span title={`Semaine utilisée : ${pct(sevenDay.utilization * 100)}`}>
+          <ChatRing
+            percent={sevenDay.utilization * 100}
+            hot={sevenDay.utilization >= HOT}
+          />
+          Semaine
         </span>
       )}
       {reset && (
-        <span>
-          Reset dans <b>{reset}</b>
+        <span title={`Reset de la session dans ${reset}`}>
+          <Timer size={13} />
+          <b>{reset.includes(" h ") ? reset.replace(/ min$/, "") : reset}</b>
         </span>
       )}
       {state.gitBranch && (

@@ -145,6 +145,16 @@ export const CHAT_CSS = `
 .chat-status > span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .chat-status b { color: var(--chat-dim); font-weight: 500; }
 .chat-status .hot b { color: #fcd34d; }
+.chat-status { align-items: center; }
+.chat-status > span { gap: 6px; }
+.chat-ring { position: relative; width: 26px; height: 26px; flex-shrink: 0; }
+.chat-ring svg { display: block; }
+.chat-ring circle { fill: none; stroke-width: 3; }
+.chat-ring .track { stroke: #2f3238; }
+.chat-ring .fill { stroke: var(--chat-dim); stroke-linecap: round; transition: stroke-dasharray .4s ease-out; }
+.chat-ring i { position: absolute; inset: 0; display: grid; place-items: center; font-style: normal; font-size: 9px; font-weight: 600; color: #d4d4d8; }
+.chat-ring.hot .fill { stroke: #fcd34d; }
+.chat-ring.hot i { color: #fcd34d; }
 
 .chat-menu { position: absolute; bottom: calc(100% + 6px); min-width: 220px; border-radius: 12px; background: #202327; border: 1px solid #31353b; box-shadow: 0 14px 40px rgba(0,0,0,.6); padding: 6px; z-index: 6; }
 .chat-menu button { display: flex; width: 100%; align-items: center; gap: 8px; border: 0; background: transparent; color: #d4d4d8; font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px; cursor: pointer; text-align: left; }
@@ -178,4 +188,10 @@ export const CHAT_CSS = `
 .chat-down { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(100% + 8px); border-radius: 999px; border: 1px solid #31353b; background: #202327; color: #d4d4d8; padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
 .chat-down .lucide { width: 13px; height: 13px; }
 .chat-closed { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: 13px; color: #fca5a5; padding: 8px; }
+
+/* Conversation: messages, images, tools, live line, plan, search. */
+
+/* Input and requests: questions, permissions, queued messages, drop. */
+
+/* Slash commands: menu and the panels they open. */
 `;
