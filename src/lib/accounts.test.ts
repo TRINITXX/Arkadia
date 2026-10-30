@@ -89,15 +89,15 @@ describe("claudePanesToSwitch", () => {
     expect(claudePanesToSwitch(split, "main")).toEqual([]);
   });
 
-  it("leaves a chat pane alone: its glyph is no terminal Claude", () => {
+  it("moves a chat pane too, glyph or not", () => {
     const withChat: Tab = {
       ...split,
       panes: {
         ...split.panes,
-        claude: { ...split.panes.claude, chat: { cwd: "C:/repo" } },
+        shell: { ...split.panes.shell, chat: { cwd: "C:/repo" } },
       },
     };
-    expect(claudePanesToSwitch(withChat, "b2")).toEqual([]);
+    expect(claudePanesToSwitch(withChat, "b2")).toEqual(["claude", "shell"]);
   });
 });
 

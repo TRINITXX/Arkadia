@@ -99,7 +99,10 @@ export const CHAT_CSS = `
 .chat-round.send { background: var(--chat-accent); color: var(--chat-accent-ink); }
 .chat-round.send:disabled { background: #2a2a2e; color: #5b5b63; cursor: default; }
 .chat-round.stop { background: #f4f4f5; color: #0c0c0d; }
-.chat-round.mic { background: #1f1f22; color: var(--chat-mute); }
+.chat-round.mic { background: #1f1f22; color: var(--chat-dim); }
+.chat-round.mic:hover { color: var(--chat-ink); }
+.chat-round.mic.rec { background: #ef4444; color: #fff; box-shadow: 0 0 0 4px rgba(239,68,68,.18); }
+.chat-round .spin { width: 15px; height: 15px; border-radius: 50%; border: 2px solid #3f3f46; border-top-color: var(--chat-accent); animation: chat-spin .8s linear infinite; }
 .chat-push { margin-left: auto; }
 
 .chat-ask-head { display: flex; align-items: center; gap: 8px; margin: 0 4px 8px; font-size: 14px; color: #f4f4f5; }

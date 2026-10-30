@@ -229,6 +229,18 @@ export function subscribeServerExit(cb: (account: string) => void): () => void {
   return () => onExit.delete(cb);
 }
 
+/** A closed chat's Claude Code is gone by then: another may take its session. */
+const CLOSE_GRACE_MS = 500;
+
+/** Closes a chat and waits for its Claude Code to go. */
+export async function closeChat(
+  accountId: string | undefined,
+  chatId: string,
+): Promise<void> {
+  await chatCommand(accountId, { type: "close", chatId });
+  await new Promise((r) => setTimeout(r, CLOSE_GRACE_MS));
+}
+
 export function chatCommand(
   accountId: string | undefined,
   command: ChatCommand,

@@ -158,7 +158,13 @@ async function takeCapture(paneId: string): Promise<string | null> {
   return null;
 }
 
-/** `onText` gets each finished dictation, the safety stop's included. */
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * `onText` gets each finished dictation, the safety stop's included, even
+ * once the component unmounted: it must write somewhere that outlives it
+ * (`chatDrafts`).
+ */
 export function useHiddenVoice(onText: (text: string) => void) {
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -185,18 +191,17 @@ export function useHiddenVoice(onText: (text: string) => void) {
     releaseRef.current = null;
   }, []);
 
-  // Unmounting stops the microphone and drops whatever is still on its way:
-  // a late text would land in whatever input took this one's place.
+  // Unmounting stops the microphone, and a dictation under way still ends:
+  // its text goes to `onText` like any other.
+  const stopRef = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       cancelRef.current = true;
-      if (repeatRef.current !== undefined) busy = false;
-      stopSpaces();
-      releasePane();
+      if (repeatRef.current !== undefined) void stopRef.current();
     };
-  }, [stopSpaces, releasePane]);
+  }, []);
 
   /** Releases space, waits for the transcript, and hands its text on. */
   const stop = useCallback(async () => {
@@ -222,15 +227,18 @@ export function useHiddenVoice(onText: (text: string) => void) {
       if (!text) throw new Error("Aucun texte reçu de la dictée");
       // Captured: the hook blocked the prompt, which leaves it empty.
       promptMayHoldText = false;
-      if (mountedRef.current) onTextRef.current(text);
+      onTextRef.current(text);
     } catch (e) {
-      if (mountedRef.current) setError(String(e));
+      if (mountedRef.current) setError(message(e));
     } finally {
       busy = false;
       releasePane();
       if (mountedRef.current) setStatus("idle");
     }
   }, [stopSpaces, releasePane]);
+  useEffect(() => {
+    stopRef.current = stop;
+  }, [stop]);
 
   const start = useCallback(async () => {
     if (status !== "idle") return;
@@ -251,7 +259,7 @@ export function useHiddenVoice(onText: (text: string) => void) {
     } catch (e) {
       busy = false;
       if (mountedRef.current) {
-        setError(String(e));
+        setError(message(e));
         setStatus("idle");
       }
       return;
@@ -273,5 +281,8 @@ export function useHiddenVoice(onText: (text: string) => void) {
     setStatus("listening");
   }, [status, stop]);
 
-  return { status, error, start, stop };
+  /** The caller showed the error: the next one, even the same, shows again. */
+  const clearError = useCallback(() => setError(null), []);
+
+  return { status, error, clearError, start, stop };
 }

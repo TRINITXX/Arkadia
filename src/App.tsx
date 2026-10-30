@@ -53,7 +53,6 @@ import {
 import { snipTarget } from "@/lib/artifactSnip";
 import { SessionsOverlay } from "@/components/SessionsOverlay";
 import { Toaster, useToasts } from "@/components/Toaster";
-import { VoiceTestPanel } from "@/components/voice-test-panel";
 import {
   DEFAULT_CONV_FILTERS,
   ModernConversationView,
@@ -119,8 +118,15 @@ import {
 } from "@/lib/remoteActions";
 import { dropHeldConv } from "@/lib/convStore";
 import { isBlankShell } from "@/lib/blankShell";
-import { IDLE_CHAT } from "@/lib/chat/chatEvents";
 import {
+  chatActivity,
+  chatReplaying,
+  closeChat,
+  IDLE_CHAT,
+} from "@/lib/chat/chatEvents";
+import { dropDraft, moveDraft } from "@/lib/chat/chatDrafts";
+import {
+  chatBusyReason,
   chatForCommand,
   chatLabelOf,
   chatTitle,
@@ -1441,6 +1447,7 @@ export function App() {
         paneToTab.current.delete(pid);
         dropFrame(pid);
         dropHeldConv(pid);
+        dropDraft(pid);
         try {
           await invoke("close_terminal", { sessionId: pid });
         } catch {
@@ -1485,6 +1492,7 @@ export function App() {
           paneToTab.current.delete(pid);
           dropFrame(pid);
           dropHeldConv(pid);
+          dropDraft(pid);
           try {
             await invoke("close_terminal", { sessionId: pid });
           } catch {
@@ -1526,6 +1534,7 @@ export function App() {
       paneToTab.current.delete(paneId);
       dropFrame(paneId);
       dropHeldConv(paneId);
+      dropDraft(paneId);
       try {
         await invoke("close_terminal", { sessionId: paneId });
       } catch {
@@ -1623,6 +1632,89 @@ export function App() {
   // resume the same conversation twice.
   const switchingTabs = useRef<Set<string>>(new Set());
 
+  // A chat pane on another account: a fresh pane there (its shell carries the
+  // account, for a later switch to the terminal), whose chat resumes the same
+  // conversation, with the input as it was. Only a chat at rest moves, as for
+  // the switch to the terminal, and the old chat is gone before the new one
+  // starts: never two Claude on one session. Transcripts are shared by every
+  // account.
+  const relaunchChatOnAccount = useCallback(
+    async (
+      tabId: string,
+      old: PaneState,
+      chat: PaneChat,
+      accountId: string,
+      stillThere: () => boolean,
+    ): Promise<"done" | "skipped" | "failed"> => {
+      const busy = chatBusyReason(chatActivity(old.id), chatReplaying(old.id));
+      if (busy) {
+        pushToast("info", `Volet chat gardé sur son compte : ${busy}`);
+        return "skipped";
+      }
+      const paneAccount = accountId === MAIN_ACCOUNT_ID ? undefined : accountId;
+      const newId = await spawnPane(chat.cwd, undefined, paneAccount);
+      if (!newId) return "failed";
+      const drop = () =>
+        void invoke("close_terminal", { sessionId: newId }).catch(() => {});
+      if (!stillThere()) {
+        drop();
+        return "skipped";
+      }
+      // A turn may have begun while the new pane spawned.
+      const nowBusy = chatBusyReason(
+        chatActivity(old.id),
+        chatReplaying(old.id),
+      );
+      if (nowBusy) {
+        drop();
+        pushToast("info", `Volet chat gardé sur son compte : ${nowBusy}`);
+        return "skipped";
+      }
+      await closeChat(old.accountId, old.id).catch(() => {});
+      // Closed meanwhile: the new pane has no place left.
+      if (!stillThere()) {
+        drop();
+        return "skipped";
+      }
+      paneToTab.current.delete(old.id);
+      dropFrame(old.id);
+      dropHeldConv(old.id);
+      void invoke("close_terminal", { sessionId: old.id }).catch(() => {});
+      paneToTab.current.set(newId, tabId);
+      void invoke("remote_pane_replaced", { oldId: old.id, newId }).catch(
+        () => {},
+      );
+      moveDraft(old.id, newId);
+      // Its own session or the folder's latest: never the pane map's, which
+      // may hold a terminal session that ran in this pane before the chat.
+      const next: PaneChat = chat.resume
+        ? { cwd: chat.cwd, resume: chat.resume }
+        : { cwd: chat.cwd, ...(chat.continue ? { continue: true } : {}) };
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.id !== tabId) return t;
+          const panes = { ...t.panes };
+          delete panes[old.id];
+          panes[newId] = {
+            id: newId,
+            title: chatTitle(IDLE_CHAT, chatLabelOf(old.title) || chat.cwd),
+            cwd: null,
+            accountId: paneAccount,
+            chat: next,
+          };
+          return {
+            ...t,
+            tree: replacePaneInTree(t.tree, old.id, newId),
+            activePaneId: t.activePaneId === old.id ? newId : t.activePaneId,
+            panes,
+          };
+        }),
+      );
+      return "done";
+    },
+    [spawnPane, pushToast],
+  );
+
   // Relaunches one pane's Claude on another account, on the same
   // conversation: transcripts are shared by every account (junctions into
   // `~/.claude`), so `ccd --resume` finds it. The new pane takes the old one's
@@ -1644,6 +1736,15 @@ export function App() {
       const old = tab?.panes[oldId];
       const project = projects.find((p) => p.id === tab?.projectId);
       if (!old || !project) return "skipped";
+      if (old.chat) {
+        return relaunchChatOnAccount(
+          tabId,
+          old,
+          old.chat,
+          accountId,
+          stillThere,
+        );
+      }
       const sid = await invoke<string | null>("pane_session_id", {
         paneId: oldId,
       }).catch(() => null);
@@ -1699,7 +1800,7 @@ export function App() {
       );
       return "done";
     },
-    [projects, spawnPane],
+    [projects, spawnPane, relaunchChatOnAccount],
   );
 
   // Moves every Claude of the tab to another account (tab context menu).
@@ -1709,7 +1810,13 @@ export function App() {
       if (!tab || switchingTabs.current.has(tabId)) return;
       const paneIds = claudePanesToSwitch(tab, accountId);
       if (paneIds.length === 0) return;
-      if (paneIds.some((id) => effectivePaneStates[id]?.kind === "busy")) {
+      // A chat pane at work is refused on its own (`relaunchChatOnAccount`).
+      if (
+        paneIds.some(
+          (id) =>
+            !tab.panes[id]?.chat && effectivePaneStates[id]?.kind === "busy",
+        )
+      ) {
         const ok = await ask(
           "Claude travaille encore dans cet onglet. Changer de compte coupe sa tâche en cours.",
           {
@@ -1732,6 +1839,8 @@ export function App() {
       } finally {
         switchingTabs.current.delete(tabId);
       }
+      // Chat panes that stayed have said why already.
+      if (switched === 0 && paneIds.every((id) => tab.panes[id]?.chat)) return;
       const label =
         accounts.state?.accounts.find((a) => a.id === accountId)?.label ??
         accountId;
@@ -3332,7 +3441,6 @@ export function App() {
         toasts={toasts}
         right={16 + (tabArtifacts ? artifactWidth : 0)}
       />
-      {__ARKADIA_LAB__ && <VoiceTestPanel />}
     </div>
   );
 }

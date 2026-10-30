@@ -1,21 +1,27 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, Mic, Plus, Square, X, Zap } from "lucide-react";
 import type { ChatImage } from "@/lib/chat/useChatSession";
+import type {
+  ChatDraft,
+  DraftImage as Attachment,
+} from "@/lib/chat/chatDrafts";
+import type { VoiceStatus } from "@/lib/useHiddenVoice";
 import type { PermissionMode } from "@/lib/chat/chatProtocol";
 import { MODELS, modeLabel, modelLabel, nextMode } from "@/lib/chat/chatLabels";
 
-export interface Attachment extends ChatImage {
-  id: string;
-  url: string;
+/** Claude's dictation (`useHiddenVoice`): its text lands in the draft. */
+export interface ChatVoice {
+  status: VoiceStatus;
+  start: () => unknown;
+  stop: () => unknown;
 }
 
-/** The input's content, kept by the view while a request hides the card. */
-export interface ChatDraft {
-  text: string;
-  images: Attachment[];
-}
-
-export const EMPTY_DRAFT: ChatDraft = { text: "", images: [] };
+const VOICE_TITLES: Record<VoiceStatus, string> = {
+  idle: "Dicter (Ctrl+Espace)",
+  starting: "Démarrage du vocal… (clic pour annuler)",
+  listening: "J'écoute : clic ou Ctrl+Espace pour arrêter",
+  transcribing: "Transcription…",
+};
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
@@ -49,6 +55,7 @@ export function ChatComposer({
   slashCommands,
   draft,
   onDraft,
+  voice,
   focusKey,
   onSend,
   onInterrupt,
@@ -61,6 +68,7 @@ export function ChatComposer({
   slashCommands: string[];
   draft: ChatDraft;
   onDraft: React.Dispatch<React.SetStateAction<ChatDraft>>;
+  voice: ChatVoice;
   /** Changes when the composer should take the focus (pane activated). */
   focusKey: unknown;
   onSend: (text: string, images: ChatImage[]) => void;
@@ -76,6 +84,20 @@ export function ChatComposer({
   const [menu, setMenu] = useState<"model" | null>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // The mic button lives here: whatever takes the input away (a request, the
+  // chat ending) stops the recording it would no longer show.
+  const voiceRef = useRef(voice);
+  useEffect(() => {
+    voiceRef.current = voice;
+  });
+  useEffect(
+    () => () => {
+      const { status, stop } = voiceRef.current;
+      if (status === "listening" || status === "starting") void stop();
+    },
+    [],
+  );
 
   // Only when its pane is (or becomes) the active one: a chat beside a
   // terminal must not take the keyboard back from it.
@@ -114,7 +136,7 @@ export function ChatComposer({
       body,
       images.map(({ mediaType, data }) => ({ mediaType, data })),
     );
-    onDraft(EMPTY_DRAFT);
+    onDraft({ text: "", images: [] });
   };
 
   const complete = (command: string) => {
@@ -123,7 +145,20 @@ export function ChatComposer({
     areaRef.current?.focus();
   };
 
+  // The rail's gesture: one click starts, the next stops (Ctrl+Space too).
+  const toggleVoice = () => {
+    if (voice.status === "idle") void voice.start();
+    else if (voice.status !== "transcribing") void voice.stop();
+    areaRef.current?.focus();
+  };
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === " " && e.ctrlKey) {
+      e.preventDefault();
+      // Held down, the key repeats: only its first press toggles.
+      if (!e.repeat) toggleVoice();
+      return;
+    }
     if (matches.length > 0) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -272,11 +307,18 @@ export function ChatComposer({
         </span>
         <button
           type="button"
-          className="chat-round mic chat-push"
-          title="Le vocal arrive après le chat"
-          disabled
+          className={`chat-round mic chat-push${voice.status === "listening" ? " rec" : ""}`}
+          title={VOICE_TITLES[voice.status]}
+          disabled={voice.status === "transcribing"}
+          onClick={toggleVoice}
         >
-          <Mic />
+          {voice.status === "listening" ? (
+            <Square />
+          ) : voice.status === "idle" ? (
+            <Mic />
+          ) : (
+            <span className="spin" />
+          )}
         </button>
         {working && empty ? (
           <button

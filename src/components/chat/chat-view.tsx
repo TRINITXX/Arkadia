@@ -7,11 +7,8 @@ import { Lightbox } from "@/components/modern/Lightbox";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatAgentSheet } from "@/components/chat/chat-agent-sheet";
 import { ChatAgentsDrawer } from "@/components/chat/chat-agents-drawer";
-import {
-  ChatComposer,
-  EMPTY_DRAFT,
-  type ChatDraft,
-} from "@/components/chat/chat-composer";
+import { ChatComposer, type ChatVoice } from "@/components/chat/chat-composer";
+import type { ChatDraft } from "@/lib/chat/chatDrafts";
 import { followsAfterScroll } from "@/lib/followBottom";
 import { CHAT_CSS } from "@/components/chat/chat-css";
 import { ChatLiveLine } from "@/components/chat/chat-live-line";
@@ -47,6 +44,13 @@ export interface ChatViewProps {
   onModel: (model: string) => void;
   onOpenAgent: (agentId: string) => void;
   onRestart: () => void;
+  /** The input's text and images: they outlive the card while a request
+   *  takes its place, and dictation adds to them. */
+  draft: ChatDraft;
+  onDraft: React.Dispatch<React.SetStateAction<ChatDraft>>;
+  voice: ChatVoice;
+  /** The pane stopped showing (its tab hidden): nothing on screen any more. */
+  onHidden?: () => void;
   onToast?: ToastFn;
 }
 
@@ -66,15 +70,17 @@ export function ChatView({
   onModel,
   onOpenAgent,
   onRestart,
+  draft,
+  onDraft,
+  voice,
+  onHidden,
   onToast,
 }: ChatViewProps) {
   const [lightbox, setLightbox] = useState<LightboxContent | null>(null);
   const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState<Subagent | null>(null);
   const [stuck, setStuck] = useState(true);
-  // The input's text and images outlive the card while a request takes its
-  // place: Claude's question doesn't wipe a message being written.
-  const [draft, setDraft] = useState<ChatDraft>(EMPTY_DRAFT);
+  const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   const stuckRef = useRef(true);
@@ -113,6 +119,22 @@ export function ChatView({
     ro.observe(inner);
     return () => ro.disconnect();
   }, [toBottom]);
+  // A hidden tab keeps its panes mounted but sized to nothing.
+  const onHiddenRef = useRef(onHidden);
+  useLayoutEffect(() => {
+    onHiddenRef.current = onHidden;
+  }, [onHidden]);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width === 0 && height === 0) onHiddenRef.current?.();
+    });
+    ro.observe(root);
+    return () => ro.disconnect();
+  }, []);
+
   // Only the reader scrolling up leaves the end, never the gap alone: rows
   // sized in by `content-visibility` grow under a still `scrollTop` (REVIEW.md,
   // « Vue lecture arrêtée au-dessus de la fin »).
@@ -192,7 +214,8 @@ export function ChatView({
         model={state.model}
         slashCommands={state.slashCommands}
         draft={draft}
-        onDraft={setDraft}
+        onDraft={onDraft}
+        voice={voice}
         focusKey={isActive}
         onSend={(text, images) => {
           stuckRef.current = true;
@@ -206,7 +229,7 @@ export function ChatView({
   }
 
   return (
-    <div className="chat-root" onMouseDown={onActivate}>
+    <div className="chat-root" ref={rootRef} onMouseDown={onActivate}>
       <style>
         {CONVERSATION_CSS}
         {HLJS_CSS}

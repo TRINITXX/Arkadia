@@ -82,16 +82,15 @@ export function tabAccountMarks(
 
 /**
  * Panes of a tab that "switch account" relaunches: those running Claude right
- * now (a status glyph in their title) on another account than `accountId`.
- * Plain shells keep their account.
+ * now (a status glyph in their title, or a chat) on another account than
+ * `accountId`. Plain shells keep their account.
  */
 export function claudePanesToSwitch(tab: Tab, accountId: string): string[] {
   return Object.values(tab.panes)
     .filter(
       (p) =>
-        // A chat pane's title glyph is its own (`ChatPane`), not a terminal's.
-        !p.chat &&
-        stateFromTitle(p.title) !== null &&
+        // A chat pane always runs Claude (its glyph is its own, `ChatPane`).
+        (!!p.chat || stateFromTitle(p.title) !== null) &&
         paneAccountId(p.accountId) !== accountId,
     )
     .map((p) => p.id);

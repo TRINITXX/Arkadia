@@ -7,8 +7,8 @@ import {
 } from "@/lib/agentState";
 import {
   chatActivity,
-  chatCommand,
   chatEventsReady,
+  closeChat,
   chatReplaying,
   subscribeChatActivity,
   type ChatActivity,
@@ -24,8 +24,6 @@ const EXIT_TIMEOUT_MS = 8000;
 const EXIT_POLL_MS = 150;
 /** Between keys typed into a Claude Code prompt (see "Rafale de touches"). */
 const KEY_GAP_MS = 60;
-/** A closed chat's Claude Code is gone by then. */
-const CLOSE_GRACE_MS = 500;
 /** Any leading symbol reads as busy (`stateFromTitle`). */
 const BUSY_TITLE_CHAR = "·";
 
@@ -224,9 +222,7 @@ export function usePaneChats({
         onToast("info", busy);
         return;
       }
-      await chatCommand(pane.accountId, { type: "close", chatId: pane.id });
-      // Its Claude Code is being stopped: let it go before the next one.
-      await sleep(CLOSE_GRACE_MS);
+      await closeChat(pane.accountId, pane.id);
       labelsRef.current.delete(pane.id);
       // The full path, as a shell titles itself: a folder named `.claude`
       // would read as a busy Claude's glyph (`stateFromTitle`).
