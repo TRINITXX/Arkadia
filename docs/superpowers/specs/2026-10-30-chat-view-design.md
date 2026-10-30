@@ -79,6 +79,24 @@ recopiée du terminal coupée au mauvais endroit.
   `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`.
 - **Quotas** : `rate_limit_event` (statut, `resetsAt`, `utilization`), `getContextUsage()`.
 
+## Ce qui est construit (30/10/2026, v1 dans le Lab)
+
+- `chat-server/server.ts` (Node 24, TypeScript lancé tel quel) : une query par chat, en entrée en
+  flux. Un chat repris charge lui-même son historique (`getSessionMessages`, 400 derniers messages)
+  avant de lancer Claude, et garde tous ses événements : un `start` sur un chat vivant renvoie
+  `attached`, le journal, puis `replayed` (rechargement de la page sans couper Claude). `continue`
+  devient la dernière session du dossier (`listSessions`). Titre et branche par `getSessionInfo`,
+  contexte par `getContextUsage` après chaque tour. Enregistreur de scénarios réels :
+  `chat-server/record.ts` → `chat-server/fixtures/` (tests de la page).
+- `src-tauri/src/chat.rs` : un serveur par compte, relais ligne à ligne (`chat_command`,
+  événement `chat-event`), `ARKADIA_PANE_ID` et le marqueur du Lab posés sur chaque chat ;
+  `close_terminal` ferme le chat du volet.
+- Page : `chatState.ts` (événements → conversation, pur, testé sur les scénarios), `chatGroups.ts`
+  (outils repliés), `chatEvents.ts` (un écouteur pour toute la page, activité de chaque chat pour
+  le badge et la bascule), `usePaneChats.ts` (bascule, titres, `ccd` → chat), composants
+  `src/components/chat/` (maquette A). Aperçu sans l'appli : `chat-preview.html?s=tools|live|question|plan|subagent`.
+- Pas encore : vocal branché dans la saisie, changement de compte d'un volet chat, téléphone.
+
 ## Étapes
 
 1. Prototype du vocal (Claude Code caché) : le risque principal, testé avant le reste.

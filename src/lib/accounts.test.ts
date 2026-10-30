@@ -88,6 +88,17 @@ describe("claudePanesToSwitch", () => {
   it("skips panes already on the target account", () => {
     expect(claudePanesToSwitch(split, "main")).toEqual([]);
   });
+
+  it("leaves a chat pane alone: its glyph is no terminal Claude", () => {
+    const withChat: Tab = {
+      ...split,
+      panes: {
+        ...split.panes,
+        claude: { ...split.panes.claude, chat: { cwd: "C:/repo" } },
+      },
+    };
+    expect(claudePanesToSwitch(withChat, "b2")).toEqual([]);
+  });
 });
 
 describe("planAutoSwitch", () => {

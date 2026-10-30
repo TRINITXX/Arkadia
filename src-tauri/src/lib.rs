@@ -4,6 +4,7 @@ mod ai_search;
 pub mod artifact_inbox;
 mod artifact_snip;
 mod artifact_view;
+mod chat;
 mod chrome_profile;
 mod claude_watcher;
 mod conversation;
@@ -154,6 +155,7 @@ pub fn run() {
         .manage(popup::PopupQueue::default())
         .manage(uiwatch::UiHealth::default())
         .manage(voice::VoicePane::default())
+        .manage(chat::ChatServers::default())
         .manage(remote_hub.clone())
         .setup({
             let registry = registry.clone();
@@ -261,6 +263,7 @@ pub fn run() {
         .invoke_handler(artifact_view::guard(tauri::generate_handler![
             spawn_terminal,
             voice::voice_pane,
+            chat::chat_command,
             voice::voice_take,
             accounts::accounts_state,
             accounts::account_add,

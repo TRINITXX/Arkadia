@@ -44,6 +44,14 @@ describe("planReattach", () => {
     expect(plan.leftover).toBeNull();
   });
 
+  it("brings a chat pane back as a chat, never as a terminal Claude", () => {
+    const snap = split();
+    snap.tabs[0].panes[0] = { ...pane("a", true), chat: { cwd: "C:\p", resume: "s1" } };
+    const plan = planReattach(snap, ["a", "b"]);
+    expect(plan.tabs[0].panes[0].chat).toEqual({ cwd: "C:\p", resume: "s1" });
+    expect(plan.tabs[0].claudePaneIds).toEqual([]);
+  });
+
   it("prunes a pane whose shell died and collapses the split onto the survivor", () => {
     const plan = planReattach(split(), ["a"]);
     expect(plan.tabs[0].tree).toEqual({ kind: "leaf", paneId: "a" });

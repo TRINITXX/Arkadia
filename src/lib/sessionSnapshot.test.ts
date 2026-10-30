@@ -65,6 +65,32 @@ describe("sessionSnapshot", () => {
     expect(snap.tabs[0].panes[0].title).toBe("t-a");
   });
 
+  it("reopens a chat pane as a chat, on its Claude session", () => {
+    const t = tab({ kind: "leaf", paneId: "a" }, ["a"]);
+    t.panes.a.chat = { cwd: "C:\w\a", resume: "s1" };
+    const snap = buildSessionSnapshot([t], new Set(), 1);
+    expect(snap.tabs[0].panes[0]).toMatchObject({
+      wasClaude: true,
+      chat: { cwd: "C:\w\a", resume: "s1" },
+    });
+    const reloaded = normalizeSessionSnapshot(JSON.parse(JSON.stringify(snap)));
+    expect(reloaded?.tabs[0].panes[0].chat).toEqual({
+      cwd: "C:\w\a",
+      resume: "s1",
+    });
+  });
+
+  it("keeps a ccdr chat's continue until it has a session", () => {
+    const t = tab({ kind: "leaf", paneId: "a" }, ["a"]);
+    t.panes.a.chat = { cwd: "C:/w", continue: true };
+    const snap = buildSessionSnapshot([t], new Set(), 1);
+    const reloaded = normalizeSessionSnapshot(JSON.parse(JSON.stringify(snap)));
+    expect(reloaded?.tabs[0].panes[0].chat).toEqual({
+      cwd: "C:/w",
+      continue: true,
+    });
+  });
+
   it("keeps each pane's Claude account through save and reload", () => {
     const t = tab({ kind: "leaf", paneId: "a" }, ["a"]);
     t.panes.a.accountId = "b2c3";

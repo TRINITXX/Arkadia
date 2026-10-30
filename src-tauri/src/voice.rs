@@ -132,6 +132,7 @@ pub fn voice_pane(
     registry: State<'_, Arc<AgentRegistry>>,
     scrollback: State<'_, ScrollbackConfig>,
     conv_cache: State<'_, ConvCacheMap>,
+    chats: State<'_, crate::chat::ChatServers>,
     app: AppHandle,
 ) -> Result<String, String> {
     let mut current = voice.0.lock();
@@ -142,7 +143,13 @@ pub fn voice_pane(
         }
         // Its Claude Code quit, and the shell with it: the pane goes, as a
         // closed tab's does, and a fresh one replaces it.
-        let _ = crate::terminal::close_terminal(id, sessions.clone(), registry.clone(), conv_cache);
+        let _ = crate::terminal::close_terminal(
+            id,
+            sessions.clone(),
+            registry.clone(),
+            conv_cache,
+            chats,
+        );
     }
     let dir = voice_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

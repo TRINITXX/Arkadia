@@ -89,6 +89,8 @@ export function claudePanesToSwitch(tab: Tab, accountId: string): string[] {
   return Object.values(tab.panes)
     .filter(
       (p) =>
+        // A chat pane's title glyph is its own (`ChatPane`), not a terminal's.
+        !p.chat &&
         stateFromTitle(p.title) !== null &&
         paneAccountId(p.accountId) !== accountId,
     )

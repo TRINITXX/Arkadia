@@ -1,0 +1,79 @@
+import { describe, expect, it } from "vitest";
+import {
+  groupChatItems,
+  questionAnswers,
+  toolLabel,
+  workSummary,
+  type ToolItem,
+} from "@/lib/chat/chatGroups";
+import type { ChatItem } from "@/lib/chat/chatState";
+
+const tool = (
+  name: string,
+  input: Record<string, unknown> = {},
+  id = name,
+): ToolItem => ({
+  kind: "tool",
+  id,
+  name,
+  input,
+});
+const text = (t: string, id = t): ChatItem => ({
+  kind: "text",
+  id,
+  text: t,
+  streaming: false,
+});
+
+describe("groupChatItems", () => {
+  it("folds a run of tool calls into one line and gives file changes a card", () => {
+    const units = groupChatItems([
+      text("Je regarde."),
+      tool("Bash", { command: "ls" }, "b1"),
+      { kind: "thinking", id: "th", text: "", streaming: false },
+      tool("Read", { file_path: "C:/a.ts" }, "r1"),
+      tool("Bash", { command: "git status" }, "b2"),
+      tool("Edit", { file_path: "C:/a.ts" }, "e1"),
+      tool("Grep", { pattern: "x" }, "g1"),
+    ]);
+    expect(units.map((u) => u.kind)).toEqual(["text", "work", "edit", "work"]);
+    const work = units[1];
+    expect(work.kind === "work" && workSummary(work.tools)).toBe(
+      "2 commandes, 1 fichier lu",
+    );
+  });
+
+  it("keeps the task list and the plan file out of the column", () => {
+    const units = groupChatItems([
+      tool("TaskCreate", { subject: "x" }),
+      tool("Write", {
+        file_path: "C:/Users/a/.claude/plans/p.md",
+        content: "# Plan",
+      }),
+      tool("ExitPlanMode"),
+      tool("AskUserQuestion"),
+      tool("Agent", { description: "d" }),
+    ]);
+    expect(units.map((u) => u.kind)).toEqual(["plan", "question", "agent"]);
+  });
+});
+
+describe("tool wording", () => {
+  it("names MCP tools by their own name", () => {
+    expect(toolLabel("mcp__playwright__browser_click")).toBe(
+      "browser_click (playwright)",
+    );
+    expect(toolLabel("Bash")).toBe("Bash");
+  });
+
+  it("reads the answers back from AskUserQuestion's result", () => {
+    const asked = {
+      ...tool("AskUserQuestion"),
+      result: {
+        text: 'Your questions have been answered: "Couleur ?"="Bleu". You can now continue.',
+        isError: false,
+      },
+    };
+    expect(questionAnswers(asked)).toEqual([["Couleur ?", "Bleu"]]);
+  });
+});

@@ -119,6 +119,13 @@ import {
 } from "@/lib/remoteActions";
 import { dropHeldConv } from "@/lib/convStore";
 import { isBlankShell } from "@/lib/blankShell";
+import { IDLE_CHAT } from "@/lib/chat/chatEvents";
+import {
+  chatForCommand,
+  chatLabelOf,
+  chatTitle,
+  usePaneChats,
+} from "@/lib/chat/usePaneChats";
 import {
   buildSessionSnapshot,
   materializeTree,
@@ -147,6 +154,7 @@ import {
   type NotifStyle,
   type PaneBackgroundPayload,
   type PaletteId,
+  type PaneChat,
   type PaneState,
   type Project,
   type RenderPayload,
@@ -317,7 +325,14 @@ export function App() {
       let next: Set<string> | null = null;
       for (const tab of tabs) {
         for (const [paneId, pane] of Object.entries(tab.panes)) {
-          if (!prev.has(paneId) && stateFromTitle(pane.title) !== null) {
+          // A chat pane's glyph is its own: nothing may type into its shell,
+          // even one that ran Claude in its terminal before the switch.
+          if (pane.chat) {
+            if (prev.has(paneId)) {
+              if (!next) next = new Set(prev);
+              next.delete(paneId);
+            }
+          } else if (!prev.has(paneId) && stateFromTitle(pane.title) !== null) {
             if (!next) next = new Set(prev);
             next.add(paneId);
           }
@@ -1160,18 +1175,30 @@ export function App() {
       const project = projects.find((p) => p.id === st.projectId);
       if (!project) continue;
       const newIds: string[] = [];
+      const chats: (PaneChat | undefined)[] = [];
       for (const p of st.panes) {
         let init: string | undefined;
+        let chat: PaneChat | undefined;
         if (p.wasClaude) {
           const sid = await invoke<string | null>("pane_session_id", {
             paneId: p.paneId,
           }).catch(() => null);
+          // A chat pane reopens as a chat, on its session (Arkadia Lab).
+          if (__ARKADIA_LAB__ && p.chat) {
+            const resume = p.chat.resume ?? sid ?? undefined;
+            chat = resume
+              ? { cwd: p.chat.cwd, resume }
+              : {
+                  cwd: p.chat.cwd,
+                  ...(p.chat.continue ? { continue: true } : {}),
+                };
+          }
           // `ccd` is the user's pwsh alias for Claude (skip-permissions +
           // effort), and it forwards @args — so --resume passes straight
           // through. Plain `claude` would drop those flags. Without a session
           // id (pane map lost/pruned), start a fresh Claude rather than an
           // empty shell.
-          init = sid ? `ccd --resume ${sid}` : "ccd";
+          if (!chat) init = sid ? `ccd --resume ${sid}` : "ccd";
         }
         const paneId = await spawnPane(
           p.cwd ?? project.path,
@@ -1180,6 +1207,7 @@ export function App() {
         );
         if (!paneId) break;
         newIds.push(paneId);
+        chats.push(chat);
       }
       if (newIds.length !== st.panes.length) continue;
       const tabId = newTabId();
@@ -1188,9 +1216,16 @@ export function App() {
         paneToTab.current.set(id, tabId);
         panes[id] = {
           id,
-          title: st.panes[i].title || project.name,
+          // A restored chat is at rest until it says otherwise.
+          title: chats[i]
+            ? chatTitle(
+                IDLE_CHAT,
+                chatLabelOf(st.panes[i].title) || project.name,
+              )
+            : st.panes[i].title || project.name,
           cwd: null,
           accountId: st.panes[i].accountId,
+          ...(chats[i] ? { chat: chats[i] } : {}),
         };
       });
       const tab: Tab = {
@@ -1558,6 +1593,32 @@ export function App() {
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
+
+  // Chat panes (Arkadia Lab): Claude without its terminal (`usePaneChats`).
+  const projectPathOf = useCallback(
+    (paneId: string) => {
+      const tab = tabsRef.current.find((t) => t.panes[paneId]);
+      return projects.find((p) => p.id === tab?.projectId)?.path ?? null;
+    },
+    [projects],
+  );
+  // Its own ref: React's lint forbids writing one already handed to a hook
+  // (`paneStatesRef`, kept further down with the account refs).
+  const chatPaneStatesRef = useRef(effectivePaneStates);
+  useEffect(() => {
+    chatPaneStatesRef.current = effectivePaneStates;
+  }, [effectivePaneStates]);
+  const paneState = useCallback(
+    (paneId: string) => chatPaneStatesRef.current[paneId],
+    [],
+  );
+  const { handlers: chatHandlers, startChat } = usePaneChats({
+    setTabs,
+    tabsRef,
+    projectPathOf,
+    paneState,
+    onToast: pushToast,
+  });
   // Tabs being switched: a second click while the first relaunch runs would
   // resume the same conversation twice.
   const switchingTabs = useRef<Set<string>>(new Set());
@@ -1760,7 +1821,7 @@ export function App() {
     async (sessionId: string): Promise<string | undefined> => {
       const paneIds = tabsRef.current.flatMap((t) =>
         Object.values(t.panes)
-          .filter((p) => stateFromTitle(p.title) !== null)
+          .filter((p) => !p.chat && stateFromTitle(p.title) !== null)
           .map((p) => p.id),
       );
       const sids = await Promise.all(
@@ -2030,7 +2091,9 @@ export function App() {
           // per-frame call never re-renders the app.
           const tab = prev.find((t) => t.id === tabId);
           const pane = tab?.panes[paneId];
-          if (!tab || !pane || pane.title === payload.title) return prev;
+          // A chat pane's title comes from its chat, not its idle shell.
+          if (!tab || !pane || pane.chat || pane.title === payload.title)
+            return prev;
           return prev.map((t) =>
             t.id !== tabId
               ? t
@@ -2592,6 +2655,15 @@ export function App() {
       const project = remote?.project ?? activeProject;
       if (!project) return null;
       const sendCommand = async (paneId: string) => {
+        // Arkadia Lab opens Claude as a chat rather than in the terminal.
+        const pane = tabsRef.current.map((t) => t.panes[paneId]).find(Boolean);
+        const chat = __ARKADIA_LAB__
+          ? chatForCommand(button.command, pane?.cwd ?? project.path)
+          : null;
+        if (chat) {
+          startChat(paneId, chat);
+          return;
+        }
         try {
           const text = button.command + "\r";
           const bytes = Array.from(new TextEncoder().encode(text));
@@ -2608,6 +2680,8 @@ export function App() {
       if (
         reusable &&
         !toolbarClaimedPanesRef.current.has(reusable) &&
+        // A chat pane's shell sits idle under its chat: not a free shell.
+        !tabsRef.current.some((t) => t.panes[reusable]?.chat) &&
         isBlankShell(getFrame(reusable))
       ) {
         toolbarClaimedPanesRef.current.add(reusable);
@@ -2630,7 +2704,13 @@ export function App() {
       setTimeout(() => void sendCommand(spawned.paneId), TOOLBAR_RUN_DELAY_MS);
       return spawned.tabId;
     },
-    [activeProject, activePaneIdOfActiveTab, spawnTabFor, markProjectInput],
+    [
+      activeProject,
+      activePaneIdOfActiveTab,
+      spawnTabFor,
+      markProjectInput,
+      startChat,
+    ],
   );
 
   // Bottom prompt bar: type (or send) the button's text into the active Claude
@@ -3002,6 +3082,7 @@ export function App() {
                   onSetRatio={(path, ratio) =>
                     setPaneRatio(tab.id, path, ratio)
                   }
+                  chat={chatHandlers}
                 />
               </div>
             ))}

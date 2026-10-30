@@ -8,7 +8,7 @@
  * with the freshly-spawned ids.
  */
 
-import type { PaneTree, Tab } from "@/types";
+import type { PaneChat, PaneTree, Tab } from "@/types";
 
 /** A serialized pane tree: leaves carry an index into `SnapshotTab.panes`. */
 export type SnapshotTree =
@@ -34,6 +34,9 @@ export interface SnapshotPane {
   wasClaude: boolean;
   /** Claude account the pane ran on (absent = main account). */
   accountId?: string;
+  /** The pane showed Claude as a chat: a reattach (page reload) or a restore
+   *  reopens it as one, on its session. */
+  chat?: PaneChat;
 }
 
 export interface SnapshotTab {
@@ -111,11 +114,24 @@ export function buildSessionSnapshot(
           paneId: id,
           cwd: t.panes[id]?.cwd ?? null,
           title: t.panes[id]?.title ?? "",
-          wasClaude: claudePaneIds.has(id),
+          wasClaude: claudePaneIds.has(id) || !!t.panes[id]?.chat,
           accountId: t.panes[id]?.accountId,
+          ...(t.panes[id]?.chat ? { chat: t.panes[id].chat } : {}),
         })),
       };
     }),
+  };
+}
+
+function normalizeChat(raw: unknown): { chat: PaneChat } | null {
+  const c = raw as Record<string, unknown> | null;
+  if (!c || typeof c !== "object" || typeof c.cwd !== "string") return null;
+  return {
+    chat: {
+      cwd: c.cwd,
+      ...(typeof c.resume === "string" ? { resume: c.resume } : {}),
+      ...(c.continue === true ? { continue: true } : {}),
+    },
   };
 }
 
@@ -142,6 +158,7 @@ export function normalizeSessionSnapshot(raw: unknown): SessionSnapshot | null {
         wasClaude: pane.wasClaude === true,
         accountId:
           typeof pane.accountId === "string" ? pane.accountId : undefined,
+        ...(normalizeChat(pane.chat) ?? {}),
       });
     }
     const tree = normalizeTree(tab.tree, panes.length);

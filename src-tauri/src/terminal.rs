@@ -998,7 +998,10 @@ pub fn close_terminal(
     state: State<'_, SessionMap>,
     registry: State<'_, Arc<AgentRegistry>>,
     conv_cache: State<'_, crate::conversation::ConvCacheMap>,
+    chats: State<'_, crate::chat::ChatServers>,
 ) -> Result<(), String> {
+    // A chat pane's conversation ends with its pane (see `chat`).
+    chats.close_chat(&session_id);
     // Dropped once the map's lock is released: closing the pseudo-console can
     // wait on the child, and every other command needs that lock.
     let closed = state.sessions.lock().remove(&session_id);

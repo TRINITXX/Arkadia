@@ -146,6 +146,20 @@ export interface PaneState {
   /** Claude account the pane was launched on (fixed for its lifetime).
    *  Undefined = the main account. */
   accountId?: string;
+  /** Set while the pane shows Claude as a chat (Agent SDK) rather than in its
+   *  terminal; the pane's shell stays underneath, idle. */
+  chat?: PaneChat;
+}
+
+/** A chat pane's conversation (see `useChatSession`). */
+export interface PaneChat {
+  /** Where Claude runs. */
+  cwd: string;
+  /** Its session, once known: a remount, a restore or the switch to the
+   *  terminal goes on with it. */
+  resume?: string;
+  /** Start on the folder's latest session (the toolbar's `ccdr`). */
+  continue?: boolean;
 }
 
 export type SplitDirection = "horizontal" | "vertical";

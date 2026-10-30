@@ -17,6 +17,8 @@ import {
   type ConvFilters,
 } from "./ModernConversationView";
 import { PaneInputRail } from "./PaneInputRail";
+import { ChatModeToggle } from "./chat/chat-mode-toggle";
+import { ChatPane } from "./chat/chat-pane";
 import type { AgentStateValue } from "@/lib/agentState";
 
 /** Pixel height of the real-terminal footer left uncovered by the modern view. */
@@ -88,7 +90,17 @@ interface PaneTreeViewProps {
   onUserInput?: () => void;
   onContextMenu: (paneId: string, x: number, y: number) => void;
   onSetRatio: (path: number[], ratio: number) => void;
+  /** Chat panes (Arkadia Lab): see `ChatPane`. */
+  chat: PaneChatHandlers;
   path?: number[];
+}
+
+export interface PaneChatHandlers {
+  /** Panes whose chat / terminal switch is under way. */
+  switching: ReadonlySet<string>;
+  onToggle: (paneId: string) => void;
+  onSession: (paneId: string, sessionId: string) => void;
+  onLabel: (paneId: string, label: string) => void;
 }
 
 export function PaneTreeView({
@@ -112,12 +124,31 @@ export function PaneTreeView({
   onUserInput,
   onContextMenu,
   onSetRatio,
+  chat,
   path = [],
 }: PaneTreeViewProps) {
   if (tree.kind === "leaf") {
     const pane = panes[tree.paneId];
     if (!pane) return null;
     const isActive = pane.id === activePaneId;
+    if (pane.chat) {
+      return (
+        <div className="relative h-full w-full">
+          <ChatPane
+            key={pane.id}
+            pane={pane}
+            chat={pane.chat}
+            isActive={isActive}
+            switching={chat.switching.has(pane.id)}
+            onActivate={() => onActivate(pane.id)}
+            onSession={chat.onSession}
+            onLabel={chat.onLabel}
+            onSwitchToTerminal={chat.onToggle}
+            onToast={onToast}
+          />
+        </div>
+      );
+    }
     const terminal = useWebGPU ? (
       <TerminalWebGPU
         pane={pane}
@@ -144,6 +175,13 @@ export function PaneTreeView({
     return (
       <div className="relative h-full w-full">
         {terminal}
+        {__ARKADIA_LAB__ && (
+          <ChatModeToggle
+            mode="terminal"
+            busy={chat.switching.has(pane.id)}
+            onSwitch={() => chat.onToggle(pane.id)}
+          />
+        )}
         {isActive && inputRailEnabled && (
           // Keyed: a pane swapped in place gets a fresh rail, not the previous
           // pane's pending send.
@@ -211,6 +249,7 @@ export function PaneTreeView({
           onUserInput={onUserInput}
           onContextMenu={onContextMenu}
           onSetRatio={onSetRatio}
+          chat={chat}
           path={[...path, 0]}
         />
       </div>
@@ -243,6 +282,7 @@ export function PaneTreeView({
           onUserInput={onUserInput}
           onContextMenu={onContextMenu}
           onSetRatio={onSetRatio}
+          chat={chat}
           path={[...path, 1]}
         />
       </div>
