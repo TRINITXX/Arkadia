@@ -9,7 +9,11 @@ import {
 } from "@/lib/frameStore";
 import { CLEAR_CHUNK_GAP_MS, clearPromptChunks } from "@/lib/promptClear";
 import { holdPaneShown } from "@/lib/shownPanes";
-import { isOptionRow, isPromptField, voiceFailure } from "@/lib/terminalChrome";
+import {
+  isPromptField,
+  trustAnswerKey,
+  voiceFailure,
+} from "@/lib/terminalChrome";
 
 /**
  * Claude's own dictation without a terminal on screen, for the chat view:
@@ -26,8 +30,11 @@ const SPACE_REPEAT_MS = 40;
 const MAX_TALK_MS = 10 * 60_000;
 /** Claude Code takes a few seconds to start; past this it is stuck. */
 const READY_TIMEOUT_MS = 30_000;
-/** Between two default answers to the folder-trust question. */
+/** Between two keys answering the folder-trust question. */
 const ANSWER_GAP_MS = 1500;
+/** How long the screen must stay unchanged before a key goes to it. */
+const SETTLE_MS = 500;
+const CHECK_MS = 250;
 /**
  * Longer than the hook's own timeout (10 s, `voice.rs`): past it the hook is
  * killed and blocks the prompt, so no text can land after this dictation gave
@@ -41,6 +48,7 @@ const ROWS = 40;
 
 const ENTER = [0x0d];
 const SPACE = [0x20];
+const DOWN = [0x1b, 0x5b, 0x42];
 
 function send(paneId: string, bytes: number[]): Promise<void> {
   return invoke("send_input", { sessionId: paneId, bytes });
@@ -48,14 +56,19 @@ function send(paneId: string, bytes: number[]): Promise<void> {
 
 /**
  * Resolves true once the pane shows Claude Code's prompt field. The question
- * whether to trust the folder gets Enter, its default answer: any other list
- * (choosing how to sign in) waits for a person.
+ * whether to trust the folder gets yes: any other list (choosing how to sign
+ * in) waits for a person. A dialog at rest draws nothing, so no frame comes
+ * after the one a key caused: the screen is checked on a timer too. Keys go
+ * only to a screen that stopped changing: a key sent right as the dialog
+ * appears is undone (its cursor back on the default answer).
  */
-function waitForPrompt(paneId: string): Promise<boolean> {
+export function waitForPrompt(paneId: string): Promise<boolean> {
   return new Promise((resolve) => {
+    let lastFrameAt = Date.now();
     let lastAnswer = 0;
     const finish = (ready: boolean) => {
       unsubscribe();
+      clearInterval(tick);
       clearTimeout(giveUp);
       resolve(ready);
     };
@@ -65,17 +78,20 @@ function waitForPrompt(paneId: string): Promise<boolean> {
         finish(true);
         return;
       }
-      const asking = frame?.lines.some((runs) => isOptionRow(runs)) ?? false;
-      const trust =
-        frame?.lines.some((runs) =>
-          /trust/i.test(runs.map((r) => r.text).join("")),
-        ) ?? false;
-      if (asking && trust && Date.now() - lastAnswer > ANSWER_GAP_MS) {
-        lastAnswer = Date.now();
-        void send(paneId, ENTER).catch(() => {});
+      const now = Date.now();
+      if (now - lastFrameAt < SETTLE_MS || now - lastAnswer < ANSWER_GAP_MS) {
+        return;
       }
+      const key = frame ? trustAnswerKey(frame.lines) : null;
+      if (!key) return;
+      lastAnswer = now;
+      void send(paneId, key === "enter" ? ENTER : DOWN).catch(() => {});
     };
-    const unsubscribe = subscribeFrame(paneId, check);
+    const unsubscribe = subscribeFrame(paneId, () => {
+      lastFrameAt = Date.now();
+      check();
+    });
+    const tick = setInterval(check, CHECK_MS);
     const giveUp = setTimeout(() => finish(false), READY_TIMEOUT_MS);
     check();
   });

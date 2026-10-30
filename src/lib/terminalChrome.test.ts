@@ -3,6 +3,7 @@ import {
   inputRowIndex,
   isDictating,
   isPromptField,
+  trustAnswerKey,
   voiceFailure,
 } from "@/lib/terminalChrome";
 import type { CellRun, RenderPayload } from "@/types";
@@ -84,6 +85,52 @@ describe("isPromptField", () => {
     expect(isPromptField(screenOf(["────────", "❯ 1. Yes", "  2. No"]))).toBe(
       false,
     );
+  });
+});
+
+describe("trustAnswerKey", () => {
+  /** The folder-trust question as seen through a PTY on v2.1.314. */
+  const trust = (no: string, yes: string) =>
+    screenOf([
+      " Accessing workspace:",
+      " C:\\Users\\TRINITX\\AppData\\Local\\Arkadia\\voice-lab",
+      " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not,",
+      " Security guide",
+      no,
+      yes,
+      " Enter to confirm · Esc to cancel",
+    ]).lines;
+
+  it("moves off the default answer, which quits", () => {
+    expect(
+      trustAnswerKey(trust(" ❯ No, exit", "   Yes, I trust this folder")),
+    ).toBe("down");
+  });
+
+  it("confirms once the yes is selected, numbered or not", () => {
+    expect(
+      trustAnswerKey(trust("   No, exit", " ❯ Yes, I trust this folder")),
+    ).toBe("enter");
+    expect(trustAnswerKey(trust("❯ 1. Yes, proceed", "  2. No, exit"))).toBe(
+      "enter",
+    );
+  });
+
+  it("ignores the same words left in the prompt field", () => {
+    expect(
+      trustAnswerKey(
+        screenOf(["────────", "❯ 1. Yes, one you trust", "────────"]).lines,
+      ),
+    ).toBe(null);
+  });
+
+  it("leaves other lists to a person", () => {
+    expect(
+      trustAnswerKey(
+        screenOf(["Select login method:", "❯ 1. Claude account", "  2. API"])
+          .lines,
+      ),
+    ).toBe(null);
   });
 });
 

@@ -142,6 +142,26 @@ function unframed(runs: CellRun[]): string {
     .replace(/^[│┃]\s*/, "");
 }
 
+/**
+ * The key that answers Claude Code's folder-trust question with yes, or null
+ * when the question isn't on screen. Since v2.1.314 its options carry no
+ * number and the cursor starts on "No, exit": Enter there quits, so the
+ * cursor goes down to the yes first. The cursor is the bottom-most `❯` row,
+ * under the question: the same words in the prompt field are no question.
+ */
+export function trustAnswerKey(lines: CellRun[][]): "enter" | "down" | null {
+  const asked = lines.findIndex((runs) =>
+    /trust this folder|one you trust|trust the files/i.test(unframed(runs)),
+  );
+  if (asked < 0) return null;
+  for (let r = lines.length - 1; r > asked; r--) {
+    if (!isInputRow(lines[r])) continue;
+    const choice = unframed(lines[r]).replace(/^❯\s*(?:\d+\.\s*)?/, "");
+    return /^yes\b/i.test(choice) ? "enter" : "down";
+  }
+  return null;
+}
+
 /** The live input prompt row — a `❯` at the start of the line (after any box
  * border). Also the selected option of a `❯`-cursor selector. */
 export function isInputRow(runs: CellRun[]): boolean {
