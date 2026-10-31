@@ -55,10 +55,9 @@ export type ChatItem = (
       pasted?: string[];
       /** Sent while Claude worked and not taken yet (`takeQueued`). */
       queued?: boolean;
-      /** Never taken: Claude Code cancelled it, or the chat ended first. */
+      /** Never taken: Claude Code cancelled it, or the chat ended first.
+       *  Withdrawn by the user's × (`queued_removed`), it leaves the column. */
       dropped?: boolean;
-      /** Dropped by the user's × (`queued_removed`): « retiré ». */
-      removed?: boolean;
     }
   | {
       kind: "text";
@@ -127,7 +126,6 @@ export type ChatItem = (
       /** As a message: waiting for the turn under way, or never taken. */
       queued?: boolean;
       dropped?: boolean;
-      removed?: boolean;
       /** Claude Code runs it now (`command_lifecycle`): its answer is this card's. */
       running?: boolean;
     }

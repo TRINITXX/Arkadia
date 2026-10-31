@@ -3,6 +3,7 @@ import {
   lastReplyRound,
   parseQuestionRound,
   roundReply,
+  withoutQuestions,
 } from "@/lib/chat/chatQuestionRound";
 import type { ChatItem } from "@/lib/chat/chatState";
 
@@ -85,6 +86,33 @@ describe("question rounds in Claude's reply", () => {
     expect(lastReplyRound([text("a", GRILL)])?.id).toBe("a");
     expect(lastReplyRound([text("a", GRILL, true)])).toBeNull();
     expect(lastReplyRound([text("a", GRILL), user])).toBeNull();
+  });
+
+  it("leaves Claude's other words in place once the questions go to the sheet", () => {
+    const mixed = [
+      "J'ai fini la migration, les tests passent.",
+      "",
+      GRILL,
+      "",
+      "Je lance la suite dès tes réponses.",
+    ].join("\n");
+    expect(withoutQuestions(mixed)).toBe(
+      [
+        "J'ai fini la migration, les tests passent.",
+        "",
+        "Deux décisions avant de coder.",
+        "",
+        "Je lance la suite dès tes réponses.",
+      ].join("\n"),
+    );
+    // The closing words are no part of the last recommendation.
+    expect(parseQuestionRound(mixed)[1].recommendation).toBe(
+      "Quatre au plus par volet.",
+    );
+    expect(withoutQuestions(`Contexte.\n\n${SERIES}`)).toBe("Contexte.");
+    expect(withoutQuestions("Corrigé : le test passe.")).toBe(
+      "Corrigé : le test passe.",
+    );
   });
 
   it("answers one line per question answered", () => {

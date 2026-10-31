@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
-import { laterMessages, rewindPointOf } from "@/lib/chat/chatEdit";
+import { editBlocked, laterMessages, rewindPointOf } from "@/lib/chat/chatEdit";
+import { mergeDrafts, messageDraft } from "@/lib/chat/chatAttachments";
 import type { ChatDraft } from "@/lib/chat/chatDrafts";
 import type { ChatItem } from "@/lib/chat/chatState";
 import type { SlashActions } from "@/lib/chat/useSlashActions";
@@ -10,18 +11,24 @@ type UserItem = Extract<ChatItem, { kind: "user" }>;
 /**
  * The pencil on the user's messages: the conversation goes back to just
  * before one (/rewind, conversation only) and its text waits in the input.
- * Only while Claude rests; asked first when later messages would go.
+ * Only while Claude rests (`editBlocked` says why not, the pencil stays);
+ * asked first when later messages would go.
  */
 export function useMessageEdit({
   items,
   actions,
-  resting,
+  working,
+  request,
+  closed,
   onDraft,
   onToast,
 }: {
   items: ChatItem[];
   actions?: SlashActions;
-  resting: boolean;
+  working: boolean;
+  /** A request waits for the user's answer. */
+  request: boolean;
+  closed: unknown;
   onDraft: React.Dispatch<React.SetStateAction<ChatDraft>>;
   onToast?: ToastFn;
 }) {
@@ -47,7 +54,10 @@ export function useMessageEdit({
         }
         const why = actions.rewind(point, "conversation");
         if (why) onToast?.("info", why);
-        else onDraft((d) => ({ ...d, text: point.text }));
+        // Its attachments come back as cards, its images too, before what
+        // the input already holds (`messageDraft`).
+        else
+          onDraft((d) => mergeDrafts(messageDraft(point.text, item.pasted), d));
       } catch (e) {
         onToast?.("error", e instanceof Error ? e.message : String(e));
       } finally {
@@ -60,16 +70,21 @@ export function useMessageEdit({
 
   const onEdit = useCallback(
     (item: UserItem) => {
+      if (editBlocked({ working, request, closed, going })) return;
       const later = laterMessages(items, item);
       if (later > 0) setPending({ item, later });
       else void go(item);
     },
-    [items, go],
+    [items, go, working, request, closed, going],
   );
 
+  const blocked = editBlocked({ working, request, closed, going });
+  const resting = !working && !request && !closed;
   return {
-    /** Absent while Claude works or without a chat server (preview). */
-    onEdit: resting && actions && !going ? onEdit : undefined,
+    /** Absent without a chat server; a no-op while `blocked`. */
+    onEdit: actions ? onEdit : undefined,
+    /** Why the pencil can't act now: its tooltip, dim. */
+    blocked,
     pending: resting ? pending : null,
     going,
     confirm: () => pending && void go(pending.item),

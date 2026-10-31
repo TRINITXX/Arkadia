@@ -1,6 +1,6 @@
 import { Bot, ChevronRight } from "lucide-react";
 import type { Subagent } from "@/lib/chat/chatState";
-import { toolSummary, type ToolItem } from "@/lib/chat/chatGroups";
+import { toolRunning, toolSummary, type ToolItem } from "@/lib/chat/chatGroups";
 
 const STATUS: Record<Subagent["status"], string> = {
   running: "en cours",
@@ -11,7 +11,10 @@ const STATUS: Record<Subagent["status"], string> = {
   interrupted: "interrompu",
 };
 
-/** A subagent Claude started: one line, its conversation a click away. */
+/**
+ * A subagent Claude started: one line, its conversation a click away. No
+ * spinner while it runs: its card and the live line above the input say it.
+ */
 export function ChatAgentRow({
   tool,
   agent,
@@ -22,13 +25,11 @@ export function ChatAgentRow({
   /** Its conversation when known, else the finished agents. */
   onOpen: (agent?: Subagent) => void;
 }) {
-  const running = agent
-    ? agent.status === "running"
-    : !tool.result && !tool.stale;
+  const running = agent ? agent.status === "running" : toolRunning(tool);
   return (
     <div className="chat-unit">
       <div className="chat-line" onClick={() => onOpen(agent)}>
-        {running ? <span className="spin" /> : <Bot />}
+        <Bot />
         <b>Sous-agent</b>
         <span>· {toolSummary(tool)}</span>
         <span>

@@ -9,7 +9,8 @@ import activity from "../chat-server/fixtures/activity.jsonl?raw";
  * two background subagents and a two-phase workflow at once.
  * - `activity`: up to the first of them ending: the agent cards, the
  *   workflow card (a click opens it), the shells chip with its output.
- * - `activity-done`: all ended: « Agents terminés (2) » opens the drawer.
+ * - `activity-done`: all ended: « Agents terminés (2) » opens the drawer,
+ *   for 30 s after the page loads (`doneAgentsUntil`).
  * - `activity-resumed`: the session reopened while they ran: its subagent
  *   rows say « interrompu ».
  */

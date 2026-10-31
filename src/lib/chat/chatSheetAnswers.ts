@@ -1,5 +1,6 @@
-import { useCallback, useSyncExternalStore } from "react";
-import type { RoundAnswer } from "@/lib/chat/chatQuestionRound";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { lastReplyRound, type RoundAnswer } from "@/lib/chat/chatQuestionRound";
+import type { ChatItem } from "@/lib/chat/chatState";
 
 /**
  * The question sheet's answers per pane, outside React like the drafts: a
@@ -12,6 +13,8 @@ export interface SheetAnswers {
   answers: Record<string, RoundAnswer>;
   /** Closed by the user: not shown again for this reply. */
   closed: boolean;
+  /** Folded to its head (Esc): Claude's message shows its questions again. */
+  folded?: boolean;
 }
 
 const sheets = new Map<string, SheetAnswers>();
@@ -92,4 +95,20 @@ export function useSheetAnswers(paneId: string, replyId: string): SheetAnswers {
     return empty;
   };
   return useSyncExternalStore(subscribe, snapshot);
+}
+
+/**
+ * The reply whose questions the sheet shows right now (it is up, open and
+ * unfolded), or null: that message drops its question blocks meanwhile
+ * (`withoutQuestions`). `up`: the sheet's place is free (no turn, no
+ * request, the chat open), as `ChatView` mounts it.
+ */
+export function useSheetReply(
+  paneId: string | undefined,
+  items: ChatItem[],
+  up: boolean,
+): string | null {
+  const round = useMemo(() => lastReplyRound(items), [items]);
+  const sheet = useSheetAnswers(paneId ?? "", paneId ? (round?.id ?? "") : "");
+  return up && round && !sheet.closed && !sheet.folded ? round.id : null;
 }

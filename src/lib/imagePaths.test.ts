@@ -99,6 +99,29 @@ describe("findImagePaths", () => {
     ).toEqual(["C:\\Users\\me\\Claude Desktop\\.screenshots\\vue 1.png"]);
   });
 
+  it("keeps an apostrophe, accents and spaces inside the name", () => {
+    const shot =
+      "C:\\Users\\TRINITX\\Pictures\\Screenshots\\Capture d'écran 2026-10-31 130956.png";
+    expect(findImagePaths(`"${shot}"`)).toEqual([shot]);
+    expect(findImagePaths(`regarde ${shot} stp`)).toEqual([shot]);
+    expect(findImagePaths("C:\\Été\\l’œil d'or.jpg")).toEqual([
+      "C:\\Été\\l’œil d'or.jpg",
+    ]);
+  });
+
+  it("ends a path at a closing quote, never inside it", () => {
+    expect(findImagePaths("'C:\\a b\\x.png' et 'D:\\y.png'")).toEqual([
+      "C:\\a b\\x.png",
+      "D:\\y.png",
+    ]);
+    expect(findImagePaths('"C:\\a\\x.png" puis "C:\\b\\y.png"')).toEqual([
+      "C:\\a\\x.png",
+      "C:\\b\\y.png",
+    ]);
+    // A quote opened after a folder is no part of the name.
+    expect(findImagePaths("C:\\dir 'shot.png'")).toEqual([]);
+  });
+
   it("never merges two paths on one line", () => {
     expect(findImagePaths("C:\\a\\notes.md et D:\\b c\\shot.jpg")).toEqual([
       "D:\\b c\\shot.jpg",

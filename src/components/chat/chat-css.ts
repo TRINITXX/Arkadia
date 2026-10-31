@@ -85,10 +85,6 @@ export const CHAT_CSS = `
 .chat-box.ask { border-color: #5a3a2c; }
 .chat-box textarea { width: 100%; resize: none; border: 0; outline: none; background: transparent; color: var(--chat-ink); font: inherit; line-height: 1.55; padding: 2px 6px; max-height: 40vh; min-height: 26px; }
 .chat-box textarea::placeholder { color: #6b6f76; }
-.chat-attach { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 4px 8px; }
-.chat-attach .img { position: relative; width: 52px; height: 52px; border-radius: 9px; overflow: hidden; border: 1px solid #31353b; }
-.chat-attach .img img { width: 100%; height: 100%; object-fit: cover; }
-.chat-attach .img button { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: 0; background: rgba(0,0,0,.7); color: #fff; display: grid; place-items: center; cursor: pointer; padding: 0; }
 .chat-tools-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #2b2e33; color: var(--chat-dim); font-size: 12.5px; }
 .chat-tools-row > .chat-chip, .chat-tools-row > .chat-anchor, .chat-anchor > .chat-chip { min-width: 0; }
 .chat-tools-row .chat-chip .lucide { flex-shrink: 0; }
@@ -384,7 +380,6 @@ export const CHAT_CSS = `
 .chat-shells-list .what { font-size: 12px; color: var(--chat-mute); }
 .chat-shells-list .out { margin: 0; max-height: 200px; overflow: auto; border: 1px solid #2b2e33; border-radius: 8px; background: #141619; padding: 6px 9px; font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; line-height: 1.5; color: var(--chat-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-shells-list .out.empty { color: var(--chat-mute); font-style: italic; }
-.chat-live-now .step-time { flex-shrink: 0; white-space: pre; color: var(--chat-dim); }
 .chat-live .bg-hint { color: var(--chat-mute); }
 .chat-agents-done { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--chat-mute); cursor: pointer; white-space: nowrap; text-decoration: underline; text-decoration-color: #464a51; text-underline-offset: 3px; }
 .chat-agents-done:hover { color: var(--chat-dim); }
@@ -559,4 +554,68 @@ export const CHAT_CSS = `
   .chat-tools-row .chat-chip:has(> .lucide) { padding: 3px 7px; }
   .chat-edit-confirm > span { min-width: 0; flex-basis: 100%; }
 }
+/* Attachments: cards above the input and in the user's frame (an image whole, its width following it; any other file by its icon and name), × on hover; the images Claude reads, small in their tool line. */
+.chat-files { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.chat-box > .chat-files { padding: 2px 2px 10px; max-height: min(30vh, 216px); overflow-y: auto; }
+.chat-frame > .chat-files { margin: 6px 0 2px; }
+.chat-file { position: relative; flex-shrink: 0; width: 128px; height: 96px; box-sizing: border-box; display: flex; flex-direction: column; align-items: stretch; border-radius: 10px; border: 1px solid #3a3e45; background: #1b1d21; color: var(--chat-dim); overflow: hidden; cursor: pointer; outline: none; transition: border-color .12s ease-out; }
+.chat-file:hover { border-color: #5a5f67; }
+.chat-file:focus-visible { border-color: var(--chat-accent); }
+.chat-file.thumb { width: auto; min-width: 64px; max-width: 160px; align-items: center; justify-content: center; background: #111215; cursor: zoom-in; }
+.chat-file.thumb.loading { width: 96px; }
+.chat-file.thumb img { display: block; height: 100%; width: auto; max-width: 158px; object-fit: contain; }
+.chat-file .ph { width: 20px; height: 20px; color: #5b5f66; }
+.chat-file .well { flex: 1; min-height: 0; display: grid; place-items: center; background: #141619; }
+.chat-file .ic { width: 24px; height: 24px; stroke-width: 1.5; color: var(--chat-dim); }
+.chat-file .nm { flex-shrink: 0; padding: 6px 9px; border-top: 1px solid #2b2e33; font-size: 11.5px; line-height: 1.35; color: var(--chat-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-file .x { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; background: rgba(0,0,0,.72); color: #fff; cursor: pointer; opacity: 0; transition: opacity .12s ease-out; }
+.chat-file:hover .x, .chat-file:focus-within .x { opacity: 1; }
+.chat-file .x:hover { background: #000; }
+.chat-file .x .lucide { width: 12px; height: 12px; }
+@media (hover: none) { .chat-file .x { opacity: 1; } }
+.chat-read-thumbs { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.chat-read-thumb { display: inline-block; min-width: 1px; height: 22px; }
+.chat-read-thumb img { display: block; height: 22px; width: auto; max-width: 44px; object-fit: contain; background: #111215; border-radius: 4px; border: 1px solid rgba(255,255,255,.14); cursor: zoom-in; }
+.chat-read-thumb img:hover { border-color: rgba(255,255,255,.4); }
+.chat-read-alt { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--chat-dim); }
+/* Voice, sheet, agent stop, pencil */
+/* The words of a dictation under way, dim under the text until it lands. */
+.chat-voice-live { padding: 0 6px 4px; color: #8b8f97; font-style: italic; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 30vh; overflow-y: auto; }
+.chat-voice-live::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: #ef4444; vertical-align: middle; animation: chat-voice-pulse 1.2s ease-in-out infinite; }
+@keyframes chat-voice-pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .chat-voice-live::after { animation: none; } }
+.chat-sheet-q .chat-voice-live { padding: 0 2px; font-size: 13px; }
+/* The question sheet: one question at a time, its tabs in the head, kept low. */
+.chat-sheet-q { max-height: min(38vh, 340px); }
+.chat-sheet-q .hd { gap: 8px; }
+.chat-sheet-q .hd .fold { flex: 0 0 auto; }
+.chat-sheet-q.folded .hd .fold { flex: 1; }
+.chat-sheet-q:not(.folded) .hd .chev { margin-left: 0; }
+.chat-sheet-q .tabs { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.chat-sheet-q .tab { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #31353b; border-radius: 999px; background: transparent; color: var(--chat-dim); font: inherit; font-size: 12px; font-weight: 600; padding: 1px 9px; cursor: pointer; }
+.chat-sheet-q .tab:hover { border-color: #464a51; color: var(--chat-ink); }
+.chat-sheet-q .tab.done { color: #86efac; border-color: #1f5f3a; }
+.chat-sheet-q .tab.on { background: var(--chat-accent); border-color: var(--chat-accent); color: var(--chat-accent-ink); }
+.chat-sheet-q .tab.rec::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
+.chat-sheet-q .tab .lucide { width: 12px; height: 12px; }
+.chat-sheet-q .hd .send { flex-shrink: 0; padding: 3px 10px; font-size: 12.5px; }
+.chat-sheet-q .hd .send:disabled { opacity: .45; cursor: default; }
+.chat-sheet-q .hd .send .lucide { width: 13px; height: 13px; }
+.chat-sheet-q .qs { padding: 2px 12px 10px; }
+.chat-sheet-q .q { padding: 8px 0 0; border-bottom: 0; }
+.chat-sheet-q .qb { -webkit-line-clamp: 2; cursor: pointer; }
+.chat-sheet-q .qb.more { display: block; -webkit-line-clamp: unset; }
+/* Claude's message while the sheet holds its questions. */
+.chat-bare-note { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; font-style: italic; color: var(--chat-mute); }
+.chat-bare-note .lucide { width: 13px; height: 13px; color: var(--chat-accent); }
+/* A running subagent's stop, behind a question. */
+.chat-agent-stop { flex-shrink: 0; width: 24px; height: 22px; margin: -2px -6px -2px 0; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--chat-mute); cursor: pointer; transition: color .12s, background .12s; }
+.chat-agent-stop:hover { color: #fca5a5; background: rgba(239,68,68,.14); }
+.chat-agent-ask { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-left: 22px; font-size: 12.5px; color: #fecaca; cursor: default; }
+.chat-agent-ask span { margin-right: auto; }
+.chat-agent-ask .chat-btn { padding: 2px 10px; font-size: 12px; }
+/* The pencil when it can't act now: there, dim, its tooltip says why. */
+.chat-frame:hover .chat-frame-head .copy.edit.blocked { opacity: .45; }
+.chat-frame-head .copy.edit.blocked { cursor: help; }
+.chat-frame-head .copy.edit.blocked:hover { color: var(--chat-mute); background: transparent; }
 `;

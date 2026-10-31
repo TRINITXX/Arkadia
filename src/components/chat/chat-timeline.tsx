@@ -16,6 +16,8 @@ import { ChatPlanCard } from "@/components/chat/chat-plan-card";
 import { ChatPluginErrors } from "@/components/chat/chat-plugin-errors";
 import { ChatProseContexts } from "@/components/chat/chat-prose-contexts";
 import { ChatQueuedMark } from "@/components/chat/chat-queued-mark";
+import { ChatReplyText } from "@/components/chat/chat-reply-text";
+import { ChatUserBody } from "@/components/chat/chat-user-body";
 import { ChatWorkGroup } from "@/components/chat/chat-work-group";
 import {
   groupChatItems,
@@ -51,12 +53,17 @@ interface ChatTimelineProps {
   onToast?: ToastFn;
   /** Stops the turn so Claude takes the queued messages now. */
   onSendNow?: () => void;
-  /** A pencil on the user's messages; absent while Claude works. */
+  /** A pencil on the user's messages (absent without a chat server). */
   onEditMessage?: (item: UserItem) => void;
+  /** Why the pencil can't act now (Claude works…): dim, said on hover. */
+  editBlocked?: string | null;
+  /** Claude's reply whose questions the sheet shows: drawn without them. */
+  bareReplyId?: string | null;
   /** Mounted on a long chat read at its end: its last rows first, the rest
    *  just after, in the background (a return to the project stays instant). */
   tailFirst?: boolean;
-  /** × on a queued message: withdrawn before Claude takes it (its uuid). */
+  /** × on a queued message: withdrawn before Claude takes it (its uuid),
+   *  then gone from the column and back in the input (`chatLive`). */
   onRemoveQueued?: (uuid: string) => void;
   /** « Recharger » under plugins that failed to load. */
   onReloadPlugins?: () => void;
@@ -78,6 +85,8 @@ export const ChatTimeline = memo(function ChatTimeline({
   onToast,
   onSendNow,
   onEditMessage,
+  editBlocked = null,
+  bareReplyId = null,
   tailFirst = false,
   onRemoveQueued,
   onReloadPlugins,
@@ -109,7 +118,7 @@ export const ChatTimeline = memo(function ChatTimeline({
     [onToast],
   );
   return (
-    <ChatProseContexts codeCopy={codeCopy}>
+    <ChatProseContexts codeCopy={codeCopy} onOpen={onOpen}>
       {drawn.map((unit) => {
         switch (unit.kind) {
           case "day":
@@ -132,27 +141,18 @@ export const ChatTimeline = memo(function ChatTimeline({
                     ? () => onEditMessage(unit.item)
                     : undefined
                 }
+                editBlocked={editBlocked}
               >
-                {unit.item.text && (
-                  <div className="reading-md" data-chat-prose="">
-                    <MarkdownContent
-                      text={unit.item.text}
-                      baseDir={cwd}
-                      onOpen={onOpen}
-                      onToast={onToast}
-                      inlineImages={false}
-                    />
-                  </div>
-                )}
-                <ChatGallery
+                <ChatUserBody
+                  item={unit.item}
+                  cwd={cwd}
                   refs={gallery.byItem.get(unit.item.id) ?? NO_IMAGES}
-                  dropped={unit.item.images - (unit.item.pasted?.length ?? 0)}
                   onOpen={onOpen}
+                  onToast={onToast}
                 />
                 {(unit.item.queued || unit.item.dropped) && (
                   <ChatQueuedMark
                     dropped={unit.item.dropped}
-                    removed={unit.item.removed}
                     onSendNow={onSendNow}
                     onRemove={remover(unit.item)}
                   />
@@ -193,15 +193,13 @@ export const ChatTimeline = memo(function ChatTimeline({
                 className={`chat-text${unit.item.streaming ? " streaming" : ""}`}
                 onToast={onToast}
               >
-                <div className="reading-md" data-chat-prose="">
-                  <MarkdownContent
-                    text={unit.item.text || " "}
-                    baseDir={cwd}
-                    onOpen={onOpen}
-                    onToast={onToast}
-                    inlineImages={false}
-                  />
-                </div>
+                <ChatReplyText
+                  text={unit.item.text}
+                  bare={unit.item.id === bareReplyId}
+                  cwd={cwd}
+                  onOpen={onOpen}
+                  onToast={onToast}
+                />
                 <ChatGallery
                   refs={gallery.byItem.get(unit.item.id) ?? NO_IMAGES}
                   onOpen={onOpen}

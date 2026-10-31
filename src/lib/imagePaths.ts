@@ -15,9 +15,11 @@ const VIDEO_EXT_RE = /\.(?:mp4|m4v|mov|webm|mkv|avi|wmv|flv|mpe?g|ogv|3gp)$/i;
  * follow the drive letter, so two paths on one line never merge. An extension
  * that goes on (`demo.mp4.png`, `clip.mov-frames\1.png`) is not the end. A prose
  * false positive (`C:\dir then shot.png`) just fails its probe silently.
+ * An apostrophe between two letters belongs to the name (Windows' own
+ * `Capture d'écran ….png`); any other one closes a quote around the path.
  */
 const IMG_PATH_RE =
-  /(?<![A-Za-z])[A-Za-z]:[\\/][^\n\r"'`<>|?*:]*?\.(?:png|jpe?g|gif|webp|bmp|mp4|m4v|mov|webm|mkv|avi|wmv|flv|mpe?g|ogv|3gp)\b(?![.-]\w)/gi;
+  /(?<![A-Za-z])[A-Za-z]:[\\/](?:[^\n\r"'`<>|?*:]|(?<=\p{L})'(?=\p{L}))*?\.(?:png|jpe?g|gif|webp|bmp|mp4|m4v|mov|webm|mkv|avi|wmv|flv|mpe?g|ogv|3gp)\b(?![.-]\w)/giu;
 
 /**
  * Relative image paths with at least one directory (`.screenshots/x.png`,

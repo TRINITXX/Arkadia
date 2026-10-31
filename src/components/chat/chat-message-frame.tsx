@@ -36,6 +36,7 @@ export function ChatMessageFrame({
   className,
   onToast,
   onEdit,
+  editBlocked = null,
   children,
 }: {
   role: "user" | "claude" | "peer";
@@ -53,6 +54,8 @@ export function ChatMessageFrame({
   onToast?: ToastFn;
   /** The user's message brought back to the input (`useMessageEdit`). */
   onEdit?: () => void;
+  /** Why the pencil can't act now: it stays, dim, saying so on hover. */
+  editBlocked?: string | null;
   children: React.ReactNode;
 }) {
   const { Icon } = ROLES[role];
@@ -108,12 +111,16 @@ export function ChatMessageFrame({
         {role === "user" && onEdit && (
           <button
             type="button"
-            className="copy edit"
-            title="Modifier ce message (la conversation revient juste avant)"
+            className={`copy edit${editBlocked ? " blocked" : ""}`}
+            title={
+              editBlocked ??
+              "Modifier ce message (la conversation revient juste avant)"
+            }
             aria-label="Modifier ce message"
+            aria-disabled={editBlocked ? true : undefined}
             onClick={(e) => {
               e.stopPropagation();
-              onEdit();
+              if (!editBlocked) onEdit();
             }}
           >
             <Pencil />

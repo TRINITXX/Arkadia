@@ -1,10 +1,12 @@
+import { draftFile } from "@/lib/chat/chatAttachments";
 import type { ChatDraft } from "@/lib/chat/chatDrafts";
 
 /**
  * Chat drafts written to the webview's storage, so a page reload (the
  * watchdog rebuilding the window) or a restart keeps what was being typed.
- * Text is always kept; pasted images only up to a few per pane and a total
- * size, the newest first: the storage is small and shared by the page.
+ * Text and attached paths are always kept (a few dozen paths per pane);
+ * pasted images only up to a few per pane and a total size, the newest
+ * first: the storage is small and shared by the page.
  */
 
 export const DRAFTS_KEY = "arkadia.chatDrafts.v1";
@@ -12,6 +14,8 @@ export const DRAFTS_KEY = "arkadia.chatDrafts.v1";
 export const KEPT_IMAGES = 4;
 /** Base64 characters of images kept across all panes. */
 export const KEPT_IMAGE_CHARS = 2_500_000;
+/** Attached paths kept per pane, the first ones. */
+export const KEPT_FILES = 40;
 /** A draft nobody came back to (pane closed without Arkadia) goes. */
 export const DRAFT_TTL_MS = 7 * 24 * 3_600_000;
 
@@ -22,6 +26,8 @@ interface StoredImage {
 interface StoredDraft {
   text: string;
   images: StoredImage[];
+  /** Attached paths; absent before they existed. */
+  files?: string[];
   savedAt: number;
 }
 
@@ -46,10 +52,12 @@ export function serializeDrafts(
       budget -= img.data.length;
       images.unshift({ mediaType: img.mediaType, data: img.data });
     }
-    if (!draft.text && images.length === 0) continue;
+    const files = (draft.files ?? []).slice(0, KEPT_FILES).map((f) => f.path);
+    if (!draft.text && images.length === 0 && files.length === 0) continue;
     out[paneId] = {
       text: draft.text,
       images,
+      ...(files.length > 0 && { files }),
       savedAt: savedAt.get(paneId) ?? now,
     };
   }
@@ -84,9 +92,16 @@ export function parseDrafts(
         id: `restored-${paneId}-${n}`,
         url: `data:${img.mediaType};base64,${img.data}`,
       }));
+    const files = (Array.isArray(v.files) ? v.files : [])
+      .filter((p): p is string => typeof p === "string")
+      .slice(0, KEPT_FILES)
+      .map(draftFile);
     const text = typeof v.text === "string" ? v.text : "";
-    if (!text && images.length === 0) continue;
-    out.set(paneId, { draft: { text, images }, savedAt: v.savedAt });
+    if (!text && images.length === 0 && files.length === 0) continue;
+    out.set(paneId, {
+      draft: files.length > 0 ? { text, images, files } : { text, images },
+      savedAt: v.savedAt,
+    });
   }
   return out;
 }

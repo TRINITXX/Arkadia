@@ -18,6 +18,7 @@ import { ChatAgentCards } from "@/components/chat/chat-agent-cards";
 import { ChatShellsChip } from "@/components/chat/chat-shells-chip";
 import { ChatWorkflowCard } from "@/components/chat/chat-workflow-card";
 import { useAgentSheet } from "@/lib/chat/useAgentSheet";
+import { useDoneAgentsLink } from "@/lib/chat/useDoneAgentsLink";
 import { useLiveActivity } from "@/lib/chat/useLiveActivity";
 import type { ShellOutput } from "@/lib/chat/useShellOutputs";
 import { ChatComposer, type ChatVoice } from "@/components/chat/chat-composer";
@@ -35,6 +36,7 @@ import type { StartupPhase } from "@/lib/chat/chatStartup";
 import { recallColumn } from "@/lib/chat/chatLive";
 import { useColumnMemory } from "@/lib/chat/useColumnMemory";
 import { useMessageEdit } from "@/lib/chat/useMessageEdit";
+import { useSheetReply } from "@/lib/chat/chatSheetAnswers";
 import { ChatElicitationPanel } from "@/components/chat/chat-elicitation-panel";
 import { ChatPermissionPanel } from "@/components/chat/chat-permission-panel";
 import type { ChatSdkActions } from "@/lib/chat/useChatSdkActions";
@@ -48,7 +50,7 @@ import { chatGallery } from "@/lib/chat/chatImages";
 import { folderOf, modelLabel } from "@/lib/chat/chatLabels";
 import { createChatLayers } from "@/lib/chat/chatLayers";
 import { ChatLayersContext, useLayer } from "@/lib/chat/useChatLayers";
-import { liveStep } from "@/lib/chat/chatSteps";
+import { liveStep, timedCall } from "@/lib/chat/chatSteps";
 import { useChatSearch } from "@/lib/chat/useChatSearch";
 import type { PermissionMode, PermissionResult } from "@/lib/chat/chatProtocol";
 import {
@@ -98,7 +100,7 @@ export interface ChatViewProps {
   onLoadOlder?: () => void;
   /** Ctrl+B: the running Bash commands and subagents go to the background. */
   onBackground?: () => void;
-  /** « Arrêter le workflow ». */
+  /** « Arrêter le workflow », a subagent card's stop (`stopTask`). */
   onStopTask?: (taskId: string) => void;
   /** Asks a background shell's output again (`task_output`). */
   onShellOutput?: (taskId: string) => void;
@@ -108,6 +110,7 @@ export interface ChatViewProps {
 }
 
 const NO_OUTPUTS: Record<string, ShellOutput> = {};
+const NO_AGENTS: Subagent[] = [];
 
 /** A foreground call Ctrl+B can send to the background, as the terminal hints. */
 const BACKGROUNDABLE = new Set(["Bash", "PowerShell", "Agent", "Task"]);
@@ -158,7 +161,10 @@ export function ChatView({
     () => state.subagents.filter((s) => s.status !== "running"),
     [state.subagents],
   );
-  const lastTool = state.liveTools[state.liveTools.length - 1];
+  // « Agents terminés (N) » a while after the last one ended, not for good.
+  const doneLink = useDoneAgentsLink(state.subagents, state.items);
+  // The call whose time the live line shows (a foreground agent's own).
+  const timed = timedCall(state.liveTools);
   const [stuck, setStuck] = useState(true);
   // Off while its tab is hidden (the pane sized to nothing).
   const [shown, setShown] = useState(true);
@@ -233,10 +239,17 @@ export function ChatView({
   const edit = useMessageEdit({
     items: state.items,
     actions: slashActions,
-    resting: !state.working && !request && !state.closed,
+    working: state.working,
+    request: !!request,
+    closed: state.closed,
     onDraft,
     onToast,
   });
+  // The question sheet up and open: Claude's message drops its questions.
+  const sheetUp = !state.closed && !request && !state.working;
+  const sheetReply = useSheetReply(memoryKey, state.items, sheetUp);
+  // A field of the sheet takes the dictation: its words show there, not here.
+  const [sheetDictates, setSheetDictates] = useState(false);
   // What is open in the pane: Esc closes the latest before it reaches
   // Claude (`chatLayers`). Menus and lists register themselves inside.
   const [layers] = useState(createChatLayers);
@@ -411,7 +424,7 @@ export function ChatView({
         }}
         draft={draft}
         onDraft={onDraft}
-        voice={voice}
+        voice={sheetDictates ? { ...voice, interim: undefined } : voice}
         focusKey={isActive}
         active={isActive && shown}
         onSend={(text, images, now) => {
@@ -428,6 +441,7 @@ export function ChatView({
         suggestion={state.suggestion}
         sdk={state.sdk}
         onEffort={sdkActions?.setEffort}
+        onOpen={open}
       />
     );
   }
@@ -488,6 +502,8 @@ export function ChatView({
             // Claude Code takes what waits at once.
             onSendNow={state.closed ? undefined : onInterrupt}
             onEditMessage={edit.onEdit}
+            editBlocked={edit.blocked}
+            bareReplyId={sheetReply}
             tailFirst={tailFirst}
             onRemoveQueued={state.closed ? undefined : sdkActions?.removeQueued}
             onReloadPlugins={sdkActions?.reloadPlugins}
@@ -519,18 +535,18 @@ export function ChatView({
                 : liveStep(state.liveTools, state.livePhase, cwd)
             }
             // The running call's own time: « lance pnpm test · 42 s ».
-            stepSince={request ? null : (lastTool?.startedAt ?? null)}
+            stepSince={request ? null : (timed?.startedAt ?? null)}
             backgroundHint={
               !request &&
               !!onBackground &&
-              !!lastTool &&
-              !lastTool.agent &&
-              BACKGROUNDABLE.has(lastTool.name)
+              !!timed &&
+              !timed.agent &&
+              BACKGROUNDABLE.has(timed.name)
             }
             turnStartedAt={state.turnStartedAt}
             // Thinking ticks before its real count comes (`thinking_tokens`).
             turnTokens={state.turnTokens + state.thinkingTokens}
-            subagents={finishedAgents}
+            subagents={doneLink ? finishedAgents : NO_AGENTS}
             tasks={tasks}
             onOpenAgents={openFinished}
             retry={state.retry}
@@ -544,11 +560,12 @@ export function ChatView({
               onCancel={edit.cancel}
             />
           )}
-          {!state.closed && !request && !state.working && memoryKey && (
+          {sheetUp && memoryKey && (
             <ChatQuestionSheet
               paneKey={memoryKey}
               items={state.items}
               voice={voice}
+              onDictating={setSheetDictates}
               onSend={(text) => {
                 stuckRef.current = true;
                 onSend(text, []);
@@ -560,6 +577,7 @@ export function ChatView({
             cwd={cwd}
             now={live.now}
             onOpen={agentSheet.openSheet}
+            onStop={onStopTask}
           />
           {live.workflow && (
             <ChatWorkflowCard

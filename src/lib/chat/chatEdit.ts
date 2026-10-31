@@ -3,6 +3,26 @@ import type { ChatItem } from "@/lib/chat/chatState";
 
 type UserItem = Extract<ChatItem, { kind: "user" }>;
 
+/**
+ * Why the pencil can't take a message back now, or null: /rewind relaunches
+ * the chat, so only Claude at rest (as `chatBusyReason`, whose background
+ * tasks `rewind` itself answers at the click). The pencil still shows on
+ * hover, dim, with this as its tooltip: absent, it looked missing.
+ */
+export function editBlocked(chat: {
+  working: boolean;
+  closed: unknown;
+  request: boolean;
+  going: boolean;
+}): string | null {
+  if (chat.closed) return "Conversation arrêtée : reprends-la d'abord";
+  if (chat.request) return "Réponds d'abord à la demande de Claude";
+  if (chat.working)
+    return "Claude travaille : modifiable à la fin de son tour (ou après Échap)";
+  if (chat.going) return "Retour en arrière en cours…";
+  return null;
+}
+
 /** The messages (the user's, Claude's, a peer's) after `item`: what an edit drops. */
 export function laterMessages(
   items: readonly ChatItem[],

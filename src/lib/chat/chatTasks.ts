@@ -598,6 +598,33 @@ export function agentCards(subagents: Subagent[], now: number): Subagent[] {
   );
 }
 
+/** « Agents terminés (N) » shows this long after the latest subagent ended. */
+export const DONE_AGENTS_MS = 30_000;
+
+/**
+ * Until when « Agents terminés (N) » shows (ms), null for not at all:
+ * `DONE_AGENTS_MS` past the latest subagent's end, none once the user sent
+ * a message or a command since. Their rows in the column still open them;
+ * an agent of a resumed session has no end time and never brings it back.
+ */
+export function doneAgentsUntil(
+  subagents: Subagent[],
+  items: ChatItem[],
+): number | null {
+  let lastEnd: number | undefined;
+  for (const s of subagents)
+    if (s.status !== "running" && s.endedAt !== undefined)
+      lastEnd = Math.max(lastEnd ?? s.endedAt, s.endedAt);
+  if (lastEnd === undefined) return null;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.kind !== "user" && item.kind !== "command") continue;
+    if (item.at !== undefined && item.at >= lastEnd) return null;
+    break;
+  }
+  return lastEnd + DONE_AGENTS_MS;
+}
+
 /** The workflow card: the latest running one, or one that just ended. */
 export function workflowCard(
   workflows: Workflow[],

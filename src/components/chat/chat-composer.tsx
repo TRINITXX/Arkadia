@@ -6,8 +6,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowUp, Mic, Square, X, Zap } from "lucide-react";
+import { ArrowUp, Mic, Square, Zap } from "lucide-react";
+import type { LightboxContent } from "@/components/modern/ImageThumb";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
+import { ChatAttachments } from "@/components/chat/chat-attachments";
+import type { AttachmentSource } from "@/components/chat/chat-attachment-card";
+import { messageDraft, withAttachedPaths } from "@/lib/chat/chatAttachments";
+import { usePastedPaths } from "@/lib/chat/usePastedPaths";
 import { ChatRailActions } from "@/components/chat/chat-rail-actions";
 import { ChatSlashMenu } from "@/components/chat/chat-slash-menu";
 import { useSlashMenu, type ChatSlash } from "@/lib/chat/useSlashMenu";
@@ -16,11 +21,13 @@ import type { ChatImage } from "@/lib/chat/useChatSession";
 import { hasQueued, type ChatItem } from "@/lib/chat/chatState";
 import { useSendAfterDictation } from "@/lib/chat/useSendAfterDictation";
 import { useChatSuggestion } from "@/lib/chat/useChatSuggestion";
-import { useInputHistory } from "@/lib/chat/useInputHistory";
+import { attachedKey, useInputHistory } from "@/lib/chat/useInputHistory";
 import { useTypeToInput } from "@/lib/chat/useTypeToInput";
-import type {
-  ChatDraft,
-  DraftImage as Attachment,
+import {
+  EMPTY_DRAFT,
+  type ChatDraft,
+  type DraftFile,
+  type DraftImage as Attachment,
 } from "@/lib/chat/chatDrafts";
 import type { DictationEnd, VoiceStatus } from "@/lib/useHiddenVoice";
 import type { PermissionMode } from "@/lib/chat/chatProtocol";
@@ -37,6 +44,8 @@ export interface ChatVoice {
   /** Resolves once the dictated text is in the draft, or with why not
    *  (`quiet`: true while the caller is there to show the failure). */
   stop: (options?: { quiet?: () => boolean }) => Promise<DictationEnd>;
+  /** The words so far, dim under the text until the dictation lands. */
+  interim?: string;
 }
 
 const VOICE_TITLES: Record<VoiceStatus, string> = {
@@ -47,6 +56,7 @@ const VOICE_TITLES: Record<VoiceStatus, string> = {
 };
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const NO_FILES: DraftFile[] = [];
 
 function readImage(file: File): Promise<Attachment> {
   return new Promise((resolve, reject) => {
@@ -66,9 +76,10 @@ function readImage(file: File): Promise<Attachment> {
 }
 
 /**
- * The input card: text (Enter sends, Shift+Enter breaks the line), images by
- * paste, `/` commands, the terminal rail's actions (`ChatRailActions`), and
- * the session's mode and model.
+ * The input card: text (Enter sends, Shift+Enter breaks the line), cards of
+ * the attached files and pasted images above it (`chatAttachments`: picker,
+ * drag & drop, Ctrl+V of an image or of paths), `/` commands, the terminal
+ * rail's actions (`ChatRailActions`), and the session's mode and model.
  * Esc first closes what is open in the pane (`chatLayers`), then interrupts
  * a working Claude (its turn only: background agents and workflows go on), Ctrl+B sends its running command or agent to the
  * background, Shift+Tab cycles the mode, as in the terminal. A message sent while Claude works waits for its turn; Ctrl+Enter
@@ -97,6 +108,7 @@ export function ChatComposer({
   suggestion = null,
   sdk = EMPTY_SDK,
   onEffort,
+  onOpen,
 }: {
   /** The conversation, for the copy of Claude's last code block. */
   items: ChatItem[];
@@ -128,8 +140,11 @@ export function ChatComposer({
   sdk?: Pick<SdkState, "models" | "effort" | "fastMode">;
   /** The session's effort, this session only. */
   onEffort?: (effort: EffortLevel) => void;
+  /** An image card clicked: the lightbox. */
+  onOpen?: (content: LightboxContent) => void;
 }) {
   const { text, images } = draft;
+  const files = draft.files ?? NO_FILES;
   const setText = (value: string) => onDraft((d) => ({ ...d, text: value }));
   const setImages = (update: (prev: Attachment[]) => Attachment[]) =>
     onDraft((d) => ({ ...d, images: update(d.images) }));
@@ -137,9 +152,16 @@ export function ChatComposer({
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const layers = useChatLayers();
   const ghost = useChatSuggestion(suggestion, text, working);
-  // ↑ / ↓ bring back the pane's last messages (empty input).
-  const history = useInputHistory(items, text, (t) =>
-    onDraft((d) => ({ ...d, text: t })),
+  // ↑ / ↓ bring back the pane's last messages (empty input), their
+  // attachments as cards.
+  const history = useInputHistory(
+    items,
+    text,
+    (message) => onDraft((d) => ({ ...d, ...messageDraft(message) })),
+    attachedKey(
+      files.map((f) => f.path),
+      images.length,
+    ),
   );
   // A key typed after a click in the conversation still lands here.
   useTypeToInput(
@@ -197,22 +219,47 @@ export function ChatComposer({
     setImages((prev) => [...prev, ...read]);
   };
 
+  const pastePaths = usePastedPaths(onDraft);
+  // Pasted images first, then the files, as the user's frame shows them.
+  const cards = useMemo<AttachmentSource[]>(
+    () => [
+      ...images.map((img, n) => ({
+        kind: "pasted" as const,
+        key: img.id,
+        url: img.url,
+        name: `Image collée ${n + 1}`,
+      })),
+      ...files.map((f) => ({ kind: "path" as const, key: f.id, path: f.path })),
+    ],
+    [images, files],
+  );
+  const removeCard = (key: string) =>
+    onDraft((d) => ({
+      ...d,
+      images: d.images.filter((x) => x.id !== key),
+      files: d.files?.filter((x) => x.id !== key),
+    }));
+
   const queued = useMemo(() => hasQueued(items), [items]);
   const send = (now: boolean) => {
     const body = text.trim();
-    if (!body && images.length === 0) {
+    if (!body && images.length === 0 && files.length === 0) {
       // Ctrl+Enter on an empty input: the messages waiting go now.
       if (now && queued) onInterrupt();
       return;
     }
     // /resume, /rewind, a terminal-only command: the page answers.
-    if (slashMenu.intercept(body)) return;
+    if (files.length === 0 && slashMenu.intercept(body)) return;
+    // The attached files as Claude Code reads them: their quoted paths.
     onSend(
-      body,
+      withAttachedPaths(
+        body,
+        files.map((f) => f.path),
+      ),
       images.map(({ mediaType, data }) => ({ mediaType, data })),
       now,
     );
-    onDraft({ text: "", images: [] });
+    onDraft(EMPTY_DRAFT);
   };
   const { waiting, submit } = useSendAfterDictation(voice, send, onToast);
 
@@ -270,53 +317,50 @@ export function ChatComposer({
     }
   };
 
-  const empty = !text.trim() && images.length === 0;
+  const empty = !text.trim() && images.length === 0 && files.length === 0;
   return (
     <div className="chat-box">
       <ChatSlashMenu menu={slashMenu} />
-      {images.length > 0 && (
-        <div className="chat-attach">
-          {images.map((img) => (
-            <div key={img.id} className="img">
-              <img src={img.url} alt="" />
-              <button
-                type="button"
-                title="Retirer"
-                onClick={() =>
-                  setImages((prev) => prev.filter((x) => x.id !== img.id))
-                }
-              >
-                <X size={11} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      <ChatAttachments
+        sources={cards}
+        onOpen={(content) => onOpen?.(content)}
+        onRemove={removeCard}
+        onToast={onToast}
+      />
       <textarea
         ref={areaRef}
         rows={1}
         value={text}
         className={ghost ? "suggest" : undefined}
         placeholder={
-          ghost
-            ? `${ghost}  ·  Tab`
-            : working
-              ? "Claude travaille… ton message attendra son tour (Ctrl+Entrée : tout de suite)"
-              : "Écris à Claude…"
+          voice.interim
+            ? ""
+            : ghost
+              ? `${ghost}  ·  Tab`
+              : working
+                ? "Claude travaille… ton message attendra son tour (Ctrl+Entrée : tout de suite)"
+                : "Écris à Claude…"
         }
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
         onPaste={(e) => {
-          const files = [...e.clipboardData.files];
-          if (files.some((f) => IMAGE_TYPES.includes(f.type))) {
+          const pasted = [...e.clipboardData.files];
+          if (pasted.some((f) => IMAGE_TYPES.includes(f.type))) {
             e.preventDefault();
-            void addFiles(files);
+            void addFiles(pasted);
+            return;
           }
+          // Paths alone: cards, once they exist on disk.
+          pastePaths(e);
         }}
       />
+      {voice.interim && (
+        <div className="chat-voice-live" title="Dictée en cours">
+          {voice.interim}
+        </div>
+      )}
       <div className="chat-tools-row">
         <ChatRailActions
-          draft={draft}
           onDraft={onDraft}
           areaRef={areaRef}
           messagesOnly={messagesOnly}

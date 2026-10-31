@@ -63,13 +63,40 @@ function optionsOf(lines: string[]): RoundOption[] {
   return options.length >= 2 ? options : [];
 }
 
-/** `❓ **Q1** - **Titre** : corps…` blocks, up to `---` or the next ❓. */
+const RULE = /^\s*-{3,}\s*$/;
+
+/**
+ * Each question's lines, `[start, end)`: from its ❓ up to the next ❓, a
+ * `---`, or the blank line that closes its ➡️ paragraph (what follows is
+ * Claude's own words again).
+ */
+function grillingBlocks(lines: string[]): [number, number][] {
+  const blocks: [number, number][] = [];
+  let start = -1;
+  let advised = false;
+  const close = (end: number) => {
+    if (start >= 0) blocks.push([start, end]);
+    start = -1;
+  };
+  lines.forEach((line, i) => {
+    if (QUESTION_MARK.test(line)) {
+      close(i);
+      start = i;
+      advised = false;
+    } else if (start >= 0) {
+      if (RULE.test(line) || (advised && !line.trim())) close(i);
+      else if (ARROW.test(line)) advised = true;
+    }
+  });
+  close(lines.length);
+  return blocks;
+}
+
+/** `❓ **Q1** - **Titre** : corps…` blocks (`grillingBlocks`). */
 function grillingRound(lines: string[]): RoundQuestion[] {
-  const blocks: string[][] = [];
-  for (const line of lines) {
-    if (QUESTION_MARK.test(line)) blocks.push([line]);
-    else if (blocks.length > 0) blocks[blocks.length - 1].push(line);
-  }
+  const blocks = grillingBlocks(lines).map(([start, end]) =>
+    lines.slice(start, end),
+  );
   return blocks.map((block, i) => {
     const head = block[0].replace(QUESTION_MARK, "");
     const number = /^\**\s*Q\s*(\d+)\s*\**\s*[-–—:.]?\s*/i.exec(head);
@@ -83,7 +110,6 @@ function grillingRound(lines: string[]): RoundQuestion[] {
     const body: string[] = [rest];
     let recommendation: string | null = null;
     for (const line of block.slice(1)) {
-      if (/^\s*-{3,}\s*$/.test(line)) break;
       if (ARROW.test(line)) {
         recommendation = unbold(line.replace(ARROW, ""));
         continue;
@@ -146,11 +172,56 @@ function seriesQuestion(lines: string[]): RoundQuestion[] {
   ];
 }
 
+/** « Question n sur N. » down to the leaning (else the last option). */
+function seriesBlock(lines: string[]): [number, number][] {
+  if (seriesQuestion(lines).length === 0) return [];
+  const start = lines.findIndex((l) => SERIES.test(l));
+  let end = start + 1;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (LEANING.test(lines[i])) {
+      end = i + 1;
+      break;
+    }
+    if (OPTION.test(lines[i])) end = i + 1;
+  }
+  return [[start, end]];
+}
+
+const linesOf = (text: string) => text.replace(/\r\n/g, "\n").split("\n");
+const isGrilling = (lines: string[]) =>
+  lines.some((l) => QUESTION_MARK.test(l));
+
 /** The questions of a reply, or none when it asks no round. */
 export function parseQuestionRound(text: string): RoundQuestion[] {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  if (lines.some((l) => QUESTION_MARK.test(l))) return grillingRound(lines);
+  const lines = linesOf(text);
+  if (isGrilling(lines)) return grillingRound(lines);
   return seriesQuestion(lines);
+}
+
+/**
+ * The reply without its questions, while the sheet shows them: Claude's
+ * other words stay where they were. A `---` beside a question goes with it.
+ */
+export function withoutQuestions(text: string): string {
+  const lines = linesOf(text);
+  const blocks = isGrilling(lines) ? grillingBlocks(lines) : seriesBlock(lines);
+  const drop = new Set<number>();
+  for (const [start, end] of blocks) {
+    for (let i = start; i < end; i++) drop.add(i);
+  }
+  const near = (i: number, step: 1 | -1) => {
+    let j = i + step;
+    while (j >= 0 && j < lines.length && !lines[j].trim()) j += step;
+    return drop.has(j);
+  };
+  lines.forEach((line, i) => {
+    if (RULE.test(line) && (near(i, -1) || near(i, 1))) drop.add(i);
+  });
+  return lines
+    .filter((_, i) => !drop.has(i))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { laterMessages, rewindPointOf } from "@/lib/chat/chatEdit";
+import { editBlocked, laterMessages, rewindPointOf } from "@/lib/chat/chatEdit";
 import type { ChatItem } from "@/lib/chat/chatState";
 
 const user = (id: string, text: string) =>
@@ -36,5 +36,18 @@ describe("editing one of my messages", () => {
         ?.uuid,
     ).toBe("bbb");
     expect(rewindPointOf(items, first, [])).toBeNull();
+  });
+});
+
+describe("editBlocked", () => {
+  const rest = { working: false, closed: null, request: false, going: false };
+
+  it("lets the pencil act only at rest, and says why not otherwise", () => {
+    expect(editBlocked(rest)).toBeNull();
+    expect(editBlocked({ ...rest, working: true })).toMatch(/Claude travaille/);
+    expect(editBlocked({ ...rest, request: true })).toMatch(/demande/);
+    expect(editBlocked({ ...rest, closed: { error: null } })).toMatch(
+      /arrêtée/,
+    );
   });
 });

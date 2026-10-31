@@ -30,6 +30,49 @@ export function isPromptField(screen: RenderPayload | null): boolean {
   return above.startsWith("─") || above.startsWith("╭");
 }
 
+/** The example an empty field shows, dim (`Try "fix typecheck errors"`). */
+const FIELD_EXAMPLE = /^Try ".*"$/;
+
+/**
+ * What Claude Code's prompt field holds, or null when the screen shows no
+ * field. A long text wraps onto rows indented under the `❯`, down to the
+ * box's bottom border: the rows are joined. Dim text is no text by default:
+ * the empty field's example, a suggestion. With `dim`, it counts: the words
+ * of a dictation under way are dim until final (Claude Code's voice docs),
+ * though the example still doesn't. The recording's cursor bar (block
+ * glyphs) goes.
+ */
+export function promptFieldText(
+  screen: RenderPayload | null,
+  { dim = false }: { dim?: boolean } = {},
+): string | null {
+  if (!screen || !isPromptField(screen)) return null;
+  const top = inputRowIndex(screen);
+  const rows: string[] = [];
+  for (let r = top; r < screen.rows; r++) {
+    const runs = screen.lines[r] ?? [];
+    const raw = runs.map((run) => run.text).join("");
+    if (r > top && /^\s*[─╰└]/.test(raw)) break;
+    rows.push(
+      runs
+        .filter((run) => dim || !run.dim)
+        .map((run) => run.text)
+        .join(""),
+    );
+  }
+  const text = rows
+    .map((row, i) =>
+      (i === 0 ? row.replace(/^\s*[│┃]?\s*❯/, "") : row)
+        .replace(/^\s*[│┃]/, "")
+        .replace(/[│┃]\s*$/, ""),
+    )
+    .join(" ")
+    .replace(/[▀-▟]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return FIELD_EXAMPLE.test(text) ? "" : text;
+}
+
 /**
  * What Claude Code's voice mode prints (v2.1.310), alone on its row, while
  * warming up, recording and transcribing.

@@ -150,7 +150,8 @@ recopiée du terminal coupée au mauvais endroit.
   sous-agents interrompus par une fermeture (marqués « interrompu ») ; pastille MCP en échec,
   demandes des MCP, hook en cours, autorisations aussi prudentes que le terminal, erreurs des plugins.
 - Échap n'arrête que Claude dans la conversation principale, jamais les sous-agents ni les shells.
-  Pas de bouton arrêter par agent.
+  Bouton arrêter par sous-agent, sur sa carte, avec confirmation (demandé le 31/10/2026, au lieu
+  de « pas de bouton arrêter par agent »).
 - Idées retenues le 31/10/2026 : reprendre une ancienne session en chat (Sessions récentes, recherche
   IA, aperçu), brouillon gardé si Arkadia recharge, retour instantané sur un long chat, charger les
   messages plus anciens, démarrage visible, accueil avec les sessions récentes du dossier ; à la

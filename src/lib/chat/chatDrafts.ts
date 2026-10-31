@@ -4,6 +4,7 @@ import {
   parseDrafts,
   serializeDrafts,
 } from "@/lib/chat/chatDraftStore";
+import { mergeDrafts } from "@/lib/chat/chatAttachments";
 import type { ChatImage } from "@/lib/chat/useChatSession";
 
 /**
@@ -17,9 +18,18 @@ export interface DraftImage extends ChatImage {
   url: string;
 }
 
+/** A file attached by its path (picker, drop, pasted path): the path alone
+ *  goes to Claude, quoted after the text, as the terminal types it. */
+export interface DraftFile {
+  id: string;
+  path: string;
+}
+
 export interface ChatDraft {
   text: string;
   images: DraftImage[];
+  /** Shown as cards above the input; absent is none. */
+  files?: DraftFile[];
 }
 
 export const EMPTY_DRAFT: ChatDraft = { text: "", images: [] };
@@ -101,7 +111,10 @@ export function setDraft(
 ): void {
   const paneId = current(target);
   const next = typeof update === "function" ? update(getDraft(paneId)) : update;
-  if (next === EMPTY_DRAFT || (!next.text && next.images.length === 0)) {
+  if (
+    next === EMPTY_DRAFT ||
+    (!next.text && next.images.length === 0 && !next.files?.length)
+  ) {
     drafts.delete(paneId);
     savedAt.delete(paneId);
   } else {
@@ -141,6 +154,14 @@ export function appendDictation(paneId: string, text: string): void {
     ...d,
     text: d.text.trim() ? `${d.text.trimEnd()} ${text}` : text,
   }));
+}
+
+/**
+ * A message the user withdrew before Claude took it (`queued_removed`): its
+ * text and attachments back in the input, before what it holds now.
+ */
+export function putBackInDraft(paneId: string, back: ChatDraft): void {
+  setDraft(paneId, (d) => mergeDrafts(back, d));
 }
 
 /** A pane relaunched under a new id (account switch) keeps its input. */

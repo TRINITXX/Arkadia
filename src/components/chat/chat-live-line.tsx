@@ -3,16 +3,15 @@ import { Bot, Circle, CircleCheck, CircleDot, ListChecks } from "lucide-react";
 import { retryLabel, type RetryInfo } from "@/lib/chat/chatErrors";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import type { Subagent, TaskItem } from "@/lib/chat/chatState";
+import { liveElapsed } from "@/lib/chat/chatSteps";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 
-/** A call's own time shows once it runs this long (the terminal's). */
-const STEP_TIME_MS = 3_000;
-
 /**
- * What the terminal shows above its input while Claude works: the spinner,
- * the step it is on (« lit chatState.ts », `liveStep`) and its own time, the
- * time and tokens of the turn (thinking's estimate included); its finished
- * subagents and task list, one click away (running ones have their cards).
+ * What the terminal shows above its input while Claude works, the one line
+ * that says it: the spinner, the step it is on (« lit chatState.ts »,
+ * `liveStep`), one time (the running call's, else the turn's: `liveElapsed`)
+ * and the turn's tokens (thinking's estimate included); the subagents just
+ * finished and the task list, one click away (running ones have their cards).
  */
 export function ChatLiveLine({
   working,
@@ -33,7 +32,7 @@ export function ChatLiveLine({
   step: string;
   /** A hook running a while (`useRunningHook`): « hook Stop en cours », turn or not. */
   hook?: string | null;
-  /** When the running call began: its own time shows past a few seconds. */
+  /** When the running call began: its time replaces the turn's past a few seconds. */
   stepSince?: number | null;
   /** That call is a foreground Bash or agent: Ctrl+B is said, as in the terminal. */
   backgroundHint?: boolean;
@@ -41,7 +40,7 @@ export function ChatLiveLine({
   retry?: RetryInfo | null;
   turnStartedAt: number | null;
   turnTokens: number;
-  /** The finished ones (running ones have their cards): « Agents terminés (N) ». */
+  /** « Agents terminés (N) », empty once it's due to go (`useDoneAgentsLink`). */
   subagents: Subagent[];
   tasks: TaskItem[];
   onOpenAgents: () => void;
@@ -63,9 +62,11 @@ export function ChatLiveLine({
   );
   if (quiet) return <div className="chat-live" />;
   // A call running a while: its time, and Ctrl+B for a command or an agent.
-  const stepMs =
-    stepSince !== null && !compacting && !retry ? now - stepSince : 0;
-  const long = stepMs >= STEP_TIME_MS;
+  const elapsed = liveElapsed(
+    now,
+    turnStartedAt,
+    compacting || retry ? null : stepSince,
+  );
 
   // A failed request Claude Code sends again: said, not a silent spinner.
   const doing = compacting
@@ -83,14 +84,12 @@ export function ChatLiveLine({
           <span className="what" title={doing}>
             {doing}
           </span>
-          {long && <span className="step-time"> · {elapsedLabel(stepMs)}</span>}
           <span className="figures">
-            {turnStartedAt !== null &&
-              ` · ${elapsedLabel(now - turnStartedAt)}`}
+            {elapsed && ` · ${elapsedLabel(elapsed.ms)}`}
             {working &&
               turnTokens > 0 &&
               ` · ↓ ${tokensLabel(turnTokens)} jetons`}
-            {long && backgroundHint && (
+            {elapsed?.call && backgroundHint && (
               <span className="bg-hint"> · Ctrl+B : en arrière-plan</span>
             )}
           </span>

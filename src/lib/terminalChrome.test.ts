@@ -3,6 +3,7 @@ import {
   inputRowIndex,
   isDictating,
   isPromptField,
+  promptFieldText,
   trustAnswerKey,
   voiceFailure,
   voiceFailureText,
@@ -202,5 +203,60 @@ describe("isDictating", () => {
       ),
     ).toBe(false);
     expect(isDictating(box("", "❯ still processing… the logs"))).toBe(false);
+  });
+});
+
+describe("promptFieldText", () => {
+  const rule = "─".repeat(40);
+  /** The field's first row: `❯`, then runs, dim or not (v2.1.316). */
+  const field = (parts: [string, boolean][], more: string[] = []) => {
+    const screen = screenOf([
+      "◉ xhigh · /effort",
+      rule,
+      "",
+      ...more,
+      rule,
+      "  ⏸ plan mode on (shift+tab to cycle)",
+    ]);
+    screen.lines[2] = [
+      run("❯\u00a0"),
+      ...parts.map(([text, dim]) => ({ ...run(text), dim })),
+    ];
+    return screen;
+  };
+
+  it("reads an empty field, its dim example aside", () => {
+    expect(promptFieldText(field([]))).toBe("");
+    const example = field([['Try "fix typecheck errors"', true]]);
+    expect(promptFieldText(example)).toBe("");
+    expect(promptFieldText(example, { dim: true })).toBe("");
+  });
+
+  it("joins a long text wrapped under the `❯`", () => {
+    expect(
+      promptFieldText(
+        field(
+          [["alpha onececi est une longue phrase de cent", false]],
+          ["  soixante colonnes"],
+        ),
+      ),
+    ).toBe("alpha onececi est une longue phrase de cent soixante colonnes");
+  });
+
+  it("keeps a dictation's dim words only when asked, without the cursor bar", () => {
+    const listening = field([
+      ["refais la ", false],
+      ["vue lecture", true],
+      ["▃", false],
+    ]);
+    expect(promptFieldText(listening, { dim: true })).toBe(
+      "refais la vue lecture",
+    );
+    expect(promptFieldText(listening)).toBe("refais la");
+  });
+
+  it("is null without the field: a shell, a selector", () => {
+    expect(promptFieldText(screenOf(["PS C:\\> "]))).toBeNull();
+    expect(promptFieldText(null)).toBeNull();
   });
 });

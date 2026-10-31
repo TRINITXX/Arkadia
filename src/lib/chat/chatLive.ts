@@ -4,8 +4,16 @@ import {
   subscribeChat,
   subscribeServerExit,
 } from "@/lib/chat/chatEvents";
+import { messageDraft } from "@/lib/chat/chatAttachments";
+import { putBackInDraft } from "@/lib/chat/chatDrafts";
 import type { ChatEvent } from "@/lib/chat/chatProtocol";
-import { EMPTY_CHAT, reduceChat, type ChatState } from "@/lib/chat/chatState";
+import { withdrawnItem } from "@/lib/chat/chatSdkSettings";
+import {
+  EMPTY_CHAT,
+  reduceChat,
+  type ChatItem,
+  type ChatState,
+} from "@/lib/chat/chatState";
 import type { ChatStart } from "@/lib/chat/useChatSession";
 
 /**
@@ -32,6 +40,8 @@ export interface ColumnPlace {
 }
 
 interface LiveChat {
+  /** The pane's id too: its draft's key (`chatDrafts`). */
+  chatId: string;
   accountId: string | undefined;
   state: ChatState;
   /** Subagent conversations opened from the drawer, by agent id. */
@@ -82,6 +92,13 @@ function notify(chat: LiveChat, before?: ChatState, reset = false): void {
 const isReset = (event: ChatEvent) =>
   event.type === "sdk" && event.message.type === "conversation_reset";
 
+/** A message withdrawn as the input had it: a command as typed. */
+function draftOf(item: Extract<ChatItem, { kind: "user" | "command" }>) {
+  if (item.kind === "user") return messageDraft(item.text, item.pasted);
+  const text = `/${item.name}${item.args ? ` ${item.args}` : ""}`;
+  return { text, images: [] };
+}
+
 function flush(chat: LiveChat): void {
   chat.timer = undefined;
   const batch = chat.queue;
@@ -108,8 +125,15 @@ function flush(chat: LiveChat): void {
       }
       continue;
     }
+    // Withdrawn by its × (never in a replay): back in the input.
+    const back =
+      event.type === "queued_removed"
+        ? withdrawnItem(state.items, event.uuid)
+        : null;
     state = reduceChat(state, event, now);
     if (isReset(event)) reset = true;
+    if (back && !state.items.includes(back))
+      putBackInDraft(chat.chatId, draftOf(back));
   }
   chat.replay = replay;
   if (state === chat.state) return;
@@ -139,6 +163,7 @@ function open(chatId: string, accountId: string | undefined): LiveChat {
   const known = chats.get(chatId);
   if (known) return known;
   const chat: LiveChat = {
+    chatId,
     accountId,
     state: EMPTY_CHAT,
     agents: NO_AGENTS,

@@ -302,6 +302,7 @@ pub fn run() {
             open_path,
             run_detached,
             resolve_path_in_pane,
+            path_exists,
             save_screenshot,
             conversation::read_conversation,
             conversation::read_conversation_delta,
@@ -546,6 +547,14 @@ fn resolve_path_in_pane(
     }
     // A file the agent asks the user to create: clicking creates then opens it.
     resolve_missing_path_at(&line, click)
+}
+
+/// True when `path` names a file or folder on disk, as written. A path pasted
+/// in the chat's input becomes a card only then: `resolve_path_in_pane` also
+/// answers for a file to create, which a paste must never attach.
+#[tauri::command(async)]
+fn path_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
 }
 
 /// A tool row's `…/.screenshots/x.png`: a display mod keeps only the last parts

@@ -359,14 +359,10 @@ export function usePaneChats({
         Object.values(t.panes),
       );
       const chat = panes.find(
-        (p) =>
-          p.chat &&
-          (liveSessionId(p.id) ?? p.chat.resume) === sessionId,
+        (p) => p.chat && (liveSessionId(p.id) ?? p.chat.resume) === sessionId,
       );
       if (chat) return chat.id;
-      const terminals = panes.filter(
-        (p) => !p.chat && stateFromTitle(p.title),
-      );
+      const terminals = panes.filter((p) => !p.chat && stateFromTitle(p.title));
       const ids = await Promise.all(
         terminals.map((p) =>
           invoke<string | null>("pane_session_id", { paneId: p.id }).catch(

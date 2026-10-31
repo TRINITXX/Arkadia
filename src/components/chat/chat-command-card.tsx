@@ -40,7 +40,6 @@ export function ChatCommandCard({
         {(item.queued || item.dropped) && (
           <ChatQueuedMark
             dropped={item.dropped}
-            removed={item.removed}
             onSendNow={onSendNow}
             onRemove={onRemove}
           />

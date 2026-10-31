@@ -44,6 +44,24 @@ describe("chat drafts kept across a reload", () => {
     expect(textOnly.get("p1")!.draft.images).toEqual([]);
   });
 
+  it("keeps the attached paths, images or not", () => {
+    const drafts = new Map<string, ChatDraft>([
+      [
+        "p1",
+        {
+          text: "",
+          images: [],
+          files: [{ id: "f1", path: "C:\\Users\\me\\Capture d'écran 1.png" }],
+        },
+      ],
+    ]);
+    const raw = serializeDrafts(drafts, new Map(), NOW, false);
+    const files = parseDrafts(raw, NOW).get("p1")!.draft.files;
+    expect(files?.map((f) => f.path)).toEqual([
+      "C:\\Users\\me\\Capture d'écran 1.png",
+    ]);
+  });
+
   it("drops stale drafts and torn values", () => {
     const raw = serializeDrafts(
       new Map([["old", { text: "vieux", images: [] }]]),

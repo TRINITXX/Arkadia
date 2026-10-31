@@ -91,7 +91,12 @@ export function useChatSession(
       const s = stateRef.current;
       const plan = sendNowPlan(
         s.subagents,
-        isCommandSent(s, { type: "user_sent", chatId, text, images: images.length }),
+        isCommandSent(s, {
+          type: "user_sent",
+          chatId,
+          text,
+          images: images.length,
+        }),
       );
       return run(
         plan.priority

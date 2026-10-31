@@ -15,16 +15,14 @@ import { useChatLayer } from "@/lib/chat/useChatLayers";
  * can move.
  */
 export function ChatRailActions({
-  draft,
   onDraft,
   areaRef,
   messagesOnly,
   onMessagesOnly,
   active,
 }: {
-  draft: ChatDraft;
   onDraft: React.Dispatch<React.SetStateAction<ChatDraft>>;
-  /** The input: the picked paths land at its caret, and it keeps the focus. */
+  /** The input: it keeps the focus, the picked files go above it as cards. */
   areaRef: RefObject<HTMLTextAreaElement | null>;
   messagesOnly: boolean;
   onMessagesOnly: (on: boolean) => void;
@@ -38,7 +36,7 @@ export function ChatRailActions({
     show,
     close,
     insert,
-  } = useDraftFilePicker(areaRef, draft.text, onDraft, active);
+  } = useDraftFilePicker(areaRef, onDraft, active);
   // Esc with the focus back in the input closes it, not Claude's turn.
   useChatLayer(picking, close);
 

@@ -5,6 +5,8 @@ import { toolLabel, type ToolItem } from "@/lib/chat/chatGroups";
 import { toolStep } from "@/lib/chat/chatSteps";
 import { shellMarks } from "@/lib/chat/chatToolResult";
 import { ChatShellOutput } from "@/components/chat/chat-shell-output";
+import { ChatReadThumbs } from "@/components/chat/chat-read-thumbs";
+import { readImagePath } from "@/lib/chat/chatImages";
 
 /** A tool's output is shown up to this, its tail cut. */
 const OUTPUT_CAP = 6000;
@@ -20,7 +22,10 @@ export function ChatToolRow({
 }) {
   const [open, setOpen] = useState(false);
   const Icon = toolIcon(tool.name);
-  const step = toolStep(tool.name, tool.input, cwd);
+  // An image read: its thumbnail stands for its path (`ChatReadThumbs`).
+  const step = readImagePath(tool)
+    ? "lit"
+    : toolStep(tool.name, tool.input, cwd);
   const command =
     tool.name === "Bash" || tool.name === "PowerShell"
       ? String(tool.input.command ?? "")
@@ -44,6 +49,7 @@ export function ChatToolRow({
               {mark}
             </span>
           ))}
+        <ChatReadThumbs tools={[tool]} />
         {tool.result?.isError && <CircleAlert size={13} className="err" />}
       </div>
       {open && shell && streams && (

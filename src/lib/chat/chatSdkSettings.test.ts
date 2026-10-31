@@ -278,7 +278,7 @@ describe("queued message withdrawn", () => {
   ]);
   const item = (s: ChatState) => s.items.find((x) => x.id === "sent:u2");
 
-  it("shows as removed after Claude Code's « cancelled », never as taken", () => {
+  it("leaves the column after Claude Code's « cancelled », never as taken", () => {
     expect(item(working)).toMatchObject({ queued: true });
     // The order of the live check: the lifecycle frame, then the answer.
     const removed = run(
@@ -292,11 +292,8 @@ describe("queued message withdrawn", () => {
       ],
       working,
     );
-    expect(item(removed)).toMatchObject({
-      queued: false,
-      dropped: true,
-      removed: true,
-    });
+    expect(item(removed)).toBeUndefined();
+    expect(removed.items.find((x) => x.id === "sent:u1")).toBeDefined();
   });
 
   it("leaves a message Claude already took as taken", () => {
@@ -312,7 +309,7 @@ describe("queued message withdrawn", () => {
       working,
     );
     expect(item(taken)).toMatchObject({ queued: false });
-    expect(item(taken)).not.toHaveProperty("removed");
+    expect(item(taken)).not.toHaveProperty("dropped");
   });
 });
 

@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { publishFrame } from "@/lib/frameStore";
-import { hookReportsFailure, waitForPrompt } from "@/lib/useHiddenVoice";
+import { clearPromptChunks } from "@/lib/promptClear";
+import {
+  emptyAfterCapture,
+  hookReportsFailure,
+  waitForPrompt,
+} from "@/lib/useHiddenVoice";
 import type { CellRun, RenderPayload } from "@/types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -90,6 +95,32 @@ describe("waitForPrompt", () => {
     expect(keys().some((k) => k[0] === ENTER[0])).toBe(false);
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(ready).resolves.toBe(false);
+  });
+});
+
+describe("emptyAfterCapture", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(invoke).mockClear();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  /** The field as seen through a PTY on v2.1.316. */
+  const field = (text: string) =>
+    show(["─".repeat(40), `❯ ${text}`, "─".repeat(40)]);
+
+  it("empties the field Claude Code refills with the blocked dictation", async () => {
+    // Submitted: the field is empty a beat, then the hook's block puts the
+    // text back (« alpha one » came back before « beta two » in the probe).
+    field("");
+    const done = emptyAfterCapture(PANE);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(keys()).toEqual([]);
+    field("refais la vue lecture");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(keys()).toEqual(clearPromptChunks());
+    field("");
+    await done;
   });
 });
 

@@ -11,6 +11,7 @@ import { CLEAR_CHUNK_GAP_MS, clearPromptChunks } from "@/lib/promptClear";
 import { holdPaneShown } from "@/lib/shownPanes";
 import {
   isPromptField,
+  promptFieldText,
   trustAnswerKey,
   voiceFailure,
   voiceFailureText,
@@ -43,6 +44,10 @@ const CHECK_MS = 250;
  */
 const CAPTURE_TIMEOUT_MS = 11_000;
 const CAPTURE_POLL_MS = 100;
+/** A blocked prompt comes back in the field a beat after its hook ran. */
+const RESTORE_WAIT_MS = 2_000;
+/** The clearing keys' effect on screen. */
+const EMPTY_WAIT_MS = 1_500;
 /** A wide grid keeps a long dictation on few rows. */
 const COLS = 160;
 const ROWS = 40;
@@ -106,9 +111,15 @@ let readyId: string | null = null;
 // text (the capture is kept per pane).
 let busy = false;
 // The prompt may hold something: a dictation cut short, a reload mid-way, a
-// click too short that typed real spaces. Held space only dictates into an
-// empty prompt, so the next dictation empties it first. Unknown at load.
+// click too short that typed real spaces, and every captured dictation:
+// Claude Code puts the prompt its hook blocked back in the field (v2.1.316).
+// A dictation inserts its words at the cursor, after what the field holds,
+// so the next one would bring the old text back: emptied first. Unknown at
+// load.
 let promptMayHoldText = true;
+// The field being emptied after a capture (`emptyAfterCapture`): the next
+// dictation waits for it.
+let settling: Promise<void> = Promise.resolve();
 
 /**
  * The hidden Claude Code, its prompt field on screen. Checked on every
@@ -144,7 +155,10 @@ async function hiddenPane(): Promise<string> {
  * and one that never ends stops this dictation too.
  */
 async function emptyPrompt(paneId: string): Promise<void> {
-  if (!promptMayHoldText) return;
+  await settling;
+  // The screen has the last word: a restore later than `emptyAfterCapture`
+  // waited for still shows.
+  if (!promptMayHoldText && !promptFieldText(getFrame(paneId))) return;
   const release = holdPaneShown(paneId);
   try {
     if (!(await waitForDictationEnd(paneId))) {
@@ -161,6 +175,51 @@ async function clearPrompt(paneId: string): Promise<void> {
   for (const [i, bytes] of clearPromptChunks().entries()) {
     if (i > 0) await new Promise((r) => setTimeout(r, CLEAR_CHUNK_GAP_MS));
     await send(paneId, bytes);
+  }
+}
+
+/** Resolves true once the field's text passes `test`, false after `ms`. */
+function waitForField(
+  paneId: string,
+  test: (text: string) => boolean,
+  ms: number,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      unsubscribe();
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const check = () => {
+      const text = promptFieldText(getFrame(paneId));
+      if (text !== null && test(text)) finish(true);
+    };
+    const unsubscribe = subscribeFrame(paneId, check);
+    const timer = setTimeout(() => finish(false), ms);
+    check();
+  });
+}
+
+/**
+ * After a capture: the blocked prompt comes back in the field (v2.1.316),
+ * so it is emptied at once, before anyone dictates again. Counted empty only
+ * once the screen says so; else the next dictation empties it again.
+ */
+export async function emptyAfterCapture(paneId: string): Promise<void> {
+  const release = holdPaneShown(paneId);
+  try {
+    await waitForField(paneId, (text) => text !== "", RESTORE_WAIT_MS);
+    await clearPrompt(paneId);
+    if (await waitForField(paneId, (text) => text === "", EMPTY_WAIT_MS)) {
+      promptMayHoldText = false;
+    }
+  } catch {
+    // The pane went: the next dictation gets a new one, emptied first.
+  } finally {
+    release();
   }
 }
 
@@ -208,6 +267,33 @@ export function useHiddenVoice(onText: (text: string) => void) {
   const releaseRef = useRef<(() => void) | null>(null);
   // A stop asked while the hidden Claude Code still starts.
   const cancelRef = useRef(false);
+  // The words so far, read off the hidden field as the terminal shows them
+  // (dim until final), while it records and transcribes. Frozen once Enter
+  // goes (the field empties and refills), gone once the text lands.
+  const [interim, setInterim] = useState("");
+  const unwatchRef = useRef<(() => void) | null>(null);
+  const unwatch = useCallback(() => {
+    unwatchRef.current?.();
+    unwatchRef.current = null;
+  }, []);
+  const watchField = useCallback(
+    (paneId: string) => {
+      unwatch();
+      // The screen as it was: the field just emptied may not show yet, and
+      // its old words are no live words (`emptyPrompt`).
+      const before = getFrame(paneId);
+      setInterim("");
+      const read = () => {
+        if (!mountedRef.current) return;
+        const frame = getFrame(paneId);
+        if (frame === before) return;
+        const text = promptFieldText(frame, { dim: true });
+        if (text !== null) setInterim(text);
+      };
+      unwatchRef.current = subscribeFrame(paneId, read);
+    },
+    [unwatch],
+  );
 
   const stopSpaces = useCallback(() => {
     window.clearInterval(repeatRef.current);
@@ -236,6 +322,7 @@ export function useHiddenVoice(onText: (text: string) => void) {
     return () => {
       mountedRef.current = false;
       cancelRef.current = true;
+      unwatchRef.current?.();
       if (repeatRef.current !== undefined) void stopRef.current();
     };
   }, []);
@@ -269,11 +356,14 @@ export function useHiddenVoice(onText: (text: string) => void) {
           }
           const failure = voiceFailure(frame);
           if (failure) throw new Error(voiceFailureText(failure));
+          unwatch();
           await send(paneId, ENTER);
           const text = await takeCapture(paneId);
           if (!text) throw new Error("Aucun texte reçu de la dictée");
-          // Captured: the hook blocked the prompt, which leaves it empty.
-          promptMayHoldText = false;
+          // Captured, and soon back in the field: emptied before the next.
+          promptMayHoldText = true;
+          settling = emptyAfterCapture(paneId);
+          if (mountedRef.current) setInterim("");
           onTextRef.current(text);
           return { ok: true } as const;
         } catch (e) {
@@ -285,14 +375,18 @@ export function useHiddenVoice(onText: (text: string) => void) {
           busy = false;
           stoppingRef.current = null;
           quietRef.current = null;
+          unwatch();
           releasePane();
-          if (mountedRef.current) setStatus("idle");
+          if (mountedRef.current) {
+            setInterim("");
+            setStatus("idle");
+          }
         }
       })();
       stoppingRef.current = stopping;
       return stopping;
     },
-    [stopSpaces, releasePane],
+    [stopSpaces, releasePane, unwatch],
   );
   useEffect(() => {
     stopRef.current = stop;
@@ -337,12 +431,13 @@ export function useHiddenVoice(onText: (text: string) => void) {
       SPACE_REPEAT_MS,
     );
     capRef.current = window.setTimeout(() => void stop(), MAX_TALK_MS);
+    watchField(paneId);
     setStatus("listening");
     return true;
-  }, [status, stop]);
+  }, [status, stop, watchField]);
 
   /** The caller showed the error: the next one, even the same, shows again. */
   const clearError = useCallback(() => setError(null), []);
 
-  return { status, error, clearError, start, stop };
+  return { status, error, clearError, start, stop, interim };
 }

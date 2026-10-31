@@ -1,5 +1,5 @@
 import type { JsonObject } from "@/lib/chat/chatProtocol";
-import { toolLabel } from "@/lib/chat/chatGroups";
+import { toolLabel, toolRunning, type ToolItem } from "@/lib/chat/chatGroups";
 import type { LivePhase, LiveTool } from "@/lib/chat/chatState";
 
 /**
@@ -141,11 +141,44 @@ export function turnDoneLine(
   return parts.join(" · ");
 }
 
-/** The words after a folded series' counts: its last call, in progress or not. */
-export function lastStep(
-  tools: { name: string; input: JsonObject }[],
-  cwd: string | null,
-): string {
+/**
+ * The words after a folded series' counts: its last call once the series is
+ * done. None while one of its calls runs: the live line above the input
+ * says it, the column doesn't say it twice.
+ */
+export function lastStep(tools: ToolItem[], cwd: string | null): string {
   const last = tools[tools.length - 1];
-  return last ? toolStep(last.name, last.input, cwd) : "";
+  if (!last || tools.some(toolRunning)) return "";
+  return toolStep(last.name, last.input, cwd);
+}
+
+/** The running call's time replaces the turn's once it lasts this long: a
+ *  quick read doesn't flicker the line. */
+export const STEP_TIME_MS = 3_000;
+
+/**
+ * The call the live line times: the main loop's latest (a foreground
+ * subagent's Agent call while that subagent works), else a subagent's own.
+ */
+export function timedCall(tools: LiveTool[]): LiveTool | undefined {
+  for (let i = tools.length - 1; i >= 0; i--)
+    if (!tools[i].agent) return tools[i];
+  return tools[tools.length - 1];
+}
+
+/**
+ * The live line's one duration: the running call's own once it lasts
+ * `STEP_TIME_MS` (`call`: Ctrl+B is hinted for it), else the turn's; null
+ * when neither runs.
+ */
+export function liveElapsed(
+  now: number,
+  turnStartedAt: number | null,
+  callSince: number | null,
+): { ms: number; call: boolean } | null {
+  if (callSince !== null && now - callSince >= STEP_TIME_MS)
+    return { ms: now - callSince, call: true };
+  return turnStartedAt === null
+    ? null
+    : { ms: now - turnStartedAt, call: false };
 }

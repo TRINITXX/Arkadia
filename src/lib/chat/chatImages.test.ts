@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatGallery } from "@/lib/chat/chatImages";
+import { chatGallery, userMessageView } from "@/lib/chat/chatImages";
 import type { ChatItem } from "@/lib/chat/chatState";
 
 const CWD = "C:\\proj";
@@ -68,5 +68,41 @@ describe("chatGallery", () => {
       "C:\\proj\\.screenshots\\apres.png",
       "Image collée 3",
     ]);
+  });
+});
+
+describe("the user's attached files", () => {
+  const SHOT =
+    "C:\\Users\\TRINITX\\Pictures\\Screenshots\\Capture d'écran 2026-10-31 130956.png";
+  const PDF = "C:\\proj\\devis.pdf";
+  const sent: ChatItem = {
+    kind: "user",
+    id: "u",
+    text: `"${SHOT}" le menu déborde\n\n"${PDF}"`,
+    images: 0,
+  };
+
+  it("leave the text for cards, the image ones in the lightbox's walk", () => {
+    expect(userMessageView(sent, CWD)).toEqual({
+      text: "`Capture d'écran 2026-10-31 130956.png` le menu déborde",
+      paths: [SHOT, PDF],
+      named: [],
+    });
+    expect(chatGallery([sent], CWD).all).toEqual([{ path: SHOT }]);
+  });
+
+  it("put an image Claude reads in the walk, never another file", () => {
+    const read = (id: string, file_path: string): ChatItem => ({
+      kind: "tool",
+      id,
+      name: "Read",
+      input: { file_path },
+    });
+    const { all, byItem } = chatGallery(
+      [read("r1", SHOT), read("r2", PDF)],
+      CWD,
+    );
+    expect(all).toEqual([{ path: SHOT }]);
+    expect(byItem.has("r2")).toBe(false);
   });
 });

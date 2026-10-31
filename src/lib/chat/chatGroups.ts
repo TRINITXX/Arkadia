@@ -113,6 +113,11 @@ const CATEGORIES: [RegExp, string, string][] = [
   [/^Skill$/, "skill", "skills"],
 ];
 
+/** A call without its result still runs, unless read from the past (`stale`). */
+export function toolRunning(tool: ToolItem): boolean {
+  return !tool.result && !tool.stale;
+}
+
 /** "4 commandes, 3 fichiers lus" for a run of tool calls, in first-seen order. */
 export function workSummary(tools: ToolItem[]): string {
   const counts = new Map<string, [number, string, string]>();

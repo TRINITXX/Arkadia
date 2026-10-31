@@ -426,16 +426,24 @@ type SdkEvent = Extract<
   }
 >;
 
-/** A message withdrawn by the user: « retiré », never as taken. */
-function markRemoved(items: ChatItem[], uuid: string): ChatItem[] {
-  const i = items.findIndex((x) => x.id === `sent:${uuid}`);
-  const item = items[i];
-  if (!item || (item.kind !== "user" && item.kind !== "command")) return items;
+/**
+ * A message withdrawn by the user: gone from the column (its text goes back
+ * to the input, `chatLive`), never as taken.
+ */
+function withdraw(items: ChatItem[], uuid: string): ChatItem[] {
+  const item = withdrawnItem(items, uuid);
+  return item ? items.filter((x) => x !== item) : items;
+}
+
+/** The message `queued_removed` withdraws, while it still waits. */
+export function withdrawnItem(
+  items: ChatItem[],
+  uuid: string,
+): Extract<ChatItem, { kind: "user" | "command" }> | null {
+  const item = items.find((x) => x.id === `sent:${uuid}`);
+  if (!item || (item.kind !== "user" && item.kind !== "command")) return null;
   // Taken meanwhile (neither waiting nor dropped): it went.
-  if (!item.queued && !item.dropped) return items;
-  const next = items.slice();
-  next[i] = { ...item, queued: false, dropped: true, removed: true };
-  return next;
+  return item.queued || item.dropped ? item : null;
 }
 
 /** The chat server's own events about the settings. */
@@ -473,7 +481,7 @@ export function reduceSdkEvent(state: ChatState, event: SdkEvent): ChatState {
         },
       };
     case "queued_removed": {
-      const items = markRemoved(state.items, event.uuid);
+      const items = withdraw(state.items, event.uuid);
       return items === state.items ? state : { ...state, items };
     }
   }

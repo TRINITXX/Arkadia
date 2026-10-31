@@ -37,6 +37,7 @@ import {
 } from "@/chat-preview-activity";
 import tools from "../chat-server/fixtures/tools.jsonl?raw";
 import pastedPng from "../src-tauri/icons/128x128@2x.png?inline";
+import { attachDraft, attachEvents } from "@/chat-preview-attach";
 
 /**
  * Dev-only page (`/chat-preview.html?s=<scenario>`): the chat view fed with
@@ -76,6 +77,12 @@ const LAB = "C:\\Users\\TRINITX\\Desktop\\Claude Desktop\\Arkadia-lab";
 const fsUrl = (path: string) => `/@fs/${encodeURI(path.replace(/\\/g, "/"))}`;
 setBridge({
   invoke: async <T,>(cmd: string, args?: Record<string, unknown>) => {
+    // A pasted path: a file Vite serves exists (`usePastedPaths`).
+    if (cmd === "path_exists" && typeof args?.path === "string") {
+      const res = await window.fetch(fsUrl(args.path), { method: "HEAD" });
+      const html = res.headers.get("content-type")?.startsWith("text/html");
+      return (res.ok && !html) as T;
+    }
     const path = typeof args?.path === "string" ? args.path : "";
     if (cmd !== "read_image_bytes" || !path)
       throw new Error(`${cmd} : absent de l'aperçu`);
@@ -312,6 +319,8 @@ const SCENARIOS: Record<string, () => ChatState> = {
         Boolean(e.message.parent_tool_use_id),
     ),
   images: () => replay(imageEvents()),
+  // Files as cards: sent, read by Claude, and waiting in the input.
+  attach: () => replay(attachEvents()),
   code: () => replay(codeEvents()),
   // /context, /compact and /rename as cards (`&draft=/` opens the menu,
   // `&draft=/resume ` or `/rewind ` their panels); `clear`: after /clear.
@@ -418,6 +427,9 @@ const PREVIEW_SLASH: SlashActions = {
 
 const params = new URLSearchParams(window.location.search);
 const name = params.get("s") ?? "tools";
+/** What the preview's mic « hears », word by word. */
+const PREVIEW_DICTATION =
+  "Refais la vue lecture pour qu'elle garde la place du lecteur quand un message arrive.";
 const nowSeconds = Math.round(Date.now() / 1000);
 const state = {
   ...(SCENARIOS[name] ?? SCENARIOS.tools)(),
@@ -449,24 +461,39 @@ function Preview() {
         }),
     );
   }, []);
-  const [draft, setDraft] = useState<ChatDraft>({
-    ...EMPTY_DRAFT,
-    text: params.get("draft") ?? "",
-  });
+  const [draft, setDraft] = useState<ChatDraft>(() =>
+    name === "attach"
+      ? attachDraft(pastedPng)
+      : { ...EMPTY_DRAFT, text: params.get("draft") ?? "" },
+  );
   const [messagesOnly, setMessagesOnly] = useState(false);
   const [status, setStatus] = useState<VoiceStatus>(
     params.get("voice") === "listening" ? "listening" : "idle",
   );
+  // The words come one by one while it listens, as the hidden field shows them.
+  const [heard, setHeard] = useState(0);
+  useEffect(() => {
+    if (status !== "listening") return;
+    const id = setInterval(() => setHeard((n) => n + 1), 350);
+    return () => clearInterval(id);
+  }, [status]);
   const voice = {
     status,
-    start: () => setStatus("listening"),
+    interim:
+      status === "idle"
+        ? ""
+        : PREVIEW_DICTATION.split(" ").slice(0, heard).join(" "),
+    start: () => {
+      setHeard(0);
+      setStatus("listening");
+    },
     stop: () => {
       setStatus("transcribing");
       return new Promise<DictationEnd>((resolve) =>
         setTimeout(() => {
           setDraft((d) => ({
             ...d,
-            text: `${d.text}Texte dicté pour l'aperçu.`,
+            text: `${d.text}${PREVIEW_DICTATION}`,
           }));
           setStatus("idle");
           resolve({ ok: true });
@@ -502,6 +529,8 @@ function Preview() {
         sdkActions={PREVIEW_SDK}
         shellOutputs={PREVIEW_SHELL_OUTPUTS}
         onBackground={() => {}}
+        // Said in the console: no chat server to stop a task.
+        onStopTask={(taskId) => console.info("[aperçu] arrêt de", taskId)}
         memoryKey="preview"
         startup={(params.get("startup") as StartupPhase) ?? null}
         onLoadOlder={

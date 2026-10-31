@@ -9,6 +9,9 @@ import {
 import {
   agentCards,
   CARD_LINGER_MS,
+  DONE_AGENTS_MS,
+  doneAgentsUntil,
+  historySubagents,
   outputTail,
   runningShells,
   sendNowPlan,
@@ -135,6 +138,52 @@ describe("background tasks", () => {
     ]);
     expect(agentCards(s.subagents, 5000 + CARD_LINGER_MS - 1)).toHaveLength(1);
     expect(agentCards(s.subagents, 5000 + CARD_LINGER_MS)).toHaveLength(0);
+  });
+});
+
+describe("« Agents terminés »", () => {
+  const started = (id: string, at: number) =>
+    task("task_started", { task_id: id, task_type: "local_agent" }, at);
+  const ended = (id: string, at: number) =>
+    task("task_notification", { task_id: id, status: "completed" }, at);
+  const sent = (at: number): ChatEvent =>
+    ({
+      type: "user_sent",
+      chatId: "c",
+      text: "Suite",
+      images: 0,
+      at,
+    }) as ChatEvent;
+  const until = (s: ChatState) => doneAgentsUntil(s.subagents, s.items);
+
+  it("stays 30 s after the last subagent ended, longer if another ends", () => {
+    let s = run([started("a1", 1000), started("a2", 1000)]);
+    expect(until(s)).toBeNull();
+    s = run([ended("a1", 5000)], s);
+    expect(until(s)).toBe(5000 + DONE_AGENTS_MS);
+    s = run([ended("a2", 20_000)], s);
+    expect(until(s)).toBe(20_000 + DONE_AGENTS_MS);
+  });
+
+  it("goes when the user writes again, back if an agent ends after", () => {
+    let s = run([started("a1", 1000), started("a2", 1000), ended("a1", 5000)]);
+    s = run([sent(8000)], s);
+    expect(until(s)).toBeNull();
+    s = run([ended("a2", 9000)], s);
+    expect(until(s)).toBe(9000 + DONE_AGENTS_MS);
+  });
+
+  it("never shows for a resumed session's agents (no end time)", () => {
+    const resumed: ChatItem[] = [
+      {
+        kind: "tool",
+        id: "t1",
+        name: "Agent",
+        input: { description: "Lire" },
+        result: { text: "Fini", isError: false },
+      },
+    ];
+    expect(doneAgentsUntil(historySubagents([], resumed), resumed)).toBeNull();
   });
 });
 
