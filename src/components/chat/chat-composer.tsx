@@ -75,8 +75,8 @@ function readImage(file: File): Promise<Attachment> {
  * The input card: text (Enter sends, Shift+Enter breaks the line), cards of
  * the attached files and pasted images above it (`chatAttachments`: picker,
  * drag & drop, Ctrl+V of an image or of paths), `/` commands, the terminal
- * rail's actions (`ChatRailActions`). The session's mode, model and effort
- * sit on the status line under it (`ChatSessionControls`).
+ * rail's actions (`ChatRailActions`). Its bottom row starts with `leading`:
+ * the session's button (model, effort, mode) and its rings.
  * Esc first closes what is open in the pane (`chatLayers`), then interrupts
  * a working Claude (its turn only: background agents and workflows go on), Ctrl+B sends its running command or agent to the
  * background, Shift+Tab cycles the mode, as in the terminal. A message sent while Claude works waits for its turn; Ctrl+Enter
@@ -102,6 +102,7 @@ export function ChatComposer({
   onToast,
   suggestion = null,
   onOpen,
+  leading,
 }: {
   /** The conversation, for the copy of Claude's last code block. */
   items: ChatItem[];
@@ -129,6 +130,8 @@ export function ChatComposer({
   suggestion?: string | null;
   /** An image card clicked: the lightbox. */
   onOpen?: (content: LightboxContent) => void;
+  /** First in the bottom row: the session's button and rings (`ChatView`). */
+  leading?: React.ReactNode;
 }) {
   const { text, images } = draft;
   const files = draft.files ?? NO_FILES;
@@ -346,54 +349,58 @@ export function ChatComposer({
         </div>
       )}
       <div className="chat-tools-row">
-        <ChatRailActions
-          onDraft={onDraft}
-          areaRef={areaRef}
-          messagesOnly={messagesOnly}
-          onMessagesOnly={onMessagesOnly}
-          active={active}
-        />
-        <button
-          type="button"
-          className={`chat-round mic chat-push${voice.status === "listening" ? " rec" : ""}`}
-          title={VOICE_TITLES[voice.status]}
-          disabled={voice.status === "transcribing"}
-          onClick={toggleVoice}
-        >
-          {voice.status === "listening" ? (
-            <Square />
-          ) : voice.status === "idle" ? (
-            <Mic />
+        {leading}
+        {/* Insert, hide, mic, send: one group on the right, never split. */}
+        <div className="chat-tools-end">
+          <ChatRailActions
+            onDraft={onDraft}
+            areaRef={areaRef}
+            messagesOnly={messagesOnly}
+            onMessagesOnly={onMessagesOnly}
+            active={active}
+          />
+          <button
+            type="button"
+            className={`chat-round mic${voice.status === "listening" ? " rec" : ""}`}
+            title={VOICE_TITLES[voice.status]}
+            disabled={voice.status === "transcribing"}
+            onClick={toggleVoice}
+          >
+            {voice.status === "listening" ? (
+              <Square />
+            ) : voice.status === "idle" ? (
+              <Mic />
+            ) : (
+              <span className="spin" />
+            )}
+          </button>
+          {working && empty && voice.status === "idle" && !waiting ? (
+            <button
+              type="button"
+              className="chat-round stop"
+              title="Interrompre (Échap)"
+              onClick={onInterrupt}
+            >
+              <Square />
+            </button>
           ) : (
-            <span className="spin" />
+            <button
+              type="button"
+              className={`chat-round send${waiting ? " waiting" : ""}`}
+              title={
+                waiting
+                  ? "Envoi dès la fin de la dictée…"
+                  : working
+                    ? "Envoyer après le tour en cours (Entrée) · tout de suite : Ctrl+Entrée"
+                    : "Envoyer (Entrée)"
+              }
+              disabled={empty && voice.status === "idle"}
+              onClick={(e) => void submit(e.ctrlKey)}
+            >
+              <ArrowUp />
+            </button>
           )}
-        </button>
-        {working && empty && voice.status === "idle" && !waiting ? (
-          <button
-            type="button"
-            className="chat-round stop"
-            title="Interrompre (Échap)"
-            onClick={onInterrupt}
-          >
-            <Square />
-          </button>
-        ) : (
-          <button
-            type="button"
-            className={`chat-round send${waiting ? " waiting" : ""}`}
-            title={
-              waiting
-                ? "Envoi dès la fin de la dictée…"
-                : working
-                  ? "Envoyer après le tour en cours (Entrée) · tout de suite : Ctrl+Entrée"
-                  : "Envoyer (Entrée)"
-            }
-            disabled={empty && voice.status === "idle"}
-            onClick={(e) => void submit(e.ctrlKey)}
-          >
-            <ArrowUp />
-          </button>
-        )}
+        </div>
       </div>
     </div>
   );

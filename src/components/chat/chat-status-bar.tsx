@@ -1,10 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { GitBranch, Timer } from "lucide-react";
 import { ChatContextGauge } from "@/components/chat/chat-context-gauge";
 import { ChatMcpChip } from "@/components/chat/chat-mcp-chip";
 import { ChatRing } from "@/components/chat/chat-ring";
 import type { ContextDetail } from "@/lib/chat/chatProtocol";
-import { modelLabel, resetLabel } from "@/lib/chat/chatLabels";
+import { resetLabel } from "@/lib/chat/chatLabels";
 import { liveWindow, type ChatState } from "@/lib/chat/chatState";
 
 /** Past this share of a window, its figure turns amber. */
@@ -16,8 +16,8 @@ const TICK_MS = 30_000;
 const pct = (n: number) => `${Math.round(n)} %`;
 
 /**
- * The terminal's status line, under the input: model (or `controls`, the
- * session's model, mode and effort buttons), context, quotas, reset, branch.
+ * The terminal's status line, in the input's bottom row after the session's
+ * button (`ChatSessionMenu`): context, quotas, reset, branch.
  * Context and quotas as rings with their figure inside (the user's pick of
  * 30/10/2026), the reset as a short countdown.
  */
@@ -25,15 +25,12 @@ export function ChatStatusBar({
   state,
   onContextDetail,
   onMcpOpen,
-  controls,
 }: {
   state: ChatState;
   /** The context by category, for the ring's hover (`ChatContextGauge`). */
   onContextDetail?: () => Promise<ContextDetail>;
   /** The MCP list opened: their state asked again. */
   onMcpOpen?: () => void;
-  /** Shown first, in place of the model's name (`ChatSessionControls`). */
-  controls?: ReactNode;
 }) {
   const [now, setNow] = useState(() => Date.now());
   const fiveReset = state.limits.fiveHour?.resetsAt;
@@ -54,11 +51,6 @@ export function ChatStatusBar({
       : null;
   return (
     <div className="chat-status">
-      {controls ?? (
-        <span>
-          <b>{modelLabel(state.model)}</b>
-        </span>
-      )}
       {state.context && (
         <ChatContextGauge
           percentage={state.context.percentage}

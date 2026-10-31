@@ -44,7 +44,7 @@ import { ChatPlanApproval } from "@/components/chat/chat-plan-approval";
 import { ChatQuestionPanel } from "@/components/chat/chat-question-panel";
 import { ChatSearchBox } from "@/components/chat/chat-search-box";
 import { ChatStatusBar } from "@/components/chat/chat-status-bar";
-import { ChatSessionControls } from "@/components/chat/chat-session-controls";
+import { ChatSessionMenu } from "@/components/chat/chat-session-menu";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
 import { chatGallery } from "@/lib/chat/chatImages";
 import { folderOf, modelLabel } from "@/lib/chat/chatLabels";
@@ -378,6 +378,33 @@ export function ChatView({
     [onDraft],
   );
 
+  // The session's button, its rings and its shells: in the input's bottom
+  // row (the user's pick of 31/10/2026), else on a row of their own.
+  const sessionItems = (
+    <>
+      <ChatSessionMenu
+        mode={state.mode}
+        model={state.model}
+        sdk={state.sdk}
+        onMode={onMode}
+        onModel={onModel}
+        onEffort={sdkActions?.setEffort}
+      />
+      <ChatStatusBar
+        state={state}
+        onContextDetail={sdkActions?.contextDetail}
+        onMcpOpen={sdkActions?.refreshMcp}
+      />
+      <ChatShellsChip
+        shells={live.shells}
+        commands={live.commands}
+        outputs={shellOutputs}
+        now={live.now}
+        onOutput={onShellOutput}
+      />
+    </>
+  );
+  let inInput = false;
   let bottom: React.ReactNode;
   if (state.closed) {
     bottom = (
@@ -440,8 +467,10 @@ export function ChatView({
       </div>
     );
   } else {
+    inInput = true;
     bottom = (
       <ChatComposer
+        leading={sessionItems}
         items={state.items}
         working={state.working}
         mode={state.mode}
@@ -614,30 +643,7 @@ export function ChatView({
             />
           )}
           {bottom}
-          <div className="chat-status-row">
-            <ChatStatusBar
-              state={state}
-              onContextDetail={sdkActions?.contextDetail}
-              onMcpOpen={sdkActions?.refreshMcp}
-              controls={
-                <ChatSessionControls
-                  mode={state.mode}
-                  model={state.model}
-                  sdk={state.sdk}
-                  onMode={onMode}
-                  onModel={onModel}
-                  onEffort={sdkActions?.setEffort}
-                />
-              }
-            />
-            <ChatShellsChip
-              shells={live.shells}
-              commands={live.commands}
-              outputs={shellOutputs}
-              now={live.now}
-              onOutput={onShellOutput}
-            />
-          </div>
+          {!inInput && <div className="chat-status-row">{sessionItems}</div>}
         </div>
       </div>
       {drawer && (
