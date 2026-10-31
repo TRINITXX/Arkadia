@@ -216,3 +216,117 @@ export function visualNext(checkId: string, report: VisualReport): ChatEvent[] {
     sdk({ type: "result", subtype: "success", duration_ms: 21_000 }),
   ];
 }
+
+/** A phone screenshot drawn here (780×1688, 2×): what Alexis showed in a « Galerie ». */
+function phoneShot(): string {
+  const c = document.createElement("canvas");
+  c.width = 780;
+  c.height = 1688;
+  const g = c.getContext("2d");
+  if (!g) return "";
+  g.fillStyle = "#0f1012";
+  g.fillRect(0, 0, 780, 1688);
+  g.fillStyle = "#1c1e22";
+  g.fillRect(0, 0, 780, 190);
+  g.fillStyle = "#e4e4e7";
+  g.font = "600 46px Segoe UI, sans-serif";
+  g.fillText("Projets", 48, 140);
+  const rows = ["Arkadia", "Arkadia Lab", "VTC Planner", "Assets IA", "Site ARIA", "Ferme à sites", "Notes"];
+  rows.forEach((name, i) => {
+    const y = 240 + i * 190;
+    g.fillStyle = "#1c1e22";
+    g.beginPath();
+    g.roundRect(32, y, 716, 160, 28);
+    g.fill();
+    g.fillStyle = i % 2 ? "#60a5fa" : "#e2865f";
+    g.beginPath();
+    g.arc(110, y + 80, 38, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#e4e4e7";
+    g.font = "600 38px Segoe UI, sans-serif";
+    g.fillText(name, 176, y + 72);
+    g.fillStyle = "#858790";
+    g.font = "30px Segoe UI, sans-serif";
+    g.fillText(`${3 + i} onglets · ${i + 1} h`, 176, y + 118);
+  });
+  return c.toDataURL("image/png");
+}
+
+/** `?s=tall`: one tall screenshot and its caption, checked and shown (the case of 31/10). */
+export function tallEvents(): ChatEvent[] {
+  const html = `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><style>
+figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:10px}
+figcaption{font-size:13px;color:var(--muted);text-align:center}
+</style></head><body>
+<figure><img src="${phoneShot()}" alt="Liste des projets sur l'iPhone">
+<figcaption>La liste des projets sur l'iPhone, après la reprise du dernier onglet.</figcaption></figure>
+</body></html>`;
+  const id = "vis-tall";
+  return [
+    ev("user_sent", { text: "Montre-moi la capture de la liste des projets.", images: 0 }),
+    sdk({
+      type: "assistant",
+      uuid: "tall-a1",
+      message: {
+        id: "tall-m1",
+        content: [{ type: "tool_use", id, name: VISUAL_TOOL_NAME, input: { html, title: "Galerie" } }],
+      },
+    }),
+    ev("visual_check", { checkId: id, toolUseId: id, html, title: "Galerie", wide: false }),
+    ev("visual_checked", { checkId: id }),
+    sdk({
+      type: "user",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: id, content: "Shown in the chat (checked: no error).", is_error: false }],
+      },
+    }),
+    ...stepsEvents(),
+    sdk({
+      type: "assistant",
+      uuid: "tall-a2",
+      message: { id: "tall-m2", content: [{ type: "text", text: "Voici la capture, puis les étapes de la reprise." }] },
+    }),
+    sdk({ type: "result", subtype: "success", duration_ms: 6_000 }),
+  ];
+}
+
+/** Text that no image fit can shorten: 14 steps, scaled down to fit the pane. */
+function stepsEvents(): ChatEvent[] {
+  const steps = [
+    "Le volet lit sa carte de session",
+    "Le serveur de chat démarre",
+    "Claude Code reprend la session",
+    "Le journal se rejoue dans la colonne",
+    "Les messages en attente reviennent",
+    "Les sous-agents vivants se rattachent",
+    "Les shells de fond se relisent",
+    "La place de lecture revient",
+    "Le brouillon revient dans la saisie",
+    "La barre d'état se remplit",
+    "Les visuels se redemandent",
+    "Les notifications se taisent pendant le rejeu",
+    "Le badge suit l'activité du chat",
+    "Le volet redevient interactif",
+  ];
+  const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><style>
+ol{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+li{display:flex;gap:12px;align-items:center;background:var(--card);border-radius:var(--radius-sm);padding:12px 14px}
+b{width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;flex-shrink:0;font-size:13px}
+span{color:var(--text)}
+</style></head><body><ol>${steps.map((t, i) => `<li><b>${i + 1}</b><span>${t}</span></li>`).join("")}</ol></body></html>`;
+  const id = "vis-steps";
+  return [
+    sdk({
+      type: "assistant",
+      uuid: "steps-a1",
+      message: { id: "steps-m1", content: [{ type: "tool_use", id, name: VISUAL_TOOL_NAME, input: { html, title: "Reprise d'un chat en 14 étapes" } }] },
+    }),
+    ev("visual_check", { checkId: id, toolUseId: id, html, title: "Reprise d'un chat en 14 étapes", wide: false }),
+    ev("visual_checked", { checkId: id }),
+    sdk({
+      type: "user",
+      message: { content: [{ type: "tool_result", tool_use_id: id, content: "Shown in the chat (checked: no error).", is_error: false }] },
+    }),
+  ];
+}

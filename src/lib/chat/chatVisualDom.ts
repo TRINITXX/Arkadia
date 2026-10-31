@@ -11,7 +11,7 @@ import {
   type VisualReport,
 } from "@/lib/chat/chatVisual";
 import type { ChatEvent } from "@/lib/chat/chatProtocol";
-import { readVisualReport } from "@chat-server/visualHtml";
+import { readVisualReport, VISUAL_FIT_HEIGHT } from "@chat-server/visualHtml";
 
 /**
  * The visuals' frames in the page: loading one (the shell, then the page
@@ -34,14 +34,20 @@ export function loadVisualFrame(
   iframe: HTMLIFrameElement,
   html: string,
   onMessage: (message: FrameMessage) => void,
-): () => void {
+  /** The room the card has (`--ark-fit-h`); none: the page as written. */
+  fit?: number,
+): { stop: () => void; setFit: (height: number) => void } {
   iframe.setAttribute("sandbox", "allow-scripts");
   iframe.setAttribute("referrerpolicy", "no-referrer");
   visualFrames.add(iframe);
   // Only this frame's bootstrap knows it: its messages are its own.
   const token = crypto.randomUUID();
-  const doc = visualDocument(html, token);
+  const doc = visualDocument(html, token, fit);
   let posted = false;
+  /** A room given before the page is in: sent once it is (the shell drops it). */
+  let pendingFit: number | null = null;
+  const sendFit = (height: number) =>
+    iframe.contentWindow?.postMessage({ arkadiaVisualFit: 1, height }, "*");
   const listener = (e: MessageEvent) => {
     if (!iframe.contentWindow || e.source !== iframe.contentWindow) return;
     const message = readFrameMessage(e.data, token);
@@ -63,6 +69,9 @@ export function loadVisualFrame(
         { arkadiaVisualDocument: 1, html: doc },
         "*",
       );
+      // After the page, in order: its bootstrap hears it.
+      if (pendingFit !== null) sendFit(pendingFit);
+      pendingFit = null;
       return;
     }
     onMessage(message);
@@ -70,7 +79,14 @@ export function loadVisualFrame(
   window.addEventListener("message", listener);
   if (isTauri()) iframe.src = convertFileSrc("", PROTOCOL);
   else iframe.srcdoc = VISUAL_SHELL;
-  return () => window.removeEventListener("message", listener);
+  return {
+    stop: () => window.removeEventListener("message", listener),
+    // The room the card has now (`--ark-fit-h`): its media and the page refit.
+    setFit: (height) => {
+      if (posted) sendFit(height);
+      else pendingFit = height;
+    },
+  };
 }
 
 /** The Lab's own last click or key: a frame's gesture must come after. */
@@ -227,10 +243,16 @@ export function probeVisual(check: VisualCheck): {
   };
   let loaded: () => void = () => {};
   const loadedOnce = new Promise<void>((r) => (loaded = r));
-  const stop = loadVisualFrame(iframe, check.html, (m) => {
-    if (m.kind === "loaded") loaded();
-    for (const cb of listeners) cb(m);
-  });
+  // The room a pane gives, as the card will: a fitted page isn't too tall.
+  const { stop } = loadVisualFrame(
+    iframe,
+    check.html,
+    (m) => {
+      if (m.kind === "loaded") loaded();
+      for (const cb of listeners) cb(m);
+    },
+    VISUAL_FIT_HEIGHT,
+  );
   document.body.appendChild(iframe);
   let cancelled = false;
   const cleanup = () => {

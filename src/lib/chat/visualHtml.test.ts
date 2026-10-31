@@ -177,6 +177,13 @@ describe("visualResult", () => {
     expect(r.text).toContain("Note: local image not inlined: C:\\x.png");
   });
 
+  it("notes a page taller than the pane fits even scaled down, without folding it", () => {
+    const r = visualResult({ ...clean, height: 1400 }, []);
+    expect(r.isError).toBe(false);
+    expect(r.text).toContain("Note: the page is 1400px tall");
+    expect(visualResult({ ...clean, height: 900 }, []).text).not.toContain("Note:");
+  });
+
   it("only notes a local file left out: an image it breaks shows in the report", () => {
     const r = visualResult(clean, [{ path: "C:\\x.png", reason: "not found" }]);
     expect(r.isError).toBe(false);

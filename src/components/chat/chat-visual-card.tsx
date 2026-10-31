@@ -15,6 +15,7 @@ import {
   visualInput,
   visualPhase,
   visualProblem,
+  visualVerified,
   type VisualEntry,
 } from "@/lib/chat/chatVisual";
 
@@ -131,6 +132,7 @@ export function ChatVisualCard({
         <ChatVisualFrame
           html={html}
           title={title}
+          verified={visualVerified(tool)}
           onChoose={onChoose}
           onLink={link}
         />

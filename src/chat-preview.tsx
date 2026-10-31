@@ -38,7 +38,7 @@ import {
 import tools from "../chat-server/fixtures/tools.jsonl?raw";
 import pastedPng from "../src-tauri/icons/128x128@2x.png?inline";
 import { attachDraft, attachEvents } from "@/chat-preview-attach";
-import { visualNext, visualStart } from "@/chat-preview-visuals";
+import { tallEvents, visualNext, visualStart } from "@/chat-preview-visuals";
 import { createVisualProbe } from "@/lib/chat/chatVisualDom";
 
 /**
@@ -362,6 +362,8 @@ const SCENARIOS: Record<string, () => ChatState> = {
   peer: () => replay([...parse(tools), ...peerEvents()]),
   // Claude's visuals, checked by the real probe as they come (`chat-preview-visuals`).
   visuals: () => replay(visualStart()),
+  // One tall screenshot and its caption: the card fits the pane's height.
+  tall: () => replay(tallEvents()),
 };
 // SDK settings: model, effort and fast mode chips, MCP chip and requests,
 // a running hook, plugin errors, a cautious permission, a message withdrawn.

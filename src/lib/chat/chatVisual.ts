@@ -2,6 +2,8 @@ import shell from "@/lib/chat/visual-frame.html?raw";
 import { CHAT_FONTS, CHAT_TOKENS as T } from "@/lib/chat/chatTheme";
 import type { ToolItem } from "@/lib/chat/chatGroups";
 import {
+  VISUAL_CHECKED_CLEAN,
+  VISUAL_FIT_FLOOR,
   VISUAL_TOOL_NAME,
   type VisualReport,
 } from "@chat-server/visualHtml";
@@ -37,6 +39,31 @@ export const VISUAL_PAGE_CSP = VISUAL_CSP.split(";")
   .map((d) => d.trim())
   .filter((d) => d && !/^(require-trusted-types-for|trusted-types)\b/.test(d))
   .join("; ");
+
+/** What a media's fitted height leaves for the rest: the gutter and a caption under it. */
+export const VISUAL_FIT_ROOM = 88;
+
+/**
+ * The least room a visual fits to: a pane whose input grows (it can take
+ * 40% of the window) leaves less, and fitting to that would make images of a
+ * few dozen pixels; not fitting at all would make a fitted image jump to its
+ * full height and back as the input grows and shrinks. So the room never
+ * counts under this: the visual stays fitted, the conversation scrolls. The
+ * page side (`usableRoom`) and the frame's boot script read the same rule.
+ */
+export const VISUAL_MIN_ROOM = 240;
+
+/** The room fitting uses, never under `VISUAL_MIN_ROOM`; null: unknown (a hidden tab). */
+export function usableRoom(room: number | null | undefined): number | null {
+  return room != null && Number.isFinite(room)
+    ? Math.max(VISUAL_MIN_ROOM, Math.round(room))
+    : null;
+}
+
+/** The media the room caps: images and videos the page didn't size itself. */
+const FIT_MEDIA = ["img", "video"]
+  .map((tag) => `${tag}:not([width]):not([height]):not([style])`)
+  .join(",");
 
 /** The visuals' theme: the chat's colours as CSS variables (the tool lists them). */
 export const VISUAL_THEME: Record<string, string> = {
@@ -75,7 +102,18 @@ export const VISUAL_THEME_CSS =
     .join("")}}` +
   "html{background:var(--bg);color:var(--text);font-family:var(--font-sans);font-size:14.5px;line-height:1.6;padding:16px;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;scrollbar-width:thin;scrollbar-color:#31353b transparent}" +
   "body{margin:0}*,*::before,*::after{box-sizing:border-box}a{color:var(--accent)}" +
-  "code,kbd,pre,samp{font-family:var(--font-mono)}::selection{background:var(--accent-soft)}";
+  "code,kbd,pre,samp{font-family:var(--font-mono)}::selection{background:var(--accent-soft)}" +
+  // Images and videos fit the room the card has (`--ark-fit-h`, its frame's
+  // height without scrolling), room kept for a caption under them. Only
+  // those without a width, height or style attribute, at no specificity: a
+  // max-width or max-height the page's own CSS gives wins, but a width or
+  // height it sets from a class keeps the cap on the other side (contained,
+  // not distorted). Never an svg or a canvas: capped, an svg without viewBox
+  // is cut and a canvas squashed, and the probe no longer sees it overflow.
+  // Without a usable room (the copy opened in the browser, a small pane) the
+  // calc is invalid and nothing is capped.
+  `:root{--ark-fit-media:calc(var(--ark-fit-h) - ${VISUAL_FIT_ROOM}px)}` +
+  `:where(${FIT_MEDIA}){max-width:100%;max-height:var(--ark-fit-media);object-fit:contain}`;
 
 /**
  * A cheap extra behind the shell's Trusted Types (`visual-frame.html`, the
@@ -118,7 +156,8 @@ function report(){var r=document.documentElement,im=document.images;for(var i=0;
 return{errors:errors,consoleErrors:consoleErrors,blocked:blocked,height:height(),width:r.clientWidth,scrollWidth:r.scrollWidth,empty:!visible(),followsFrame:false,unfinished:!loaded};}
 try{dp(window,"arkadia",{value:Object.freeze({choose:function(t){post("choose",String(t==null?"":t).slice(0,4000));}})});}catch(x){}
 if(framed){
-window.addEventListener("message",function(e){var d=e.data;if(e.source===P&&d&&d.arkadiaVisualProbe===1)post("report",report());});
+window.addEventListener("message",function(e){var d=e.data;if(e.source!==P||!d)return;if(d.arkadiaVisualProbe===1)post("report",report());
+if(d.arkadiaVisualFit===1&&typeof d.height==="number"){if(isFinite(d.height))document.documentElement.style.setProperty("--ark-fit-h",Math.max(${VISUAL_MIN_ROOM},Math.round(d.height))+"px");}});
 document.addEventListener("click",function(e){if(!e.isTrusted||e.defaultPrevented||e.button!==0)return;var a=e.target&&e.target.closest?e.target.closest("a[href]"):null,u;if(!a)return;
 try{u=new URL(a.getAttribute("href"),document.baseURI);}catch(x){return;}if(u.href.split("#")[0]===location.href.split("#")[0])return;e.preventDefault();if(/^https?:$/.test(u.protocol))post("link",u.href);});
 window.addEventListener("focus",function(){post("focus");});
@@ -136,13 +175,15 @@ export const VISUAL_BOOTSTRAP = visualBootstrap("");
 const bootstrapTag = (token: string) =>
   `<script>${visualBootstrap(token).replace(/<\/script/gi, "<\\/script")}</script>`;
 
-const head = (token: string) =>
+const head = (token: string, fit?: number) =>
   '<meta charset="utf-8">' +
   `<meta http-equiv="Content-Security-Policy" content="${VISUAL_PAGE_CSP}">` +
   // No DNS lookups ahead of links: a name looked up can carry data out.
   '<meta http-equiv="x-dns-prefetch-control" content="off">' +
   '<meta name="viewport" content="width=device-width, initial-scale=1">' +
   `<style id="arkadia-theme">${VISUAL_THEME_CSS}</style>` +
+  // The room the card has at first; the bootstrap takes its changes.
+  (usableRoom(fit) ? `<style id="arkadia-fit">:root{--ark-fit-h:${usableRoom(fit)}px}</style>` : "") +
   bootstrapTag(token);
 
 /**
@@ -167,18 +208,21 @@ export function inertFrames(html: string): string {
  * mode). The parser opens the head for them, the page's own `<html>` and
  * `<head>` merge in, so nothing of the page runs or styles before them.
  */
-export function visualDocument(html: string, token = ""): string {
+export function visualDocument(html: string, token = "", fit?: number): string {
   const page = inertFrames(html);
   const doctype = /^\uFEFF?\s*<!doctype[^>]*>/i.exec(page);
   if (doctype) {
     const at = doctype[0].length;
-    return `${page.slice(0, at)}${head(token)}${page.slice(at)}`;
+    return `${page.slice(0, at)}${head(token, fit)}${page.slice(at)}`;
   }
-  return `<!doctype html>${head(token)}${page}`;
+  return `<!doctype html>${head(token, fit)}${page}`;
 }
 
-/** The card's frame grows with the page up to this, then scrolls inside. */
-export const VISUAL_MAX_HEIGHT = 1600;
+/**
+ * The card's frame is the page's height (scaled, `visualFit`), never a
+ * scrollbar inside; this only stops a page that grows without end.
+ */
+export const VISUAL_MAX_HEIGHT = 12_000;
 export const VISUAL_MIN_HEIGHT = 48;
 
 export function clampVisualHeight(height: number): number {
@@ -208,6 +252,108 @@ export function mergeProbeReports(
     height: first.height,
     followsFrame: tall.height - first.height >= 0.8 * growth,
   };
+}
+
+/**
+ * How the card shows a page `content` px tall in `room` px (the pane's
+ * height less the card's band): whole if it fits, else scaled down to fit,
+ * but never under `VISUAL_FIT_FLOOR` (smaller no longer reads well): past
+ * that, at the floor, and the conversation scrolls. `height`: the card's.
+ */
+export function visualFit(
+  content: number,
+  room: number | null,
+): { scale: number; height: number } {
+  const usable = usableRoom(room);
+  if (usable === null || content <= usable) return { scale: 1, height: content };
+  const scale = Math.max(VISUAL_FIT_FLOOR, usable / content);
+  return { scale, height: Math.ceil(content * scale) };
+}
+
+/** A frame's height as the page's reports move it (`nextFrameHeight`). */
+export interface FrameGrowth {
+  height: number;
+  /** The last growth, and how many times in a row it came back the same. */
+  step: number;
+  streak: number;
+  /** The page grows with its frame (`min-height: 100vh`): no more growth. */
+  frozen: boolean;
+  /** The last height held back while frozen: shown when the stop lifts. */
+  ignored: number | null;
+}
+
+/**
+ * A growth this small, the same three times in a row, each right after the
+ * Lab set the frame's height, follows the frame.
+ */
+const FOLLOW_STEP = 64;
+const FOLLOW_STREAK = 3;
+/** « Right after »: the frame's resize and the page's answer, a round trip. */
+const FOLLOW_MS = 120;
+
+export const firstFrameGrowth = (height: number): FrameGrowth => ({
+  height,
+  step: 0,
+  streak: 0,
+  frozen: false,
+  ignored: null,
+});
+
+/**
+ * The frame's next height from the page's report. A page whose height
+ * follows its frame (vh, height:100% on html or body) answers each height
+ * the Lab gives the frame with that height plus its gutter: left alone it
+ * would grow without end. The same small growth three times in a row, each
+ * within `FOLLOW_MS` of the Lab resizing the frame (`sinceFrameResize`),
+ * stops the growth (the height held back is kept, `ignored`); a page that
+ * shrinks still does. Only a page the probe didn't check clean can stop
+ * (`mayFreeze`: unverified, or shown anyway after its check failed): one
+ * checked clean never follows its frame, whatever pace it grows at.
+ */
+export function nextFrameHeight(
+  prev: FrameGrowth,
+  reported: number,
+  sinceFrameResize: number | null,
+  mayFreeze: boolean,
+): FrameGrowth {
+  const delta = reported - prev.height;
+  if (delta <= 0) return { ...prev, height: reported, step: 0, streak: 0, ignored: null };
+  if (prev.frozen) return { ...prev, ignored: reported };
+  const follows =
+    mayFreeze &&
+    delta <= FOLLOW_STEP &&
+    sinceFrameResize !== null &&
+    sinceFrameResize <= FOLLOW_MS;
+  const streak = !follows ? 0 : Math.abs(delta - prev.step) <= 1 ? prev.streak + 1 : 1;
+  return {
+    height: reported,
+    step: delta,
+    streak,
+    frozen: streak >= FOLLOW_STREAK,
+    ignored: null,
+  };
+}
+
+/**
+ * The Lab changed the page's layout itself (a new room, the pane's width):
+ * the growths that follow are its doing, never a page following its frame.
+ * The count starts again and a stop is lifted.
+ */
+export function refitFrameGrowth(prev: FrameGrowth): FrameGrowth {
+  if (prev.streak === 0 && !prev.frozen) return prev;
+  return {
+    height: prev.ignored ?? prev.height,
+    step: 0,
+    streak: 0,
+    frozen: false,
+    ignored: null,
+  };
+}
+
+/** The probe checked the page clean: its height never follows its frame. */
+export function visualVerified(tool: ToolItem): boolean {
+  const result = tool.result;
+  return !!result && !result.isError && result.text.startsWith(VISUAL_CHECKED_CLEAN);
 }
 
 /** What a visual's frame says to the Lab. */

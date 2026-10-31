@@ -23,6 +23,14 @@ import {
   VISUAL_PAGE_CSP,
   VISUAL_SHELL,
   visualBootstrap,
+  visualFit,
+  firstFrameGrowth,
+  nextFrameHeight,
+  refitFrameGrowth,
+  usableRoom,
+  visualVerified,
+  VISUAL_MIN_ROOM,
+  VISUAL_THEME_CSS,
   VISUAL_TOOL_NAME,
   visualDocument,
   visualHtml,
@@ -31,6 +39,7 @@ import {
   type VisualReport,
 } from "@/lib/chat/chatVisual";
 import { createVisualProbe, type VisualCheck } from "@/lib/chat/chatVisualDom";
+import { visualResult } from "@chat-server/visualHtml";
 
 const tool = (patch: Partial<ToolItem> = {}): ToolItem => ({
   kind: "tool",
@@ -103,6 +112,100 @@ describe("the wall against a frame of the page's own", () => {
     expect(
       inertFrames('<IFRAME srcdoc="x"></iframe><object></object><template shadowrootmode="closed">'),
     ).toBe('<x-blocked-IFRAME srcdoc="x"></x-blocked-iframe><x-blocked-object></x-blocked-object><template data-shadowrootmode="closed">');
+  });
+});
+
+describe("fitting the pane's height", () => {
+  it("shows a page whole when it fits, scaled down to fit, never under the readable floor", () => {
+    expect(visualFit(600, 770)).toEqual({ scale: 1, height: 600 });
+    // 864 px of steps in 770: scaled to fit exactly.
+    expect(visualFit(864, 770).height).toBe(770);
+    expect(visualFit(864, 770).scale).toBeCloseTo(0.891, 3);
+    // Far taller: the floor, and the conversation scrolls.
+    expect(visualFit(2000, 770)).toEqual({ scale: 0.75, height: 1500 });
+    // No room known (a hidden tab, « Agrandir »): as written.
+    expect(visualFit(2000, null)).toEqual({ scale: 1, height: 2000 });
+  });
+
+  it("never fits to less than 240 px: a small pane keeps the visual fitted, never unfitted", () => {
+    expect(usableRoom(0)).toBe(VISUAL_MIN_ROOM);
+    expect(usableRoom(213)).toBe(VISUAL_MIN_ROOM);
+    expect(usableRoom(770)).toBe(770);
+    // Unknown (a hidden tab): no fit at all.
+    expect(usableRoom(null)).toBeNull();
+    // The input grows to 7 lines: the screenshot stays fitted, at the floor scale at most.
+    expect(visualFit(600, 150)).toEqual({ scale: 0.75, height: 450 });
+    expect(visualDocument("<img src=x>", "t", 150)).toContain(":root{--ark-fit-h:240px}");
+    // The boot script reads the same floor for a room sent later.
+    expect(visualBootstrap("t")).toContain(`Math.max(${VISUAL_MIN_ROOM},Math.round(d.height))`);
+  });
+
+  it("caps media to the room the card has, a caption's room kept, at no specificity", () => {
+    const doc = visualDocument("<img src=x>", "t", 770);
+    expect(doc).toContain(":root{--ark-fit-h:770px}");
+    // The copy opened in the browser: no room, nothing capped.
+    expect(visualDocument("<img src=x>")).not.toContain("--ark-fit-h:");
+  });
+
+  it("caps only images and videos the page left unsized, never an svg or a canvas", () => {
+    const rule = /:where\(([^)]*\)[^{]*)\)\{max-width:100%;max-height:var\(--ark-fit-media\)/.exec(VISUAL_THEME_CSS);
+    expect(rule?.[1]).toBe(
+      "img:not([width]):not([height]):not([style]),video:not([width]):not([height]):not([style])",
+    );
+    expect(VISUAL_THEME_CSS).not.toMatch(/svg|canvas/);
+  });
+
+  it("stops an unverified page that answers each resize of its frame with its gutter more", () => {
+    // body{min-height:100vh}: each height the Lab gives comes back 32 px taller, at once.
+    let g = firstFrameGrowth(160);
+    for (let i = 0; i < 10; i++) g = nextFrameHeight(g, g.height + 32, 30, true);
+    expect(g).toMatchObject({ frozen: true, height: 256, ignored: 288 });
+    // A page that shrinks still does.
+    expect(nextFrameHeight(g, 200, 30, true).height).toBe(200);
+  });
+
+  it("never stops a page the probe checked clean, whatever pace it grows at", () => {
+    // A list revealed every 80 ms: each growth lands right after the frame's resize.
+    let p = firstFrameGrowth(160);
+    for (let i = 0; i < 10; i++) p = nextFrameHeight(p, p.height + 22, 30, false);
+    expect(p).toMatchObject({ height: 380, frozen: false });
+    // Unverified, a slow reveal (no resize just before) never stops either.
+    let q = firstFrameGrowth(160);
+    for (let i = 0; i < 10; i++) q = nextFrameHeight(q, q.height + 22, 400, true);
+    expect(q.frozen).toBe(false);
+  });
+
+  it("a growth right after a refit never freezes, and a lifted stop shows what it held back", () => {
+    // The input loses three lines: three new rooms, the image grows each time.
+    let g = firstFrameGrowth(500);
+    for (const step of [22, 23, 22]) {
+      g = refitFrameGrowth(g);
+      g = nextFrameHeight(g, g.height + step, 10, true);
+    }
+    expect(g.frozen).toBe(false);
+    // A stop already made is lifted by the Lab's own change, at the height held back.
+    let f = firstFrameGrowth(160);
+    for (let i = 0; i < 4; i++) f = nextFrameHeight(f, f.height + 32, 30, true);
+    expect(f).toMatchObject({ frozen: true, height: 256, ignored: 288 });
+    expect(refitFrameGrowth(f)).toMatchObject({ frozen: false, height: 288, ignored: null });
+  });
+
+  it("knows a page the probe checked clean from its result", () => {
+    const shown = (text: string, isError = false) => tool({ result: { text, isError } });
+    const clean: VisualReport = {
+      errors: [],
+      consoleErrors: [],
+      blocked: [],
+      height: 400,
+      width: 728,
+      scrollWidth: 728,
+      empty: false,
+      followsFrame: false,
+    };
+    expect(visualVerified(shown(visualResult(clean, []).text))).toBe(true);
+    expect(visualVerified(shown("Shown in the chat, not verified: the Lab did not report"))).toBe(false);
+    expect(visualVerified(shown("- Script error", true))).toBe(false);
+    expect(visualVerified(tool({ stale: true }))).toBe(false);
   });
 });
 

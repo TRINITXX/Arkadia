@@ -1,13 +1,21 @@
-import { useEffect, useRef, useState } from "react";
-import { clampVisualHeight } from "@/lib/chat/chatVisual";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  clampVisualHeight,
+  firstFrameGrowth,
+  nextFrameHeight,
+  refitFrameGrowth,
+  visualFit,
+} from "@/lib/chat/chatVisual";
 import { frameGestureNow, loadVisualFrame } from "@/lib/chat/chatVisualDom";
 
 interface ChatVisualFrameProps {
   /** The page, its local images in (`ChatState.visuals`). */
   html: string;
   title: string;
-  /** Fills its box (« Agrandir ») instead of fitting the page's height. */
+  /** Fills its box (« Agrandir »), the page as written: no fit, no scale. */
   fill?: boolean;
+  /** The probe checked it clean: its growth is never stopped (`nextFrameHeight`). */
+  verified?: boolean;
   /** A choice of the page (`arkadia.choose`), on the user's click in it. */
   onChoose?: (text: string) => void;
   /** A link of the page, on the user's click: the browser opens it. */
@@ -17,23 +25,112 @@ interface ChatVisualFrameProps {
 /** Height before the page says its own (`size`). */
 const FIRST_HEIGHT = 160;
 
+const px = (value: string) => parseFloat(value) || 0;
+
 /**
- * A visual's sandboxed frame (`loadVisualFrame`): its height follows the
- * page up to `VISUAL_MAX_HEIGHT`, then the page scrolls inside. A new page
- * gets a new frame, never the old one's state.
+ * The room a card has in its column, read from the layout itself: the
+ * column's visible height less its own padding, the card's band (the
+ * element over the frame) and the card's border. Null in a hidden tab (a
+ * column sized to nothing).
+ */
+function roomIn(box: HTMLElement): number | null {
+  const scroller = box.closest<HTMLElement>(".chat-scroll");
+  const visible = scroller?.clientHeight ?? 0;
+  if (!scroller || visible <= 0) return null;
+  const column = scroller.firstElementChild;
+  const columnStyle = column ? window.getComputedStyle(column) : null;
+  const pad = columnStyle
+    ? px(columnStyle.paddingTop) + px(columnStyle.paddingBottom)
+    : 0;
+  const card = box.parentElement;
+  const cardStyle = card ? window.getComputedStyle(card) : null;
+  const border = cardStyle
+    ? px(cardStyle.borderTopWidth) + px(cardStyle.borderBottomWidth)
+    : 0;
+  const band =
+    (box.previousElementSibling as HTMLElement | null)?.offsetHeight ?? 0;
+  return Math.max(0, Math.floor(visible - pad - band - border));
+}
+
+/**
+ * The page's own height on the frame, scaled from its top centre. True
+ * when the frame's height changed: the page may answer it (`nextFrameHeight`).
+ */
+function applySize(
+  iframe: HTMLIFrameElement,
+  { height, scale }: { height: number; scale: number },
+): boolean {
+  const resized = iframe.style.height !== `${height}px`;
+  iframe.style.height = `${height}px`;
+  iframe.style.transform = scale < 1 ? `scale(${scale})` : "";
+  iframe.style.transformOrigin = "top center";
+  return resized;
+}
+
+/**
+ * A visual's sandboxed frame (`loadVisualFrame`). In the column it fits the
+ * pane's height when it can (Alexis, 31/10/2026): its media take the room
+ * the card has (`--ark-fit-h`), then a page still taller is scaled down, no
+ * further than readable (`visualFit`), and the conversation scrolls past
+ * that. Never a scrollbar inside: the frame is the page's whole height,
+ * except a page that grows with its frame, stopped (`nextFrameHeight`). A
+ * new page gets a new frame, never the old one's state.
  */
 export function ChatVisualFrame({
   html,
   title,
   fill = false,
+  verified = false,
   onChoose,
   onLink,
 }: ChatVisualFrameProps) {
   const boxRef = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState<number | null>(null);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const setFitRef = useRef<((height: number) => void) | null>(null);
+  const [growth, setGrowth] = useState(() => firstFrameGrowth(FIRST_HEIGHT));
+  const [room, setRoom] = useState<number | null>(null);
+  /** The room as last measured, for a frame created before the next render. */
+  const roomRef = useRef<number | null>(null);
+  /** The page's own height and its scale, for whichever frame is there. */
+  const sizeRef = useRef({ height: FIRST_HEIGHT, scale: 1 });
+  /** Read by the frame's listener: a check that comes later counts at once. */
+  const verifiedRef = useRef(verified);
+  useEffect(() => {
+    verifiedRef.current = verified;
+  }, [verified]);
+  /** When the Lab last changed the frame's height (`performance.now()`). */
+  const resizedAtRef = useRef<number | null>(null);
+  const resize = (iframe: HTMLIFrameElement) => {
+    if (applySize(iframe, sizeRef.current)) resizedAtRef.current = performance.now();
+  };
   const handlers = useRef({ onChoose, onLink });
   useEffect(() => {
     handlers.current = { onChoose, onLink };
+  });
+  const fit = visualFit(growth.height, fill ? null : room);
+  // The pane's height, as it changes (resize, split, the input growing).
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    const scroller = box?.closest<HTMLElement>(".chat-scroll");
+    if (fill || !box || !scroller) return;
+    // Any change of the column (its height, its width) is the Lab's: the
+    // page's growths that follow never mean it follows its frame.
+    const measure = () => {
+      setGrowth(refitFrameGrowth);
+      const next = roomIn(box);
+      if (next === null) return;
+      roomRef.current = next;
+      setRoom(next);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(scroller);
+    return () => ro.disconnect();
+  }, [fill]);
+  // The frame keeps the page's own height, scaled from its top centre.
+  useLayoutEffect(() => {
+    sizeRef.current = { height: growth.height, scale: fit.scale };
+    if (frameRef.current && !fill) resize(frameRef.current);
   });
   useEffect(() => {
     const box = boxRef.current;
@@ -41,24 +138,50 @@ export function ChatVisualFrame({
     const iframe = document.createElement("iframe");
     iframe.title = title;
     box.appendChild(iframe);
-    const stop = loadVisualFrame(iframe, html, (m) => {
-      if (m.kind === "size") setHeight(clampVisualHeight(m.height));
-      // Only the user's click in this frame acts (`frameGestureOk`).
-      else if (m.kind === "choose" && frameGestureNow(iframe))
-        handlers.current.onChoose?.(m.text);
-      else if (m.kind === "link" && frameGestureNow(iframe))
-        handlers.current.onLink?.(m.url);
-    });
+    frameRef.current = iframe;
+    // A new page starts its own count, at the height shown.
+    setGrowth(firstFrameGrowth(sizeRef.current.height));
+    // Its size and scale before its first report: until then no render
+    // would give them, and a frame left at 100% scrolls inside.
+    if (!fill) resize(iframe);
+    const { stop, setFit } = loadVisualFrame(
+      iframe,
+      html,
+      (m) => {
+        if (m.kind === "size") {
+          const at = resizedAtRef.current;
+          const since = at === null ? null : performance.now() - at;
+          setGrowth((g) =>
+            nextFrameHeight(g, clampVisualHeight(m.height), since, !verifiedRef.current),
+          );
+        }
+        // Only the user's click in this frame acts (`frameGestureOk`).
+        else if (m.kind === "choose" && frameGestureNow(iframe))
+          handlers.current.onChoose?.(m.text);
+        else if (m.kind === "link" && frameGestureNow(iframe))
+          handlers.current.onLink?.(m.url);
+      },
+      fill ? undefined : (roomRef.current ?? undefined),
+    );
+    setFitRef.current = setFit;
     return () => {
       stop();
       iframe.remove();
+      if (frameRef.current === iframe) frameRef.current = null;
+      setFitRef.current = null;
     };
-  }, [html, title]);
+  }, [html, title, fill]);
+  // A new room: the page refits its media to it (held until the page is in).
+  useEffect(() => {
+    if (fill || room === null) return;
+    setGrowth(refitFrameGrowth);
+    setFitRef.current?.(room);
+  }, [room, fill]);
   return (
     <div
       ref={boxRef}
       className="chat-visual-box"
-      style={fill ? undefined : { height: height ?? FIRST_HEIGHT }}
+      style={fill ? undefined : { height: fit.height }}
     />
   );
 }

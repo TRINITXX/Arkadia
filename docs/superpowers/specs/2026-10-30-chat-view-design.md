@@ -133,7 +133,8 @@ recopiée du terminal coupée au mauvais endroit.
    place de l'appel, au-dessus de sa réponse. Jamais de demande d'autorisation.
 2. **Carte** : bandeau (titre, « Agrandir » sur tout le volet, « Ouvrir dans le navigateur »). Largeur de
    la colonne, ou du volet moins 16 px de chaque côté avec `wide` (maquettes côte à côte, tableau large,
-   graphique dense).
+   graphique dense). Hauteur : le visuel tient dans le volet quand il le peut (images ajustées à la place,
+   puis page réduite jusqu'à 0,75) ; au-delà, la conversation défile. « Agrandir » le montre tel quel.
 3. **Isolement** : cadre `sandbox="allow-scripts"`, coquille servie par le protocole `arkvisual` avec sa
    propre CSP (scripts de jsdelivr, cdnjs et unpkg seulement, aucun réseau, aucun cadre). Un `srcdoc`
    hériterait de la CSP de l'app et n'exécuterait aucun script. L'IPC reste hors d'atteinte (vérifié par
