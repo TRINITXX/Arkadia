@@ -9,7 +9,6 @@ import type {
 import { Terminal } from "./Terminal";
 import { TerminalWebGPU } from "./TerminalWebGPU";
 import { PaneInputRail } from "./PaneInputRail";
-import { ChatModeToggle } from "./chat/chat-mode-toggle";
 import { ChatPane } from "./chat/chat-pane";
 
 interface PaneTreeViewProps {
@@ -77,12 +76,10 @@ export function PaneTreeView({
             pane={pane}
             chat={pane.chat}
             isActive={isActive}
-            switching={chat.switching.has(pane.id)}
             onActivate={() => onActivate(pane.id)}
             onSession={chat.onSession}
             onLabel={chat.onLabel}
             liveSessions={chat.liveSessions}
-            onSwitchToTerminal={chat.onToggle}
             onToast={onToast}
           />
         </div>
@@ -114,13 +111,6 @@ export function PaneTreeView({
     return (
       <div className="relative h-full w-full">
         {terminal}
-        {__ARKADIA_LAB__ && (
-          <ChatModeToggle
-            mode="terminal"
-            busy={chat.switching.has(pane.id)}
-            onSwitch={() => chat.onToggle(pane.id)}
-          />
-        )}
         {isActive && inputRailEnabled && (
           // Keyed: a pane swapped in place gets a fresh rail, not the previous
           // pane's pending send.

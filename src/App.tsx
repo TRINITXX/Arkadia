@@ -8,6 +8,7 @@ import { arrayMove } from "@dnd-kit/sortable";
 import { TabBar } from "@/components/TabBar";
 import { Sidepanel } from "@/components/Sidepanel";
 import { Toolbar } from "@/components/Toolbar";
+import { ChatModeToggle } from "@/components/chat/chat-mode-toggle";
 import { AccountsPanel } from "@/components/AccountsPanel";
 import { AccountChip } from "@/components/AccountChip";
 import { useAccounts } from "@/lib/useAccounts";
@@ -537,6 +538,12 @@ export function App() {
     if (!activeTabId) return null;
     return tabs.find((t) => t.id === activeTabId)?.activePaneId ?? null;
   }, [tabs, activeTabId]);
+  // The pane the toolbar's Chat / Terminal switches (the Lab).
+  const activeModePane = useMemo(() => {
+    if (!activePaneIdOfActiveTab) return null;
+    const tab = tabs.find((t) => t.id === activeTabId);
+    return tab?.panes[activePaneIdOfActiveTab] ?? null;
+  }, [tabs, activeTabId, activePaneIdOfActiveTab]);
   // The bottom prompt bar only shows when the active pane is a (sticky) Claude
   // session — see `claudePaneIds`.
   const activePaneIsClaude =
@@ -3152,6 +3159,15 @@ export function App() {
               <AccountChip
                 state={accounts.state}
                 onSelect={(id) => void accounts.setCurrent(id)}
+              />
+            ) : null
+          }
+          paneMode={
+            __ARKADIA_LAB__ && activeModePane ? (
+              <ChatModeToggle
+                mode={activeModePane.chat ? "chat" : "terminal"}
+                busy={chatHandlers.switching.has(activeModePane.id)}
+                onSwitch={() => chatHandlers.onToggle(activeModePane.id)}
               />
             ) : null
           }

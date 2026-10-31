@@ -27,7 +27,6 @@ import { followsAfterScroll } from "@/lib/followBottom";
 import { useAnyOverlayOpen } from "@/lib/overlays";
 import { CHAT_CSS } from "@/components/chat/chat-css";
 import { ChatLiveLine } from "@/components/chat/chat-live-line";
-import { ChatModeToggle } from "@/components/chat/chat-mode-toggle";
 import { ChatEditConfirm } from "@/components/chat/chat-edit-confirm";
 import { ChatOlderButton } from "@/components/chat/chat-older-button";
 import { ChatQuestionSheet } from "@/components/chat/chat-question-sheet";
@@ -70,8 +69,6 @@ export interface ChatViewProps {
   agents: Record<string, ChatState>;
   cwd: string | null;
   isActive: boolean;
-  switching: boolean;
-  onSwitchToTerminal: () => void;
   onActivate: () => void;
   /** `now`: Claude Code ends the turn under way for it. */
   onSend: (text: string, images: ChatImage[], now?: boolean) => void;
@@ -123,8 +120,6 @@ export function ChatView({
   agents,
   cwd,
   isActive,
-  switching,
-  onSwitchToTerminal,
   onActivate,
   onSend,
   onInterrupt,
@@ -485,11 +480,6 @@ export function ChatView({
         {CHAT_CSS}
         {search.css}
       </style>
-      <ChatModeToggle
-        mode="chat"
-        busy={switching}
-        onSwitch={onSwitchToTerminal}
-      />
       {search.open && (
         <ChatSearchBox
           query={search.query}

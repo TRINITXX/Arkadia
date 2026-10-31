@@ -26,18 +26,15 @@ export function ChatPane({
   pane,
   chat,
   isActive,
-  switching,
   onActivate,
   onSession,
   onLabel,
   liveSessions,
-  onSwitchToTerminal,
   onToast,
 }: {
   pane: PaneState;
   chat: PaneChat;
   isActive: boolean;
-  switching: boolean;
   onActivate: () => void;
   /** The chat's Claude session, once known (kept in the pane for later). */
   onSession: (paneId: string, sessionId: string) => void;
@@ -45,7 +42,6 @@ export function ChatPane({
   onLabel: (paneId: string, label: string) => void;
   /** Sessions running in the other panes: /resume can't take them. */
   liveSessions: (exceptPaneId: string) => Promise<Set<string>>;
-  onSwitchToTerminal: (paneId: string) => void;
   onToast?: ToastFn;
 }) {
   const session = useChatSession(pane.id, pane.accountId, chat);
@@ -111,8 +107,6 @@ export function ChatPane({
       agents={session.agents}
       cwd={chat.cwd}
       isActive={isActive}
-      switching={switching}
-      onSwitchToTerminal={() => onSwitchToTerminal(pane.id)}
       onActivate={onActivate}
       onSend={session.send}
       onInterrupt={session.interrupt}

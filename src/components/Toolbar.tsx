@@ -19,6 +19,8 @@ interface ToolbarProps {
   onToggleSidepanel: () => void;
   /** Shown only while the sidepanel (and its accounts block) is hidden. */
   accountChip: React.ReactNode;
+  /** Chat / Terminal for the active pane, before the settings (the Lab). */
+  paneMode?: React.ReactNode;
 }
 
 export function Toolbar({
@@ -29,6 +31,7 @@ export function Toolbar({
   sidepanelOpen,
   onToggleSidepanel,
   accountChip,
+  paneMode,
 }: ToolbarProps) {
   return (
     <div className="chrome-surface flex h-9 items-center gap-1 border-b border-zinc-800 bg-zinc-950 px-2">
@@ -77,6 +80,7 @@ export function Toolbar({
             ),
           )}
       </div>
+      {paneMode}
       <button
         onClick={onOpenSettings}
         className="ml-1 flex size-7 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"

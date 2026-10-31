@@ -592,9 +592,6 @@ export const CHAT_CSS = `
   .chat-col { width: calc(100% - 24px); }
   .chat-scroll-inner { padding-top: 46px; }
   .chat-title { font-size: 27px; }
-  .chat-toggle { top: 8px; right: 10px; }
-  .chat-toggle .lbl { display: none; }
-  .chat-toggle button { padding: 3px 7px; }
   .chat-tools-row { gap: 6px; }
   .chat-tools-row .chat-chip:has(> .lucide) .lbl { display: none; }
   .chat-tools-row .chat-chip:has(> .lucide) { padding: 3px 7px; }

@@ -529,8 +529,6 @@ function Preview() {
         agents={{}}
         cwd={"C:\\Users\\TRINITX\\Desktop\\Claude Desktop\\Arkadia-lab"}
         isActive
-        switching={false}
-        onSwitchToTerminal={() => {}}
         onActivate={() => {}}
         onSend={() => {}}
         // Said in the console: Esc's checks read it (`chatLayers`).
