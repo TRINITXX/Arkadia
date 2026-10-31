@@ -664,9 +664,18 @@ export const CHAT_CSS = `
 .chat-session-menu { width: 300px; max-height: min(460px, 70vh); overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; padding: 8px; }
 .chat-session-menu h6 { margin: 6px 8px 4px; font-size: 11px; font-weight: 600; color: var(--chat-mute); }
 .chat-session-menu .ck { margin-left: auto; width: 14px; height: 14px; color: var(--chat-accent); }
-.chat-session-seg { display: flex; gap: 3px; padding: 3px; margin: 0 4px 4px; border-radius: 9px; background: #181a1d; }
-.chat-session-seg button { flex: 1; width: auto; justify-content: center; padding: 4px 0; border-radius: 7px; font-size: 11.5px; color: var(--chat-dim); }
-.chat-session-seg button.on { background: var(--chat-accent); color: var(--chat-accent-ink); font-weight: 600; }
+/* The effort slider (the user's pick of 31/10/2026): accent up to the thumb, the level named at the right of its title. */
+.chat-effort-slider { margin: 0 8px 6px; }
+.chat-effort-slider .hd { display: flex; align-items: baseline; justify-content: space-between; margin: 6px 0 2px; }
+.chat-effort-slider .hd h6 { margin: 0; }
+.chat-effort-slider .hd b { font-size: 12px; font-weight: 600; color: #f4f4f5; }
+.chat-effort-slider input { -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 20px; margin: 0; background: transparent; cursor: pointer; }
+.chat-effort-slider input::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: linear-gradient(to right, var(--chat-accent) var(--pct), #31353b var(--pct)); }
+.chat-effort-slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; background: #f4f4f5; border: 2px solid var(--chat-accent); box-shadow: 0 1px 3px rgba(0,0,0,.45); }
+.chat-effort-slider input:focus-visible { outline: none; }
+.chat-effort-slider input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 35%, transparent); }
+.chat-effort-slider input.unset::-webkit-slider-thumb { opacity: 0; }
+.chat-effort-slider .ends { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--chat-mute); }
 .chat-session-modes { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 4px 4px; }
 .chat-session-modes button { width: auto; gap: 5px; padding: 3px 9px; border-radius: 999px; border: 1px solid #31353b; font-size: 12px; color: var(--chat-dim); }
 .chat-session-modes button.on { border-color: var(--chat-accent); color: #f4f4f5; background: #2b2623; }

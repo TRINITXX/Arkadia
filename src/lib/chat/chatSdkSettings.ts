@@ -127,6 +127,51 @@ export function modelChoices(raw: unknown[]): ModelChoice[] {
 
 const baseModel = (id: string) => id.replace(/\[.*\]$/, "");
 
+/** `claude-haiku-4-5-20251001` → haiku, [4, 5]: a date is no version. */
+function familyVersion(
+  id: string,
+): { family: string; version: number[] } | null {
+  const m = /(opus|sonnet|haiku|fable)-([\d-]+)/i.exec(baseModel(id));
+  if (!m) return null;
+  const version = m[2]
+    .split("-")
+    .filter((p) => p !== "" && p.length < 8)
+    .map(Number);
+  return { family: m[1].toLowerCase(), version };
+}
+
+function compareVersions(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/**
+ * The menu's rows: the latest version of each family (Opus, Sonnet, Haiku,
+ * Fable), with its wide-window row; no « Par défaut », no older version
+ * (the user's pick of 31/10/2026). A row naming no family stays.
+ */
+export function latestModels(models: ModelChoice[]): ModelChoice[] {
+  const rows = models
+    .filter((m) => m.value !== "default")
+    .map((m) => ({ m, v: familyVersion(m.model) }));
+  const latest = new Map<string, number[]>();
+  for (const { v } of rows) {
+    if (!v) continue;
+    const best = latest.get(v.family);
+    if (!best || compareVersions(v.version, best) > 0)
+      latest.set(v.family, v.version);
+  }
+  return rows
+    .filter(({ v }) => {
+      const best = v && latest.get(v.family);
+      return !v || !best || compareVersions(v.version, best) === 0;
+    })
+    .map(({ m }) => m);
+}
+
 /**
  * The menu's row for the session's model (an id, `[1m]` for the wide
  * window): its own value, else the row running it, not « Par défaut ».

@@ -19,10 +19,12 @@ import {
   currentChoice,
   effortChoices,
   effortLabel,
+  latestModels,
   type ModelChoice,
   type SdkState,
 } from "@/lib/chat/chatSdkSettings";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
+import { ChatEffortSlider } from "@/components/chat/chat-effort-slider";
 
 /** Until Claude Code lists its models: the usual four. */
 const FALLBACK: ModelChoice[] = MODELS.map((m) => ({
@@ -64,8 +66,11 @@ export function ChatSessionMenu({
   onEffort?: (effort: EffortLevel) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const models = sdk.models.length > 0 ? sdk.models : FALLBACK;
-  const current = useMemo(() => currentChoice(models, model), [models, model]);
+  const all = sdk.models.length > 0 ? sdk.models : FALLBACK;
+  // The menu lists the latest of each family; the button still names an
+  // older model the session runs.
+  const models = useMemo(() => latestModels(all), [all]);
+  const current = useMemo(() => currentChoice(all, model), [all, model]);
   const efforts = effortChoices({
     models: sdk.models,
     model,
@@ -119,23 +124,11 @@ export function ChatSessionMenu({
             ))}
           </div>
           {efforts.length > 0 && onEffort && (
-            <>
-              <h6>Effort</h6>
-              <div className="chat-session-seg">
-                {efforts.map((level) => (
-                  <button
-                    key={level}
-                    type="button"
-                    aria-pressed={level === sdk.effort}
-                    className={level === sdk.effort ? "on" : undefined}
-                    title={level}
-                    onClick={() => onEffort(level)}
-                  >
-                    {effortLabel(level)}
-                  </button>
-                ))}
-              </div>
-            </>
+            <ChatEffortSlider
+              levels={efforts}
+              value={sdk.effort}
+              onChange={onEffort}
+            />
           )}
           <h6>Mode</h6>
           <div className="chat-session-modes">

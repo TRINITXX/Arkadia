@@ -5,6 +5,7 @@ import {
   contextBreakdown,
   currentChoice,
   effortChoices,
+  latestModels,
   mcpFailed,
   mergeMcp,
   modelChoices,
@@ -73,6 +74,30 @@ describe("model menu", () => {
       "Haiku 5.5",
       "Haiku 4.5",
       "Opus 4.6",
+    ]);
+  });
+
+  it("shows only the latest version of each family", () => {
+    const rows = latestModels(
+      modelChoices([
+        ...MODELS,
+        {
+          value: "claude-sonnet-5",
+          resolvedModel: "claude-sonnet-5",
+          displayName: "Sonnet 5",
+        },
+        {
+          value: "sonnet",
+          resolvedModel: "claude-sonnet-5-5",
+          displayName: "Sonnet 5.5",
+        },
+      ]),
+    );
+    expect(rows.map((m) => m.value)).toEqual([
+      "opus",
+      "opus[1m]",
+      "haiku",
+      "sonnet",
     ]);
   });
 
