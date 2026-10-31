@@ -60,7 +60,9 @@ export function ChatLiveLine({
   useChatLayer(tasksOpen && tasks.length > 0 && !quiet, () =>
     setTasksOpen(false),
   );
-  if (quiet) return <div className="chat-live" />;
+  // Nothing to say: no line at all, no empty band above the input (the
+  // user's ask of 31/10/2026).
+  if (quiet) return null;
   // A call running a while: its time, and Ctrl+B for a command or an agent.
   const elapsed = liveElapsed(
     now,
