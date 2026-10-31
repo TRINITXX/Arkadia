@@ -234,7 +234,8 @@ export function ChatQuestionSheet({
                   setView({ replyId, step, more: !more });
                 }}
               >
-                {q.body}
+                {/* Claude writes it after « Titre : », in lower case. */}
+                {q.body.charAt(0).toUpperCase() + q.body.slice(1)}
               </div>
             )}
             {(q.options.length > 0 || ownReco) && (
