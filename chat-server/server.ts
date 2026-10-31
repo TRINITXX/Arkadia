@@ -504,6 +504,10 @@ class Chat {
         // message (SendMessage) reaches the page live, seen on 31/10/2026.
         // The others are dropped in `pump` (`isEcho`).
         extraArgs: { "replay-user-messages": null },
+        // Another session's message always comes in, whatever the sender's
+        // mode: the user's choice (31/10/2026), and the chat has no accept
+        // button for a held one. Session only, never written to a file.
+        settings: { crossSessionInbound: "accept" },
         stderr: (data) => process.stderr.write(`[${this.chatId}] ${data}`),
       },
     });
