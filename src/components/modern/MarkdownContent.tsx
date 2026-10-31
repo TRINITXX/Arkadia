@@ -25,7 +25,12 @@ import {
 } from "@/lib/rehypeInlineImages";
 import { imageCaptions } from "@/lib/imageCaption";
 import { InlineVideo } from "@/components/modern/VideoThumb";
-import { imagePathKey, isVideoPath, splitImagePaths } from "@/lib/imagePaths";
+import {
+  clickablePath,
+  imagePathKey,
+  isVideoPath,
+  splitImagePaths,
+} from "@/lib/imagePaths";
 import { fetchImageUrl } from "@/lib/imageUrlCache";
 import { LinkCardsContext } from "@/lib/linkCards";
 
@@ -139,18 +144,6 @@ function CodeBlock({ children, ...rest }: React.ComponentProps<"pre">) {
       </button>
     </div>
   );
-}
-
-/**
- * `text` when it is an absolute Windows file path (optionally `:line:col`
- * suffixed, which is stripped), else `null`. Colons are only legal after the
- * drive letter, so `https://…` and prose never match.
- */
-export function clickablePath(text: string): string | null {
-  const m = /^([A-Za-z]:[\\/][^"'<>|?*:\n]+?)(?::\d+(?::\d+)?)?$/.exec(
-    text.trim(),
-  );
-  return m ? m[1] : null;
 }
 
 /** The plain text of a link's children: its label. */

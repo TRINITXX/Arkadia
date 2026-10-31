@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clickablePath,
   findImagePaths,
   isImagePath,
   isVideoPath,
@@ -175,5 +176,15 @@ describe("findImagePaths", () => {
     );
     expect(findImagePaths(`${p} ${p.toUpperCase()}`)).toEqual([p]);
     expect(findImagePaths(many)).toHaveLength(12);
+  });
+});
+
+describe("clickablePath", () => {
+  it("opens a capture whose name holds an apostrophe, never a quoted one", () => {
+    const shot = String.raw`C:\Users\TRINITX\Pictures\Screenshots\Capture d'écran 2026-10-31 130956.png`;
+    expect(clickablePath(shot)).toBe(shot);
+    expect(clickablePath(`${shot}:12:3`)).toBe(shot);
+    expect(clickablePath(`'${shot}'`)).toBeNull();
+    expect(clickablePath("https://example.com/a.png")).toBeNull();
   });
 });

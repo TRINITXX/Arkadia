@@ -9,17 +9,42 @@ const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp)$/i;
 const VIDEO_EXT_RE = /\.(?:mp4|m4v|mov|webm|mkv|avi|wmv|flv|mpe?g|ogv|3gp)$/i;
 
 /**
+ * One character of a path, for every pattern of absolute paths here (a `u`
+ * one): anything Windows allows in a name but `:`, the backtick and `'`. An
+ * apostrophe between two letters belongs to the name (Windows' own
+ * `Capture d'écran ….png`); any other one closes a quote around the path.
+ */
+const NAME_CHAR = String.raw`(?:[^\n\r"'\x60<>|?*:]|(?<=\p{L})'(?=\p{L}))`;
+
+/**
  * Absolute Windows paths ending in an image extension, both slash styles.
  * Spaces are allowed (`…\Claude Desktop\…` is a real project root): the match
  * is lazy from the drive letter to the first image extension, and `:` can only
  * follow the drive letter, so two paths on one line never merge. An extension
  * that goes on (`demo.mp4.png`, `clip.mov-frames\1.png`) is not the end. A prose
  * false positive (`C:\dir then shot.png`) just fails its probe silently.
- * An apostrophe between two letters belongs to the name (Windows' own
- * `Capture d'écran ….png`); any other one closes a quote around the path.
+ * Its characters: `NAME_CHAR`.
  */
-const IMG_PATH_RE =
-  /(?<![A-Za-z])[A-Za-z]:[\\/](?:[^\n\r"'`<>|?*:]|(?<=\p{L})'(?=\p{L}))*?\.(?:png|jpe?g|gif|webp|bmp|mp4|m4v|mov|webm|mkv|avi|wmv|flv|mpe?g|ogv|3gp)\b(?![.-]\w)/giu;
+const IMG_PATH_RE = new RegExp(
+  String.raw`(?<![A-Za-z])[A-Za-z]:[\\/]${NAME_CHAR}*?\.(?:png|jpe?g|gif|webp|bmp|mp4|m4v|mov|webm|mkv|avi|wmv|flv|mpe?g|ogv|3gp)\b(?![.-]\w)`,
+  "giu",
+);
+
+/** A whole absolute path, a `:line:col` suffix aside (`clickablePath`). */
+const CLICKABLE_PATH_RE = new RegExp(
+  String.raw`^([A-Za-z]:[\\/]${NAME_CHAR}+?)(?::\d+(?::\d+)?)?$`,
+  "u",
+);
+
+/**
+ * `text` when it is an absolute Windows path, whole (a `:line:col` suffix
+ * stripped), else `null`: what a click on inline code or a tool's header
+ * opens. Colons only follow the drive letter, so `https://…` never matches.
+ */
+export function clickablePath(text: string): string | null {
+  const m = CLICKABLE_PATH_RE.exec(text.trim());
+  return m ? m[1] : null;
+}
 
 /**
  * Relative image paths with at least one directory (`.screenshots/x.png`,

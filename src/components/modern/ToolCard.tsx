@@ -2,10 +2,10 @@ import { Fragment, memo, useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   MarkdownContent,
-  clickablePath,
   openPath,
   type ToastFn,
 } from "@/components/modern/MarkdownContent";
+import { clickablePath } from "@/lib/imagePaths";
 import {
   ThumbStrip,
   type LightboxContent,

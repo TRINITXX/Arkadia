@@ -75,6 +75,84 @@ describe("question rounds in Claude's reply", () => {
     expect(parseQuestionRound("Corrigé : le test passe.")).toEqual([]);
   });
 
+  it("reads options written on the question's line, its reco there too", () => {
+    // As Claude wrote them in the Lab (31/10/2026).
+    const oneLine = [
+      "❓ **Q1** - **Couleur du bouton** : quelle couleur ? a) Violet b) Vert c) Gris",
+      "",
+      "➡️ a) Violet : il reprend la couleur des cartes.",
+      "",
+      "❓ **Q2** - **Taille du texte** : quelle taille ? a) Petite b) Moyenne c) Grande ➡️ c) Grande : le titre ressort mieux.",
+      "",
+      "Je code dès tes réponses.",
+    ].join("\n");
+    const [q1, q2] = parseQuestionRound(oneLine);
+    expect(q1).toMatchObject({
+      body: "quelle couleur ?",
+      options: [
+        { key: "a", label: "Violet" },
+        { key: "b", label: "Vert" },
+        { key: "c", label: "Gris" },
+      ],
+      recommendedKey: "a",
+    });
+    expect(q2).toMatchObject({
+      body: "quelle taille ?",
+      options: [
+        { key: "a", label: "Petite" },
+        { key: "b", label: "Moyenne" },
+        { key: "c", label: "Grande" },
+      ],
+      recommendation: "c) Grande : le titre ressort mieux.",
+      recommendedKey: "c",
+    });
+    expect(withoutQuestions(oneLine)).toBe("Je code dès tes réponses.");
+  });
+
+  it("takes no letter in a sentence for options", () => {
+    const [q] = parseQuestionRound(
+      "❓ **Q1** - **Ordre** : on garde le cas a) seul, ou aussi le cas (c) ?",
+    );
+    expect(q.options).toEqual([]);
+    const [mid] = parseQuestionRound(
+      "❓ **Q1** - **Choix** : a) Violet, b) Vert ou c) Gris ?",
+    );
+    expect(mid.options.map((o) => o.label)).toEqual(["Violet", "Vert", "Gris"]);
+  });
+
+  it("takes a ➡ in the question's words for no recommendation", () => {
+    const flow = [
+      "❓ **Q1** - **Parcours** : on garde ce parcours ?",
+      "Aujourd'hui : clic ➡️ fiche.",
+      "",
+      "a) Garder",
+      "b) Changer",
+      "",
+      "➡️ a) Garder.",
+      "",
+      "Je reprends ensuite.",
+    ].join("\n");
+    expect(parseQuestionRound(flow)[0]).toMatchObject({
+      recommendation: "a) Garder.",
+      recommendedKey: "a",
+    });
+    expect(parseQuestionRound(flow)[0].options).toHaveLength(2);
+    expect(withoutQuestions(flow)).toBe("Je reprends ensuite.");
+  });
+
+  it("leaves the words after a « Question n sur N » in the message only", () => {
+    const series = [
+      "Question 1 sur 2.",
+      "Quelle couleur ? a) Violet b) Vert",
+      "",
+      "Puis je relance a) le build et b) les tests.",
+    ].join("\n");
+    expect(parseQuestionRound(series)[0].body).toBe("");
+    expect(withoutQuestions(series)).toBe(
+      "Puis je relance a) le build et b) les tests.",
+    );
+  });
+
   it("offers the sheet for the last finished reply only", () => {
     const text = (id: string, t: string, streaming = false): ChatItem => ({
       kind: "text",

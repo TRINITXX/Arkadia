@@ -63,6 +63,89 @@ function optionsOf(lines: string[]): RoundOption[] {
   return options.length >= 2 ? options : [];
 }
 
+/** An option's letter inside a line: `a)`, `(b)`, `**c)**`. */
+const INLINE_OPTION = /(^|[\s(:;,])(?:\*\*)?\(?([a-hA-H])\)(?:\*\*)?\s+/g;
+
+/**
+ * Options written on one line, `… ? a) Violet b) Vert c) Gris`: the letters
+ * in order from a, two at least, each with its words. `rest`: what the line
+ * says before them.
+ */
+function inlineOptions(
+  line: string,
+): { options: RoundOption[]; rest: string } | null {
+  const marks: { key: string; at: number; end: number }[] = [];
+  for (const m of line.matchAll(INLINE_OPTION)) {
+    const last = marks[marks.length - 1];
+    const want = last
+      ? String.fromCharCode(last.key.toLowerCase().charCodeAt(0) + 1)
+      : "a";
+    // Another letter is part of a label: `b) le cas (c) seul`.
+    if (m[2].toLowerCase() !== want) continue;
+    marks.push({
+      key: m[2],
+      at: m.index + m[1].length,
+      end: m.index + m[0].length,
+    });
+  }
+  if (marks.length < 2) return null;
+  // The sentence goes on around them: `a) Violet, b) Vert ou c) Gris ?`.
+  const tidy = (label: string) =>
+    label
+      .replace(/[\s,;.?!]+$/, "")
+      .replace(/\s+(?:ou|et)$/i, "")
+      .replace(/[\s,;.?!]+$/, "");
+  const options = marks.map((mark, i) => ({
+    key: mark.key,
+    label: tidy(unbold(line.slice(mark.end, marks[i + 1]?.at ?? line.length))),
+  }));
+  if (options.some((o) => !o.label)) return null;
+  return { options, rest: line.slice(0, marks[0].at).trim() };
+}
+
+/** A question's options, one per line or all on one line, its lines without
+ *  them, and the last line that held one (-1 for none). */
+function optionsIn(lines: string[]): {
+  options: RoundOption[];
+  lines: string[];
+  lastAt: number;
+} {
+  const options = optionsOf(lines);
+  if (options.length > 0)
+    return {
+      options,
+      lines: lines.filter((l) => !OPTION.test(l)),
+      lastAt: lines.reduce((at, l, i) => (OPTION.test(l) ? i : at), -1),
+    };
+  for (let i = 0; i < lines.length; i++) {
+    const inline = inlineOptions(lines[i]);
+    if (inline)
+      return {
+        options: inline.options,
+        lines: lines.map((l, j) => (j === i ? inline.rest : l)),
+        lastAt: i,
+      };
+  }
+  return { options: [], lines, lastAt: -1 };
+}
+
+/**
+ * Where a recommendation shares the question's line (`… ? a) Petite
+ * b) Grande ➡️ b) …`): its first ➡ after the « ? », else -1. A ➡ before
+ * it, or in the body, is the question's own words (`clic ➡️ fiche`).
+ */
+function arrowAt(head: string): number {
+  const asked = head.indexOf("?");
+  return asked < 0 ? -1 : head.indexOf("➡", asked);
+}
+
+/** The question's line, its recommendation on a line of its own. */
+function splitArrow(head: string): string[] {
+  const at = arrowAt(head);
+  if (at < 0) return [head];
+  return [head.slice(0, at).trimEnd(), head.slice(at)];
+}
+
 const RULE = /^\s*-{3,}\s*$/;
 
 /**
@@ -82,7 +165,8 @@ function grillingBlocks(lines: string[]): [number, number][] {
     if (QUESTION_MARK.test(line)) {
       close(i);
       start = i;
-      advised = false;
+      // The recommendation may share the question's line (`arrowAt`).
+      advised = arrowAt(line) >= 0;
     } else if (start >= 0) {
       if (RULE.test(line) || (advised && !line.trim())) close(i);
       else if (ARROW.test(line)) advised = true;
@@ -94,9 +178,10 @@ function grillingBlocks(lines: string[]): [number, number][] {
 
 /** `❓ **Q1** - **Titre** : corps…` blocks (`grillingBlocks`). */
 function grillingRound(lines: string[]): RoundQuestion[] {
-  const blocks = grillingBlocks(lines).map(([start, end]) =>
-    lines.slice(start, end),
-  );
+  const blocks = grillingBlocks(lines).map(([start, end]) => [
+    ...splitArrow(lines[start]),
+    ...lines.slice(start + 1, end),
+  ]);
   return blocks.map((block, i) => {
     const head = block[0].replace(QUESTION_MARK, "");
     const number = /^\**\s*Q\s*(\d+)\s*\**\s*[-–—:.]?\s*/i.exec(head);
@@ -118,11 +203,8 @@ function grillingRound(lines: string[]): RoundQuestion[] {
       else body.push(line);
     }
     recommendation = recommendation?.trim() || null;
-    const options = optionsOf(body);
-    const text = body
-      .filter((l) => !(options.length > 0 && OPTION.test(l)))
-      .join("\n")
-      .trim();
+    const { options, lines: kept } = optionsIn(body);
+    const text = kept.join("\n").trim();
     return {
       id: `Q${number?.[1] ?? i + 1}`,
       title: title || unbold(text.split("\n")[0] ?? ""),
@@ -134,34 +216,37 @@ function grillingRound(lines: string[]): RoundQuestion[] {
   });
 }
 
-/** « Question n sur N. », context, the question, `a) b) c)`, the leaning. */
-function seriesQuestion(lines: string[]): RoundQuestion[] {
+/**
+ * « Question n sur N. », context, the question, `a) b) c)`, the leaning: the
+ * question, and its lines `[start, end)`, down to the leaning (else its
+ * options). What follows is Claude's own words again.
+ */
+function seriesRead(
+  lines: string[],
+): { question: RoundQuestion; start: number; end: number } | null {
   const start = lines.findIndex((l) => SERIES.test(l));
-  if (start < 0) return [];
+  if (start < 0) return null;
   const n = SERIES.exec(lines[start])![1];
   const after = lines.slice(start + 1);
-  const options = optionsOf(after);
-  if (options.length === 0) return [];
-  let recommendation: string | null = null;
-  let recommendedKey: string | null = null;
-  const prose: string[] = [];
-  for (const line of after) {
-    const lean = LEANING.exec(line);
-    if (lean) {
-      recommendedKey = lean[1];
-      recommendation = `${lean[1]}) ${lean[2]}`.trim();
-      continue;
-    }
-    if (!OPTION.test(line) && line.trim()) prose.push(unbold(line));
-  }
+  // The options come before the leaning, whose « (a) » is none.
+  const leanAt = after.findIndex((l) => LEANING.test(l));
+  const scope = leanAt >= 0 ? after.slice(0, leanAt) : after;
+  const found = optionsIn(scope);
+  if (found.options.length === 0) return null;
+  const last = leanAt >= 0 ? leanAt : found.lastAt;
+  const { options, lines: kept } = optionsIn(scope.slice(0, last + 1));
+  const lean = leanAt >= 0 ? LEANING.exec(after[leanAt]) : null;
+  const recommendedKey = lean ? lean[1] : null;
+  const recommendation = lean ? `${lean[1]}) ${lean[2]}`.trim() : null;
+  const prose = kept.filter((line) => line.trim()).map(unbold);
   // The question is its line ending with « ? », the rest is context.
   let qi = -1;
   prose.forEach((l, i) => {
     if (l.trimEnd().endsWith("?")) qi = i;
   });
   const title = qi >= 0 ? prose[qi] : (prose[0] ?? "");
-  return [
-    {
+  return {
+    question: {
       id: `Q${n}`,
       title,
       body: prose.filter((_, i) => i !== (qi >= 0 ? qi : 0)).join("\n"),
@@ -169,22 +254,19 @@ function seriesQuestion(lines: string[]): RoundQuestion[] {
       recommendation,
       recommendedKey,
     },
-  ];
+    start,
+    end: start + 1 + last + 1,
+  };
 }
 
-/** « Question n sur N. » down to the leaning (else the last option). */
+function seriesQuestion(lines: string[]): RoundQuestion[] {
+  const read = seriesRead(lines);
+  return read ? [read.question] : [];
+}
+
 function seriesBlock(lines: string[]): [number, number][] {
-  if (seriesQuestion(lines).length === 0) return [];
-  const start = lines.findIndex((l) => SERIES.test(l));
-  let end = start + 1;
-  for (let i = start + 1; i < lines.length; i++) {
-    if (LEANING.test(lines[i])) {
-      end = i + 1;
-      break;
-    }
-    if (OPTION.test(lines[i])) end = i + 1;
-  }
-  return [[start, end]];
+  const read = seriesRead(lines);
+  return read ? [[read.start, read.end]] : [];
 }
 
 const linesOf = (text: string) => text.replace(/\r\n/g, "\n").split("\n");
