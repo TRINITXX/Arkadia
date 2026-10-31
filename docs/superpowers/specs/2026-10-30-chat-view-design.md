@@ -126,6 +126,43 @@ recopiée du terminal coupée au mauvais endroit.
    compte : seuls les événements vivants notifient. Un onglet caché notifie quand même.
 8. **Téléphone** : rien pour l'instant.
 
+## Visuels dans le chat (décidé avec Alexis le 31/10/2026)
+
+1. **Outil** : `show_visual` (serveur MCP `arkadia`, dans chaque chat, `chat-server/visual.ts`). Claude lui passe
+   une page HTML complète (512 Ko au plus), un titre et `wide`. La page s'affiche dans la colonne, à la
+   place de l'appel, au-dessus de sa réponse. Jamais de demande d'autorisation.
+2. **Carte** : bandeau (titre, « Agrandir » sur tout le volet, « Ouvrir dans le navigateur »). Largeur de
+   la colonne, ou du volet moins 16 px de chaque côté avec `wide` (maquettes côte à côte, tableau large,
+   graphique dense).
+3. **Isolement** : cadre `sandbox="allow-scripts"`, coquille servie par le protocole `arkvisual` avec sa
+   propre CSP (scripts de jsdelivr, cdnjs et unpkg seulement, aucun réseau, aucun cadre). Un `srcdoc`
+   hériterait de la CSP de l'app et n'exécuterait aucun script. L'IPC reste hors d'atteinte (vérifié par
+   `examples/frame_ipc_probe.rs`, voir REVIEW.md). Les Trusted Types de la coquille et le premier script de la
+   page gênent les cadres imbriqués et WebRTC, sans les fermer tout à fait : une page peut encore ouvrir un
+   cadre avec WebRTC et voler quelques frappes. Risque accepté par Alexis le 31/10/2026 (la page de Claude
+   dans sa propre session ; il faudrait un Claude trompé ou un CDN piraté). Un lien s'ouvre dans le navigateur, sur un clic seulement.
+4. **Images locales** : un chemin absolu dans `src`, `srcset` ou `url()` devient une data URL à l'appel,
+   si ses octets sont une image (8 Mo l'image, 24 Mo la page). La copie est gardée
+   (`%LOCALAPPDATA%\Arkadia\chat-visuals`) : une session reprise la retrouve, même si le fichier a bougé.
+5. **Couleurs** : variables du chat (`chatTheme.ts`) posées avant les styles de la page, plus une feuille
+   de base (fond, texte, police, marge de 16 px). La description de l'outil les liste.
+6. **Contrôle** : la page rend chaque nouveau visuel dans un cadre invisible, onglet affiché ou non, et
+   renvoie erreurs de script, `console.error`, ressources refusées, page vide, débordement, hauteur liée
+   au cadre. Le résultat de l'outil le dit à Claude, qui corrige et rappelle l'outil. Un visuel en erreur
+   reste replié (« Voir quand même »). Sans rapport en 8 s : « non vérifié ».
+7. **Choix** : `window.arkadia.choose(texte)` met le texte dans la saisie du volet, sans l'envoyer. Un
+   second clic remplace le premier choix. Seul un clic dans le cadre compte.
+8. **Historique** : l'entrée de l'appel garde la page. Une session reprise redemande la copie aux images
+   (`visual_html`). Un rechargement rejoue le contrôle seulement s'il n'avait pas fini.
+9. **Quand** : règle ajoutée au prompt des chats du Lab (`VISUAL_RULE`). Visuel pour expliquer, comparer,
+   faire choisir maintenant ; artefact claude.ai pour une grosse page, un lien à partager ou rouvrir, une
+   liste à remplir sur plusieurs jours, ou hors du Lab. Les blocs Mermaid restent rendus comme avant.
+10. **Prompt système (décision d'Alexis du 31/10/2026)** : sans `systemPrompt`, le SDK lance un prompt
+    presque vide. Le chat prend donc le préréglage `claude_code`, comme le terminal, et le Lab y ajoute
+    la règle des visuels (`append`).
+
+Aperçu : `chat-preview.html?s=visuals` (un graphique écarté puis corrigé, trois maquettes avec choix).
+
 ## Étapes
 
 1. Prototype du vocal (Claude Code caché) : le risque principal, testé avant le reste.

@@ -62,6 +62,7 @@ import {
 } from "@/lib/chat/chatState";
 import type { ChatImage } from "@/lib/chat/useChatSession";
 import type { SlashActions } from "@/lib/chat/useSlashActions";
+import { withChoice } from "@/lib/chat/chatVisual";
 
 export interface ChatViewProps {
   state: ChatState;
@@ -286,7 +287,14 @@ export function ChatView({
     const scroller = scrollRef.current;
     if (!inner || !scroller) return;
     let wasHidden = scroller.clientHeight === 0;
+    // A wide visual takes the pane's width, not the column's (`.chat-visual.wide`).
+    const lane = () => {
+      if (scroller.clientWidth > 0)
+        scroller.style.setProperty("--chat-lane", `${scroller.clientWidth}px`);
+    };
+    lane();
     const ro = new ResizeObserver(() => {
+      lane();
       if (scroller.clientHeight === 0) {
         wasHidden = true;
         return;
@@ -348,6 +356,32 @@ export function ChatView({
   const answer = (result: PermissionResult) => {
     if (request) onAnswer(request.requestId, result);
   };
+  // A visual's choice goes into the input, never sent: the user can add a
+  // comment. A second click changes the pick (`withChoice`).
+  const lastChoice = useRef<string | null>(null);
+  // Read when a choice comes: the pane's `onActivate` is a new arrow each
+  // render, and a `choose` that changed with it would draw the whole column
+  // again on every render (`ChatTimeline` is memoised).
+  const activateRef = useRef(onActivate);
+  useLayoutEffect(() => {
+    activateRef.current = onActivate;
+  });
+  const choose = useCallback(
+    (text: string) => {
+      // Read now: the updater runs later, after the ref holds this choice.
+      const previous = lastChoice.current;
+      lastChoice.current = text;
+      onDraft((d) => ({ ...d, text: withChoice(d.text, text, previous) }));
+      // A click in a frame doesn't reach the pane: it becomes the active one here.
+      activateRef.current();
+      requestAnimationFrame(() =>
+        rootRef.current
+          ?.querySelector<HTMLTextAreaElement>(".chat-box textarea")
+          ?.focus(),
+      );
+    },
+    [onDraft],
+  );
 
   let bottom: React.ReactNode;
   if (state.closed) {
@@ -504,6 +538,10 @@ export function ChatView({
             tailFirst={tailFirst}
             onRemoveQueued={state.closed ? undefined : sdkActions?.removeQueued}
             onReloadPlugins={sdkActions?.reloadPlugins}
+            visuals={state.visuals}
+            onVisualHtml={sdkActions?.visualHtml}
+            onChoose={choose}
+            onOpenVisual={sdkActions?.openVisual}
           />
         </div>
       </div>

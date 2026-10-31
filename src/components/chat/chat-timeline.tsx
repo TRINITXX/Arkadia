@@ -18,6 +18,7 @@ import { ChatProseContexts } from "@/components/chat/chat-prose-contexts";
 import { ChatQueuedMark } from "@/components/chat/chat-queued-mark";
 import { ChatReplyText } from "@/components/chat/chat-reply-text";
 import { ChatUserBody } from "@/components/chat/chat-user-body";
+import { ChatVisualCard } from "@/components/chat/chat-visual-card";
 import { ChatWorkGroup } from "@/components/chat/chat-work-group";
 import {
   groupChatItems,
@@ -28,11 +29,13 @@ import { withDayBreaks } from "@/lib/chat/chatDays";
 import { chatGallery } from "@/lib/chat/chatImages";
 import { peerLabel } from "@/lib/chat/chatPeer";
 import { latestPlan, type ChatItem, type Subagent } from "@/lib/chat/chatState";
+import type { VisualEntry } from "@/lib/chat/chatVisual";
 import { turnDoneLine } from "@/lib/chat/chatSteps";
 import { copiedCodeMessage } from "@/lib/codeCopy";
 import type { ImageRef } from "@/lib/imageGallery";
 
 const NO_IMAGES: ImageRef[] = [];
+const NO_VISUALS: Record<string, VisualEntry> = {};
 
 /** Rows a long chat draws first when it comes back (`tailFirst`). */
 const TAIL_ROWS = 40;
@@ -67,6 +70,13 @@ interface ChatTimelineProps {
   onRemoveQueued?: (uuid: string) => void;
   /** « Recharger » under plugins that failed to load. */
   onReloadPlugins?: () => void;
+  /** Claude's visuals' pages and checks (`ChatState.visuals`). */
+  visuals?: Record<string, VisualEntry>;
+  /** A past visual's page with its images in, asked of the server. */
+  onVisualHtml?: (toolUseId: string) => void;
+  /** A visual's choice: into the input, not sent. */
+  onChoose?: (text: string) => void;
+  onOpenVisual?: (html: string, title: string) => void;
 }
 
 /** The uuid the chat server sent a message under (`sent:<uuid>`). */
@@ -90,6 +100,10 @@ export const ChatTimeline = memo(function ChatTimeline({
   tailFirst = false,
   onRemoveQueued,
   onReloadPlugins,
+  visuals = NO_VISUALS,
+  onVisualHtml,
+  onChoose,
+  onOpenVisual,
 }: ChatTimelineProps) {
   const remover = (item: { id: string; queued?: boolean }) => {
     const uuid = item.queued ? sentUuid(item.id) : null;
@@ -302,6 +316,17 @@ export const ChatTimeline = memo(function ChatTimeline({
               </div>
             );
           }
+          case "visual":
+            return (
+              <ChatVisualCard
+                key={unit.item.id}
+                tool={unit.item}
+                entry={visuals[unit.item.id]}
+                onNeedHtml={onVisualHtml}
+                onChoose={onChoose}
+                onOpenInBrowser={onOpenVisual}
+              />
+            );
           case "plan": {
             const at = items.findIndex((i) => i.id === unit.item.id);
             return (

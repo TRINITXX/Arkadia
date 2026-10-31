@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com; style-src 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com; font-src data: https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com; img-src data: blob: https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com; media-src data: blob:; connect-src 'none'; worker-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types default"
+    />
+    <meta http-equiv="x-dns-prefetch-control" content="off" />
+  </head>
+  <body>
+    <!--
+  The shell of a chat visual (`show_visual`). The Lab serves it from its
+  `arkvisual` protocol with the CSP above (`src-tauri/src/visual_frame.rs`):
+  a `srcdoc` frame would inherit the app's CSP, which blocks every script.
+  The page posts the visual in (`chatVisual.ts`), written over this shell.
+
+  Trusted Types are the visual's wall against a frame of its own: a frame
+  inside it would be a fresh realm, WebRTC and all, out of reach of the CSP
+  (`frame-src` lets a srcdoc through). The engine sends every HTML string the
+  page parses (this shell's write, innerHTML, document.write, parseHTMLUnsafe…)
+  through the one policy allowed, `default`, made here before the page exists:
+  frame tags become inert ones, declarative shadow roots plain templates, and a
+  srcdoc is refused. Its Window outlives `document.open`: the policy stays.
+-->
+    <script>
+      (function () {
+        var parent = window.parent;
+        if (parent === window) return;
+        if (window.trustedTypes && !window.trustedTypes.defaultPolicy) {
+          window.trustedTypes.createPolicy("default", {
+            createHTML: function (html, _type, sink) {
+              if (/srcdoc/i.test(String(sink))) return null;
+              return String(html)
+                .replace(
+                  /<(\/?)(iframe|frame|frameset|object|embed|fencedframe|portal)\b/gi,
+                  "<$1x-blocked-$2",
+                )
+                .replace(/\bshadowroot(mode)?(\s*=)/gi, "data-shadowroot$1$2");
+            },
+            // eval and the page's own scripts pass; a javascript: navigation doesn't.
+            createScript: function (code, _type, sink) {
+              return /location|href|src|navigat/i.test(String(sink))
+                ? null
+                : code;
+            },
+            createScriptURL: function (url) {
+              return url;
+            },
+          });
+        }
+        window.addEventListener("message", function take(e) {
+          var d = e.data;
+          if (
+            e.source !== parent ||
+            !d ||
+            d.arkadiaVisualDocument !== 1 ||
+            typeof d.html !== "string"
+          )
+            return;
+          window.removeEventListener("message", take);
+          document.open();
+          document.write(d.html);
+          document.close();
+        });
+        parent.postMessage({ arkadiaVisual: 1, kind: "shell" }, "*");
+      })();
+    </script>
+  </body>
+</html>

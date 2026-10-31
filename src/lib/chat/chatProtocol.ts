@@ -151,6 +151,33 @@ export type ChatEvent =
       truncated: boolean;
       error?: string;
     }
+  /**
+   * Claude called `show_visual` (`chat-server/visual.ts`): the page, its
+   * local images in, for the card and the page's offscreen check.
+   */
+  | {
+      type: "visual_check";
+      chatId: string;
+      checkId: string;
+      toolUseId: string | null;
+      /** Null when replayed: the server sends the page live only. */
+      html: string | null;
+      title: string;
+      wide: boolean;
+      /** A copy with its images in was kept: ask `visual_html` for it. */
+      stored?: boolean;
+      /** The server's account key (`main` or an account id). */
+      account?: string | null;
+    }
+  /** That check is over (reported or timed out). */
+  | { type: "visual_checked"; chatId: string; checkId: string }
+  /** A past visual's page with its images in; null: none kept (not replayed). */
+  | {
+      type: "visual_html";
+      chatId: string;
+      toolUseId: string;
+      html: string | null;
+    }
   | { type: "closed"; chatId: string; error?: string }
   | { type: "error"; chatId?: string; message: string }
   /** From Rust: the server process of an account ended. */
@@ -318,6 +345,12 @@ export type ChatCommand =
   | { type: "mcp_status"; chatId: string }
   /** Plugins and skills read again from disk (plugin errors' « Recharger »). */
   | { type: "reload_plugins"; chatId: string }
+  /** What the page's offscreen render of a visual found (`chatVisualProbe`). */
+  | { type: "visual_report"; chatId: string; checkId: string; report: unknown }
+  /** A past visual's page with its images in (answered by `visual_html`). */
+  | { type: "visual_html"; chatId: string; toolUseId: string }
+  /** « Ouvrir dans le navigateur »: the page as the card shows it. */
+  | { type: "visual_open"; chatId: string; html: string; title: string }
   | { type: "close"; chatId: string };
 
 /** The SDK's `EffortLevel`, low to max. */

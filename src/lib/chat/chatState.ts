@@ -27,6 +27,7 @@ import { resultNotice, type RetryInfo } from "@/lib/chat/chatErrors";
 import { peerMessages, type PeerMessage } from "@/lib/chat/chatPeer";
 import { addSdkContent, compactNotice } from "@/lib/chat/chatSdkContent";
 import { toolDetail, type ToolDetail } from "@/lib/chat/chatToolResult";
+import type { VisualEntry } from "@/lib/chat/chatVisual";
 import {
   addSubagentMessage,
   addTaskEvent,
@@ -255,6 +256,8 @@ export interface ChatState {
   interrupted: boolean;
   /** Models, effort, fast mode, MCP servers and requests, hooks (`chatSdkSettings`). */
   sdk: SdkState;
+  /** Claude's visuals (`show_visual`) by tool call: their page and check. */
+  visuals: Record<string, VisualEntry>;
 }
 
 export const EMPTY_CHAT: ChatState = {
@@ -295,6 +298,7 @@ export const EMPTY_CHAT: ChatState = {
   apiError: null,
   interrupted: false,
   sdk: EMPTY_SDK,
+  visuals: {},
 };
 
 const obj = (v: unknown): JsonObject =>
@@ -1238,6 +1242,45 @@ export function reduceChat(
       return addHistory(state, event.messages, event.truncated, event.older);
     case "workflow_live":
       return addWorkflowLive(state, event.taskId, event.agents);
+    case "visual_check": {
+      if (!event.toolUseId) return state;
+      const known = state.visuals[event.toolUseId];
+      return {
+        ...state,
+        visuals: {
+          ...state.visuals,
+          // A replayed check has no page: one already known stays.
+          [event.toolUseId]: {
+            html: event.html ?? known?.html ?? null,
+            checking: true,
+            stored: event.stored === true,
+          },
+        },
+      };
+    }
+    case "visual_checked": {
+      const entry = state.visuals[event.checkId];
+      if (!entry) return state;
+      return {
+        ...state,
+        visuals: {
+          ...state.visuals,
+          [event.checkId]: { ...entry, checking: false },
+        },
+      };
+    }
+    case "visual_html": {
+      const known = state.visuals[event.toolUseId];
+      // A page already known (sent live) wins over the kept copy.
+      if (known?.html) return state;
+      return {
+        ...state,
+        visuals: {
+          ...state.visuals,
+          [event.toolUseId]: { html: event.html, checking: known?.checking ?? false },
+        },
+      };
+    }
     case "closed": {
       // Its Claude Code is gone, and the background work it ran with it.
       const ended = endTurn(interruptTasks(state, now));

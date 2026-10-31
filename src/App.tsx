@@ -132,6 +132,7 @@ import {
 import { dropSheet, openRoundSheet } from "@/lib/chat/chatSheetAnswers";
 import { useChatLimitSwitch } from "@/lib/chat/useChatLimitSwitch";
 import { useChatNotify } from "@/lib/chat/useChatNotify";
+import { useVisualProbe } from "@/lib/chat/useVisualProbe";
 import { dropPathsInChat } from "@/lib/chat/chatDrop";
 import {
   dropMessagesOnly,
@@ -312,6 +313,8 @@ export function App() {
   // A chat pane's rings come from its chat (the hook skips chat panes): a
   // pane map left by its terminal before the switch must not ring it.
   const chatRings = useChatNotify(tabs);
+  // Claude's visuals are checked offscreen as they come, tab shown or not.
+  useVisualProbe();
   const effectivePaneStates = useMemo(() => {
     const merged: Record<string, AgentStateValue> = {};
     for (const tab of tabs) {

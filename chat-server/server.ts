@@ -9,12 +9,15 @@
 // gets them again by starting the same chat, while Claude goes on working.
 
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { needsReread, outputFiles, readConsoleTail } from "./taskOutput.ts";
+import { storedVisual, visualServer, VISUAL_RULE, type PreparedVisual } from "./visual.ts";
+import { readVisualReport, VISUAL_SERVER, VISUAL_TOOL_NAME, type VisualReport } from "./visualHtml.ts";
 import { WorkflowWatch, type WorkflowLiveAgent } from "./workflowWatch.ts";
 import {
   getSessionInfo,
@@ -126,6 +129,12 @@ export type Command =
   | { type: "mcp_status"; chatId: string }
   /** Plugins and skills read again from disk. */
   | { type: "reload_plugins"; chatId: string }
+  /** The page rendered a visual (`visual_check`): what broke, for the tool's result. */
+  | { type: "visual_report"; chatId: string; checkId: string; report: unknown }
+  /** A past visual's page with its images in (`storedVisual`), for a resumed chat. */
+  | { type: "visual_html"; chatId: string; toolUseId: string }
+  /** « Ouvrir dans le navigateur »: the page as the column shows it, theme in. */
+  | { type: "visual_open"; chatId: string; html: string; title: string }
   | { type: "close"; chatId: string };
 
 type StartCommand = Extract<Command, { type: "start" }>;
@@ -157,6 +166,20 @@ const extras = (q: Query) => q as Query & QueryExtras;
 /** Polls the MCP servers' state while some still connect, this many times. */
 const MCP_POLL_MS = 5_000;
 const MCP_POLLS = 12;
+
+/** How long a visual waits for the page's report before it is « not verified ». */
+const VISUAL_CHECK_MS = 8_000;
+
+/** Set by Arkadia Lab on its chats (`chat.rs`): only they get the visuals' rule. */
+const LAB_MARKER = "ARKADIA_LAB";
+
+/**
+ * The account this server runs for (`chat.rs`): a visual's check names it,
+ * so a page reloaded meanwhile sends its report here. Not passed on to
+ * Claude Code: it is the server's own.
+ */
+const ACCOUNT = process.env.ARKADIA_CHAT_ACCOUNT ?? null;
+delete process.env.ARKADIA_CHAT_ACCOUNT;
 
 export type ServerEvent =
   /** A start found the chat running: its events follow, from the beginning. */
@@ -300,6 +323,28 @@ export type ServerEvent =
     }
   /** A running workflow's agents from its folder (`WorkflowWatch`). */
   | { type: "workflow_live"; chatId: string; taskId: string; agents: WorkflowLiveAgent[] }
+  /**
+   * Claude called `show_visual`: the page, its local images in, for the
+   * column's card and for the page's offscreen check (`visual_report`).
+   */
+  | {
+      type: "visual_check";
+      chatId: string;
+      checkId: string;
+      toolUseId: string | null;
+      /** Sent live only: the log keeps the check without its page (null). */
+      html: string | null;
+      title: string;
+      wide: boolean;
+      /** A copy with its images in was kept: `visual_html` gives it. */
+      stored: boolean;
+      /** This server's account (`chat.rs`): where the page sends its report. */
+      account: string | null;
+    }
+  /** That check is over (reported, or timed out): a replay doesn't check it again. */
+  | { type: "visual_checked"; chatId: string; checkId: string }
+  /** The answer to `visual_html` (not kept for a replay); null: none kept. */
+  | { type: "visual_html"; chatId: string; toolUseId: string; html: string | null }
   /** The end of a background shell's output (not kept for a replay). */
   | {
       type: "task_output";
@@ -436,6 +481,10 @@ class Chat {
   private mcpTimer: ReturnType<typeof setTimeout> | undefined;
   /** Background shells' output files, by task id (`noteOutputFiles`). */
   private outputFiles = new Map<string, string>();
+  /** Visuals waiting for the page's report, by check id (`checkVisual`). */
+  private visualChecks = new Map<string, (report: VisualReport | null) => void>();
+  /** Their pages, while their check is open: a reattached page checks them. */
+  private visualPages = new Map<string, ServerEvent>();
 
   // No parameter properties: Node runs this file by stripping its types.
   constructor(chatId: string, start: Boot) {
@@ -521,6 +570,18 @@ class Chat {
         // mode: the user's choice (31/10/2026), and the chat has no accept
         // button for a held one. Session only, never written to a file.
         settings: { crossSessionInbound: "accept" },
+        // `show_visual`: a page inline in the column, checked by the page
+        // before the user sees it. It shows and touches nothing: never asked.
+        mcpServers: { [VISUAL_SERVER]: visualServer((v) => this.checkVisual(v)) },
+        allowedTools: [VISUAL_TOOL_NAME],
+        // Claude Code's own prompt, as in the terminal (the user's pick of
+        // 31/10/2026): left out, the SDK runs a near-empty one. The Lab adds
+        // its rule of a visual against an artifact.
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          ...(start.env?.[LAB_MARKER] === "1" ? { append: VISUAL_RULE } : {}),
+        },
         stderr: (data) => process.stderr.write(`[${this.chatId}] ${data}`),
       },
     });
@@ -543,11 +604,16 @@ class Chat {
   /** Sends an event to the page and keeps it for a later reattach. */
   private out(event: ServerEvent): void {
     if (this.silent) return;
+    emit(this.remember(event));
+  }
+
+  /** Keeps an event for a later reattach, without sending it. */
+  private remember(event: ServerEvent): ServerEvent {
     // Stamped: a page that reloads gets the times things happened.
     const stamped = { ...event, at: Date.now() };
     this.log.push(stamped);
     if (this.log.length > LOG_LIMIT) this.log.splice(0, this.log.length - LOG_LIMIT);
-    emit(stamped);
+    return stamped;
   }
 
   /** Replays the chat's life to a page that just (re)opened it. */
@@ -558,6 +624,8 @@ class Chat {
     if (this.commands) emit({ type: "commands", chatId: this.chatId, commands: this.commands });
     for (const event of this.log) emit(event);
     for (const { latest } of this.workflows.values()) if (latest) emit(latest);
+    // The visuals still being checked, page and all: the page checks them.
+    for (const page of this.visualPages.values()) emit(page);
     emit({ type: "replayed", chatId: this.chatId });
     // The status bar's figures again: a long turn may have pushed them out of
     // the log, and the quotas replayed may date from long ago.
@@ -759,6 +827,41 @@ class Chat {
           : `Plugins rechargés : ${n} toujours en erreur`,
       tone: n === 0 ? "info" : "error",
     });
+  }
+
+  /**
+   * Hands a visual to the page, which renders it offscreen (any tab, shown
+   * or not) and reports what broke; null after `VISUAL_CHECK_MS`. The page
+   * goes live only: the log keeps the check without it (a page can weigh
+   * tens of Mo with its images, and the log lives as long as the chat). A
+   * page reloaded meanwhile gets it again while its check is open
+   * (`visualPages`), and asks for a kept copy later (`visual_html`).
+   */
+  private checkVisual(visual: PreparedVisual): Promise<VisualReport | null> {
+    const checkId = visual.toolUseId ?? randomUUID();
+    return new Promise((resolve) => {
+      const done = (report: VisualReport | null) => {
+        if (!this.visualChecks.delete(checkId)) return;
+        this.visualPages.delete(checkId);
+        clearTimeout(timer);
+        this.out({ type: "visual_checked", chatId: this.chatId, checkId });
+        resolve(report);
+      };
+      const timer = setTimeout(() => done(null), VISUAL_CHECK_MS);
+      this.visualChecks.set(checkId, done);
+      if (this.silent) return;
+      const check = { type: "visual_check" as const, chatId: this.chatId, checkId, account: ACCOUNT, ...visual };
+      const stub = this.remember({ ...check, html: null });
+      const page = { ...stub, html: visual.html };
+      this.visualPages.set(checkId, page);
+      emit(page);
+    });
+  }
+
+  /** The page's report on a visual; the first one counts. */
+  reportVisual(checkId: string, report: unknown): void {
+    const read = readVisualReport(report);
+    if (read) this.visualChecks.get(checkId)?.(read);
   }
 
   /** An MCP server's request waits here for the page's answer. */
@@ -1248,6 +1351,8 @@ class Chat {
     this.pending.clear();
     for (const resolve of this.elicitations.values()) resolve({ action: "cancel" });
     this.elicitations.clear();
+    for (const done of [...this.visualChecks.values()]) done(null);
+    this.visualPages.clear();
     clearTimeout(this.mcpTimer);
     this.input.end();
     this.query?.close();
@@ -1317,6 +1422,34 @@ async function history(cmd: Extract<Command, { type: "history" }>) {
 
 /** How many of the folder's sessions /resume lists. */
 const SESSIONS_LIMIT = 60;
+
+/** A past visual's page with its images in, if one was kept (`visual.ts`). */
+async function visualHtml(cmd: Extract<Command, { type: "visual_html" }>): Promise<void> {
+  const html = await storedVisual(cmd.toolUseId);
+  emit({ type: "visual_html", chatId: cmd.chatId, toolUseId: cmd.toolUseId, html });
+}
+
+/**
+ * « Ouvrir dans le navigateur »: the page in a file of the temp folder, opened
+ * by Windows' default handler (the browser). Named by its title and content:
+ * opened twice, the same file.
+ */
+async function openVisual(cmd: Extract<Command, { type: "visual_open" }>): Promise<void> {
+  const dir = join(tmpdir(), "arkadia-visuals");
+  await mkdir(dir, { recursive: true });
+  const slug =
+    cmd.title
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^\w-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "visuel";
+  const hash = createHash("sha256").update(cmd.html).digest("hex").slice(0, 8);
+  const file = join(dir, `${slug}-${hash}.html`);
+  await writeFile(file, cmd.html, "utf8");
+  // Explorer exits 1 even when it opened the file: its code says nothing.
+  execFile("explorer.exe", [file], { windowsHide: true }, () => {});
+}
 
 /** How Claude Code opens the summary that replaces a compacted conversation. */
 const COMPACT_SUMMARY = "This session is being continued from a previous conversation";
@@ -1413,6 +1546,11 @@ async function handle(cmd: Command): Promise<void> {
     return;
   }
   if (cmd.type === "history") return history(cmd);
+  // A closed chat's past visuals show too: no live chat needed.
+  if (cmd.type === "visual_html") return visualHtml(cmd);
+  if (cmd.type === "visual_open") return openVisual(cmd);
+  // A report for a chat gone meanwhile (closed, relaunched) has no one to tell.
+  if (cmd.type === "visual_report") return chats.get(cmd.chatId)?.reportVisual(cmd.checkId, cmd.report);
   if (cmd.type === "agent_history") {
     // An agent's sheet with no agent: an error, never the session's past.
     if (typeof cmd.agentId !== "string" || !cmd.agentId) {

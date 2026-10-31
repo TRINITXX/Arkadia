@@ -207,6 +207,10 @@ function dispatch(line: string): void {
   if (!("chatId" in event) || !event.chatId) return;
   const chatId = event.chatId;
   if (event.type === "attached") replaying.add(chatId);
+  // A visual's check names its server: a reloaded page reports there, even
+  // for a chat it hasn't started again (`chatCommandFor`).
+  if (event.type === "visual_check" && event.account)
+    accountOf.set(chatId, event.account);
   setActivity(chatId, nextActivity(chatActivity(chatId), event));
   if (event.type === "replayed" || event.type === "closed") {
     replaying.delete(chatId);
@@ -262,6 +266,15 @@ export async function closeChat(
 ): Promise<void> {
   await chatCommand(accountId, { type: "close", chatId });
   await new Promise((r) => setTimeout(r, CLOSE_GRACE_MS));
+}
+
+/** A command to the server that runs `chatId` (its start named the account). */
+export function chatCommandFor(
+  chatId: string,
+  command: ChatCommand,
+): Promise<void> {
+  const account = accountOf.get(chatId);
+  return chatCommand(account === "main" ? undefined : account, command);
 }
 
 export function chatCommand(

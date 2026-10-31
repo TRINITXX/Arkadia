@@ -38,6 +38,8 @@ import {
 import tools from "../chat-server/fixtures/tools.jsonl?raw";
 import pastedPng from "../src-tauri/icons/128x128@2x.png?inline";
 import { attachDraft, attachEvents } from "@/chat-preview-attach";
+import { visualNext, visualStart } from "@/chat-preview-visuals";
+import { createVisualProbe } from "@/lib/chat/chatVisualDom";
 
 /**
  * Dev-only page (`/chat-preview.html?s=<scenario>`): the chat view fed with
@@ -358,6 +360,8 @@ const SCENARIOS: Record<string, () => ChatState> = {
   suggest: () => replay([...parse(tools), SUGGESTION]),
   // Another session's message, in its own frame.
   peer: () => replay([...parse(tools), ...peerEvents()]),
+  // Claude's visuals, checked by the real probe as they come (`chat-preview-visuals`).
+  visuals: () => replay(visualStart()),
 };
 // SDK settings: model, effort and fast mode chips, MCP chip and requests,
 // a running hook, plugin errors, a cautious permission, a message withdrawn.
@@ -467,6 +471,22 @@ function Preview() {
       : { ...EMPTY_DRAFT, text: params.get("draft") ?? "" },
   );
   const [messagesOnly, setMessagesOnly] = useState(false);
+  // `?s=visuals`: each page goes through the probe; its report answers the
+  // call as the chat server would, and the next call follows.
+  useEffect(() => {
+    if (name !== "visuals") return;
+    let live = true;
+    const onEvent = createVisualProbe((_chatId, checkId, report) => {
+      if (!live) return;
+      const next = visualNext(checkId, report);
+      setChat((s) => next.reduce((acc, e) => reduceChat(acc, e, Date.now()), s));
+      for (const e of next) if (e.type === "visual_check") onEvent(e, false);
+    });
+    for (const e of visualStart()) if (e.type === "visual_check") onEvent(e, false);
+    return () => {
+      live = false;
+    };
+  }, []);
   const [status, setStatus] = useState<VoiceStatus>(
     params.get("voice") === "listening" ? "listening" : "idle",
   );
@@ -526,7 +546,12 @@ function Preview() {
         messagesOnly={messagesOnly}
         onMessagesOnly={setMessagesOnly}
         slashActions={PREVIEW_SLASH}
-        sdkActions={PREVIEW_SDK}
+        sdkActions={{
+          ...PREVIEW_SDK,
+          // Said in the console: no chat server to write the file.
+          openVisual: (_html, title) =>
+            console.info("[aperçu] ouvrir dans le navigateur :", title),
+        }}
         shellOutputs={PREVIEW_SHELL_OUTPUTS}
         onBackground={() => {}}
         // Said in the console: no chat server to stop a task.

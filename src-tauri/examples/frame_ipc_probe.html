@@ -1,0 +1,185 @@
+<!doctype html>
+<html>
+  <body>
+    <p>probe</p>
+    <!--
+  The page `frame_ipc_probe.rs` frames: every road out of a visual's frame.
+  __LABEL__ names the way it was framed (srcdoc, shell).
+-->
+    <script>
+      (function () {
+        var LABEL = "__LABEL__",
+          out = [],
+          nested = "silent";
+        function t(name, f) {
+          try {
+            out.push(name + "=" + f());
+          } catch (e) {
+            out.push(name + "=threw " + e.name);
+          }
+        }
+        t("internals", function () {
+          return typeof window.__TAURI_INTERNALS__;
+        });
+        t("ipc", function () {
+          return typeof window.ipc;
+        });
+        t("chromeWebview", function () {
+          return typeof (window.chrome && window.chrome.webview);
+        });
+        t("parentDoc", function () {
+          return typeof window.parent.document.body;
+        });
+        t("topInternals", function () {
+          return typeof window.top.__TAURI_INTERNALS__;
+        });
+        t("origin", function () {
+          return String(window.origin);
+        });
+        // WebRTC escapes the CSP: the bootstrap removes it, and any nested frame.
+        t("rtc", function () {
+          return typeof new RTCPeerConnection();
+        });
+        t("webkitRtc", function () {
+          return typeof window.webkitRTCPeerConnection;
+        });
+        window.addEventListener("message", function (e) {
+          if (e.data && e.data.nested) nested = e.data.nested;
+        });
+        try {
+          var n = document.createElement("iframe");
+          n.srcdoc =
+            "<script>var r;try{r=typeof new RTCPeerConnection();}catch(e){r='threw '+e.name;}parent.postMessage({nested:'ran rtc='+r},'*');<\/script>";
+          document.body.appendChild(n);
+        } catch (e) {
+          out.push("nestedAppend=threw " + e.name);
+        }
+        // ICE through round 2's bypass: a closed shadow root parsed apart
+        // (`parseHTMLUnsafe`) and adopted, its srcdoc frame reaching for a LAN
+        // STUN server. Split tags: the shell's policy must meet them at run
+        // time, not in this page's source.
+        var ice = "none",
+          iceDirect = "no RTCPeerConnection here";
+        window.addEventListener("message", function (e) {
+          if (e.data && e.data.ice) ice = e.data.ice;
+        });
+        // In this realm too when WebRTC is there (the bare page).
+        if (typeof window.RTCPeerConnection === "function") {
+          (async function () {
+            try {
+              var pc = new RTCPeerConnection({
+                iceServers: [{ urls: "stun:192.168.1.1:3478" }],
+              });
+              pc.createDataChannel("x");
+              var c = [];
+              pc.onicecandidate = function (e) {
+                if (e.candidate)
+                  c.push(e.candidate.type + " " + e.candidate.address);
+              };
+              await pc.setLocalDescription(await pc.createOffer());
+              await new Promise(function (s) {
+                setTimeout(s, 1500);
+              });
+              iceDirect = c.length + " candidates " + c.join("|");
+            } catch (e) {
+              iceDirect = "threw " + e.name;
+            }
+          })();
+        }
+        try {
+          var gather =
+            "<script>(async function(){var r;try{var pc=new RTCPeerConnection({iceServers:[{urls:'stun:192.168.1.1:3478'}]});pc.createDataChannel('x');var c=[];pc.onicecandidate=function(e){if(e.candidate)c.push(e.candidate.type+' '+e.candidate.address);};await pc.setLocalDescription(await pc.createOffer());await new Promise(function(s){setTimeout(s,1500)});r=c.length+' candidates '+c.join('|');}catch(e){r='threw '+e.name;}parent.postMessage({ice:r},'*');})()<\/script>";
+          var parsed = Document.parseHTMLUnsafe(
+            '<div id="h"><template shadowroot' +
+              'mode="closed"><ifr' +
+              'ame srcdoc="' +
+              gather +
+              '"></ifr' +
+              'ame></template></div>',
+          );
+          document.body.appendChild(
+            document.adoptNode(parsed.getElementById("h")),
+          );
+        } catch (e) {
+          out.push("iceSetup=threw " + e.name);
+        }
+        // A blank frame's realm lending its pristine methods (round 2's bypass).
+        t("foreignRealm", function () {
+          var f = document.createElement("iframe");
+          document.body.appendChild(f);
+          return typeof f.contentWindow.Element.prototype.attachShadow;
+        });
+        try {
+          window.__TAURI_INTERNALS__
+            .invoke("probe_hit", { via: LABEL + ":invoke" })
+            .then(
+              function () {
+                out.push("invoke=resolved");
+              },
+              function (e) {
+                out.push("invoke=rejected " + e);
+              },
+            );
+        } catch (e) {
+          out.push("invoke=threw " + e.name);
+        }
+        try {
+          window.ipc.postMessage(
+            JSON.stringify({
+              cmd: "probe_hit",
+              callback: 1,
+              error: 2,
+              payload: { via: LABEL + ":ipc-forged" },
+              __TAURI_INVOKE_KEY__: "forged",
+            }),
+          );
+          out.push("ipcPost=sent");
+        } catch (e) {
+          out.push("ipcPost=threw " + e.name);
+        }
+        try {
+          window.chrome.webview.postMessage("hello from " + LABEL);
+          out.push("webviewPost=sent");
+        } catch (e) {
+          out.push("webviewPost=threw " + e.name);
+        }
+        try {
+          fetch("http://ipc.localhost/probe_hit", {
+            method: "POST",
+            body: "{}",
+            headers: {
+              "Content-Type": "application/json",
+              "Tauri-Callback": "1",
+              "Tauri-Error": "2",
+              "Tauri-Invoke-Key": "forged",
+            },
+          }).then(
+            function (r) {
+              out.push("fetch=status " + r.status);
+            },
+            function (e) {
+              out.push("fetch=failed " + e.name);
+            },
+          );
+        } catch (e) {
+          out.push("fetch=threw " + e.name);
+        }
+        try {
+          var w = window.open("http://arkprobe.localhost/popup");
+          out.push("open=" + (w ? "window" : "null"));
+        } catch (e) {
+          out.push("open=threw " + e.name);
+        }
+        setTimeout(function () {
+          out.push("nested=" + nested);
+          out.push("ice=" + ice);
+          out.push("iceDirect=" + iceDirect);
+          window.parent.postMessage({ probe: LABEL, out: out }, "*");
+          try {
+            window.top.location.href = "http://arkprobe.localhost/navigated";
+          } catch (e) {}
+        }, 3000);
+      })();
+    </script>
+  </body>
+</html>

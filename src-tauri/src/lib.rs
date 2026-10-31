@@ -27,6 +27,7 @@ mod sessions;
 mod terminal;
 pub mod terminal_state;
 mod uiwatch;
+pub mod visual_frame;
 pub mod voice;
 
 use std::path::PathBuf;
@@ -143,6 +144,8 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         // Videos mentioned in conversations, streamed to the views.
         .register_asynchronous_uri_scheme_protocol(media::PROTOCOL, media::serve_protocol)
+        // The shell of the chat's visuals, with their own CSP (`visual_frame`).
+        .register_uri_scheme_protocol(visual_frame::PROTOCOL, visual_frame::serve)
         .manage(SessionMap::default())
         .manage(pane_viewers::PaneViewers::default())
         .manage(terminal::ScrollbackConfig::default())

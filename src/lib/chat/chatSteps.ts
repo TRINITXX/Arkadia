@@ -1,5 +1,6 @@
 import type { JsonObject } from "@/lib/chat/chatProtocol";
 import { toolLabel, toolRunning, type ToolItem } from "@/lib/chat/chatGroups";
+import { isVisualTool } from "@/lib/chat/chatVisual";
 import type { LivePhase, LiveTool } from "@/lib/chat/chatState";
 
 /**
@@ -58,6 +59,7 @@ export function toolStep(
   )
     return "consulte le web";
   if (name === "Skill") return `lance ${line(input, "skill")}`;
+  if (isVisualTool(name)) return "prépare un visuel";
   const description = line(input, "description");
   if (description)
     return description.charAt(0).toLowerCase() + description.slice(1);

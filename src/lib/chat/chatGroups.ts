@@ -1,4 +1,5 @@
 import type { ChatItem } from "@/lib/chat/chatState";
+import { isVisualTool } from "@/lib/chat/chatVisual";
 
 /**
  * How the column shows the chat's items: consecutive tool calls fold into one
@@ -23,7 +24,9 @@ export type ChatUnit =
   | { kind: "edit"; item: ToolItem }
   | { kind: "agent"; item: ToolItem }
   | { kind: "question"; item: ToolItem }
-  | { kind: "plan"; item: ToolItem };
+  | { kind: "plan"; item: ToolItem }
+  /** Claude's HTML page (`show_visual`), as a card where it was called. */
+  | { kind: "visual"; item: ToolItem };
 
 const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 /** Shown elsewhere: the task list (live line) and the session's own files. */
@@ -72,6 +75,9 @@ export function groupChatItems(items: ChatItem[]): ChatUnit[] {
     } else if (item.name === "ExitPlanMode") {
       flush();
       units.push({ kind: "plan", item });
+    } else if (isVisualTool(item.name)) {
+      flush();
+      units.push({ kind: "visual", item });
     } else {
       work = [...work, item];
     }
@@ -86,7 +92,8 @@ const NONE = new Set<string>();
  * « Messages seuls » (the terminal rail's button): the user's words, Claude's
  * replies, the messages of other sessions and subagents, the errors, and what answers the user: the commands they typed
  * (cards and notices) and the plan waiting for their answer, which the panel
- * below points to (`pending`: the tool calls a request is about). Thinking,
+ * below points to (`pending`: the tool calls a request is about), and
+ * Claude's visuals, but not one found broken (a fixed one follows). Thinking,
  * tool work, edits, subagents, question recaps, decided plans, other info
  * notices and « Terminé en » drop out.
  */
@@ -101,7 +108,8 @@ export function messagesOnly(
       u.kind === "text" ||
       u.kind === "command" ||
       (u.kind === "notice" && (u.item.tone === "error" || u.item.command)) ||
-      (u.kind === "plan" && pending.has(u.item.id)),
+      (u.kind === "plan" && pending.has(u.item.id)) ||
+      (u.kind === "visual" && !u.item.result?.isError),
   );
 }
 

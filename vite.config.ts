@@ -17,6 +17,8 @@ export default defineConfig(async () => ({
     alias: {
       "@": path.resolve(__dirname, "./src"),
       "@renderer": path.resolve(__dirname, "./crates/terminal-renderer/pkg"),
+      // The chat server's pure modules the page shares (`visualHtml.ts`).
+      "@chat-server": path.resolve(__dirname, "./chat-server"),
     },
   },
 

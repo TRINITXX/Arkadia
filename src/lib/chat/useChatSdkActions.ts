@@ -20,6 +20,10 @@ export interface ChatSdkActions {
   contextDetail: () => Promise<ContextDetail>;
   refreshMcp: () => void;
   reloadPlugins: () => void;
+  /** A past visual's page with its images in (`visual_html` into the state). */
+  visualHtml?: (toolUseId: string) => void;
+  /** « Ouvrir dans le navigateur »: the page as its card shows it. */
+  openVisual?: (html: string, title: string) => void;
 }
 
 /** A breakdown this recent answers the next hover. */
@@ -90,6 +94,9 @@ export function useChatSdkActions(
       },
       refreshMcp: () => run({ type: "mcp_status", chatId }),
       reloadPlugins: () => run({ type: "reload_plugins", chatId }),
+      visualHtml: (toolUseId) => run({ type: "visual_html", chatId, toolUseId }),
+      openVisual: (html, title) =>
+        run({ type: "visual_open", chatId, html, title }),
     };
   }, [chatId, accountId, onError]);
 }

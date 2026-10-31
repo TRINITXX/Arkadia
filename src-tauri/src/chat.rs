@@ -68,6 +68,9 @@ fn with_chat_env(mut command: Value) -> Value {
 fn spawn_server(app: &AppHandle, account_id: Option<&str>) -> Result<Server, String> {
     let mut cmd = Command::new("node");
     cmd.arg(SERVER_SCRIPT)
+        // Its own account key: a visual's check names it, so a reloaded page
+        // sends its report back here (`chatCommandFor`).
+        .env("ARKADIA_CHAT_ACCOUNT", account_key(account_id))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

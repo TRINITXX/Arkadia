@@ -20,6 +20,8 @@ describe("focusIsFree", () => {
     expect(focusIsFree(at({ tag: "input", inMenu: true }))).toBe(false);
     expect(focusIsFree(at({ tag: "textarea" }))).toBe(false);
     expect(focusIsFree(at({ tag: "div", editable: true }))).toBe(false);
+    // A visual's frame: its page may have a field the user types in.
+    expect(focusIsFree(at({ tag: "iframe" }))).toBe(false);
   });
 
   it("never from an open menu, nor from outside the chat", () => {

@@ -1,5 +1,6 @@
 import serifItalic from "@/components/chat/fonts/instrument-serif-italic.woff2?url";
 import serifRegular from "@/components/chat/fonts/instrument-serif-regular.woff2?url";
+import { CHAT_TOKENS as T } from "@/lib/chat/chatTheme";
 
 /**
  * The chat view's look ("Colonne calme", mockup A of 30/10/2026): a centred
@@ -11,7 +12,7 @@ export const CHAT_CSS = `
 @font-face { font-family: "Instrument Serif"; font-style: normal; font-weight: 400; font-display: swap; src: url(${serifRegular}) format("woff2"); }
 @font-face { font-family: "Instrument Serif"; font-style: italic; font-weight: 400; font-display: swap; src: url(${serifItalic}) format("woff2"); }
 
-.chat-root { --chat-bg: #181a1d; --chat-ink: #e4e4e7; --chat-dim: #a1a1aa; --chat-mute: #858790; --chat-line: #2b2e33; --chat-card: #141619; --chat-accent: #e2865f; --chat-accent-ink: #1a0f0a;
+.chat-root { --chat-bg: ${T.bg}; --chat-ink: ${T.ink}; --chat-dim: ${T.dim}; --chat-mute: ${T.mute}; --chat-line: ${T.line}; --chat-card: ${T.card}; --chat-accent: ${T.accent}; --chat-accent-ink: ${T.accentInk};
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: stretch; background: var(--chat-bg); color: var(--chat-ink);
   font-family: "Segoe UI", system-ui, sans-serif; font-size: 14.5px; line-height: 1.6; }
 .chat-root *, .chat-root *::before, .chat-root *::after { box-sizing: border-box; }
@@ -68,6 +69,27 @@ export const CHAT_CSS = `
 .chat-card .body { border-top: 1px solid #26292e; padding: 10px 14px; }
 .chat-card .body .reading-md { font-size: 13.5px; }
 .chat-card .body.clamp { max-height: 220px; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+/* Claude's visuals (\`show_visual\`): a band over its sandboxed page. Wide: the pane's width less a 16px gutter. */
+.chat-visual { border: 1px solid var(--chat-line); border-radius: 12px; background: var(--chat-bg); overflow: hidden; container-type: inline-size; }
+.chat-visual.wide { width: max(100%, calc(var(--chat-lane, 0px) - 32px)); margin-left: calc((100% - max(100%, calc(var(--chat-lane, 0px) - 32px))) / 2); }
+.chat-visual-head { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 5px 6px 5px 12px; font-size: 12.5px; color: #d4d4d8; background: var(--chat-card); border-bottom: 1px solid #26292e; min-width: 0; }
+.chat-visual-head > .lucide { width: 15px; height: 15px; flex-shrink: 0; color: var(--chat-accent); }
+.chat-visual-head .t { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.chat-visual-head .tail { margin-left: auto; display: flex; gap: 2px; flex-shrink: 0; }
+.chat-visual-head .spin { width: 13px; height: 13px; margin-left: auto; margin-right: 6px; border-radius: 50%; border: 2px solid #464a51; border-top-color: var(--chat-accent); animation: chat-spin .8s linear infinite; flex-shrink: 0; }
+.chat-visual-btn { display: inline-flex; align-items: center; gap: 6px; height: 27px; padding: 0 9px; border-radius: 8px; border: 0; background: transparent; color: var(--chat-dim); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.chat-visual-btn:hover { background: #25282c; color: var(--chat-ink); }
+.chat-visual-btn .lucide { width: 14px; height: 14px; flex-shrink: 0; }
+@container (max-width: 460px) { .chat-visual-btn .lbl { display: none; } }
+.chat-visual-box iframe { display: block; width: 100%; height: 100%; border: 0; background: var(--chat-bg); color-scheme: dark; }
+.chat-visual-wait { display: flex; align-items: center; height: 120px; padding: 0 16px; color: var(--chat-mute); font-size: 12.5px; }
+.chat-visual-broken { cursor: default; }
+.chat-visual-broken:hover { background: transparent; color: var(--chat-mute); }
+.chat-visual-broken > .lucide { color: #fcd34d; }
+.chat-visual-broken .why { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.chat-visual-zoom { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--chat-bg); }
+.chat-visual-zoom-body { flex: 1; min-height: 0; }
+.chat-visual-zoom-body .chat-visual-box { height: 100%; }
 .chat-qa { display: flex; flex-direction: column; gap: 2px; }
 .chat-qa .q { color: var(--chat-dim); font-size: 13px; }
 .chat-qa .a { color: var(--chat-ink); }

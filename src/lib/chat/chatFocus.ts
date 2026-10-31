@@ -18,7 +18,11 @@ export interface FocusInfo {
   inMenu: boolean;
 }
 
-const TYPING_TAGS = new Set(["input", "textarea", "select"]);
+/**
+ * What takes typing: fields, and a frame (a visual of the chat): the page
+ * inside it has the keyboard, which the panel can't see from here.
+ */
+const TYPING_TAGS = new Set(["input", "textarea", "select", "iframe"]);
 
 /** Null: nothing has the focus (the page's body). */
 export function focusIsFree(focused: FocusInfo | null): boolean {
