@@ -8,7 +8,8 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Once};
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::{json, Value};
@@ -18,6 +19,96 @@ use crate::popup::log_line;
 
 /// Arkadia runs from its repo's build folder: the server sits beside it.
 const SERVER_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../chat-server/server.ts");
+
+/// After the first chat server: the chats restored at launch start first.
+const UPDATE_DELAY: Duration = Duration::from_secs(120);
+/// Then once a day while Arkadia runs.
+const UPDATE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+/// A `claude update` still running past this is stopped: a version weighs
+/// some 335 MB, so a slow line needs time.
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+static UPDATER: Once = Once::new();
+
+/// Claude Code updates itself while a terminal runs it; its docs don't say it
+/// does when only the Agent SDK runs it. So the chats run `claude update`
+/// themselves: two minutes after the first server, then once a day (Alexis,
+/// 31/10/2026). A new version takes effect at the next chat. Hidden, its
+/// outcome in the log.
+fn keep_claude_current() {
+    UPDATER.call_once(|| {
+        std::thread::spawn(|| {
+            std::thread::sleep(UPDATE_DELAY);
+            loop {
+                run_claude_update();
+                std::thread::sleep(UPDATE_EVERY);
+            }
+        });
+    });
+}
+
+fn run_claude_update() {
+    let Some(bin) = crate::ai_search::claude_binary() else {
+        log_line("claude update: claude binary not found");
+        return;
+    };
+    let mut cmd = Command::new(bin);
+    cmd.arg("update")
+        // The main account's config: the binary is the same for all.
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: never flash a console over the app.
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            log_line(&format!("claude update: {e}"));
+            return;
+        }
+    };
+    // Read on their own threads: a full pipe would stall the update.
+    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            String::from_utf8_lossy(&bytes).into_owned()
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.to_string(),
+            Ok(None) if started.elapsed() > UPDATE_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // A child of claude may still hold the pipes: no wait on them.
+                log_line("claude update: stopped after 20 min");
+                return;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_secs(1)),
+            Err(e) => break e.to_string(),
+        }
+    };
+    let text = format!(
+        "{} {}",
+        out.join().unwrap_or_default(),
+        err.join().unwrap_or_default()
+    );
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    log_line(&format!(
+        "claude update ({status}): {}",
+        crate::sessions::truncate_for_ui(&text, 300)
+    ));
+}
 
 struct Server {
     stdin: ChildStdin,
@@ -66,6 +157,7 @@ fn with_chat_env(mut command: Value) -> Value {
 /// Starts the account's server. A secondary account runs with its own
 /// `CLAUDE_CONFIG_DIR`, the main one without it (rule of `accounts`).
 fn spawn_server(app: &AppHandle, account_id: Option<&str>) -> Result<Server, String> {
+    keep_claude_current();
     let mut cmd = Command::new("node");
     cmd.arg(SERVER_SCRIPT)
         // Its own account key: a visual's check names it, so a reloaded page
