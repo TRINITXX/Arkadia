@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { WorkflowWatch, type WorkflowLiveAgent } from "./workflowWatch.ts";
 import {
   getSessionInfo,
   getSessionMessages,
@@ -21,6 +22,11 @@ import {
   listSessions,
   query,
   type CanUseTool,
+  type EffortLevel,
+  type ElicitationRequest,
+  type ElicitationResult,
+  type ModelInfo,
+  type OnElicitation,
   type PermissionMode,
   type PermissionResult,
   type PermissionUpdate,
@@ -53,8 +59,15 @@ export type Command =
       images?: ImageInput[];
       /** « Envoyer maintenant »: Claude Code stops the turn under way for it. */
       priority?: "now";
+      /**
+       * Sent now while foreground Agent calls run: queued as any message, then
+       * these go to the background, and Claude takes it at that boundary (a
+       * `now` would end their turn, and them with it).
+       */
+      spare?: string[];
     }
-  | { type: "interrupt"; chatId: string }
+  /** Esc. `spare`: running foreground Agent calls sent to the background first. */
+  | { type: "interrupt"; chatId: string; spare?: string[] }
   | {
       type: "answer";
       chatId: string;
@@ -63,6 +76,8 @@ export type Command =
     }
   | { type: "set_mode"; chatId: string; mode: PermissionMode }
   | { type: "set_model"; chatId: string; model: string }
+  /** A subagent's conversation (its sheet): never the session's, whatever comes. */
+  | { type: "agent_history"; chatId: string; sessionId: string; cwd: string; limit: number; agentId: string }
   | {
       type: "history";
       chatId: string;
@@ -89,6 +104,27 @@ export type Command =
     }
   /** /rewind's « code seul »: the files as they were before the message. */
   | { type: "restore_code"; chatId: string; before: string }
+  /** Ctrl+B: the running Bash commands and subagents go to the background. */
+  /** Ctrl+B (all foreground tasks), or these Agent calls only (`toolUseIds`). */
+  | { type: "background"; chatId: string; toolUseIds?: string[] }
+  /** Stops one background task (« Arrêter le workflow »). */
+  | { type: "stop_task"; chatId: string; taskId: string }
+  /** The end of a background shell's output, answered by `task_output`. */
+  | { type: "task_output"; chatId: string; taskId: string }
+  /** « Charger les messages plus anciens »: the page before `before`. */
+  | { type: "older"; chatId: string; before: string; limit: number }
+  /** The session's effort, for this session only: never saved. */
+  | { type: "set_effort"; chatId: string; effort: EffortLevel }
+  /** Withdraws a message Claude hasn't taken yet. */
+  | { type: "cancel_queued"; chatId: string; uuid: string }
+  /** The page's answer to an MCP server's request. */
+  | { type: "elicit_answer"; chatId: string; requestId: string; result: ElicitationResult }
+  /** The context by category (token counts: asked on hover only). */
+  | { type: "context_detail"; chatId: string; requestId: string }
+  /** The MCP servers' state again (their list opened). */
+  | { type: "mcp_status"; chatId: string }
+  /** Plugins and skills read again from disk. */
+  | { type: "reload_plugins"; chatId: string }
   | { type: "close"; chatId: string };
 
 type StartCommand = Extract<Command, { type: "start" }>;
@@ -104,6 +140,22 @@ type Boot = StartCommand & {
 };
 
 type SlashCommandInfo = Awaited<ReturnType<Query["supportedCommands"]>>[number];
+
+/** An MCP server as the page lists it. */
+type McpServerInfo = { name: string; status: string; error?: string; source?: string };
+
+/** Query methods the SDK has but doesn't type (sdk.mjs, 0.3.314). */
+type QueryExtras = {
+  /** True when the message was still queued and is gone. */
+  cancelAsyncMessage(uuid: string): Promise<boolean>;
+  /** `applied.effort`: what the next message runs at (`init` lacks it here). */
+  getSettings(): Promise<{ applied?: { effort?: EffortLevel | null } }>;
+};
+const extras = (q: Query) => q as Query & QueryExtras;
+
+/** Polls the MCP servers' state while some still connect, this many times. */
+const MCP_POLL_MS = 5_000;
+const MCP_POLLS = 12;
 
 export type ServerEvent =
   /** A start found the chat running: its events follow, from the beginning. */
@@ -134,9 +186,41 @@ export type ServerEvent =
       decisionReason?: string;
       /** What would stop Claude Code asking: the « always allow » buttons. */
       suggestions?: PermissionUpdate[];
+      /** Who asks and on what, and how cautious the panel must be. */
+      displayName?: string;
+      defaultToNo?: boolean;
+      suppressAlwaysAllowRule?: boolean;
+      agentId?: string;
+      blockedPath?: string;
+      mcpServer?: { name: string; source: string };
     }
   /** Answered by the page, or dropped by Claude Code (interrupt, timeout). */
   | { type: "permission_resolved"; chatId: string; requestId: string }
+  /** The model menu (`supportedModels`). */
+  | { type: "models"; chatId: string; models: ModelInfo[] }
+  /** The effort the next message runs at; null: the model takes none. */
+  | { type: "effort"; chatId: string; effort: EffortLevel | null }
+  /** The MCP servers and their state, sent when it changes. */
+  | { type: "mcp"; chatId: string; servers: McpServerInfo[] }
+  /** An MCP server asks the user something (`onElicitation`). */
+  | { type: "elicitation"; chatId: string; requestId: string; request: ElicitationRequest }
+  /** Answered by the page, or dropped by Claude Code. */
+  | { type: "elicitation_resolved"; chatId: string; requestId: string }
+  /** A message the user withdrew before Claude took it. */
+  | { type: "queued_removed"; chatId: string; uuid: string }
+  /** The answer to `context_detail` (not kept for a replay). */
+  | {
+      type: "context_detail";
+      chatId: string;
+      requestId: string;
+      detail?: {
+        categories: { id?: string; name: string; tokens: number; kind: string }[];
+        totalTokens: number;
+        rawMaxTokens: number;
+        memoryFiles: { path: string; tokens: number }[];
+      };
+      error?: string;
+    }
   | {
       type: "context";
       chatId: string;
@@ -154,6 +238,8 @@ export type ServerEvent =
       gitBranch?: string | null;
       /** The session resumed: its init only comes with the first turn. */
       sessionId?: string;
+      /** The mode it starts in: the init that says it comes with a turn. */
+      mode?: PermissionMode;
     }
   /** Claude Code's slash commands, for the page's `/` menu. */
   | { type: "commands"; chatId: string; commands: SlashCommandInfo[] }
@@ -193,6 +279,21 @@ export type ServerEvent =
       messages: unknown[];
       /** More messages exist before the first one sent. */
       truncated: boolean;
+      /** A page before the oldest shown: not kept in the log. */
+      older?: boolean;
+      /** Before a compaction since: nothing older can be read. */
+      unreachable?: boolean;
+    }
+  /** A running workflow's agents from its folder (`WorkflowWatch`). */
+  | { type: "workflow_live"; chatId: string; taskId: string; agents: WorkflowLiveAgent[] }
+  /** The end of a background shell's output (not kept for a replay). */
+  | {
+      type: "task_output";
+      chatId: string;
+      taskId: string;
+      output: string;
+      truncated: boolean;
+      error?: string;
     }
   | { type: "closed"; chatId: string; error?: string }
   | { type: "error"; chatId?: string; message: string };
@@ -272,6 +373,9 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
   }
 }
 
+/** How long a message sent now waits for Claude Code to have it queued. */
+const LIFECYCLE_WAIT_MS = 2_000;
+
 /** Past this, the oldest events of a long chat are dropped from its log. */
 const LOG_LIMIT = 20_000;
 
@@ -287,6 +391,10 @@ class Chat {
   private ready: Promise<Query>;
   /** Permission requests waiting for the page, by SDK request id. */
   private pending = new Map<string, (result: PermissionResult) => void>();
+  /** Running workflows' folders watched (`WorkflowWatch`), by task id. */
+  private workflows = new Map<string, { watch: WorkflowWatch; latest?: ServerEvent }>();
+  /** Messages waiting for their first `command_lifecycle` frame (Claude Code has them). */
+  private lifecycleWaiters = new Map<string, () => void>();
   /** Everything sent to the page, for a page that comes back. */
   private log: ServerEvent[] = [];
   private sessionId: string | undefined;
@@ -306,6 +414,12 @@ class Chat {
   private pumping: Promise<void> = Promise.resolve();
   /** The latest command list: a replay sends it first, the log may have lost it. */
   private commands: SlashCommandInfo[] | undefined;
+  /** MCP servers' requests waiting for the page, by SDK request id. */
+  private elicitations = new Map<string, (result: ElicitationResult) => void>();
+  /** What the page last got of these: sent again only when it changes. */
+  private effortSent: string | undefined;
+  private mcpSent: string | undefined;
+  private mcpTimer: ReturnType<typeof setTimeout> | undefined;
 
   // No parameter properties: Node runs this file by stripping its types.
   constructor(chatId: string, start: Boot) {
@@ -333,6 +447,10 @@ class Chat {
     if (!resume && start.continue) {
       const [latest] = await listSessions({ dir: start.cwd, limit: 1 });
       resume = latest?.sessionId;
+      // Nothing to go on with: the page stops waiting for a past.
+      if (!resume) {
+        this.out({ type: "history", chatId: this.chatId, messages: [], truncated: false });
+      }
     }
     if (resume) {
       this.sessionId = resume;
@@ -362,20 +480,38 @@ class Chat {
         permissionMode: start.permissionMode ?? "auto",
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
+        // The next message, grey in the empty input after a turn.
+        promptSuggestions: true,
         pathToClaudeCodeExecutable: claudeExecutable(),
         env: { ...process.env, ...start.env } as Record<string, string>,
         canUseTool: (toolName, input, options) =>
           this.askPage(toolName, input, options),
+        // An MCP server's form or sign-in page: asked in the page, never declined unseen.
+        onElicitation: (request, options) => this.askElicitation(request, options),
+        // « hook … en cours » in the live line, a failed hook in the column.
+        includeHookEvents: true,
+        // Esc stops Claude's turn only: background agents and workflows go
+        // on (verified live 31/10/2026); the page stops a workflow by its card.
+        perTaskStopAffordance: true,
+        // A running subagent's card: a line of what it does, every ~30 s.
+        agentProgressSummaries: true,
+        // Its text too, not only its tool calls: its sheet follows it live.
+        forwardSubagentText: true,
         stderr: (data) => process.stderr.write(`[${this.chatId}] ${data}`),
       },
     });
     this.query = q;
+    // The input's mode chip before any turn: the init only comes with one.
+    this.out({ type: "info", chatId: this.chatId, mode: start.permissionMode ?? "auto" });
     this.pumping = this.pump(q);
     // The status bar's figures before any turn: these answer without one.
     void this.reportCommands(q);
     void this.reportUsage(q);
     void this.reportContext(q);
     void this.reportBranch();
+    void this.reportModels(q);
+    void this.reportEffort(q);
+    void this.reportMcp(q, MCP_POLLS);
     this.branchTimer = setInterval(() => void this.reportBranch(), BRANCH_POLL_MS);
     return q;
   }
@@ -397,6 +533,7 @@ class Chat {
     // next need it to tell a command from words (`isCommandSent`).
     if (this.commands) emit({ type: "commands", chatId: this.chatId, commands: this.commands });
     for (const event of this.log) emit(event);
+    for (const { latest } of this.workflows.values()) if (latest) emit(latest);
     emit({ type: "replayed", chatId: this.chatId });
     // The status bar's figures again: a long turn may have pushed them out of
     // the log, and the quotas replayed may date from long ago.
@@ -406,6 +543,13 @@ class Chat {
       .then((q) => {
         void this.reportUsage(q);
         void this.reportContext(q);
+        // The model menu, effort and MCP states: a long chat or /clear may
+        // have dropped them from the log.
+        this.effortSent = undefined;
+        this.mcpSent = undefined;
+        void this.reportModels(q);
+        void this.reportEffort(q);
+        void this.reportMcp(q);
       })
       .catch(() => {});
   }
@@ -418,8 +562,21 @@ class Chat {
         // here would come after and override a newer one.
         if (message.type === "conversation_reset") {
           this.log = this.log.filter((e) => e.type === "info");
+          // No session until the next message's init names it (its
+          // `new_conversation_id` is not it, seen live on 30/10/2026): a
+          // relaunch meanwhile starts fresh, never on the cleared one.
+          this.sessionId = undefined;
         }
-        this.out({ type: "sdk", chatId: this.chatId, message });
+        // A hook's progress shows nothing in the page.
+        if (message.type === "system" && message.subtype === "hook_progress") continue;
+        this.out({ type: "sdk", chatId: this.chatId, message: slimHook(message) });
+        this.watchWorkflows(message);
+        // Not in the SDK's types (0.3.314): a message's lifecycle frames.
+        const frame = message as { type: string; command_uuid?: unknown };
+        if (frame.type === "command_lifecycle" && typeof frame.command_uuid === "string") {
+          this.lifecycleWaiters.get(frame.command_uuid)?.();
+          this.lifecycleWaiters.delete(frame.command_uuid);
+        }
         if (message.type === "system" && message.subtype === "init") {
           this.sessionId = message.session_id;
           this.model = message.model;
@@ -438,10 +595,15 @@ class Chat {
           this.log = this.log.filter(
             (e) => e.type !== "sdk" || e.message.type !== "stream_event",
           );
+          // Nor the turn's hooks that ran well: only failures stay.
+          this.log = this.log.filter((e) => e.type !== "sdk" || !isSettledHook(e.message));
           void this.reportContext(q);
           void this.reportUsage(q);
           void this.reportInfo();
           void this.reportBranch();
+          // /model, /effort or a slash command may have changed them.
+          void this.reportEffort(q);
+          void this.reportMcp(q);
         }
       }
       this.out({ type: "closed", chatId: this.chatId });
@@ -452,6 +614,144 @@ class Chat {
       // Stopped for a relaunch: its successor takes the place.
       if (!this.silent && chats.get(this.chatId) === this) chats.delete(this.chatId);
     }
+  }
+
+  /** The model menu, at boot: Claude Code's own list, with each one's efforts. */
+  private async reportModels(q: Query): Promise<void> {
+    try {
+      const models = await q.supportedModels();
+      this.out({ type: "models", chatId: this.chatId, models });
+    } catch {
+      // The chat closed meanwhile.
+    }
+  }
+
+  /** The effort the next message runs at (the SDK's `init` leaves it out). */
+  private async reportEffort(q: Query): Promise<void> {
+    try {
+      const settings = await extras(q).getSettings();
+      const effort = settings.applied?.effort ?? null;
+      if (String(effort) === this.effortSent) return;
+      this.effortSent = String(effort);
+      this.out({ type: "effort", chatId: this.chatId, effort });
+    } catch {
+      // The chat closed meanwhile, or a CLI without `get_settings`.
+    }
+  }
+
+  /**
+   * The MCP servers' state, sent when it changes; while some still connect,
+   * looked at again every 5 s, `polls` more times.
+   */
+  private async reportMcp(q: Query, polls = 0): Promise<void> {
+    // A new round of looks replaces the one under way; a single look leaves it.
+    if (polls > 0) clearTimeout(this.mcpTimer);
+    try {
+      const all = await q.mcpServerStatus();
+      const servers: McpServerInfo[] = all.map((s) => ({
+        name: s.name,
+        status: s.status,
+        error: s.error,
+        // Not in the SDK's type, but there (`init.mcp_servers` has it too).
+        source: (s as { source?: string }).source,
+      }));
+      const key = JSON.stringify(servers);
+      if (key !== this.mcpSent) {
+        this.mcpSent = key;
+        this.out({ type: "mcp", chatId: this.chatId, servers });
+      }
+      if (polls > 0 && !this.silent && all.some((s) => s.status === "pending")) {
+        this.mcpTimer = setTimeout(() => void this.reportMcp(q, polls - 1), MCP_POLL_MS);
+      }
+    } catch {
+      // The chat closed meanwhile.
+    }
+  }
+
+  /** The page opened the MCP list: their state now, and while some connect. */
+  async refreshMcp(): Promise<void> {
+    await this.reportMcp(await this.ready, MCP_POLLS);
+  }
+
+  /** The context by category for the ring's hover: token counts, a second or two. */
+  async contextDetail(requestId: string): Promise<void> {
+    try {
+      const u = await (await this.ready).getContextUsage({ detail: "full" });
+      emit({
+        type: "context_detail",
+        chatId: this.chatId,
+        requestId,
+        detail: {
+          categories: u.categories.map(({ id, name, tokens, kind }) => ({ id, name, tokens, kind })),
+          totalTokens: u.totalTokens,
+          rawMaxTokens: u.rawMaxTokens,
+          memoryFiles: u.memoryFiles.map(({ path, tokens }) => ({ path, tokens })),
+        },
+      });
+    } catch (e) {
+      emit({ type: "context_detail", chatId: this.chatId, requestId, error: String(e) });
+    }
+  }
+
+  /** The effort for this session alone: `applyFlagSettings`, never a settings file. */
+  async setEffort(effort: EffortLevel): Promise<void> {
+    const q = await this.ready;
+    await q.applyFlagSettings({ effortLevel: effort });
+    await this.reportEffort(q);
+  }
+
+  /**
+   * Withdraws a queued message: Claude Code drops it (a `cancelled` lifecycle
+   * frame) only while still queued. Too late, it was taken: it stays so.
+   */
+  async cancelQueued(uuid: string): Promise<void> {
+    const cancelled = await extras(await this.ready).cancelAsyncMessage(uuid);
+    if (cancelled) this.out({ type: "queued_removed", chatId: this.chatId, uuid });
+    else emit({ type: "error", chatId: this.chatId, message: "Trop tard : Claude a déjà pris ce message" });
+  }
+
+  /** « Recharger » under plugins that failed: plugins and skills read again. */
+  async reloadPlugins(): Promise<void> {
+    const q = await this.ready;
+    const reloaded = await q.reloadPlugins();
+    await q.reloadSkills().catch(() => {});
+    this.commands = reloaded.commands;
+    this.out({ type: "commands", chatId: this.chatId, commands: reloaded.commands });
+    void this.reportMcp(q, MCP_POLLS);
+    const n = reloaded.error_count;
+    this.out({
+      type: "notice",
+      chatId: this.chatId,
+      text:
+        n === 0
+          ? "Plugins rechargés"
+          : `Plugins rechargés : ${n} toujours en erreur`,
+      tone: n === 0 ? "info" : "error",
+    });
+  }
+
+  /** An MCP server's request waits here for the page's answer. */
+  private askElicitation(
+    request: ElicitationRequest,
+    { requestId, signal }: Parameters<OnElicitation>[1],
+  ): Promise<ElicitationResult> {
+    return new Promise((resolve) => {
+      this.elicitations.set(requestId, resolve);
+      signal.addEventListener("abort", () => {
+        if (!this.elicitations.delete(requestId)) return;
+        this.out({ type: "elicitation_resolved", chatId: this.chatId, requestId });
+        resolve({ action: "cancel" });
+      });
+      this.out({ type: "elicitation", chatId: this.chatId, requestId, request });
+    });
+  }
+
+  answerElicitation(requestId: string, result: ElicitationResult): void {
+    const resolve = this.elicitations.get(requestId);
+    if (!resolve) return;
+    this.elicitations.delete(requestId);
+    this.out({ type: "elicitation_resolved", chatId: this.chatId, requestId });
+    resolve(result);
   }
 
   /** 'summary': from the last response's usage, without token-count calls. */
@@ -487,17 +787,19 @@ class Chat {
 
   /** Only the title: the transcript's branch is the one of its last message. */
   private async reportInfo(): Promise<void> {
-    if (!this.sessionId) return;
+    const sessionId = this.sessionId;
+    if (!sessionId) return;
     try {
-      const info = await getSessionInfo(this.sessionId, { dir: this.cwd });
-      if (!info) return;
+      const info = await getSessionInfo(sessionId, { dir: this.cwd });
+      // A /clear meanwhile: that session is no longer this chat's.
+      if (!info || sessionId !== this.sessionId) return;
       // A session opened by a command (/clear) is no title yet.
       const summary = info.summary.startsWith("/") ? undefined : info.summary;
       this.out({
         type: "info",
         chatId: this.chatId,
         title: info.customTitle ?? summary,
-        sessionId: this.sessionId,
+        sessionId,
       });
     } catch {
       // No transcript yet.
@@ -555,6 +857,12 @@ class Chat {
         description: options.description,
         decisionReason: options.decisionReason,
         suggestions: options.suggestions,
+        displayName: options.displayName,
+        defaultToNo: options.defaultToNo,
+        suppressAlwaysAllowRule: options.suppressAlwaysAllowRule,
+        agentId: options.agentID,
+        blockedPath: options.blockedPath,
+        mcpServer: options.mcpServer,
       });
     });
   }
@@ -572,7 +880,12 @@ class Chat {
    * a turn runs: its `command_lifecycle` frames, named by our uuid, say when
    * it is taken (« started »). Priority `now` ends the turn under way first.
    */
-  send(text: string, images: ImageInput[] = [], priority?: "now"): void {
+  async send(
+    text: string,
+    images: ImageInput[] = [],
+    priority?: "now",
+    spare: string[] = [],
+  ): Promise<void> {
     const uuid = randomUUID();
     this.out({
       type: "user_sent",
@@ -582,6 +895,10 @@ class Chat {
       pasted: images,
       uuid,
     });
+    // Sent now while foreground agents run: a `now` would end them with the
+    // turn. Queued once Claude Code has it, their backgrounding hands the
+    // Agent calls a result, and Claude takes it at that boundary.
+    const queued = spare.length > 0 ? this.lifecycleSeen(uuid) : null;
     this.input.push({
       type: "user",
       uuid,
@@ -602,10 +919,115 @@ class Chat {
         ],
       },
     });
+    if (!queued) return;
+    await queued;
+    const q = await this.ready;
+    // Nothing sent away: no boundary takes it, so the turn stops for it (a
+    // message waiting outlives an interrupt and runs next).
+    if (!(await this.spare(q, spare))) await q.interrupt();
   }
 
-  async interrupt(): Promise<void> {
-    await (await this.ready).interrupt();
+  /** Resolves at the message's first lifecycle frame, or after 2 s (older CLI). */
+  private lifecycleSeen(uuid: string): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.lifecycleWaiters.delete(uuid);
+        resolve();
+      }, LIFECYCLE_WAIT_MS);
+      this.lifecycleWaiters.set(uuid, () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Esc stops Claude's turn, never a subagent: a foreground Agent call dies
+   * with the turn (verified live 31/10/2026), so the page's running ones go
+   * to the background first; background ones and workflows outlive it
+   * (`perTaskStopAffordance`). A message waiting is never cut this way: the
+   * page then sends `background` alone (`stopTurnPlan`).
+   */
+  async interrupt(spare: string[] = []): Promise<void> {
+    const q = await this.ready;
+    for (const toolUseId of spare) await q.backgroundTasks(toolUseId).catch(() => false);
+    await q.interrupt();
+  }
+
+  /** Ctrl+B: every foreground Bash command and subagent, as in the terminal. */
+  async background(toolUseIds?: string[]): Promise<void> {
+    const q = await this.ready;
+    if (!toolUseIds?.length) {
+      await q.backgroundTasks();
+      return;
+    }
+    // A message waits: the Agent calls' results let Claude take it, no
+    // interrupt. Nothing sent away (a stale row, a turn on a Bash): no
+    // boundary takes it, so the turn stops as a plain Esc.
+    if (!(await this.spare(q, toolUseIds))) await q.interrupt();
+  }
+
+  /** Each Agent call to the background; true if any went. */
+  private async spare(q: Query, toolUseIds: string[]): Promise<boolean> {
+    let any = false;
+    for (const toolUseId of toolUseIds) {
+      if (await q.backgroundTasks(toolUseId).catch(() => false)) any = true;
+    }
+    return any;
+  }
+
+  async stopTask(taskId: string): Promise<void> {
+    await (await this.ready).stopTask(taskId);
+  }
+
+  /** The last 8 KiB a background shell wrote, for the shells list (polled). */
+  async taskOutput(taskId: string): Promise<void> {
+    const q = (await this.ready) as Query & {
+      // In sdk.mjs, not yet in its types (0.3.314): `get_task_output`.
+      getTaskOutput(id: string): Promise<{ output: string; truncated: boolean }>;
+    };
+    const chatId = this.chatId;
+    try {
+      const { output, truncated } = await q.getTaskOutput(taskId);
+      emit({ type: "task_output", chatId, taskId, output, truncated });
+    } catch (e) {
+      emit({ type: "task_output", chatId, taskId, output: "", truncated: false, error: String(e) });
+    }
+  }
+
+  /**
+   * A workflow launched (its tool result names its folder) is watched until
+   * its notification. What the watcher sees goes out unlogged, the latest
+   * kept for a replay: it changes every second while agents work.
+   */
+  private watchWorkflows(message: SDKMessage): void {
+    if (message.type === "user" && !message.parent_tool_use_id) {
+      const r = message.tool_use_result as
+        | { taskType?: unknown; taskId?: unknown; transcriptDir?: unknown }
+        | undefined;
+      const { taskId, transcriptDir } = r ?? {};
+      if (
+        r?.taskType !== "local_workflow" ||
+        typeof taskId !== "string" ||
+        typeof transcriptDir !== "string" ||
+        this.workflows.has(taskId)
+      )
+        return;
+      const entry: { watch: WorkflowWatch; latest?: ServerEvent } = {
+        watch: new WorkflowWatch(transcriptDir, (agents) => {
+          if (this.silent) return;
+          const event = { type: "workflow_live" as const, chatId: this.chatId, taskId, agents };
+          // Stamped as `out` does: the page's clocks read `at`.
+          const stamped = { ...event, at: Date.now() };
+          entry.latest = stamped;
+          emit(stamped);
+        }),
+      };
+      this.workflows.set(taskId, entry);
+    } else if (message.type === "system" && message.subtype === "task_notification") {
+      this.workflows.get(message.task_id)?.watch.stop();
+      this.workflows.delete(message.task_id);
+    }
   }
 
   async setMode(mode: PermissionMode): Promise<void> {
@@ -613,7 +1035,10 @@ class Chat {
   }
 
   async setModel(model: string): Promise<void> {
-    await (await this.ready).setModel(model);
+    const q = await this.ready;
+    await q.setModel(model);
+    // Another model may take other efforts, or none.
+    void this.reportEffort(q);
   }
 
   /** /resume: the folder's sessions; one open in another chat can't be taken. */
@@ -704,6 +1129,38 @@ class Chat {
       : `Code remis comme avant ce message : ${n} fichier${n > 1 ? "s" : ""}`;
   }
 
+  /**
+   * The messages just before `before` (the oldest the page shows), straight
+   * to the page: not logged, a reloaded page starts from the latest again.
+   * The SDK reads a session from its last compaction on (verified live on
+   * 31/10/2026, `includeSystemMessages` too): a page shown from before a
+   * compaction has nothing older to reach, and says so (`unreachable`).
+   */
+  async older(before: string, limit: number): Promise<void> {
+    if (!this.sessionId) throw new Error("Pas encore de conversation à remonter");
+    const all = await getSessionMessages(this.sessionId, { dir: this.cwd });
+    const at = all.findIndex((m) => m.uuid === before);
+    if (at < 0) {
+      emit({
+        type: "history",
+        chatId: this.chatId,
+        messages: [],
+        truncated: false,
+        older: true,
+        unreachable: true,
+      });
+      return;
+    }
+    const from = Math.max(0, at - Math.min(limit, HISTORY_LIMIT));
+    emit({
+      type: "history",
+      chatId: this.chatId,
+      messages: all.slice(from, at),
+      truncated: from > 0,
+      older: true,
+    });
+  }
+
   /** /rewind's « code seul »: the files go back, the conversation stays. */
   async restoreCode(before: string): Promise<void> {
     const text = await this.restoreFiles(before);
@@ -722,10 +1179,15 @@ class Chat {
 
   close(): void {
     clearInterval(this.branchTimer);
+    for (const { watch } of this.workflows.values()) watch.stop();
+    this.workflows.clear();
     for (const resolve of this.pending.values()) {
       resolve({ behavior: "deny", message: "Chat closed" });
     }
     this.pending.clear();
+    for (const resolve of this.elicitations.values()) resolve({ action: "cancel" });
+    this.elicitations.clear();
+    clearTimeout(this.mcpTimer);
     this.input.end();
     this.query?.close();
     // Still booting: close the query as soon as it exists.
@@ -734,6 +1196,20 @@ class Chat {
 }
 
 const chats = new Map<string, Chat>();
+
+/** A hook that went well says nothing the page shows: its output stays here. */
+function slimHook(message: SDKMessage): SDKMessage {
+  if (message.type !== "system" || message.subtype !== "hook_response") return message;
+  if (message.outcome === "error") return message;
+  return { ...message, output: "", stdout: "", stderr: "" };
+}
+
+/** A hook of a finished turn that ran well: a replay doesn't need it. */
+function isSettledHook(message: SDKMessage): boolean {
+  if (message.type !== "system") return false;
+  if (message.subtype === "hook_started") return true;
+  return message.subtype === "hook_response" && message.outcome !== "error";
+}
 
 async function history(cmd: Extract<Command, { type: "history" }>) {
   const all = cmd.agentId
@@ -836,6 +1312,14 @@ async function handle(cmd: Command): Promise<void> {
     return;
   }
   if (cmd.type === "history") return history(cmd);
+  if (cmd.type === "agent_history") {
+    // An agent's sheet with no agent: an error, never the session's past.
+    if (typeof cmd.agentId !== "string" || !cmd.agentId) {
+      emit({ type: "error", chatId: cmd.chatId, message: "Sous-agent inconnu" });
+      return;
+    }
+    return history({ ...cmd, type: "history" });
+  }
   const chat = chats.get(cmd.chatId);
   // Arkadia closes the chat of every pane it closes, chat or not.
   if (!chat && cmd.type === "close") return;
@@ -845,9 +1329,9 @@ async function handle(cmd: Command): Promise<void> {
   }
   switch (cmd.type) {
     case "send":
-      return chat.send(cmd.text, cmd.images, cmd.priority);
+      return chat.send(cmd.text, cmd.images, cmd.priority, cmd.spare);
     case "interrupt":
-      await chat.interrupt();
+      await chat.interrupt(cmd.spare);
       return;
     case "answer":
       return chat.answer(cmd.requestId, cmd.result);
@@ -863,11 +1347,34 @@ async function handle(cmd: Command): Promise<void> {
       relaunching.set(cmd.chatId, run);
       return run;
     }
+    case "older":
+      return chat.older(cmd.before, cmd.limit).catch((e: unknown) => {
+        const message = e instanceof Error ? e.message : String(e);
+        emit({ type: "error", chatId: cmd.chatId, message });
+      });
+    case "background":
+      return chat.background(cmd.toolUseIds);
+    case "stop_task":
+      return chat.stopTask(cmd.taskId);
+    case "task_output":
+      return chat.taskOutput(cmd.taskId);
     case "restore_code":
       return chat.restoreCode(cmd.before).catch((e: unknown) => {
         const message = e instanceof Error ? e.message : String(e);
         emit({ type: "error", chatId: cmd.chatId, message });
       });
+    case "set_effort":
+      return chat.setEffort(cmd.effort);
+    case "cancel_queued":
+      return chat.cancelQueued(cmd.uuid);
+    case "elicit_answer":
+      return chat.answerElicitation(cmd.requestId, cmd.result);
+    case "context_detail":
+      return chat.contextDetail(cmd.requestId);
+    case "mcp_status":
+      return chat.refreshMcp();
+    case "reload_plugins":
+      return chat.reloadPlugins();
     case "close":
       chats.delete(cmd.chatId);
       return chat.close();

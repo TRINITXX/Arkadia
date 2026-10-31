@@ -1,38 +1,18 @@
 import { useMemo, useState } from "react";
-import { ChevronRight, FilePen, FilePlus2, CircleAlert } from "lucide-react";
+import {
+  ChevronRight,
+  FilePen,
+  FilePlus2,
+  CircleAlert,
+  SquareArrowOutUpRight,
+} from "lucide-react";
+import { openPath, type ToastFn } from "@/components/modern/MarkdownContent";
+import { ChatDiffRows } from "@/components/chat/chat-diff-rows";
+import { editDiff } from "@/lib/chat/chatDiff";
 import type { ToolItem } from "@/lib/chat/chatGroups";
 
-/** Past this many lines a change opens folded. */
+/** Past this many changed lines a change opens folded. */
 const OPEN_UNDER = 14;
-const SHOWN_LINES = 400;
-
-type DiffLine = { sign: "+" | "-"; text: string };
-
-/** The lines a file change removes and adds, as its tool input states them. */
-export function editDiff(tool: ToolItem): DiffLine[] {
-  const s = (v: unknown) => (typeof v === "string" ? v : "");
-  // A file's final newline ends its last line: it adds no line of its own.
-  const lines = (text: string, sign: "+" | "-") =>
-    text === ""
-      ? []
-      : text
-          .replace(/\n$/, "")
-          .split("\n")
-          .map((t) => ({ sign, text: t }));
-  const input = tool.input;
-  if (tool.name === "Write") return lines(s(input.content), "+");
-  if (tool.name === "MultiEdit" && Array.isArray(input.edits)) {
-    return input.edits.flatMap((e: Record<string, unknown>) => [
-      ...lines(s(e.old_string), "-"),
-      ...lines(s(e.new_string), "+"),
-    ]);
-  }
-  if (tool.name === "NotebookEdit") return lines(s(input.new_source), "+");
-  return [
-    ...lines(s(input.old_string), "-"),
-    ...lines(s(input.new_string), "+"),
-  ];
-}
 
 /** A path as read from the session's folder. */
 function shortPath(path: string, cwd: string | null): string {
@@ -48,16 +28,25 @@ function shortPath(path: string, cwd: string | null): string {
 export function ChatEditCard({
   tool,
   cwd,
+  onToast,
 }: {
   tool: ToolItem;
   cwd: string | null;
+  /** « Ouvrir le fichier » failing says so. */
+  onToast?: ToastFn;
 }) {
-  const diff = useMemo(() => editDiff(tool), [tool]);
-  const [open, setOpen] = useState(diff.length <= OPEN_UNDER);
-  const added = diff.filter((l) => l.sign === "+").length;
-  const removed = diff.length - added;
+  // The real diff once the result is in (line numbers, context), else the input's.
+  const patch = tool.result?.detail?.patch;
+  const diff = useMemo(
+    () => editDiff(tool.name, tool.input, patch),
+    [tool.name, tool.input, patch],
+  );
+  const { added, removed } = diff;
+  const [open, setOpen] = useState(added + removed <= OPEN_UNDER);
   const path = String(tool.input.file_path ?? tool.input.notebook_path ?? "");
-  const Icon = tool.name === "Write" ? FilePlus2 : FilePen;
+  // A Write over an existing file is a change, not a new file.
+  const Icon =
+    tool.name === "Write" && patch?.write !== "update" ? FilePlus2 : FilePen;
   return (
     <div className="chat-unit chat-card">
       <div className="head" onClick={() => setOpen((o) => !o)}>
@@ -66,6 +55,21 @@ export function ChatEditCard({
         {added > 0 && <span className="add">+{added}</span>}
         {removed > 0 && <span className="del">−{removed}</span>}
         {tool.result?.isError && <CircleAlert size={14} className="del" />}
+        {path && (
+          // As a clickable path does: the file in its default app.
+          <button
+            type="button"
+            className="chat-open-file"
+            title={`Ouvrir ${path}`}
+            aria-label="Ouvrir le fichier"
+            onClick={(e) => {
+              e.stopPropagation();
+              openPath(path, onToast);
+            }}
+          >
+            <SquareArrowOutUpRight />
+          </button>
+        )}
         <span className="tail">
           <ChevronRight
             size={15}
@@ -74,19 +78,9 @@ export function ChatEditCard({
         </span>
       </div>
       {open && (
-        <div className="chat-diff">
-          {diff.slice(0, SHOWN_LINES).map((line, i) => (
-            <div key={i} className={line.sign === "+" ? "p" : "m"}>
-              {line.sign} {line.text}
-            </div>
-          ))}
-          {diff.length > SHOWN_LINES && (
-            <div className="more">
-              … {diff.length - SHOWN_LINES} lignes de plus
-            </div>
-          )}
+        <ChatDiffRows diff={diff}>
           {tool.result?.isError && <div className="m">{tool.result.text}</div>}
-        </div>
+        </ChatDiffRows>
       )}
     </div>
   );

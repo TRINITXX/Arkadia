@@ -14,6 +14,11 @@ import {
   type ChatActivity,
 } from "@/lib/chat/chatEvents";
 import { folderOf } from "@/lib/chat/chatLabels";
+import {
+  dropLiveChat,
+  liveSessionId,
+  subscribeLiveSessions,
+} from "@/lib/chat/chatLive";
 import { getFrame } from "@/lib/frameStore";
 import { CLEAR_CHUNK_GAP_MS, clearPromptChunks } from "@/lib/promptClear";
 import { isPromptField } from "@/lib/terminalChrome";
@@ -197,6 +202,22 @@ export function usePaneChats({
     [patchPane],
   );
 
+  // Its session into the pane as soon as the chat knows it, mounted or not;
+  // none after /clear, so a relaunch (account, restore) starts fresh.
+  useEffect(
+    () =>
+      subscribeLiveSessions((paneId, sessionId) => {
+        if (sessionId) onSession(paneId, sessionId);
+        else
+          patchPane(paneId, (pane) =>
+            pane.chat && (pane.chat.resume || pane.chat.continue)
+              ? { ...pane, chat: { cwd: pane.chat.cwd } }
+              : pane,
+          );
+      }),
+    [onSession, patchPane],
+  );
+
   const onLabel = useCallback(
     (paneId: string, label: string) => {
       labelsRef.current.set(paneId, label);
@@ -227,6 +248,8 @@ export function usePaneChats({
       // The full path, as a shell titles itself: a folder named `.claude`
       // would read as a busy Claude's glyph (`stateFromTitle`).
       patchPane(pane.id, (p) => ({ ...p, chat: undefined, title: chat.cwd }));
+      // Its column is over: a later switch back starts a new one.
+      dropLiveChat(pane.id);
       // `ccd` is the user's pwsh alias for Claude; it forwards --resume.
       const launch = chat.resume ? `ccd --resume ${chat.resume}` : "ccd";
       await invoke("send_input", {
@@ -313,7 +336,7 @@ export function usePaneChats({
         .filter((p) => p.id !== exceptPaneId);
       const ids = await Promise.all(
         panes.map((p) => {
-          if (p.chat) return p.chat.resume ?? null;
+          if (p.chat) return liveSessionId(p.id) ?? p.chat.resume ?? null;
           if (!stateFromTitle(p.title)) return null;
           return invoke<string | null>("pane_session_id", {
             paneId: p.id,
@@ -325,9 +348,40 @@ export function usePaneChats({
     [tabsRef],
   );
 
+  /**
+   * The pane where a Claude Code runs `sessionId` now, if any: a chat on it,
+   * or a terminal with Claude up whose pane map names it. Resuming it a
+   * second time would put two Claude Code on one transcript.
+   */
+  const paneHolding = useCallback(
+    async (sessionId: string): Promise<string | null> => {
+      const panes = (tabsRef.current ?? []).flatMap((t) =>
+        Object.values(t.panes),
+      );
+      const chat = panes.find(
+        (p) =>
+          p.chat &&
+          (liveSessionId(p.id) ?? p.chat.resume) === sessionId,
+      );
+      if (chat) return chat.id;
+      const terminals = panes.filter(
+        (p) => !p.chat && stateFromTitle(p.title),
+      );
+      const ids = await Promise.all(
+        terminals.map((p) =>
+          invoke<string | null>("pane_session_id", { paneId: p.id }).catch(
+            () => null,
+          ),
+        ),
+      );
+      return terminals[ids.indexOf(sessionId)]?.id ?? null;
+    },
+    [tabsRef],
+  );
+
   const handlers = useMemo(
     () => ({ switching, onToggle, onSession, onLabel, liveSessions }),
     [switching, onToggle, onSession, onLabel, liveSessions],
   );
-  return { handlers, startChat };
+  return { handlers, startChat, paneHolding };
 }

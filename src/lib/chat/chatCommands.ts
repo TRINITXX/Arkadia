@@ -286,6 +286,8 @@ export function resetConversation(state: ChatState, m: JsonObject): ChatState {
     subagents: [],
     requests: [],
     historyTruncated: false,
+    // None until the next message's init: the cleared one is over.
+    sessionId: null,
   };
 }
 

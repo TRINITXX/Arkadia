@@ -1,10 +1,17 @@
 import { useCallback, useEffect } from "react";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatView } from "@/components/chat/chat-view";
-import { appendDictation, usePaneDraft } from "@/lib/chat/chatDrafts";
+import {
+  appendDictation,
+  redirectDictation,
+  usePaneDraft,
+} from "@/lib/chat/chatDrafts";
 import { folderOf } from "@/lib/chat/chatLabels";
 import { usePaneMessagesOnly } from "@/lib/chat/chatMessagesOnly";
+import { startupPhase } from "@/lib/chat/chatStartup";
+import { useChatSdkActions } from "@/lib/chat/useChatSdkActions";
 import { useChatSession } from "@/lib/chat/useChatSession";
+import { useShellOutputs } from "@/lib/chat/useShellOutputs";
 import { useSlashActions } from "@/lib/chat/useSlashActions";
 import { useHiddenVoice } from "@/lib/useHiddenVoice";
 import type { PaneChat, PaneState } from "@/types";
@@ -42,6 +49,7 @@ export function ChatPane({
   onToast?: ToastFn;
 }) {
   const session = useChatSession(pane.id, pane.accountId, chat);
+  const shellOutputs = useShellOutputs(pane.id);
   const { state } = session;
   const [draft, setDraft] = usePaneDraft(pane.id);
   const [messagesOnly, setMessagesOnly] = usePaneMessagesOnly(pane.id);
@@ -69,6 +77,13 @@ export function ChatPane({
     if (recording) void stopVoice();
   }, [recording, stopVoice]);
 
+  // A dictation over (text, failure, cancel), or the pane gone: the
+  // question sheet's field it was for no longer takes the next one.
+  useEffect(() => {
+    if (voiceStatus === "idle") redirectDictation(paneId, null);
+  }, [voiceStatus, paneId]);
+  useEffect(() => () => redirectDictation(paneId, null), [paneId]);
+
   useEffect(() => {
     if (state.sessionId) onSession(pane.id, state.sessionId);
   }, [state.sessionId, pane.id, onSession]);
@@ -88,6 +103,7 @@ export function ChatPane({
     onSlashError,
     liveSessions,
   );
+  const sdkActions = useChatSdkActions(pane.id, pane.accountId, onSlashError);
 
   return (
     <ChatView
@@ -113,6 +129,14 @@ export function ChatPane({
       onHidden={onHidden}
       onToast={onToast}
       slashActions={slashActions}
+      memoryKey={pane.id}
+      startup={startupPhase(state, !!(chat.resume || chat.continue))}
+      onLoadOlder={session.loadOlder}
+      onBackground={session.background}
+      onStopTask={session.stopTask}
+      onShellOutput={session.taskOutput}
+      shellOutputs={shellOutputs}
+      sdkActions={sdkActions}
     />
   );
 }

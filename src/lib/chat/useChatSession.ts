@@ -1,16 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { chatCommand } from "@/lib/chat/chatEvents";
 import {
-  chatCommand,
-  chatEventsReady,
-  subscribeChat,
-  subscribeServerExit,
-} from "@/lib/chat/chatEvents";
-import type {
-  ChatEvent,
-  PermissionMode,
-  PermissionResult,
-} from "@/lib/chat/chatProtocol";
-import { EMPTY_CHAT, reduceChat, type ChatState } from "@/lib/chat/chatState";
+  attachLiveChat,
+  liveChatAgents,
+  liveChatState,
+  startLiveChat,
+  subscribeLiveChat,
+  updateLiveChat,
+} from "@/lib/chat/chatLive";
+import type { PermissionMode, PermissionResult } from "@/lib/chat/chatProtocol";
+import { isCommandSent } from "@/lib/chat/chatCommands";
+import { reduceChat, type ChatState } from "@/lib/chat/chatState";
+import { sendNowPlan, stopTurnPlan } from "@/lib/chat/chatTasks";
 
 export interface ChatStart {
   cwd: string;
@@ -26,88 +27,39 @@ export interface ChatImage {
   data: string;
 }
 
-/**
- * Events come in bursts while Claude streams: they are folded in at most
- * every 16 ms. A timer rather than an animation frame: frames stop while the
- * window is minimized, and a long stream would pile up meanwhile.
- */
-const FLUSH_MS = 16;
+/** How many older messages « Charger les messages plus anciens » brings. */
+const OLDER_PAGE = 200;
 
 /**
- * One chat, driven by its pane. Starting it again (remount, page reload)
- * reattaches to the running conversation: the chat ends only with `close`,
- * which the pane's owner sends when the pane goes away or switches to the
- * terminal.
+ * One chat, driven by its pane. Its state lives page-side (`chatLive`) and
+ * outlives the pane: back on screen, it shows at once and starts nothing.
+ * Starting it on a running conversation (page reload) reattaches: the chat
+ * ends only with `close`, which the pane's owner sends when the pane goes
+ * away or switches to the terminal.
  */
 export function useChatSession(
   chatId: string,
   accountId: string | undefined,
   start: ChatStart,
 ) {
-  const [state, setState] = useState<ChatState>(EMPTY_CHAT);
-  /** Subagent conversations opened from the drawer, by agent id. */
-  const [agents, setAgents] = useState<Record<string, ChatState>>({});
   const startRef = useRef(start);
-  /** Bumped by `restart`: starts the chat again, on its session. */
-  const [generation, setGeneration] = useState(0);
-
+  // Declared before the reads below: React runs it before they subscribe.
   useEffect(() => {
-    let alive = true;
-    let queue: ChatEvent[] = [];
-    let timer: number | undefined;
-    const flush = () => {
-      timer = undefined;
-      const batch = queue;
-      queue = [];
-      const now = Date.now();
-      setState((s) => batch.reduce((acc, e) => reduceChat(acc, e, now), s));
-    };
-    const push = (event: ChatEvent) => {
-      queue.push(event);
-      timer ??= window.setTimeout(flush, FLUSH_MS);
-    };
-    const unsubscribe = subscribeChat(chatId, (event) => {
-      if (event.type === "history" && event.agentId) {
-        const agentId = event.agentId;
-        setAgents((prev) => ({
-          ...prev,
-          [agentId]: reduceChat(
-            EMPTY_CHAT,
-            { ...event, agentId: undefined },
-            0,
-          ),
-        }));
-        return;
-      }
-      push(event);
-    });
-    const unsubscribeExit = subscribeServerExit((account) => {
-      if (account !== (accountId ?? "main")) return;
-      push({
-        type: "closed",
-        chatId,
-        error: "Le serveur du chat s'est arrêté",
-      });
-    });
-    void chatEventsReady()
-      .then(() => {
-        if (!alive) return;
-        return chatCommand(accountId, {
-          type: "start",
-          chatId,
-          ...startRef.current,
-        });
-      })
-      .catch((e: unknown) =>
-        push({ type: "closed", chatId, error: String(e) }),
-      );
-    return () => {
-      alive = false;
-      unsubscribe();
-      unsubscribeExit();
-      window.clearTimeout(timer);
-    };
-  }, [chatId, accountId, generation]);
+    if (attachLiveChat(chatId, accountId)) {
+      void startLiveChat(chatId, accountId, startRef.current);
+    }
+  }, [chatId, accountId]);
+  const subscribe = useCallback(
+    (cb: () => void) => subscribeLiveChat(chatId, cb),
+    [chatId],
+  );
+  const state = useSyncExternalStore(subscribe, () => liveChatState(chatId));
+  /** Subagent conversations opened from the drawer, by agent id. */
+  const agents = useSyncExternalStore(subscribe, () => liveChatAgents(chatId));
+  const setState = useCallback(
+    (update: (s: ChatState) => ChatState) => updateLiveChat(chatId, update),
+    [chatId],
+  );
 
   const run = useCallback(
     (command: Parameters<typeof chatCommand>[1]) =>
@@ -120,22 +72,56 @@ export function useChatSession(
           ),
         ),
       ),
-    [accountId, chatId],
+    [accountId, chatId, setState],
   );
 
+  // What ends the turn (Esc, « Envoyer maintenant », Ctrl+Entrée) never
+  // ends a subagent nor a waiting message (`stopTurnPlan`). Read at call
+  // time: the actions keep one identity.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  });
   const send = useCallback(
-    (text: string, images: ChatImage[] = [], now = false) =>
-      run({
-        type: "send",
-        chatId,
-        text,
-        images,
-        ...(now ? { priority: "now" as const } : {}),
-      }),
+    (text: string, images: ChatImage[] = [], now = false) => {
+      const command = { type: "send" as const, chatId, text, images };
+      if (!now) return run(command);
+      // Foreground agents running: queued, then they go to the background
+      // and Claude takes it there (`sendNowPlan`).
+      const s = stateRef.current;
+      const plan = sendNowPlan(
+        s.subagents,
+        isCommandSent(s, { type: "user_sent", chatId, text, images: images.length }),
+      );
+      return run(
+        plan.priority
+          ? { ...command, priority: "now" as const }
+          : { ...command, spare: plan.spare },
+      );
+    },
     [run, chatId],
   );
-  const interrupt = useCallback(
-    () => run({ type: "interrupt", chatId }),
+  const interrupt = useCallback(() => {
+    const { subagents, items } = stateRef.current;
+    const plan = stopTurnPlan(subagents, items);
+    // A message waits: the backgrounding alone moves Claude on to it.
+    if (!plan.interrupt)
+      return run({ type: "background", chatId, toolUseIds: plan.spare });
+    return run({ type: "interrupt", chatId, spare: plan.spare });
+  }, [run, chatId]);
+  /** Ctrl+B: the running Bash commands and subagents go to the background. */
+  const background = useCallback(
+    () => run({ type: "background", chatId }),
+    [run, chatId],
+  );
+  /** « Arrêter le workflow »: that one task. */
+  const stopTask = useCallback(
+    (taskId: string) => run({ type: "stop_task", chatId, taskId }),
+    [run, chatId],
+  );
+  /** A background shell's output, answered by a `task_output` event. */
+  const taskOutput = useCallback(
+    (taskId: string) => run({ type: "task_output", chatId, taskId }),
     [run, chatId],
   );
   const answer = useCallback(
@@ -153,9 +139,10 @@ export function useChatSession(
   );
   const openAgent = useCallback(
     (agentId: string) => {
-      if (!state.sessionId) return;
+      // No agent, no request: never the session's past in a sheet.
+      if (!agentId || !state.sessionId) return;
       void run({
-        type: "history",
+        type: "agent_history",
         chatId,
         sessionId: state.sessionId,
         cwd: startRef.current.cwd,
@@ -168,20 +155,35 @@ export function useChatSession(
 
   /** A chat that ended starts again on its session, its past reloaded. */
   const restart = useCallback(() => {
+    // The pane's chat as it is now: after a /clear it names no session.
     startRef.current = {
-      cwd: startRef.current.cwd,
-      resume: state.sessionId ?? startRef.current.resume,
+      cwd: start.cwd,
+      resume: state.sessionId ?? start.resume,
     };
-    setState(EMPTY_CHAT);
-    setGeneration((g) => g + 1);
-  }, [state.sessionId]);
+    void startLiveChat(chatId, accountId, startRef.current);
+  }, [chatId, accountId, state.sessionId, start.cwd, start.resume]);
+
+  /** The page of messages before the oldest shown (`older`, server-side). */
+  const loadOlder = useCallback(() => {
+    if (!state.historyCursor) return;
+    void run({
+      type: "older",
+      chatId,
+      before: state.historyCursor,
+      limit: OLDER_PAGE,
+    });
+  }, [run, chatId, state.historyCursor]);
 
   return {
     state,
     agents,
     restart,
+    loadOlder,
     send,
     interrupt,
+    background,
+    stopTask,
+    taskOutput,
     answer,
     setMode,
     setModel,

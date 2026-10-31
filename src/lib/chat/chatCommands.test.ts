@@ -57,7 +57,9 @@ describe("slash commands in the column", () => {
     const state = replay(resultAfter("/compact"));
     expect(
       state.items.some(
-        (i) => i.kind === "notice" && i.text === "Conversation compactée",
+        (i) =>
+          i.kind === "notice" &&
+          /^Conversation compactée · \d+ k → \d+ k jetons$/.test(i.text),
       ),
     ).toBe(true);
     expect(

@@ -3,6 +3,8 @@ import { CircleAlert } from "lucide-react";
 import { toolIcon } from "@/components/modern/toolIcons";
 import { toolLabel, type ToolItem } from "@/lib/chat/chatGroups";
 import { toolStep } from "@/lib/chat/chatSteps";
+import { shellMarks } from "@/lib/chat/chatToolResult";
+import { ChatShellOutput } from "@/components/chat/chat-shell-output";
 
 /** A tool's output is shown up to this, its tail cut. */
 const OUTPUT_CAP = 6000;
@@ -24,6 +26,10 @@ export function ChatToolRow({
       ? String(tool.input.command ?? "")
       : "";
   const output = tool.result?.text ?? "";
+  // A command's output and errors apart, and how it ended (`toolDetail`).
+  const shell = tool.result?.detail?.shell;
+  const streams =
+    shell && (shell.stdout !== undefined || shell.stderr !== undefined);
   return (
     <div className="chat-tool">
       <div className="row" onClick={() => setOpen((o) => !o)}>
@@ -32,9 +38,18 @@ export function ChatToolRow({
         <span className="step" title={step}>
           {step}
         </span>
+        {shell &&
+          shellMarks(shell).map((mark) => (
+            <span key={mark} className="chat-mark">
+              {mark}
+            </span>
+          ))}
         {tool.result?.isError && <CircleAlert size={13} className="err" />}
       </div>
-      {open && (
+      {open && shell && streams && (
+        <ChatShellOutput command={command} shell={shell} text={output} />
+      )}
+      {open && !streams && (
         <div className="out">
           {command && `$ ${command}\n\n`}
           {output
@@ -43,7 +58,9 @@ export function ChatToolRow({
               : output
             : tool.result
               ? "(rien)"
-              : "En cours…"}
+              : tool.stale
+                ? "(sans résultat)"
+                : "En cours…"}
         </div>
       )}
     </div>

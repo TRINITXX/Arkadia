@@ -2,7 +2,17 @@ import { Bot, CircleAlert, CircleCheck, MessagesSquare, X } from "lucide-react";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import type { Subagent } from "@/lib/chat/chatState";
 
-/** The chat's subagents: what each does, how far it got, its conversation a click away. */
+/** How an agent ended, when not plainly done. */
+const ENDED: Partial<Record<Subagent["status"], string>> = {
+  failed: "en échec",
+  stopped: "arrêté",
+  interrupted: "interrompu",
+};
+
+/**
+ * The chat's finished subagents (« Agents terminés », running ones have their
+ * cards): what each did, how it ended, its conversation a click away.
+ */
 export function ChatAgentsDrawer({
   subagents,
   onOpenConversation,
@@ -16,7 +26,7 @@ export function ChatAgentsDrawer({
     <div className="chat-drawer">
       <div className="dh">
         <Bot size={16} />
-        <span>Sous-agents</span>
+        <span>Agents terminés</span>
         <button
           type="button"
           className="chat-ib"
@@ -30,7 +40,7 @@ export function ChatAgentsDrawer({
         {subagents.length === 0 && (
           <div className="chat-agent">
             <span className="meta">
-              Aucun sous-agent dans cette conversation.
+              Aucun sous-agent terminé dans cette conversation.
             </span>
           </div>
         )}
@@ -50,6 +60,7 @@ export function ChatAgentsDrawer({
             </div>
             <div className="meta">
               {[
+                ENDED[agent.status],
                 agent.type,
                 agent.toolUses > 0 && `${agent.toolUses} outils`,
                 agent.tokens > 0 && `${tokensLabel(agent.tokens)} jetons`,

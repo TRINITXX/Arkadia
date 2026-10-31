@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { ArrowUp, Mic, Square, X, Zap } from "lucide-react";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatRailActions } from "@/components/chat/chat-rail-actions";
@@ -7,17 +14,24 @@ import { useSlashMenu, type ChatSlash } from "@/lib/chat/useSlashMenu";
 import type { ChatImage } from "@/lib/chat/useChatSession";
 import { hasQueued, type ChatItem } from "@/lib/chat/chatState";
 import { useSendAfterDictation } from "@/lib/chat/useSendAfterDictation";
+import { useChatSuggestion } from "@/lib/chat/useChatSuggestion";
+import { useInputHistory } from "@/lib/chat/useInputHistory";
+import { useTypeToInput } from "@/lib/chat/useTypeToInput";
 import type {
   ChatDraft,
   DraftImage as Attachment,
 } from "@/lib/chat/chatDrafts";
 import type { DictationEnd, VoiceStatus } from "@/lib/useHiddenVoice";
 import type { PermissionMode } from "@/lib/chat/chatProtocol";
-import { MODELS, modeLabel, modelLabel, nextMode } from "@/lib/chat/chatLabels";
+import { modeLabel, nextMode } from "@/lib/chat/chatLabels";
+import { ChatModelPicker } from "@/components/chat/chat-model-picker";
+import type { EffortLevel } from "@/lib/chat/chatProtocol";
+import { EMPTY_SDK, type SdkState } from "@/lib/chat/chatSdkSettings";
 
 /** Claude's dictation (`useHiddenVoice`): its text lands in the draft. */
 export interface ChatVoice {
   status: VoiceStatus;
+  /** True once listening (`useHiddenVoice`); the preview's says nothing. */
   start: () => unknown;
   /** Resolves once the dictated text is in the draft, or with why not
    *  (`quiet`: true while the caller is there to show the failure). */
@@ -54,8 +68,9 @@ function readImage(file: File): Promise<Attachment> {
  * The input card: text (Enter sends, Shift+Enter breaks the line), images by
  * paste, `/` commands, the terminal rail's actions (`ChatRailActions`), and
  * the session's mode and model.
- * Esc interrupts a working Claude, Shift+Tab cycles the mode, as in the
- * terminal. A message sent while Claude works waits for its turn; Ctrl+Enter
+ * Esc interrupts a working Claude (its turn only: background agents and
+ * workflows go on), Ctrl+B sends its running command or agent to the
+ * background, Shift+Tab cycles the mode, as in the terminal. A message sent while Claude works waits for its turn; Ctrl+Enter
  * sends it now (the turn under way stops), or, input empty, the ones waiting.
  * Sent mid-dictation, the draft goes once the dictated text is in.
  */
@@ -71,12 +86,16 @@ export function ChatComposer({
   focusKey,
   onSend,
   onInterrupt,
+  onBackground,
   onMode,
   onModel,
   messagesOnly,
   onMessagesOnly,
   active,
   onToast,
+  suggestion = null,
+  sdk = EMPTY_SDK,
+  onEffort,
 }: {
   /** The conversation, for the copy of Claude's last code block. */
   items: ChatItem[];
@@ -93,6 +112,8 @@ export function ChatComposer({
   /** `now`: Claude Code ends the turn under way for it (Ctrl+Enter). */
   onSend: (text: string, images: ChatImage[], now?: boolean) => void;
   onInterrupt: () => void;
+  /** Ctrl+B while Claude works: its running Bash and agents to the background. */
+  onBackground?: () => void;
   onMode: (mode: PermissionMode) => void;
   onModel: (model: string) => void;
   messagesOnly: boolean;
@@ -100,6 +121,12 @@ export function ChatComposer({
   /** The pane is the active one and on screen (`ChatRailActions`). */
   active: boolean;
   onToast?: ToastFn;
+  /** Claude Code's guess at the next message: grey in the empty input. */
+  suggestion?: string | null;
+  /** The model menu, effort and fast mode (`ChatModelPicker`). */
+  sdk?: Pick<SdkState, "models" | "effort" | "fastMode">;
+  /** The session's effort, this session only. */
+  onEffort?: (effort: EffortLevel) => void;
 }) {
   const { text, images } = draft;
   const setText = (value: string) => onDraft((d) => ({ ...d, text: value }));
@@ -107,6 +134,20 @@ export function ChatComposer({
     onDraft((d) => ({ ...d, images: update(d.images) }));
   const [menu, setMenu] = useState<"model" | null>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const ghost = useChatSuggestion(suggestion, text, working);
+  // ↑ / ↓ bring back the pane's last messages (empty input).
+  const history = useInputHistory(items, text, (t) =>
+    onDraft((d) => ({ ...d, text: t })),
+  );
+  // A key typed after a click in the conversation still lands here.
+  useTypeToInput(
+    areaRef,
+    useCallback(
+      (key: string) => onDraft((d) => ({ ...d, text: d.text + key })),
+      [onDraft],
+    ),
+    active,
+  );
   const slashMenu = useSlashMenu({
     text,
     setText,
@@ -187,7 +228,14 @@ export function ChatComposer({
       if (!e.repeat) toggleVoice();
       return;
     }
+    if (history.onKeyDown(e)) return;
     if (slashMenu.onKeyDown(e)) return;
+    // Tab takes the suggestion, only in the empty input with no menu open.
+    if (e.key === "Tab" && !e.shiftKey && ghost && !menu) {
+      e.preventDefault();
+      setText(ghost);
+      return;
+    }
     if (e.key === "Tab" && e.shiftKey) {
       e.preventDefault();
       onMode(nextMode(mode));
@@ -196,6 +244,18 @@ export function ChatComposer({
     if (e.key === "Escape" && working) {
       e.preventDefault();
       onInterrupt();
+      return;
+    }
+    if (
+      e.ctrlKey &&
+      !e.shiftKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === "b" &&
+      working &&
+      onBackground
+    ) {
+      e.preventDefault();
+      onBackground();
       return;
     }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -230,10 +290,13 @@ export function ChatComposer({
         ref={areaRef}
         rows={1}
         value={text}
+        className={ghost ? "suggest" : undefined}
         placeholder={
-          working
-            ? "Claude travaille… ton message attendra son tour (Ctrl+Entrée : tout de suite)"
-            : "Écris à Claude…"
+          ghost
+            ? `${ghost}  ·  Tab`
+            : working
+              ? "Claude travaille… ton message attendra son tour (Ctrl+Entrée : tout de suite)"
+              : "Écris à Claude…"
         }
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
@@ -261,36 +324,13 @@ export function ChatComposer({
         >
           <Zap /> <span className="lbl">{modeLabel(mode)}</span>
         </span>
-        <span className="chat-anchor">
-          <span
-            className="chat-chip"
-            title="Changer de modèle"
-            onClick={() => setMenu((m) => (m ? null : "model"))}
-          >
-            <span className="lbl">{modelLabel(model)}</span>
-          </span>
-          {menu === "model" && (
-            <div
-              className="chat-menu"
-              style={{ left: 0 }}
-              onMouseLeave={() => setMenu(null)}
-            >
-              {MODELS.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  className={modelLabel(model) === m.label ? "on" : undefined}
-                  onClick={() => {
-                    onModel(m.id);
-                    setMenu(null);
-                  }}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </span>
+        <ChatModelPicker
+          model={model}
+          sdk={sdk}
+          onModel={onModel}
+          onEffort={onEffort}
+          onMenu={(open) => setMenu(open ? "model" : null)}
+        />
         <button
           type="button"
           className={`chat-round mic chat-push${voice.status === "listening" ? " rec" : ""}`}

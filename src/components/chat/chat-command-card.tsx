@@ -20,6 +20,7 @@ export function ChatCommandCard({
   onOpen,
   onToast,
   onSendNow,
+  onRemove,
 }: {
   item: CommandItem;
   cwd: string | null;
@@ -27,6 +28,8 @@ export function ChatCommandCard({
   onToast?: ToastFn;
   /** Stops the turn so Claude takes the queued messages now. */
   onSendNow?: () => void;
+  /** Withdraws it while it still waits. */
+  onRemove?: () => void;
 }) {
   return (
     <div className={`chat-unit chat-cmd${item.queued ? " queued" : ""}`}>
@@ -35,7 +38,12 @@ export function ChatCommandCard({
         <span className="name">/{item.name}</span>
         {item.args && <span className="args">{item.args}</span>}
         {(item.queued || item.dropped) && (
-          <ChatQueuedMark dropped={item.dropped} onSendNow={onSendNow} />
+          <ChatQueuedMark
+            dropped={item.dropped}
+            removed={item.removed}
+            onSendNow={onSendNow}
+            onRemove={onRemove}
+          />
         )}
       </div>
       {item.output && (

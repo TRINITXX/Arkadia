@@ -124,6 +124,9 @@ import {
   IDLE_CHAT,
 } from "@/lib/chat/chatEvents";
 import { dropDraft, moveDraft } from "@/lib/chat/chatDrafts";
+import { dropLiveChat, liveSessionId } from "@/lib/chat/chatLive";
+import { dropSheet } from "@/lib/chat/chatSheetAnswers";
+import { useChatLimitSwitch } from "@/lib/chat/useChatLimitSwitch";
 import { dropPathsInChat } from "@/lib/chat/chatDrop";
 import {
   dropMessagesOnly,
@@ -1198,6 +1201,8 @@ export function App() {
       const panes: Record<string, PaneState> = {};
       newIds.forEach((id, i) => {
         paneToTab.current.set(id, tabId);
+        // A chat's unsent input, kept on disk, follows it to its new id.
+        if (chats[i]) moveDraft(st.panes[i].paneId, id);
         panes[id] = {
           id,
           // A restored chat is at rest until it says otherwise.
@@ -1266,9 +1271,14 @@ export function App() {
     const paneIds = tabs.flatMap((t) => Object.keys(t.panes));
     void Promise.all(
       paneIds.map(async (paneId) => {
-        const sid = await invoke<string | null>("pane_session_id", {
-          paneId,
-        }).catch(() => null);
+        // A chat's session is its own, never its pane map's (a terminal
+        // session may have run there before the chat).
+        const chat = tabs.find((t) => t.panes[paneId])?.panes[paneId]?.chat;
+        const sid = chat
+          ? (liveSessionId(paneId) ?? chat.resume ?? null)
+          : await invoke<string | null>("pane_session_id", {
+              paneId,
+            }).catch(() => null);
         return sid ? ([sid, paneId] as const) : null;
       }),
     ).then((pairs) => {
@@ -1280,6 +1290,16 @@ export function App() {
     };
   }, [sessionsOpen, tabs]);
 
+  /**
+   * Arkadia Lab: what resuming a past conversation as a chat needs from
+   * further down (the chat panes' hook, `revealPane`), set once they exist.
+   */
+  const labResumeRef = useRef<{
+    holding: (sessionId: string) => Promise<string | null>;
+    reveal: (paneId: string) => void;
+    start: (paneId: string, chat: PaneChat) => void;
+  } | null>(null);
+
   // Reopens a past conversation: a tab in the project that owns its folder
   // (created on the spot when none does), with the pane started in the
   // session's own cwd — `--resume` only finds a transcript under the project
@@ -1290,6 +1310,18 @@ export function App() {
       /** False from the phone: the desktop view stays where it is. */
       activate = true,
     ) => {
+      // Arkadia Lab: as a chat, unless a pane runs it already: never two
+      // Claude Code on one session (/resume's rule, `paneHolding`).
+      const lab = __ARKADIA_LAB__ ? labResumeRef.current : null;
+      if (lab) {
+        const held = await lab.holding(session.id);
+        const heldTab = held ? paneToTab.current.get(held) : undefined;
+        if (held && heldTab) {
+          if (activate) lab.reveal(held);
+          pushToast("info", "Conversation déjà ouverte : voici son onglet");
+          return { tabId: heldTab, paneId: held };
+        }
+      }
       const target = resolveProjectTarget(projects, session.cwd);
       let project: Project | undefined;
       if (target.kind === "existing") {
@@ -1311,12 +1343,14 @@ export function App() {
       // and forwards its args, so --resume passes straight through.
       const spawned = await spawnTabFor(
         project,
-        `ccd --resume ${session.id}`,
+        lab ? undefined : `ccd --resume ${session.id}`,
         session.cwd,
         undefined,
         activate,
       );
       if (!spawned) return null;
+      // The pane's shell stays under the chat, for a later switch.
+      if (lab) lab.start(spawned.paneId, { cwd: session.cwd, resume: session.id });
       if (activate) setActiveProjectId(project.id);
       // The project is where the user is about to work: surface it in the
       // sidebar's "Active" list now, not on the first keystroke.
@@ -1427,6 +1461,8 @@ export function App() {
         dropHeldConv(pid);
         dropDraft(pid);
         dropMessagesOnly(pid);
+        dropLiveChat(pid);
+        dropSheet(pid);
         try {
           await invoke("close_terminal", { sessionId: pid });
         } catch {
@@ -1473,6 +1509,8 @@ export function App() {
           dropHeldConv(pid);
           dropDraft(pid);
           dropMessagesOnly(pid);
+          dropLiveChat(pid);
+          dropSheet(pid);
           try {
             await invoke("close_terminal", { sessionId: pid });
           } catch {
@@ -1516,6 +1554,8 @@ export function App() {
       dropHeldConv(paneId);
       dropDraft(paneId);
       dropMessagesOnly(paneId);
+      dropLiveChat(paneId);
+      dropSheet(paneId);
       try {
         await invoke("close_terminal", { sessionId: paneId });
       } catch {
@@ -1602,7 +1642,11 @@ export function App() {
     (paneId: string) => chatPaneStatesRef.current[paneId],
     [],
   );
-  const { handlers: chatHandlers, startChat } = usePaneChats({
+  const {
+    handlers: chatHandlers,
+    startChat,
+    paneHolding,
+  } = usePaneChats({
     setTabs,
     tabsRef,
     projectPathOf,
@@ -1626,6 +1670,8 @@ export function App() {
       chat: PaneChat,
       accountId: string,
       stillThere: () => boolean,
+      /** The new pane and its chat (the limit switch starts it at once). */
+      onStarted?: (paneId: string, chat: PaneChat, accountId?: string) => void,
     ): Promise<"done" | "skipped" | "failed"> => {
       const busy = chatBusyReason(chatActivity(old.id), chatReplaying(old.id));
       if (busy) {
@@ -1669,8 +1715,12 @@ export function App() {
       moveMessagesOnly(old.id, newId);
       // Its own session or the folder's latest: never the pane map's, which
       // may hold a terminal session that ran in this pane before the chat.
-      const next: PaneChat = chat.resume
-        ? { cwd: chat.cwd, resume: chat.resume }
+      // The chat's own word first: the pane may not have heard it yet.
+      const resume = liveSessionId(old.id) ?? chat.resume;
+      dropLiveChat(old.id);
+      dropSheet(old.id);
+      const next: PaneChat = resume
+        ? { cwd: chat.cwd, resume }
         : { cwd: chat.cwd, ...(chat.continue ? { continue: true } : {}) };
       setTabs((prev) =>
         prev.map((t) => {
@@ -1692,6 +1742,7 @@ export function App() {
           };
         }),
       );
+      onStarted?.(newId, next, paneAccount);
       return "done";
     },
     [spawnPane, pushToast],
@@ -2093,6 +2144,24 @@ export function App() {
     [findClaudePane, persistLimitState],
   );
 
+  // A chat at its usage limit moves to the free account whose quota resets
+  // soonest, as the terminal's setting says (`useChatLimitSwitch`).
+  const tabsListRef = tabsRef as React.RefObject<Tab[]>;
+  useChatLimitSwitch({
+    enabledRef: autoSwitchOnLimitRef,
+    accountsRef: accountsStateRef,
+    tabsRef: tabsListRef,
+    blocked: () => limitState.current.blocked,
+    block: (accountId, until) => {
+      const blocked = limitState.current.blocked;
+      blocked[accountId] = Math.max(blocked[accountId] ?? 0, until);
+      persistLimitState();
+    },
+    relaunch: relaunchChatOnAccount,
+    onSwitched: (accountId) => void accounts.setCurrent(accountId),
+    onToast: pushToast,
+  });
+
   // ─── Pane operations ───────────────────────────────────────────
 
   const focusPane = useCallback((tabId: string, paneId: string) => {
@@ -2282,6 +2351,15 @@ export function App() {
     });
   }, []);
 
+  // Arkadia Lab: « Reprendre » opens the conversation as a chat.
+  useEffect(() => {
+    labResumeRef.current = {
+      holding: paneHolding,
+      reveal: revealPane,
+      start: startChat,
+    };
+  }, [paneHolding, revealPane, startChat]);
+
   // ─── Focus a pane on request from the notification popup ────────
   // The "open in Arkadia" button emits `focus-pane` with the pane id; bring its
   // project + tab forward and focus the pane so the user lands on the
@@ -2467,6 +2545,8 @@ export function App() {
         dropHeldConv(pid);
         dropDraft(pid);
         dropMessagesOnly(pid);
+        dropLiveChat(pid);
+        dropSheet(pid);
         void invoke("close_terminal", { sessionId: pid });
       });
     });

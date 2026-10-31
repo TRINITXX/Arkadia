@@ -10,6 +10,7 @@ import {
   SquareCheck,
   X,
 } from "lucide-react";
+import { focusIsFree, focusOf } from "@/lib/chat/chatFocus";
 import type { PermissionResult } from "@/lib/chat/chatProtocol";
 import {
   answerOf,
@@ -93,13 +94,10 @@ export function ChatQuestionPanel({
   const quietSince = useRef(0);
   useEffect(() => {
     quietSince.current = Date.now();
-    // Takes the keyboard only from nowhere or from its own chat: never from
-    // the terminal, notepad or field the user is typing in.
-    const focused = document.activeElement;
-    const chat = rootRef.current?.closest(".chat-root");
-    const free =
-      !focused || focused === document.body || !!chat?.contains(focused);
-    if (isActive && free) rootRef.current?.focus();
+    // Takes the keyboard only from nowhere or a button of its own chat: never
+    // from the terminal, a field, the Ctrl+F box or a menu (`focusIsFree`).
+    if (isActive && focusIsFree(focusOf(rootRef.current)))
+      rootRef.current?.focus();
     // Focus on arrival only, not each time the pane becomes active.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request.requestId]);
@@ -107,8 +105,7 @@ export function ChatQuestionPanel({
   // field): the panel keeps the keyboard, and its tab comes into view.
   useEffect(() => {
     if (!tabbed) return;
-    const focused = document.activeElement;
-    if (isActive && (!focused || focused === document.body)) {
+    if (isActive && focusIsFree(focusOf(rootRef.current))) {
       rootRef.current?.focus();
     }
     tabsRef.current

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { suggestionDetail, suggestionLabel } from "@/lib/chat/chatPermissions";
+import {
+  alwaysChoices,
+  permissionAsker,
+  suggestionDetail,
+  suggestionLabel,
+} from "@/lib/chat/chatPermissions";
 
 describe("suggestionLabel", () => {
   // As Claude Code 2.1.314 sent them in a live check (31/10/2026).
@@ -32,5 +37,30 @@ describe("suggestionLabel", () => {
         destination: "localSettings",
       }),
     ).toBeNull();
+  });
+});
+
+describe("cautious requests", () => {
+  const rule = {
+    type: "addRules" as const,
+    rules: [{ toolName: "Bash", ruleContent: "rm -rf ./tmpdir" }],
+    behavior: "allow" as const,
+    destination: "localSettings" as const,
+  };
+
+  it("offers no « always » when Claude Code forbids a lasting choice", () => {
+    expect(alwaysChoices({ suggestions: [rule] })).toHaveLength(1);
+    expect(
+      alwaysChoices({ suggestions: [rule], suppressAlwaysAllowRule: true }),
+    ).toEqual([]);
+  });
+
+  it("names the subagent that asks", () => {
+    const agents = [{ taskId: "a37e", description: "Créer sub.txt" }];
+    expect(permissionAsker(undefined, agents)).toBeNull();
+    expect(permissionAsker("a37e", agents)).toBe(
+      "Le sous-agent « Créer sub.txt » demande",
+    );
+    expect(permissionAsker("other", agents)).toBe("Un sous-agent demande");
   });
 });

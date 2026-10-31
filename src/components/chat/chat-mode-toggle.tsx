@@ -29,17 +29,19 @@ export function ChatModeToggle({
         type="button"
         className={mode === "chat" ? "on" : undefined}
         disabled={mode === "chat" || busy}
+        title="Chat"
         onClick={onSwitch}
       >
-        <MessageSquare /> Chat
+        <MessageSquare /> <span className="lbl">Chat</span>
       </button>
       <button
         type="button"
         className={mode === "terminal" ? "on" : undefined}
         disabled={mode === "terminal" || busy}
+        title="Terminal"
         onClick={onSwitch}
       >
-        <SquareTerminal /> Terminal
+        <SquareTerminal /> <span className="lbl">Terminal</span>
       </button>
     </div>
   );

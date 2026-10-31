@@ -16,7 +16,8 @@ export function ChatWorkGroup({
   cwd: string | null;
 }) {
   const [open, setOpen] = useState(false);
-  const running = tools.some((t) => !t.result);
+  // A past call without a result is not running (`stale`).
+  const running = tools.some((t) => !t.result && !t.stale);
   const failed = tools.filter((t) => t.result?.isError).length;
   const last = lastStep(tools, cwd);
   return (

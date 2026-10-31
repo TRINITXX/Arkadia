@@ -96,9 +96,12 @@ export function nextActivity(
       return IDLE_CHAT;
     case "user_sent":
       return { ...prev, busy: true };
+    // An MCP server's request waits on the user as a permission does.
     case "permission":
+    case "elicitation":
       return { ...prev, pending: prev.pending + 1 };
     case "permission_resolved":
+    case "elicitation_resolved":
       return { ...prev, pending: Math.max(0, prev.pending - 1) };
     case "sdk": {
       const m = event.message;
@@ -199,6 +202,7 @@ function dispatch(line: string): void {
     notifySoon(chatId);
   }
   for (const cb of byChat.get(chatId) ?? []) cb(event);
+  for (const cb of everyChat) cb(event);
 }
 
 /** Resolves once the page listens to the chat servers. */
@@ -207,6 +211,14 @@ export function chatEventsReady(): Promise<void> {
     () => undefined,
   );
   return ready;
+}
+
+/** Every chat's events, shown or not (the usage limit's watch). */
+const everyChat = new Set<Listener>();
+
+export function subscribeEveryChat(cb: Listener): () => void {
+  everyChat.add(cb);
+  return () => everyChat.delete(cb);
 }
 
 export function subscribeChat(chatId: string, cb: Listener): () => void {

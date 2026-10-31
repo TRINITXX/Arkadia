@@ -1,0 +1,263 @@
+import { describe, expect, it } from "vitest";
+import type { ChatEvent, JsonObject } from "@/lib/chat/chatProtocol";
+import {
+  EMPTY_CHAT,
+  reduceChat,
+  type ChatItem,
+  type ChatState,
+} from "@/lib/chat/chatState";
+
+/** SDK messages as the chat server relays them (shapes of live runs, 31/10/2026). */
+const sdk = (message: JsonObject): ChatEvent => ({
+  type: "sdk",
+  chatId: "t",
+  message,
+});
+
+function run(events: ChatEvent[], from: ChatState = EMPTY_CHAT): ChatState {
+  return events.reduce((s, e, i) => reduceChat(s, e, 1_000 + i * 10), from);
+}
+
+const notices = (state: ChatState) =>
+  state.items.filter(
+    (i): i is Extract<ChatItem, { kind: "notice" }> => i.kind === "notice",
+  );
+
+const warning = (threshold: number) =>
+  sdk({
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: "allowed_warning",
+      rateLimitType: "five_hour",
+      unifiedWindows: {
+        five_hour: {
+          utilization: threshold + 0.01,
+          resetsAt: 1_793_424_000,
+          status: "allowed_warning",
+          surpassedThreshold: threshold,
+        },
+      },
+    },
+  });
+
+describe("Claude Code's notices in the column", () => {
+  it("says a quota threshold once, however many events repeat it", () => {
+    const state = run([warning(0.9), warning(0.9), warning(0.9)]);
+    expect(notices(state).map((n) => n.text)).toEqual([
+      expect.stringMatching(/^90 % de la session utilisés, reset /),
+    ]);
+  });
+
+  it("explains a refusal of the current mode: which action, why", () => {
+    const state = run([
+      sdk({
+        type: "assistant",
+        uuid: "a1",
+        message: {
+          id: "m1",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_1",
+              name: "Bash",
+              input: {
+                command: "mkdir sous-dossier",
+                description: "Create subfolder",
+              },
+            },
+          ],
+        },
+      }),
+      sdk({
+        type: "system",
+        subtype: "permission_denied",
+        tool_name: "Bash",
+        tool_use_id: "toolu_1",
+        decision_reason_type: "mode",
+        message:
+          "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: …",
+      }),
+    ]);
+    const [notice] = notices(state);
+    expect(notice.text).toBe(
+      "Refusé par le mode « … » : lance mkdir sous-dossier",
+    );
+    expect(notice.detail).toMatch(
+      /^Raison : Permission to use Bash has been denied/,
+    );
+    expect(notice.tone).toBe("warning");
+  });
+
+  it("says a hook blocked the message, with its reason", () => {
+    const state = run([
+      sdk({
+        type: "system",
+        subtype: "informational",
+        uuid: "i1",
+        level: "warning",
+        prevent_continuation: true,
+        content:
+          "UserPromptSubmit operation blocked by hook:\nBloqué par le hook de test\n\nOriginal prompt: Dis OK.",
+        prompt_submit_outcome: {
+          kind: "blocked_by_hook",
+          prompt_kept: false,
+          reason: "Bloqué par le hook de test",
+        },
+      }),
+    ]);
+    expect(notices(state)).toMatchObject([
+      {
+        text: "Message bloqué par un hook, il n'est pas parti",
+        detail: "Bloqué par le hook de test",
+        tone: "warning",
+      },
+    ]);
+  });
+
+  it("keeps one notification per key, without the terminal's key hint", () => {
+    const notification = (text: string) =>
+      sdk({
+        type: "system",
+        subtype: "notification",
+        key: "ide",
+        text,
+        priority: "low",
+      });
+    const state = run([
+      notification("IDE disconnected · ctrl+o to see"),
+      notification("IDE disconnected · ctrl+o to see"),
+      notification("IDE connected"),
+    ]);
+    expect(notices(state).map((n) => n.text)).toEqual(["IDE connected"]);
+  });
+
+  it("says an automatic compaction's figures, and a failed one", () => {
+    const state = run([
+      sdk({
+        type: "system",
+        subtype: "compact_boundary",
+        uuid: "c1",
+        compact_metadata: {
+          trigger: "auto",
+          pre_tokens: 180_400,
+          post_tokens: 32_100,
+        },
+      }),
+      sdk({
+        type: "system",
+        subtype: "status",
+        uuid: "s1",
+        status: null,
+        compact_result: "failed",
+        compact_error: "Not enough messages to compact.",
+      }),
+    ]);
+    expect(notices(state).map((n) => [n.text, n.tone])).toEqual([
+      ["Compacté automatiquement · 180 k → 32 k jetons", "info"],
+      ["La compaction a échoué : la conversation reste entière", "error"],
+    ]);
+  });
+});
+
+describe("Claude Code's turn around the column", () => {
+  it("keeps the suggestion for the next message until something is sent", () => {
+    const suggested = run([
+      sdk({ type: "prompt_suggestion", suggestion: "Écris le script complet" }),
+    ]);
+    expect(suggested.suggestion).toBe("Écris le script complet");
+    const sent = reduceChat(
+      suggested,
+      { type: "user_sent", chatId: "t", text: "Autre chose", images: 0 },
+      2_000,
+    );
+    expect(sent.suggestion).toBeNull();
+  });
+
+  it("holds a retry until the reply streams, and marks a reply cut by Esc", () => {
+    const retrying = run([
+      sdk({
+        type: "system",
+        subtype: "api_retry",
+        attempt: 1,
+        max_retries: 10,
+        retry_delay_ms: 581,
+        error_status: null,
+        error: "unknown",
+      }),
+    ]);
+    expect(retrying.retry).toMatchObject({ attempt: 1, cause: "connexion" });
+    const cut = run(
+      [
+        sdk({
+          type: "stream_event",
+          api_message_id: "m1",
+          event: { type: "message_start" },
+        }),
+        sdk({
+          type: "assistant",
+          uuid: "a1",
+          aborted: true,
+          message: {
+            id: "m1",
+            content: [{ type: "text", text: "La mer s'éveille" }],
+          },
+        }),
+        sdk({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          terminal_reason: "aborted_streaming",
+          uuid: "r1",
+        }),
+      ],
+      retrying,
+    );
+    expect(cut.retry).toBeNull();
+    expect(cut.items.find((i) => i.kind === "text")).toMatchObject({
+      aborted: true,
+    });
+    expect(notices(cut).map((n) => n.text)).toEqual(["Tour interrompu"]);
+  });
+
+  it("gives a tool call its structured result: a command's streams apart", () => {
+    const state = run([
+      sdk({
+        type: "assistant",
+        uuid: "a1",
+        message: {
+          id: "m1",
+          content: [
+            {
+              type: "tool_use",
+              id: "t1",
+              name: "Bash",
+              input: { command: "x" },
+            },
+          ],
+        },
+      }),
+      sdk({
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "t1",
+              content: "sortie\nattention",
+            },
+          ],
+        },
+        tool_use_result: {
+          stdout: "sortie",
+          stderr: "attention",
+          interrupted: false,
+        },
+      }),
+    ]);
+    const tool = state.items.find((i) => i.kind === "tool");
+    expect(tool?.kind === "tool" && tool.result?.detail?.shell).toMatchObject({
+      stdout: "sortie",
+      stderr: "attention",
+    });
+  });
+});

@@ -27,6 +27,7 @@ import { imageCaptions } from "@/lib/imageCaption";
 import { InlineVideo } from "@/components/modern/VideoThumb";
 import { imagePathKey, isVideoPath, splitImagePaths } from "@/lib/imagePaths";
 import { fetchImageUrl } from "@/lib/imageUrlCache";
+import { LinkCardsContext } from "@/lib/linkCards";
 
 export type ToastFn = (level: "info" | "error", message: string) => void;
 
@@ -152,6 +153,43 @@ export function clickablePath(text: string): string | null {
   return m ? m[1] : null;
 }
 
+/** The plain text of a link's children: its label. */
+function textOf(children: React.ReactNode): string {
+  if (typeof children === "string" || typeof children === "number")
+    return String(children);
+  if (Array.isArray(children)) return children.map(textOf).join("");
+  return "";
+}
+
+/**
+ * A link: opened in the browser (an artifact in its panel, `openLink`), or
+ * drawn by the view when it asks for it (`LinkCardsContext`, the chat's
+ * artifact cards).
+ */
+function MarkdownLink({
+  href,
+  children,
+}: {
+  href?: string;
+  children?: React.ReactNode;
+}) {
+  const cards = useContext(LinkCardsContext);
+  if (href && cards?.match(href)) {
+    return <cards.Card href={href} label={textOf(children)} />;
+  }
+  return (
+    <a
+      onClick={(e) => {
+        e.preventDefault();
+        if (href) void openUrl(href).catch(() => {});
+      }}
+      title={href}
+    >
+      {children}
+    </a>
+  );
+}
+
 /** Opens a file with the OS default app; failures surface as a toast. */
 export function openPath(path: string, onToast?: ToastFn) {
   backendInvoke("open_path", { path }).catch((e) => {
@@ -195,15 +233,7 @@ function buildComponents(
       return <span {...rest}>{children}</span>;
     },
     a: ({ href, children }) => (
-      <a
-        onClick={(e) => {
-          e.preventDefault();
-          if (href) void openUrl(href).catch(() => {});
-        }}
-        title={href}
-      >
-        {children}
-      </a>
+      <MarkdownLink href={href}>{children}</MarkdownLink>
     ),
     pre: (props) => {
       // A ```mermaid fence arrives as <pre><code class="language-mermaid">.

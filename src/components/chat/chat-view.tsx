@@ -7,6 +7,12 @@ import { Lightbox } from "@/components/modern/Lightbox";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatAgentSheet } from "@/components/chat/chat-agent-sheet";
 import { ChatAgentsDrawer } from "@/components/chat/chat-agents-drawer";
+import { ChatAgentCards } from "@/components/chat/chat-agent-cards";
+import { ChatShellsChip } from "@/components/chat/chat-shells-chip";
+import { ChatWorkflowCard } from "@/components/chat/chat-workflow-card";
+import { useAgentSheet } from "@/lib/chat/useAgentSheet";
+import { useLiveActivity } from "@/lib/chat/useLiveActivity";
+import type { ShellOutput } from "@/lib/chat/useShellOutputs";
 import { ChatComposer, type ChatVoice } from "@/components/chat/chat-composer";
 import type { ChatDraft } from "@/lib/chat/chatDrafts";
 import { followsAfterScroll } from "@/lib/followBottom";
@@ -14,7 +20,18 @@ import { useAnyOverlayOpen } from "@/lib/overlays";
 import { CHAT_CSS } from "@/components/chat/chat-css";
 import { ChatLiveLine } from "@/components/chat/chat-live-line";
 import { ChatModeToggle } from "@/components/chat/chat-mode-toggle";
+import { ChatEditConfirm } from "@/components/chat/chat-edit-confirm";
+import { ChatOlderButton } from "@/components/chat/chat-older-button";
+import { ChatQuestionSheet } from "@/components/chat/chat-question-sheet";
+import { ChatStartup } from "@/components/chat/chat-startup";
+import type { StartupPhase } from "@/lib/chat/chatStartup";
+import { recallColumn } from "@/lib/chat/chatLive";
+import { useColumnMemory } from "@/lib/chat/useColumnMemory";
+import { useMessageEdit } from "@/lib/chat/useMessageEdit";
+import { ChatElicitationPanel } from "@/components/chat/chat-elicitation-panel";
 import { ChatPermissionPanel } from "@/components/chat/chat-permission-panel";
+import type { ChatSdkActions } from "@/lib/chat/useChatSdkActions";
+import { useRunningHook } from "@/lib/chat/useRunningHook";
 import { ChatPlanApproval } from "@/components/chat/chat-plan-approval";
 import { ChatQuestionPanel } from "@/components/chat/chat-question-panel";
 import { ChatSearchBox } from "@/components/chat/chat-search-box";
@@ -64,7 +81,27 @@ export interface ChatViewProps {
   onToast?: ToastFn;
   /** What /resume and /rewind ask of the chat (`useSlashActions`). */
   slashActions?: SlashActions;
+  /** The pane: its column's place and its question sheet outlive unmounts. */
+  memoryKey?: string;
+  /** An empty column's line or welcome (`startupPhase`). */
+  startup?: StartupPhase;
+  /** « Charger les messages plus anciens »; absent, the old hint shows. */
+  onLoadOlder?: () => void;
+  /** Ctrl+B: the running Bash commands and subagents go to the background. */
+  onBackground?: () => void;
+  /** « Arrêter le workflow ». */
+  onStopTask?: (taskId: string) => void;
+  /** Asks a background shell's output again (`task_output`). */
+  onShellOutput?: (taskId: string) => void;
+  shellOutputs?: Record<string, ShellOutput>;
+  /** Effort, queued message withdrawn, MCP requests, context detail, plugins. */
+  sdkActions?: ChatSdkActions;
 }
+
+const NO_OUTPUTS: Record<string, ShellOutput> = {};
+
+/** A foreground call Ctrl+B can send to the background, as the terminal hints. */
+const BACKGROUNDABLE = new Set(["Bash", "PowerShell", "Agent", "Task"]);
 
 /** The chat pane's face ("Colonne calme"): column, live line, input card, status line. */
 export function ChatView({
@@ -90,10 +127,29 @@ export function ChatView({
   onHidden,
   onToast,
   slashActions,
+  memoryKey,
+  startup = null,
+  onLoadOlder,
+  onBackground,
+  onStopTask,
+  onShellOutput,
+  shellOutputs = NO_OUTPUTS,
+  sdkActions,
 }: ChatViewProps) {
+  // « hook … en cours » once one lasts; an MCP server's request waits like a tool's.
+  const hook = useRunningHook(state.sdk.hooks);
+  const elicitation = state.sdk.elicitations[0];
   const [lightbox, setLightbox] = useState<LightboxContent | null>(null);
   const [drawer, setDrawer] = useState(false);
-  const [sheet, setSheet] = useState<Subagent | null>(null);
+  // Subagents' and workflow agents' conversations, live while they run.
+  const agentSheet = useAgentSheet(state, agents, onOpenAgent);
+  // The docked cards and the shells chip, with their ticking clock.
+  const live = useLiveActivity(state);
+  const finishedAgents = useMemo(
+    () => state.subagents.filter((s) => s.status !== "running"),
+    [state.subagents],
+  );
+  const lastTool = state.liveTools[state.liveTools.length - 1];
   const [stuck, setStuck] = useState(true);
   // Off while its tab is hidden (the pane sized to nothing).
   const [shown, setShown] = useState(true);
@@ -103,6 +159,12 @@ export function ChatView({
   const stuckRef = useRef(true);
   /** `scrollTop` at the last scroll event or stick, for `followsAfterScroll`. */
   const lastTopRef = useRef(0);
+  /** The place last read while the column had a size: a hidden tab's pane is
+   *  sized to nothing and its scroll falls to 0 (as `ModernConversationView`). */
+  const savedTopRef = useRef(0);
+  /** A place was read with a size: until then a return keeps the one
+   *  `useColumnMemory` puts back (a chat mounted in a hidden tab). */
+  const measuredRef = useRef(false);
 
   const tasks = useMemo(() => tasksOf(state.items), [state.items]);
   const request = state.requests[0];
@@ -114,7 +176,14 @@ export function ChatView({
     (content: LightboxContent) => setLightbox(content),
     [],
   );
-  const openAgents = useCallback(() => setDrawer(true), []);
+  // A subagent's row opens its conversation, else the finished ones. Two
+  // handlers: one given as `onClick` would get the click event as « agent ».
+  const { openSheet } = agentSheet;
+  const openFinished = useCallback(() => setDrawer(true), []);
+  const openAgentRow = useCallback(
+    (agent?: Subagent) => (agent ? openSheet(agent) : setDrawer(true)),
+    [openSheet],
+  );
   // Every image of the conversation, for the lightbox's ←/→.
   const gallery = useMemo(
     () => (lightbox ? chatGallery(state.items, cwd).all : []),
@@ -140,19 +209,53 @@ export function ChatView({
     if (!el) return;
     el.scrollTop = el.scrollHeight;
     lastTopRef.current = el.scrollTop;
+    if (el.clientHeight > 0) {
+      savedTopRef.current = el.scrollTop;
+      measuredRef.current = true;
+    }
   }, []);
+  // Back on screen where the reader was: before the effect that keeps the end.
+  useColumnMemory(memoryKey, scrollRef, innerRef, stuckRef, leaveBottom);
+  // Read at its end (or new): the column draws its last rows first.
+  const [tailFirst] = useState(
+    () => !memoryKey || recallColumn(memoryKey)?.stuck !== false,
+  );
+  // The pencil on the user's messages (/rewind, conversation only).
+  const edit = useMessageEdit({
+    items: state.items,
+    actions: slashActions,
+    resting: !state.working && !request && !state.closed,
+    onDraft,
+    onToast,
+  });
   // New content, or content that grew (an image, a diagram), keeps the
   // column at its end while the reader is there.
   useLayoutEffect(() => {
     if (stuckRef.current) toBottom();
   }, [state.items, state.requests, toBottom]);
+  // Any size change re-pins a followed column: its content, and the column
+  // itself, which shrinks when what is docked under it grows (agent cards,
+  // workflow card, panels, notices above the input).
   useLayoutEffect(() => {
     const inner = innerRef.current;
-    if (!inner) return;
+    const scroller = scrollRef.current;
+    if (!inner || !scroller) return;
+    let wasHidden = scroller.clientHeight === 0;
     const ro = new ResizeObserver(() => {
+      if (scroller.clientHeight === 0) {
+        wasHidden = true;
+        return;
+      }
       if (stuckRef.current) toBottom();
+      // Back from a hidden tab: the reader's place, not the top.
+      else if (wasHidden && measuredRef.current) {
+        scroller.scrollTop = savedTopRef.current;
+        lastTopRef.current = scroller.scrollTop;
+      }
+      wasHidden = false;
     });
     ro.observe(inner);
+    ro.observe(scroller);
     return () => ro.disconnect();
   }, [toBottom]);
   // A hidden tab keeps its panes mounted but sized to nothing.
@@ -178,7 +281,8 @@ export function ChatView({
   // « Vue lecture arrêtée au-dessus de la fin »).
   const onScroll = () => {
     const el = scrollRef.current;
-    if (!el) return;
+    // Sized to nothing (its tab hidden): the scroll falling to 0 is no reader.
+    if (!el || el.clientHeight === 0) return;
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     // A search's smooth scroll to a match near the end doesn't follow again;
     // the very end still does (no resume zone, as in the reading view).
@@ -190,6 +294,8 @@ export function ChatView({
       searching ? 0 : undefined,
     );
     lastTopRef.current = el.scrollTop;
+    savedTopRef.current = el.scrollTop;
+    measuredRef.current = true;
     stuckRef.current = follows;
     setStuck(follows);
   };
@@ -240,7 +346,22 @@ export function ChatView({
         <ChatPermissionPanel
           key={request.requestId}
           request={request}
+          isActive={isActive}
+          subagents={state.subagents}
           onAnswer={answer}
+        />
+      </div>
+    );
+  } else if (elicitation) {
+    bottom = (
+      <div className="chat-box ask">
+        <ChatElicitationPanel
+          key={elicitation.requestId}
+          request={elicitation}
+          isActive={isActive}
+          onAnswer={(result) =>
+            sdkActions?.answerElicitation(elicitation.requestId, result)
+          }
         />
       </div>
     );
@@ -267,11 +388,15 @@ export function ChatView({
           onSend(text, images, now);
         }}
         onInterrupt={onInterrupt}
+        onBackground={onBackground}
         onMode={onMode}
         onModel={onModel}
         messagesOnly={messagesOnly}
         onMessagesOnly={onMessagesOnly}
         onToast={onToast}
+        suggestion={state.suggestion}
+        sdk={state.sdk}
+        onEffort={sdkActions?.setEffort}
       />
     );
   }
@@ -308,23 +433,33 @@ export function ChatView({
               .filter(Boolean)
               .join(" · ")}
           </div>
-          {state.historyTruncated && (
-            <div className="chat-older">
-              Les messages plus anciens sont dans le terminal.
-            </div>
-          )}
+          <ChatOlderButton
+            truncated={state.historyTruncated}
+            cursor={state.historyCursor}
+            scrollRef={scrollRef}
+            onLoad={onLoadOlder}
+          />
+          <ChatStartup
+            phase={startup}
+            actions={slashActions}
+            onToast={onToast}
+          />
           <ChatTimeline
             items={state.items}
             cwd={cwd}
             subagents={state.subagents}
             pendingToolIds={pendingToolIds}
             messagesOnly={messagesOnly}
-            onOpenAgents={openAgents}
+            onOpenAgents={openAgentRow}
             onOpen={open}
             onToast={onToast}
             // A queued message's « Envoyer maintenant »: the turn stops, and
             // Claude Code takes what waits at once.
             onSendNow={state.closed ? undefined : onInterrupt}
+            onEditMessage={edit.onEdit}
+            tailFirst={tailFirst}
+            onRemoveQueued={state.closed ? undefined : sdkActions?.removeQueued}
+            onReloadPlugins={sdkActions?.reloadPlugins}
           />
         </div>
       </div>
@@ -348,37 +483,95 @@ export function ChatView({
             compacting={state.status === "compacting"}
             step={
               // The terminal's dialog hides its spinner; here the line stays.
-              request
+              request || elicitation
                 ? "attend ta réponse"
                 : liveStep(state.liveTools, state.livePhase, cwd)
             }
+            // The running call's own time: « lance pnpm test · 42 s ».
+            stepSince={request ? null : (lastTool?.startedAt ?? null)}
+            backgroundHint={
+              !request &&
+              !!onBackground &&
+              !!lastTool &&
+              !lastTool.agent &&
+              BACKGROUNDABLE.has(lastTool.name)
+            }
             turnStartedAt={state.turnStartedAt}
-            turnTokens={state.turnTokens}
-            subagents={state.subagents}
+            // Thinking ticks before its real count comes (`thinking_tokens`).
+            turnTokens={state.turnTokens + state.thinkingTokens}
+            subagents={finishedAgents}
             tasks={tasks}
-            onOpenAgents={openAgents}
+            onOpenAgents={openFinished}
+            retry={state.retry}
+            hook={hook}
           />
+          {!state.closed && !request && edit.pending && (
+            <ChatEditConfirm
+              later={edit.pending.later}
+              going={edit.going}
+              onConfirm={edit.confirm}
+              onCancel={edit.cancel}
+            />
+          )}
+          {!state.closed && !request && !state.working && memoryKey && (
+            <ChatQuestionSheet
+              paneKey={memoryKey}
+              items={state.items}
+              voice={voice}
+              onSend={(text) => {
+                stuckRef.current = true;
+                onSend(text, []);
+              }}
+            />
+          )}
+          <ChatAgentCards
+            agents={live.cards}
+            cwd={cwd}
+            now={live.now}
+            onOpen={agentSheet.openSheet}
+          />
+          {live.workflow && (
+            <ChatWorkflowCard
+              key={live.workflow.taskId}
+              workflow={live.workflow}
+              now={live.now}
+              onOpenAgent={agentSheet.openWorkflowAgent}
+              onStop={onStopTask}
+            />
+          )}
           {bottom}
-          <ChatStatusBar state={state} />
+          <div className="chat-status-row">
+            <ChatStatusBar
+              state={state}
+              onContextDetail={sdkActions?.contextDetail}
+              onMcpOpen={sdkActions?.refreshMcp}
+            />
+            <ChatShellsChip
+              shells={live.shells}
+              commands={live.commands}
+              outputs={shellOutputs}
+              now={live.now}
+              onOutput={onShellOutput}
+            />
+          </div>
         </div>
       </div>
       {drawer && (
         <ChatAgentsDrawer
-          subagents={state.subagents}
+          subagents={finishedAgents}
           onOpenConversation={(agent) => {
-            onOpenAgent(agent.taskId);
-            setSheet(agent);
+            agentSheet.openSheet(agent);
             setDrawer(false);
           }}
           onClose={() => setDrawer(false)}
         />
       )}
-      {sheet && (
+      {agentSheet.sheet && (
         <ChatAgentSheet
-          agent={sheet}
-          conversation={agents[sheet.taskId]}
+          agent={agentSheet.sheet}
+          conversation={agentSheet.conversation}
           cwd={cwd}
-          onClose={() => setSheet(null)}
+          onClose={agentSheet.close}
           onOpen={open}
           onToast={onToast}
         />

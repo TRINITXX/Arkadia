@@ -1,0 +1,78 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  agentConversation,
+  workflowAgentSubagent,
+} from "@/lib/chat/chatAgentView";
+import type { ChatState, Subagent } from "@/lib/chat/chatState";
+import type { WorkflowAgent } from "@/lib/chat/chatTasks";
+
+/** A running workflow agent's transcript is read again this often while shown. */
+const REFRESH_MS = 2_000;
+
+/**
+ * The agent whose conversation is open over the chat, from a card, the
+ * workflow card or the drawer. A subagent this chat ran shows from its live
+ * messages (`agentMessages`), so it follows the agent as it works; any other
+ * (a resumed session's, a workflow's) from its transcript, read again every
+ * 2 s while it runs.
+ */
+export function useAgentSheet(
+  state: ChatState,
+  agents: Record<string, ChatState>,
+  onOpenAgent: (agentId: string) => void,
+) {
+  const [opened, setOpened] = useState<Subagent | null>(null);
+  // The opened agent as it is now: its card's figures move.
+  const sheet = useMemo(() => {
+    if (!opened) return null;
+    const live = state.subagents.find((s) => s.taskId === opened.taskId);
+    if (live) return live;
+    for (const wf of state.workflows) {
+      const a = wf.agents.find((x) => x.agentId === opened.taskId);
+      if (a) return workflowAgentSubagent(a);
+    }
+    return opened;
+  }, [opened, state.subagents, state.workflows]);
+
+  const messages = sheet?.toolUseId
+    ? state.agentMessages[sheet.toolUseId]
+    : undefined;
+  // Its Agent call's prompt: a background agent's isn't streamed.
+  const toolUseId = sheet?.toolUseId;
+  const prompt = useMemo(() => {
+    const call = state.items.find((x) => x.id === toolUseId);
+    const text = call?.kind === "tool" ? call.input.prompt : undefined;
+    return typeof text === "string" ? text : undefined;
+  }, [state.items, toolUseId]);
+  const liveConversation = useMemo(
+    () => (messages?.length ? agentConversation(messages, prompt) : undefined),
+    [messages, prompt],
+  );
+  const conversation =
+    liveConversation ?? (sheet ? agents[sheet.taskId] : undefined);
+
+  const running = sheet?.status === "running";
+  const streamed = liveConversation !== undefined;
+  const taskId = sheet?.taskId;
+  useEffect(() => {
+    if (!taskId || !running || streamed) return;
+    const id = window.setInterval(() => onOpenAgent(taskId), REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [taskId, running, streamed, onOpenAgent]);
+
+  const openSheet = useCallback(
+    (agent: Subagent) => {
+      if (!agent.taskId) return;
+      // Its transcript too: a live one may predate this page's log.
+      onOpenAgent(agent.taskId);
+      setOpened(agent);
+    },
+    [onOpenAgent],
+  );
+  const openWorkflowAgent = useCallback(
+    (agent: WorkflowAgent) => openSheet(workflowAgentSubagent(agent)),
+    [openSheet],
+  );
+  const close = useCallback(() => setOpened(null), []);
+  return { sheet, conversation, openSheet, openWorkflowAgent, close };
+}

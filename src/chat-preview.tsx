@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
+import { flushSync } from "react-dom";
 import { ChatView } from "@/components/chat/chat-view";
 import { setBridge } from "@/lib/bridge";
 import { EMPTY_DRAFT, type ChatDraft } from "@/lib/chat/chatDrafts";
@@ -7,11 +8,32 @@ import type { ChatEvent } from "@/lib/chat/chatProtocol";
 import { EMPTY_CHAT, reduceChat, type ChatState } from "@/lib/chat/chatState";
 import type { DictationEnd, VoiceStatus } from "@/lib/useHiddenVoice";
 import "@/styles/app.css";
+import {
+  contentNotices,
+  errorEvents,
+  retryEvents,
+  SUGGESTION,
+} from "@/chat-preview-content";
+import {
+  dayEvents,
+  grillEvents,
+  installRemountMeasure,
+  longLog,
+  olderPage,
+  olderStart,
+} from "@/chat-preview-ideas";
+import type { StartupPhase } from "@/lib/chat/chatStartup";
+import content from "../chat-server/fixtures/content.jsonl?raw";
 import plan from "../chat-server/fixtures/plan.jsonl?raw";
 import question from "../chat-server/fixtures/question.jsonl?raw";
 import slash from "../chat-server/fixtures/slash.jsonl?raw";
 import subagent from "../chat-server/fixtures/subagent.jsonl?raw";
 import type { SlashActions } from "@/lib/chat/useSlashActions";
+import { PREVIEW_SDK, sdkScenarios } from "@/chat-preview-sdk";
+import {
+  activityScenarios,
+  PREVIEW_SHELL_OUTPUTS,
+} from "@/chat-preview-activity";
 import tools from "../chat-server/fixtures/tools.jsonl?raw";
 import pastedPng from "../src-tauri/icons/128x128@2x.png?inline";
 
@@ -306,7 +328,33 @@ const SCENARIOS: Record<string, () => ChatState> = {
     );
   },
   clear: () => replay(parse(slash)),
+  // Ideas of 31/10: the answer sheet, day marks and cards, older messages,
+  // an empty column (`&startup=starting|resuming|welcome`), a long chat.
+  grill: () => replay(grillEvents()),
+  days: () => replay(dayEvents()),
+  older: () => replay([...olderStart(), ...dayEvents()]),
+  empty: () => EMPTY_CHAT,
+  long: () => replay(longLog(parse(tools), 40)),
+  // Real diffs, a command's marks, a cut reply and Claude Code's notices.
+  content: () => replay([...parse(content), ...contentNotices()]),
+  errors: () => replay(errorEvents()),
+  // The live line's « Claude réessaie », its wait counted from now.
+  retry: () => {
+    const state = replay(retryEvents());
+    return state.retry
+      ? { ...state, retry: { ...state.retry, at: Date.now() } }
+      : state;
+  },
+  suggest: () => replay([...parse(tools), SUGGESTION]),
 };
+// SDK settings: model, effort and fast mode chips, MCP chip and requests,
+// a running hook, plugin errors, a cautious permission, a message withdrawn.
+Object.assign(
+  SCENARIOS,
+  sdkScenarios(SCENARIOS.tools, SCENARIOS.subagent, SCENARIOS.queued),
+);
+// Live activity: agent cards, the workflow card, the shells chip.
+Object.assign(SCENARIOS, activityScenarios());
 
 /** /resume's and /rewind's lists, without a chat server. */
 const ago = (min: number) => Date.now() - min * 60_000;
@@ -381,6 +429,23 @@ const state = {
 };
 
 function Preview() {
+  const [chat, setChat] = useState<ChatState>(state);
+  /** Bumped to mount the view anew (`?s=long`). */
+  const [mount, setMount] = useState(0);
+  // `?s=long`: `window.__remount()` measures a long chat's return.
+  useEffect(() => {
+    if (name !== "long") return;
+    installRemountMeasure(
+      longLog(parse(tools), 40),
+      (s, e) => reduceChat(s, e, Date.now()),
+      EMPTY_CHAT,
+      (s, anew) =>
+        flushSync(() => {
+          setChat({ ...state, ...s });
+          if (anew) setMount((m) => m + 1);
+        }),
+    );
+  }, []);
   const [draft, setDraft] = useState<ChatDraft>({
     ...EMPTY_DRAFT,
     text: params.get("draft") ?? "",
@@ -409,7 +474,8 @@ function Preview() {
   return (
     <div style={{ position: "relative", height: "100%" }}>
       <ChatView
-        state={state}
+        key={mount}
+        state={chat}
         agents={{}}
         cwd={"C:\\Users\\TRINITX\\Desktop\\Claude Desktop\\Arkadia-lab"}
         isActive
@@ -429,6 +495,20 @@ function Preview() {
         messagesOnly={messagesOnly}
         onMessagesOnly={setMessagesOnly}
         slashActions={PREVIEW_SLASH}
+        sdkActions={PREVIEW_SDK}
+        shellOutputs={PREVIEW_SHELL_OUTPUTS}
+        onBackground={() => {}}
+        memoryKey="preview"
+        startup={(params.get("startup") as StartupPhase) ?? null}
+        onLoadOlder={
+          name === "older"
+            ? () =>
+                setTimeout(
+                  () => setChat((s) => reduceChat(s, olderPage(), Date.now())),
+                  600,
+                )
+            : undefined
+        }
       />
     </div>
   );

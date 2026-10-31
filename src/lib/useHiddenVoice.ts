@@ -297,11 +297,12 @@ export function useHiddenVoice(onText: (text: string) => void) {
     stopRef.current = stop;
   }, [stop]);
 
-  const start = useCallback(async () => {
-    if (status !== "idle") return;
+  /** Resolves true once listening, false when it didn't start. */
+  const start = useCallback(async (): Promise<boolean> => {
+    if (status !== "idle") return false;
     if (busy) {
       setError("Une autre dictée est en cours");
-      return;
+      return false;
     }
     busy = true;
     cancelRef.current = false;
@@ -319,12 +320,12 @@ export function useHiddenVoice(onText: (text: string) => void) {
         setError(message(e));
         setStatus("idle");
       }
-      return;
+      return false;
     }
     if (cancelRef.current || !mountedRef.current) {
       busy = false;
       if (mountedRef.current) setStatus("idle");
-      return;
+      return false;
     }
     paneRef.current = paneId;
     releaseRef.current = holdPaneShown(paneId);
@@ -336,6 +337,7 @@ export function useHiddenVoice(onText: (text: string) => void) {
     );
     capRef.current = window.setTimeout(() => void stop(), MAX_TALK_MS);
     setStatus("listening");
+    return true;
   }, [status, stop]);
 
   /** The caller showed the error: the next one, even the same, shows again. */

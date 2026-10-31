@@ -72,6 +72,37 @@ export function suggestionLabel(s: PermissionUpdate): string | null {
   }
 }
 
+/**
+ * The « always » buttons a request offers: none when Claude Code forbids a
+ * lasting choice (`suppressAlwaysAllowRule`: its rule would grant more than
+ * this action), as the terminal then shows Yes / No alone.
+ */
+export function alwaysChoices(request: {
+  suggestions?: PermissionUpdate[];
+  suppressAlwaysAllowRule?: boolean;
+}): { suggestion: PermissionUpdate; label: string }[] {
+  if (request.suppressAlwaysAllowRule) return [];
+  return (request.suggestions ?? []).flatMap((suggestion) => {
+    const label = suggestionLabel(suggestion);
+    return label ? [{ suggestion, label }] : [];
+  });
+}
+
+/**
+ * Who asks, when it isn't Claude itself: « Le sous-agent « Lister les
+ * fichiers » demande », by the subagent's description when known.
+ */
+export function permissionAsker(
+  agentId: string | undefined,
+  subagents: { taskId: string; description: string }[],
+): string | null {
+  if (!agentId) return null;
+  const agent = subagents.find((s) => s.taskId === agentId);
+  return agent?.description
+    ? `Le sous-agent « ${agent.description} » demande`
+    : "Un sous-agent demande";
+}
+
 /** The tooltip: what exactly changes, and where it is kept. */
 export function suggestionDetail(s: PermissionUpdate): string {
   const what =

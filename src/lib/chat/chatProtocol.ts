@@ -6,6 +6,19 @@
 
 export type JsonObject = Record<string, unknown>;
 
+/** An agent of a running workflow, as its journal and transcript say. */
+export interface WorkflowLiveAgent {
+  agentId: string;
+  label: string;
+  phase: string;
+  done: boolean;
+  /** Its context now: the last reply's usage, as Claude Code counts it. */
+  tokens?: number;
+  model?: string;
+  /** Its transcript's last write (epoch ms). */
+  lastActivityAt?: number;
+}
+
 export type ChatEvent =
   | { type: "attached"; chatId: string }
   /** The end of what `attached` replays: the chat is current again. */
@@ -21,7 +34,7 @@ export type ChatEvent =
       /** Named by its `command_lifecycle` frames (absent: older server). */
       uuid?: string;
     }
-  | {
+  | ({
       type: "permission";
       chatId: string;
       requestId: string;
@@ -33,7 +46,7 @@ export type ChatEvent =
       decisionReason?: string;
       /** Rule changes that would stop Claude Code asking (`chatPermissions`). */
       suggestions?: PermissionUpdate[];
-    }
+    } & PermissionAsk)
   | { type: "permission_resolved"; chatId: string; requestId: string }
   | {
       type: "context";
@@ -52,6 +65,8 @@ export type ChatEvent =
       title?: string;
       gitBranch?: string | null;
       sessionId?: string;
+      /** The mode the chat starts in, before its first turn's init. */
+      mode?: string;
     }
   /** Claude Code's slash commands, at boot (`supportedCommands`). */
   | { type: "commands"; chatId: string; commands: SlashCommandInfo[] }
@@ -80,6 +95,51 @@ export type ChatEvent =
       agentId?: string;
       messages: JsonObject[];
       truncated: boolean;
+      /** A page before the oldest shown (`older`): it goes on top. */
+      older?: boolean;
+      /** Compacted since: nothing older can be read (`older` server-side). */
+      unreachable?: boolean;
+    }
+  /** The model menu (`supportedModels`), at boot and on a replay. */
+  | { type: "models"; chatId: string; models: JsonObject[] }
+  /** The effort the next message runs at; null: the model takes none. */
+  | { type: "effort"; chatId: string; effort: EffortLevel | null }
+  /** The MCP servers and their state (`mcpServerStatus`), when it changes. */
+  | { type: "mcp"; chatId: string; servers: McpServerInfo[] }
+  /** An MCP server asks the user something (`onElicitation`). */
+  | {
+      type: "elicitation";
+      chatId: string;
+      requestId: string;
+      request: ElicitationInfo;
+    }
+  /** Answered by the page, or dropped by Claude Code (interrupt, timeout). */
+  | { type: "elicitation_resolved"; chatId: string; requestId: string }
+  /** A message the user withdrew before Claude took it (`cancel_queued`). */
+  | { type: "queued_removed"; chatId: string; uuid: string }
+  /** The answer to `context_detail` (not kept for a replay). */
+  | {
+      type: "context_detail";
+      chatId: string;
+      requestId: string;
+      detail?: ContextDetail;
+      error?: string;
+    }
+  /** A running workflow's agents from its journal: live tokens, last write. */
+  | {
+      type: "workflow_live";
+      chatId: string;
+      taskId: string;
+      agents: WorkflowLiveAgent[];
+    }
+  /** The end of a background shell's output (`task_output`; not kept for a replay). */
+  | {
+      type: "task_output";
+      chatId: string;
+      taskId: string;
+      output: string;
+      truncated: boolean;
+      error?: string;
     }
   | { type: "closed"; chatId: string; error?: string }
   | { type: "error"; chatId?: string; message: string }
@@ -182,8 +242,15 @@ export type ChatCommand =
       images?: { mediaType: string; data: string }[];
       /** « Envoyer maintenant »: Claude Code ends the turn under way for it. */
       priority?: "now";
+      /**
+       * Sent now while foreground Agent calls run (no `priority`): queued as
+       * any message, then these go to the background and Claude takes it at
+       * that boundary; a `now` would end their turn, and them with it.
+       */
+      spare?: string[];
     }
-  | { type: "interrupt"; chatId: string }
+  /** Esc. `spare`: running foreground Agent calls sent to the background first. */
+  | { type: "interrupt"; chatId: string; spare?: string[] }
   | {
       type: "answer";
       chatId: string;
@@ -192,13 +259,14 @@ export type ChatCommand =
     }
   | { type: "set_mode"; chatId: string; mode: PermissionMode }
   | { type: "set_model"; chatId: string; model: string }
+  /** A subagent's conversation, for its sheet: the agent is required, never the session's. */
   | {
-      type: "history";
+      type: "agent_history";
       chatId: string;
       sessionId: string;
       cwd: string;
       limit: number;
-      agentId?: string;
+      agentId: string;
     }
   | { type: "sessions"; chatId: string; requestId: string }
   | { type: "rewind_points"; chatId: string; requestId: string }
@@ -215,4 +283,98 @@ export type ChatCommand =
     }
   /** /rewind's « code seul »: the files as they were before the message. */
   | { type: "restore_code"; chatId: string; before: string }
+  /** Ctrl+B: the running Bash commands and subagents go to the background. */
+  /** Ctrl+B (all foreground tasks), or these Agent calls only (`toolUseIds`). */
+  | { type: "background"; chatId: string; toolUseIds?: string[] }
+  /** Stops one background task (« Arrêter le workflow »). */
+  | { type: "stop_task"; chatId: string; taskId: string }
+  /** The end of a background shell's output, answered by `task_output`. */
+  | { type: "task_output"; chatId: string; taskId: string }
+  /** The `limit` messages of the session just before the message `before`. */
+  | { type: "older"; chatId: string; before: string; limit: number }
+  /** The session's effort, for this session only (never saved). */
+  | { type: "set_effort"; chatId: string; effort: EffortLevel }
+  /** Withdraws a message Claude hasn't taken yet (`queued_removed`). */
+  | { type: "cancel_queued"; chatId: string; uuid: string }
+  | {
+      type: "elicit_answer";
+      chatId: string;
+      requestId: string;
+      result: ElicitationAnswer;
+    }
+  /** The context by category: token counts, so asked on hover only. */
+  | { type: "context_detail"; chatId: string; requestId: string }
+  /** The MCP servers' state again (their list opened). */
+  | { type: "mcp_status"; chatId: string }
+  /** Plugins and skills read again from disk (plugin errors' « Recharger »). */
+  | { type: "reload_plugins"; chatId: string }
   | { type: "close"; chatId: string };
+
+/** The SDK's `EffortLevel`, low to max. */
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+
+/**
+ * What the SDK says of a permission request beyond its tool: a subagent's
+ * (`agentId`), the path or MCP server it is about, and how cautious the
+ * panel must be (`defaultToNo`, `suppressAlwaysAllowRule`).
+ */
+export interface PermissionAsk {
+  /** Short noun phrase for the action (« Read file »). */
+  displayName?: string;
+  /** Open on Refuser: no single stray key approves. */
+  defaultToNo?: boolean;
+  /** No lasting « don't ask again »: its rule would grant more than this. */
+  suppressAlwaysAllowRule?: boolean;
+  /** The subagent asking (its task id), none for the main loop. */
+  agentId?: string;
+  /** The file path that made Claude Code ask. */
+  blockedPath?: string;
+  /** For an `mcp__*` tool: its server; `source` other than `sdk` is config. */
+  mcpServer?: { name: string; source: string };
+}
+
+/** An MCP server and its state, as `mcpServerStatus` and `init` say. */
+export interface McpServerInfo {
+  name: string;
+  /** connected, failed, needs-auth, pending, disabled (an open set). */
+  status: string;
+  /** Why it failed (`mcpServerStatus` only). */
+  error?: string;
+  /** Where it is configured: user, project, plugin, claudeai… */
+  source?: string;
+}
+
+/** An MCP server's request to the user (the SDK's `ElicitationRequest`). */
+export interface ElicitationInfo {
+  serverName: string;
+  message: string;
+  /** `form`: fields of `requestedSchema`; `url`: a page to open (auth). */
+  mode?: "form" | "url";
+  url?: string;
+  elicitationId?: string;
+  requestedSchema?: JsonObject;
+  title?: string;
+  displayName?: string;
+  description?: string;
+}
+
+/** The SDK's `ElicitationResult` (MCP `ElicitResult`). */
+export interface ElicitationAnswer {
+  action: "accept" | "decline" | "cancel";
+  content?: Record<string, string | number | boolean | string[]>;
+}
+
+/** `getContextUsage({ detail: 'full' })`, cut to what the hover shows. */
+export interface ContextDetail {
+  categories: {
+    id?: string;
+    name: string;
+    tokens: number;
+    /** used, free, buffer, deferred (out of the window); an open set. */
+    kind: string;
+  }[];
+  totalTokens: number;
+  /** The window measured against (the autocompact one). */
+  rawMaxTokens: number;
+  memoryFiles: { path: string; tokens: number }[];
+}

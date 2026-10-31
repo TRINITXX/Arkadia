@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, Sparkles, User } from "lucide-react";
+import { Check, Copy, Pencil, Sparkles, User } from "lucide-react";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { messageTime, messageTimeFull } from "@/lib/messageTime";
 
@@ -22,8 +22,10 @@ export function ChatMessageFrame({
   at,
   text,
   error = false,
+  cut = false,
   className,
   onToast,
+  onEdit,
   children,
 }: {
   role: "user" | "claude";
@@ -32,9 +34,13 @@ export function ChatMessageFrame({
   /** What « Copier le message » copies: the markdown as written. */
   text: string;
   error?: boolean;
+  /** Claude's reply cut by Esc before its end: marked « coupé ». */
+  cut?: boolean;
   /** Extra classes: `chat-user` (with `queued`), `chat-text` (`streaming`). */
   className?: string;
   onToast?: ToastFn;
+  /** The user's message brought back to the input (`useMessageEdit`). */
+  onEdit?: () => void;
   children: React.ReactNode;
 }) {
   const { label, Icon } = ROLES[role];
@@ -80,6 +86,25 @@ export function ChatMessageFrame({
           <time dateTime={iso} title={messageTimeFull(iso) ?? undefined}>
             {messageTime(iso)}
           </time>
+        )}
+        {cut && (
+          <span className="chat-cut" title="Réponse coupée par Échap">
+            coupé
+          </span>
+        )}
+        {role === "user" && onEdit && (
+          <button
+            type="button"
+            className="copy edit"
+            title="Modifier ce message (la conversation revient juste avant)"
+            aria-label="Modifier ce message"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit();
+            }}
+          >
+            <Pencil />
+          </button>
         )}
         {role === "user" && button}
       </div>
