@@ -3,6 +3,7 @@ import {
   isValidElement,
   memo,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -33,6 +34,7 @@ import {
 } from "@/lib/imagePaths";
 import { fetchImageUrl } from "@/lib/imageUrlCache";
 import { LinkCardsContext } from "@/lib/linkCards";
+import { usePathHover } from "@/lib/pathHover";
 
 export type ToastFn = (level: "info" | "error", message: string) => void;
 
@@ -58,6 +60,8 @@ function MentionImage(
  * An image or video path left as written (`inlineImages` off: the chat shows
  * it in the message's strip): a click opens it in the lightbox, or with the
  * PC's own app when it doesn't load. Inline-level, inside a `<p>`/`<li>`.
+ * Hovered, it shows its image in a card where the view asks for it
+ * (`PathHoverContext`), as the terminal does.
  */
 function ImagePathLink({
   path,
@@ -73,12 +77,38 @@ function ImagePathLink({
   onToast?: ToastFn;
 }) {
   const Tag = code ? "code" : "span";
+  const hover = usePathHover();
+  // Hovered when it goes (the message redrawn without it) or changes path:
+  // no mouseleave will come, its card goes now.
+  const hovered = useRef(false);
+  useEffect(
+    () => () => {
+      if (hovered.current) hover?.hover(null);
+      hovered.current = false;
+    },
+    [hover, path],
+  );
+  const leave = () => {
+    hovered.current = false;
+    hover?.hover(null);
+  };
   return (
     <Tag
       className="modern-imgpath"
-      title={`Voir ${path}`}
+      title={hover ? undefined : `Voir ${path}`}
+      onMouseEnter={(e) => {
+        const box = e.currentTarget.getBoundingClientRect();
+        hovered.current = true;
+        hover?.hover(path, {
+          left: box.left,
+          top: box.top,
+          bottom: box.bottom,
+        });
+      }}
+      onMouseLeave={leave}
       onClick={(e) => {
         e.stopPropagation();
+        leave();
         if (isVideoPath(path)) {
           onOpen({ kind: "video", path });
           return;

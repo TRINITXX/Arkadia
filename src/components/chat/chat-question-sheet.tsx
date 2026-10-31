@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Check,
+  ArrowLeft,
+  ArrowRight,
   ChevronDown,
   CircleHelp,
   Mic,
   Send,
   Square,
+  Star,
   X,
 } from "lucide-react";
 import type { ChatVoice } from "@/components/chat/chat-composer";
 import { redirectDictation } from "@/lib/chat/chatDrafts";
 import {
   lastReplyRound,
+  recoReason,
   roundReply,
   type RoundAnswer,
   type RoundQuestion,
@@ -27,11 +30,14 @@ import { useChatLayer } from "@/lib/chat/useChatLayers";
 /**
  * A sheet above the input when Claude's last reply asks a round of questions
  * in its text (`chatQuestionRound`), kept low so the conversation stays in
- * view: one question at a time behind its tab (ticked once answered), as the
- * question panel does. Per question, « OK pour ta reco », its options, a free
- * field (dictation lands in the one that started it, its words dim as they
- * come). A pick moves on to a question left. While it shows, Claude's
- * message drops its questions (`useSheetReply`). One « Envoyer » answers them
+ * view (the user's pick A of 31/10/2026): one question at a time, its place
+ * in a bar of segments on top (green once answered). Per question, its
+ * options as a list, Claude's reco inside the one it names with its reason
+ * (a reco naming none is a choice of its own), then the mic left of a free
+ * field that shows only a caret (dictation lands in the field that started
+ * it, its words dim as they come). A pick moves on to a question left.
+ * While it shows, Claude's message drops its questions (`useSheetReply`).
+ * « Précédente », « Suivante », and one « Envoyer n/N » that answers them
  * all, « Q1 : … » per line. Folds (Esc: the questions come back in the
  * message) and closes.
  */
@@ -140,13 +146,23 @@ export function ChatQuestionSheet({
       void voice.stop();
     }
   };
+  const close = () =>
+    updateSheet(paneKey, replyId, (s) => ({ ...s, closed: true }));
   const send = () => {
     if (!reply) return;
     onSend(reply);
-    updateSheet(paneKey, replyId, (s) => ({ ...s, closed: true }));
+    close();
   };
   const recording = dictating !== null && voice.status !== "idle";
   const listening = recording && dictating === q.id;
+
+  const last = questions.length - 1;
+  // An option it names carries its reason; else the recommendation is a
+  // choice of its own.
+  const named = q.options.find((o) => o.key === q.recommendedKey);
+  const why =
+    named && q.recommendation ? recoReason(q.recommendation, named) : "";
+  const ownReco = !named && q.recommendation ? q.recommendation : null;
 
   return (
     <div className={`chat-sheet-q${folded ? " folded" : ""}`}>
@@ -158,59 +174,48 @@ export function ChatQuestionSheet({
           onClick={() => setFolded(!folded)}
         >
           <CircleHelp />
+          <b>Questions de Claude</b>
           {folded && (
-            <>
-              <b>
-                {questions.length} question{questions.length > 1 ? "s" : ""} de
-                Claude
-              </b>
-              <span>
-                {answered > 0
-                  ? `· ${answered} répondue${answered > 1 ? "s" : ""}`
-                  : ""}
-              </span>
-            </>
+            <span>
+              · {answered} sur {questions.length} répondue
+              {answered > 1 ? "s" : ""}
+            </span>
           )}
-          <ChevronDown className="chev" />
         </button>
         {!folded && (
-          <div className="tabs" role="tablist">
+          <div className="steps" role="tablist" aria-label="Questions">
             {questions.map((x, i) => (
               <button
                 key={x.id}
                 type="button"
                 role="tab"
                 aria-selected={i === step}
-                className={`tab${i === step ? " on" : ""}${isAnswered(x) ? " done" : ""}${dictating === x.id && voice.status !== "idle" ? " rec" : ""}`}
-                title={x.title}
+                aria-label={`${x.id} : ${x.title}`}
+                className={`seg${i === step ? " on" : ""}${isAnswered(x) ? " done" : ""}${dictating === x.id && voice.status !== "idle" ? " rec" : ""}`}
+                title={`${x.id} · ${x.title}${isAnswered(x) ? " (répondue)" : ""}`}
                 onClick={() => goTo(i)}
-              >
-                {isAnswered(x) && <Check />}
-                {x.id}
-              </button>
+              />
             ))}
           </div>
         )}
+        {!folded && (
+          <span className="pos">
+            {step + 1} sur {questions.length}
+          </span>
+        )}
         <button
           type="button"
-          className="chat-btn primary send"
-          disabled={!reply}
-          title={
-            reply
-              ? `Envoyer ${answered} réponse${answered > 1 ? "s" : ""} sur ${questions.length}`
-              : "Choisis ou écris au moins une réponse"
-          }
-          onClick={send}
+          className="x"
+          title={folded ? "Déplier" : "Replier (Échap)"}
+          onClick={() => setFolded(!folded)}
         >
-          <Send /> Envoyer
+          <ChevronDown className="chev" />
         </button>
         <button
           type="button"
           className="x"
           title="Fermer (répondre dans la saisie)"
-          onClick={() =>
-            updateSheet(paneKey, replyId, (s) => ({ ...s, closed: true }))
-          }
+          onClick={close}
         >
           <X />
         </button>
@@ -232,63 +237,66 @@ export function ChatQuestionSheet({
                 {q.body}
               </div>
             )}
-            {q.recommendation && (
-              <div className="qr">➡️ {q.recommendation}</div>
+            {(q.options.length > 0 || ownReco) && (
+              <div className="opts" role="radiogroup" aria-label={q.title}>
+                {q.options.map((o) => {
+                  const rec = q.recommendedKey === o.key;
+                  const on = a.option === o.key;
+                  return (
+                    <button
+                      key={o.key}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      className={`opt${on ? " on" : ""}${rec ? " rec" : ""}`}
+                      onClick={() =>
+                        on
+                          ? set(q.id, { option: undefined })
+                          : pickAndGo({ option: o.key, reco: false })
+                      }
+                    >
+                      <span className="radio" />
+                      <span className="k">{o.key})</span>
+                      <span className="v">{o.label}</span>
+                      {rec && (
+                        <span className="why">
+                          <span className="reco">
+                            <Star /> Reco
+                          </span>
+                          {why}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+                {ownReco && (
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={!!a.reco}
+                    className={`opt rec${a.reco ? " on" : ""}`}
+                    onClick={() =>
+                      a.reco
+                        ? set(q.id, { reco: false })
+                        : pickAndGo({ reco: true, option: undefined })
+                    }
+                  >
+                    <span className="radio" />
+                    <span className="reco">
+                      <Star /> Reco
+                    </span>
+                    <span className="v">{ownReco}</span>
+                  </button>
+                )}
+              </div>
             )}
-            <div className="opts">
-              {q.recommendation && (
-                <button
-                  type="button"
-                  className={`opt reco${a.reco ? " on" : ""}`}
-                  onClick={() =>
-                    a.reco
-                      ? set(q.id, { reco: false })
-                      : pickAndGo({ reco: true, option: undefined })
-                  }
-                >
-                  OK pour ta reco
-                </button>
-              )}
-              {q.options.map((o) => (
-                <button
-                  key={o.key}
-                  type="button"
-                  className={`opt${a.option === o.key ? " on" : ""}${q.recommendedKey === o.key ? " rec" : ""}`}
-                  title={q.recommendedKey === o.key ? "Recommandé" : undefined}
-                  onClick={() =>
-                    a.option === o.key
-                      ? set(q.id, { option: undefined })
-                      : pickAndGo({ option: o.key, reco: false })
-                  }
-                >
-                  <b>{o.key})</b> {o.label}
-                </button>
-              ))}
-            </div>
             <div className="free">
-              <textarea
-                rows={1}
-                value={a.text ?? ""}
-                placeholder="Ta réponse (Ctrl+Espace : dicter)"
-                onChange={(e) => set(q.id, { text: e.target.value })}
-                onKeyDown={(e) => {
-                  if (e.key === " " && e.ctrlKey) {
-                    e.preventDefault();
-                    if (!e.repeat) dictate(q.id);
-                  } else if (
-                    e.key === "Enter" &&
-                    !e.shiftKey &&
-                    !e.nativeEvent.isComposing
-                  ) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-              />
               <button
                 type="button"
                 className={`mic${listening ? " rec" : ""}`}
-                title={listening ? "Arrêter la dictée" : "Dicter ici"}
+                title={
+                  listening ? "Arrêter la dictée" : "Dicter ici (Ctrl+Espace)"
+                }
                 disabled={
                   voice.status === "transcribing" ||
                   (voice.status !== "idle" && dictating !== q.id)
@@ -297,6 +305,29 @@ export function ChatQuestionSheet({
               >
                 {listening ? <Square /> : <Mic />}
               </button>
+              <div className="box">
+                <textarea
+                  rows={1}
+                  value={a.text ?? ""}
+                  aria-label={`Ta réponse à ${q.id}`}
+                  onChange={(e) => set(q.id, { text: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === " " && e.ctrlKey) {
+                      e.preventDefault();
+                      if (!e.repeat) dictate(q.id);
+                    } else if (
+                      e.key === "Enter" &&
+                      !e.shiftKey &&
+                      !e.nativeEvent.isComposing
+                    ) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                />
+                {/* No words in it: a caret says it takes some. */}
+                {!a.text && <span className="caret" aria-hidden="true" />}
+              </div>
             </div>
             {listening && voice.interim && (
               <div className="chat-voice-live">{voice.interim}</div>
@@ -308,6 +339,42 @@ export function ChatQuestionSheet({
       {recording && (folded || !listening) && voice.interim && (
         <div className="chat-voice-live">
           {dictating} : {voice.interim}
+        </div>
+      )}
+      {!folded && (
+        <div className="ft">
+          <button
+            type="button"
+            className="chat-btn ghost"
+            disabled={step === 0}
+            onClick={() => goTo(step - 1)}
+          >
+            <ArrowLeft /> <span className="lbl">Précédente</span>
+          </button>
+          <button
+            type="button"
+            className="chat-btn"
+            disabled={step === last}
+            onClick={() => goTo(step + 1)}
+          >
+            <span className="lbl">Suivante</span> <ArrowRight />
+          </button>
+          <button
+            type="button"
+            className="chat-btn primary send"
+            disabled={!reply}
+            title={
+              reply
+                ? `Envoyer ${answered} réponse${answered > 1 ? "s" : ""} sur ${questions.length}`
+                : "Choisis ou écris au moins une réponse"
+            }
+            onClick={send}
+          >
+            <Send /> Envoyer{" "}
+            <span className="count">
+              {answered}/{questions.length}
+            </span>
+          </button>
         </div>
       )}
     </div>

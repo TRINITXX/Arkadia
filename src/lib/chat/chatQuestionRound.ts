@@ -40,17 +40,24 @@ const ARROW = /^\s*➡️?\s*/;
 const OPTION =
   /^\s*(?:[-*•]\s+)?(?:\*\*)?\(?([a-hA-H])(?:\)|\.)(?:\*\*)?\s*[:\-–—]?\s*(.+)$/;
 const SERIES = /^\s*\**\s*Question\s+(\d+)\s+sur\s+(\d+)\s*\**\s*\.?\s*$/i;
-const LEANING = /je pencherais pour\s*\(?([a-hA-H])\)?\s*[:,-]?\s*(.*)$/i;
+/** « Je pencherais pour (b) : … »: a letter alone, never a word's first
+ *  (« pour celle qui… »). */
+const LEANING =
+  /je pencherais pour\s*\(?([a-hA-H])(?![\p{L}\d'’])\)?\s*[:,-]?\s*(.*)$/iu;
 
 const unbold = (s: string) => s.replace(/\*\*/g, "").trim();
+
+/** The key of the option `letter` names, as the option writes it (`b` for
+ *  `B)`), or null. */
+function optionKey(letter: string, options: RoundOption[]): string | null {
+  const lower = letter.toLowerCase();
+  return options.find((o) => o.key.toLowerCase() === lower)?.key ?? null;
+}
 
 /** The option a recommendation names first: `b) …`, `(b)`, `b :`. */
 function namedKey(reco: string, options: RoundOption[]): string | null {
   const m = /^\s*(?:\*\*)?\(?([a-hA-H])(?:\)|\s*[:.,-]|\s*$)/.exec(reco);
-  if (!m) return null;
-  return options.find((o) => o.key.toLowerCase() === m[1].toLowerCase())
-    ? m[1]
-    : null;
+  return m ? optionKey(m[1], options) : null;
 }
 
 function optionsOf(lines: string[]): RoundOption[] {
@@ -236,7 +243,7 @@ function seriesRead(
   const last = leanAt >= 0 ? leanAt : found.lastAt;
   const { options, lines: kept } = optionsIn(scope.slice(0, last + 1));
   const lean = leanAt >= 0 ? LEANING.exec(after[leanAt]) : null;
-  const recommendedKey = lean ? lean[1] : null;
+  const recommendedKey = lean ? optionKey(lean[1], options) : null;
   const recommendation = lean ? `${lean[1]}) ${lean[2]}`.trim() : null;
   const prose = kept.filter((line) => line.trim()).map(unbold);
   // The question is its line ending with « ? », the rest is context.
@@ -322,6 +329,25 @@ export function lastReplyRound(
     return questions.length > 0 ? { id: item.id, questions } : null;
   }
   return null;
+}
+
+/**
+ * Why Claude recommends `option`, its name aside: what the option's line
+ * shows beside it (« a) 9 h : tu le lis tôt » → « tu le lis tôt »).
+ */
+export function recoReason(
+  recommendation: string,
+  option: RoundOption,
+): string {
+  const key = option.key.replace(/[^a-z]/gi, "");
+  let rest = recommendation
+    .trim()
+    .replace(new RegExp(String.raw`^\(?${key}\)?(?=[\s:.,)-]|$)\s*`, "i"), "")
+    // `b : Grande, …` as `b) Grande, …`.
+    .replace(/^[\s:,.\-–—]+/, "");
+  if (rest.toLowerCase().startsWith(option.label.toLowerCase()))
+    rest = rest.slice(option.label.length);
+  return rest.replace(/^[\s:,.\-–—]+/, "").trim();
 }
 
 /** One line per answered question: `Q1 : b) Label, mes mots`. */

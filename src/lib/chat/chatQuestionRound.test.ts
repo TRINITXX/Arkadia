@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   lastReplyRound,
   parseQuestionRound,
+  recoReason,
   roundReply,
   withoutQuestions,
 } from "@/lib/chat/chatQuestionRound";
@@ -118,6 +119,31 @@ describe("question rounds in Claude's reply", () => {
       "❓ **Q1** - **Choix** : a) Violet, b) Vert ou c) Gris ?",
     );
     expect(mid.options.map((o) => o.label)).toEqual(["Violet", "Vert", "Gris"]);
+  });
+
+  it("keeps the reason of a recommendation, without the option it names", () => {
+    const nine = { key: "a", label: "9 h" };
+    expect(recoReason("a) 9 h : tu le lis en début de journée.", nine)).toBe(
+      "tu le lis en début de journée.",
+    );
+    expect(recoReason("(a) tu le lis tôt", nine)).toBe("tu le lis tôt");
+    expect(recoReason("a) 9 h", nine)).toBe("");
+    expect(recoReason("Ajoute-le à 9 h", nine)).toBe("Ajoute-le à 9 h");
+    expect(recoReason("a : 9 h, tu le lis tôt", nine)).toBe("tu le lis tôt");
+  });
+
+  it("names the option a reco points to as the option writes it", () => {
+    const [upper] = parseQuestionRound(
+      "❓ **Q1** - **Taille** : laquelle ?\nA) Petite\nB) Grande\n\n➡️ b) Grande, plus lisible",
+    );
+    expect(upper.recommendedKey).toBe("B");
+    const leaning = (words: string) =>
+      parseQuestionRound(
+        `Question 1 sur 1.\nLaquelle ?\n  a) Garder\n  c) Couper\n\nJe pencherais pour ${words}`,
+      )[0].recommendedKey;
+    expect(leaning("celle qui garde tout : moins de risque.")).toBeNull();
+    expect(leaning("c'est plus sûr : moins de risque.")).toBeNull();
+    expect(leaning("(c) : plus court.")).toBe("c");
   });
 
   it("takes a ➡ in the question's words for no recommendation", () => {
