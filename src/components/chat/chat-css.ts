@@ -533,10 +533,8 @@ export const CHAT_CSS = `
 .chat-sheet-q .opts { display: flex; flex-direction: column; gap: 5px; }
 .chat-sheet-q .opt { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; text-align: left; border: 1px solid #31353b; border-radius: 10px; background: transparent; color: var(--chat-ink); font: inherit; font-size: 13.5px; line-height: 1.45; padding: 6px 10px; cursor: pointer; transition: border-color .12s ease-out, background-color .12s ease-out; }
 .chat-sheet-q .opt:hover { border-color: #464a51; background: #222529; }
-.chat-sheet-q .opt.rec { border-color: #5a3a2c; background: #241b17; }
 .chat-sheet-q .opt.on { border-color: var(--chat-accent); background: #3a2519; }
 .chat-sheet-q .opt .radio { width: 15px; height: 15px; flex-shrink: 0; box-sizing: border-box; border-radius: 50%; border: 2px solid #4a4e55; }
-.chat-sheet-q .opt.rec .radio { border-color: var(--chat-accent); }
 .chat-sheet-q .opt.on .radio { border: 4px solid var(--chat-accent); }
 .chat-sheet-q .opt .k { flex-shrink: 0; color: var(--chat-mute); font-weight: 600; }
 .chat-sheet-q .opt .v { color: #f4f4f5; font-weight: 600; overflow-wrap: anywhere; }

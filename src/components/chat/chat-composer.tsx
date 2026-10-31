@@ -4,9 +4,8 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
 } from "react";
-import { ArrowUp, Mic, Square, Zap } from "lucide-react";
+import { ArrowUp, Mic, Square } from "lucide-react";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatAttachments } from "@/components/chat/chat-attachments";
@@ -31,10 +30,7 @@ import {
 } from "@/lib/chat/chatDrafts";
 import type { DictationEnd, VoiceStatus } from "@/lib/useHiddenVoice";
 import type { PermissionMode } from "@/lib/chat/chatProtocol";
-import { modeLabel, nextMode } from "@/lib/chat/chatLabels";
-import { ChatModelPicker } from "@/components/chat/chat-model-picker";
-import type { EffortLevel } from "@/lib/chat/chatProtocol";
-import { EMPTY_SDK, type SdkState } from "@/lib/chat/chatSdkSettings";
+import { nextMode } from "@/lib/chat/chatLabels";
 
 /** Claude's dictation (`useHiddenVoice`): its text lands in the draft. */
 export interface ChatVoice {
@@ -79,7 +75,8 @@ function readImage(file: File): Promise<Attachment> {
  * The input card: text (Enter sends, Shift+Enter breaks the line), cards of
  * the attached files and pasted images above it (`chatAttachments`: picker,
  * drag & drop, Ctrl+V of an image or of paths), `/` commands, the terminal
- * rail's actions (`ChatRailActions`), and the session's mode and model.
+ * rail's actions (`ChatRailActions`). The session's mode, model and effort
+ * sit on the status line under it (`ChatSessionControls`).
  * Esc first closes what is open in the pane (`chatLayers`), then interrupts
  * a working Claude (its turn only: background agents and workflows go on), Ctrl+B sends its running command or agent to the
  * background, Shift+Tab cycles the mode, as in the terminal. A message sent while Claude works waits for its turn; Ctrl+Enter
@@ -90,7 +87,6 @@ export function ChatComposer({
   items,
   working,
   mode,
-  model,
   slash,
   draft,
   onDraft,
@@ -100,21 +96,17 @@ export function ChatComposer({
   onInterrupt,
   onBackground,
   onMode,
-  onModel,
   messagesOnly,
   onMessagesOnly,
   active,
   onToast,
   suggestion = null,
-  sdk = EMPTY_SDK,
-  onEffort,
   onOpen,
 }: {
   /** The conversation, for the copy of Claude's last code block. */
   items: ChatItem[];
   working: boolean;
   mode: string | null;
-  model: string | null;
   /** The `/` menu's commands and the page's own (`useSlashMenu`). */
   slash: ChatSlash;
   draft: ChatDraft;
@@ -128,7 +120,6 @@ export function ChatComposer({
   /** Ctrl+B while Claude works: its running Bash and agents to the background. */
   onBackground?: () => void;
   onMode: (mode: PermissionMode) => void;
-  onModel: (model: string) => void;
   messagesOnly: boolean;
   onMessagesOnly: (on: boolean) => void;
   /** The pane is the active one and on screen (`ChatRailActions`). */
@@ -136,10 +127,6 @@ export function ChatComposer({
   onToast?: ToastFn;
   /** Claude Code's guess at the next message: grey in the empty input. */
   suggestion?: string | null;
-  /** The model menu, effort and fast mode (`ChatModelPicker`). */
-  sdk?: Pick<SdkState, "models" | "effort" | "fastMode">;
-  /** The session's effort, this session only. */
-  onEffort?: (effort: EffortLevel) => void;
   /** An image card clicked: the lightbox. */
   onOpen?: (content: LightboxContent) => void;
 }) {
@@ -148,7 +135,6 @@ export function ChatComposer({
   const setText = (value: string) => onDraft((d) => ({ ...d, text: value }));
   const setImages = (update: (prev: Attachment[]) => Attachment[]) =>
     onDraft((d) => ({ ...d, images: update(d.images) }));
-  const [menu, setMenu] = useState<"model" | null>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const layers = useChatLayers();
   const ghost = useChatSuggestion(suggestion, text, working);
@@ -280,7 +266,7 @@ export function ChatComposer({
     if (history.onKeyDown(e)) return;
     if (slashMenu.onKeyDown(e)) return;
     // Tab takes the suggestion, only in the empty input with no menu open.
-    if (e.key === "Tab" && !e.shiftKey && ghost && !menu) {
+    if (e.key === "Tab" && !e.shiftKey && ghost) {
       e.preventDefault();
       setText(ghost);
       return;
@@ -366,20 +352,6 @@ export function ChatComposer({
           messagesOnly={messagesOnly}
           onMessagesOnly={onMessagesOnly}
           active={active}
-        />
-        <span
-          className="chat-chip"
-          title="Changer de mode (Maj+Tab)"
-          onClick={() => onMode(nextMode(mode))}
-        >
-          <Zap /> <span className="lbl">{modeLabel(mode)}</span>
-        </span>
-        <ChatModelPicker
-          model={model}
-          sdk={sdk}
-          onModel={onModel}
-          onEffort={onEffort}
-          onMenu={(open) => setMenu(open ? "model" : null)}
         />
         <button
           type="button"

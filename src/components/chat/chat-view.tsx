@@ -45,6 +45,7 @@ import { ChatPlanApproval } from "@/components/chat/chat-plan-approval";
 import { ChatQuestionPanel } from "@/components/chat/chat-question-panel";
 import { ChatSearchBox } from "@/components/chat/chat-search-box";
 import { ChatStatusBar } from "@/components/chat/chat-status-bar";
+import { ChatSessionControls } from "@/components/chat/chat-session-controls";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
 import { chatGallery } from "@/lib/chat/chatImages";
 import { folderOf, modelLabel } from "@/lib/chat/chatLabels";
@@ -415,7 +416,6 @@ export function ChatView({
         items={state.items}
         working={state.working}
         mode={state.mode}
-        model={state.model}
         slash={{
           commands: state.commands,
           names: state.slashCommands,
@@ -434,13 +434,10 @@ export function ChatView({
         onInterrupt={onInterrupt}
         onBackground={onBackground}
         onMode={onMode}
-        onModel={onModel}
         messagesOnly={messagesOnly}
         onMessagesOnly={onMessagesOnly}
         onToast={onToast}
         suggestion={state.suggestion}
-        sdk={state.sdk}
-        onEffort={sdkActions?.setEffort}
         onOpen={open}
       />
     );
@@ -594,6 +591,16 @@ export function ChatView({
               state={state}
               onContextDetail={sdkActions?.contextDetail}
               onMcpOpen={sdkActions?.refreshMcp}
+              controls={
+                <ChatSessionControls
+                  mode={state.mode}
+                  model={state.model}
+                  sdk={state.sdk}
+                  onMode={onMode}
+                  onModel={onModel}
+                  onEffort={sdkActions?.setEffort}
+                />
+              }
             />
             <ChatShellsChip
               shells={live.shells}
