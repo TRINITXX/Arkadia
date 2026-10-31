@@ -18,8 +18,8 @@ export const CHAT_CSS = `
 .chat-root *, .chat-root *::before, .chat-root *::after { box-sizing: border-box; }
 .chat-col { width: min(760px, 100% - 48px); margin: 0 auto; }
 
-.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
-.chat-scroll-inner { display: flex; flex-direction: column; gap: 14px; padding: 28px 0 18px; }
+.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: #31353b transparent; scrollbar-gutter: stable; isolation: isolate; }
+.chat-scroll-inner { display: flex; flex-direction: column; gap: 14px; padding: 28px 0 42px; }
 .chat-unit { content-visibility: auto; contain-intrinsic-size: auto 60px; }
 
 .chat-title { font-family: "Instrument Serif", Georgia, serif; font-size: 34px; line-height: 1.1; color: #f4f4f5; letter-spacing: -0.005em; overflow-wrap: anywhere; }
@@ -94,7 +94,12 @@ export const CHAT_CSS = `
 .chat-qa .q { color: var(--chat-dim); font-size: 13px; }
 .chat-qa .a { color: var(--chat-ink); }
 
-.chat-bottom { flex-shrink: 0; display: flex; flex-direction: column; align-items: stretch; padding: 0 0 12px; background: linear-gradient(transparent, var(--chat-bg) 14px); }
+/* The bottom rises 24px over the scroll area (whose end pads as much): the messages pass behind the input and vanish under it, its corners on them (the user's ask of 31/10/2026). Above a live line or a card, they fade out. */
+.chat-bottom { flex-shrink: 0; display: flex; flex-direction: column; align-items: stretch; padding: 0 0 12px; margin-top: -24px; position: relative; z-index: 1; pointer-events: none; background: linear-gradient(transparent, var(--chat-bg) 14px); }
+.chat-bottom > * { pointer-events: auto; }
+.chat-bottom:has(> .chat-col > div.chat-box:first-of-type) { background: none; }
+/* One pixel past the column on each side: the frames' side borders hide behind it. */
+.chat-bottom .chat-box { margin-inline: -1px; }
 .chat-live { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--chat-dim); padding: 8px 2px; min-height: 36px; }
 .chat-live .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #464a51; border-top-color: var(--chat-accent); animation: chat-spin .8s linear infinite; }
 .chat-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: #202327; border: 1px solid #31353b; color: #d4d4d8; font-size: 12px; line-height: 1.4; cursor: pointer; user-select: none; white-space: nowrap; }

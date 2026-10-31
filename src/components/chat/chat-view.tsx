@@ -27,6 +27,7 @@ import { followsAfterScroll } from "@/lib/followBottom";
 import { useAnyOverlayOpen } from "@/lib/overlays";
 import { CHAT_CSS } from "@/components/chat/chat-css";
 import { ChatLiveLine } from "@/components/chat/chat-live-line";
+import { useScrollbarGutter } from "@/lib/chat/useScrollbarGutter";
 import { ChatEditConfirm } from "@/components/chat/chat-edit-confirm";
 import { ChatOlderButton } from "@/components/chat/chat-older-button";
 import { ChatQuestionSheet } from "@/components/chat/chat-question-sheet";
@@ -167,6 +168,7 @@ export function ChatView({
   const [shown, setShown] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const gutter = useScrollbarGutter(scrollRef);
   const innerRef = useRef<HTMLDivElement>(null);
   const stuckRef = useRef(true);
   /** `scrollTop` at the last scroll event or stick, for `followsAfterScroll`. */
@@ -564,7 +566,11 @@ export function ChatView({
           />
         </div>
       </div>
-      <div className="chat-bottom">
+      <div
+        className="chat-bottom"
+        // The scrollbar's width on the right: the same column as above.
+        style={gutter > 0 ? { paddingRight: gutter } : undefined}
+      >
         <div className="chat-col" style={{ position: "relative" }}>
           {!stuck && (
             <button
