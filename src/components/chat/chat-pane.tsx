@@ -5,6 +5,7 @@ import { appendDictation, usePaneDraft } from "@/lib/chat/chatDrafts";
 import { folderOf } from "@/lib/chat/chatLabels";
 import { usePaneMessagesOnly } from "@/lib/chat/chatMessagesOnly";
 import { useChatSession } from "@/lib/chat/useChatSession";
+import { useSlashActions } from "@/lib/chat/useSlashActions";
 import { useHiddenVoice } from "@/lib/useHiddenVoice";
 import type { PaneChat, PaneState } from "@/types";
 
@@ -22,6 +23,7 @@ export function ChatPane({
   onActivate,
   onSession,
   onLabel,
+  liveSessions,
   onSwitchToTerminal,
   onToast,
 }: {
@@ -34,6 +36,8 @@ export function ChatPane({
   onSession: (paneId: string, sessionId: string) => void;
   /** The tab title's text (its status glyph follows the chat: `usePaneChats`). */
   onLabel: (paneId: string, label: string) => void;
+  /** Sessions running in the other panes: /resume can't take them. */
+  liveSessions: (exceptPaneId: string) => Promise<Set<string>>;
   onSwitchToTerminal: (paneId: string) => void;
   onToast?: ToastFn;
 }) {
@@ -74,6 +78,17 @@ export function ChatPane({
     onLabel(pane.id, label);
   }, [label, pane.id, onLabel]);
 
+  const onSlashError = useCallback(
+    (message: string) => onToast?.("error", message),
+    [onToast],
+  );
+  const slashActions = useSlashActions(
+    pane.id,
+    pane.accountId,
+    onSlashError,
+    liveSessions,
+  );
+
   return (
     <ChatView
       state={state}
@@ -97,6 +112,7 @@ export function ChatPane({
       onMessagesOnly={setMessagesOnly}
       onHidden={onHidden}
       onToast={onToast}
+      slashActions={slashActions}
     />
   );
 }

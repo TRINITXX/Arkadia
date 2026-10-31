@@ -52,7 +52,8 @@ describe("reduceChat on a turn with tools", () => {
     expect(kinds[0]).toBe("user");
     expect(kinds).toContain("tool:Read");
     expect(kinds).toContain("tool:Write");
-    expect(kinds.at(-1)).toBe("text");
+    // The answer, then the turn's closing line.
+    expect(kinds.slice(-2)).toEqual(["text", "turn"]);
     for (const item of state.items) {
       if (item.kind === "tool") expect(item.result?.text).toBeTruthy();
     }
@@ -108,7 +109,8 @@ describe("reduceChat on a turn with tools", () => {
     const fromHistory = reduceChat(EMPTY_CHAT, history!, 0);
     const kinds = (s: ChatState) =>
       s.items
-        .filter((i) => i.kind !== "thinking")
+        // A transcript keeps no turn ends (`result`): no closing line.
+        .filter((i) => i.kind !== "thinking" && i.kind !== "turn")
         .map((i) => (i.kind === "tool" ? i.name : i.kind));
     expect(kinds(fromHistory)).toEqual(kinds(state));
   });
@@ -353,5 +355,190 @@ describe("visibleUserText", () => {
     ).toBeNull();
     expect(visibleUserText("<system-reminder>x</system-reminder>")).toBeNull();
     expect(visibleUserText("  bonjour ")).toBe("bonjour");
+  });
+});
+
+describe("a message sent while Claude works", () => {
+  const sent = (uuid: string): ChatEvent => ({
+    type: "user_sent",
+    chatId: "c",
+    text: uuid,
+    images: 0,
+    uuid,
+  });
+  const lifecycle = (uuid: string, state: string): ChatEvent => ({
+    type: "sdk",
+    chatId: "c",
+    message: { type: "command_lifecycle", command_uuid: uuid, state },
+  });
+  const queued = (s: ChatState, uuid: string) => {
+    const item = s.items.find((i) => i.id === `sent:${uuid}`);
+    return item?.kind === "user" && item.queued === true;
+  };
+
+  // As Claude Code 2.1.314 sent them in a live check (31/10/2026).
+  it("stays queued until Claude Code takes it, and keeps the turn's clock", () => {
+    let state = reduceChat(EMPTY_CHAT, sent("u1"), 100);
+    expect(queued(state, "u1")).toBe(false);
+    state = reduceChat(state, sent("u2"), 200);
+    expect(queued(state, "u2")).toBe(true);
+    expect(state.turnStartedAt).toBe(100);
+    state = reduceChat(state, lifecycle("u2", "queued"), 210);
+    expect(queued(state, "u2")).toBe(true);
+    state = reduceChat(state, lifecycle("u2", "started"), 300);
+    expect(queued(state, "u2")).toBe(false);
+  });
+
+  it("shows as not sent once cancelled, or still waiting when the chat ends", () => {
+    const dropped = (s: ChatState, uuid: string) => {
+      const item = s.items.find((i) => i.id === `sent:${uuid}`);
+      return item?.kind === "user" && item.dropped === true && !item.queued;
+    };
+    let state = reduceChat(EMPTY_CHAT, sent("u1"), 100);
+    state = reduceChat(state, sent("u2"), 200);
+    state = reduceChat(state, sent("u3"), 300);
+    state = reduceChat(state, lifecycle("u2", "cancelled"), 400);
+    expect(dropped(state, "u2")).toBe(true);
+    expect(queued(state, "u3")).toBe(true);
+    state = reduceChat(state, { type: "closed", chatId: "c" }, 500);
+    expect(dropped(state, "u3")).toBe(true);
+    expect(dropped(state, "u1")).toBe(false);
+  });
+});
+
+describe("times, images and the turn's figures", () => {
+  const sent = (at: number, images = 0): ChatEvent =>
+    ({
+      type: "user_sent",
+      chatId: "c",
+      text: "Regarde",
+      images,
+      pasted: Array.from({ length: images }, () => ({
+        mediaType: "image/png",
+        data: "AAAA",
+      })),
+      at,
+    }) as ChatEvent;
+
+  it("dates each message: the server's stamp, else the SDK's timestamp", () => {
+    let state = reduceChat(EMPTY_CHAT, sent(5_000, 1), 9_999);
+    const reply: ChatEvent = {
+      type: "sdk",
+      chatId: "c",
+      message: {
+        type: "assistant",
+        uuid: "a1",
+        timestamp: "2026-10-31T10:00:00.000Z",
+        message: { id: "m1", content: [{ type: "text", text: "Vu." }] },
+      },
+    };
+    state = reduceChat(state, reply, 9_999);
+    const [user, text] = state.items;
+    expect(user.at).toBe(5_000);
+    expect(user.kind === "user" && user.pasted).toEqual([
+      "data:image/png;base64,AAAA",
+    ]);
+    expect(text.at).toBe(Date.parse("2026-10-31T10:00:00.000Z"));
+  });
+
+  it("keeps the pasted images of the newest messages only, and their count", () => {
+    let state = EMPTY_CHAT;
+    for (let i = 0; i < 21; i++) state = reduceChat(state, sent(i, 1), i);
+    const [first, second] = state.items;
+    expect(first.kind === "user" && first.pasted).toBeUndefined();
+    expect(first.kind === "user" && first.images).toBe(1);
+    expect(second.kind === "user" && second.pasted).toHaveLength(1);
+  });
+
+  it("reads the times and pasted images of a resumed session", () => {
+    const state = reduceChat(
+      EMPTY_CHAT,
+      {
+        type: "history",
+        chatId: "c",
+        truncated: false,
+        messages: [
+          {
+            type: "user",
+            uuid: "h1",
+            timestamp: "2026-10-30T08:00:00.000Z",
+            message: {
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/jpeg",
+                    data: "QQ",
+                  },
+                },
+                { type: "text", text: "Et ça ?" },
+              ],
+            },
+          },
+        ],
+      },
+      0,
+    );
+    const [user] = state.items;
+    expect(user.at).toBe(Date.parse("2026-10-30T08:00:00.000Z"));
+    expect(user.kind === "user" && user.pasted).toEqual([
+      "data:image/jpeg;base64,QQ",
+    ]);
+  });
+
+  it("closes a turn with its duration, its tool calls and the files edited", () => {
+    const state = replay(fixture("tools").filter((e) => e.type !== "history"));
+    const turn = state.items[state.items.length - 1];
+    expect(turn).toMatchObject({ kind: "turn", tools: 2, files: 1 });
+    expect(turn.kind === "turn" && turn.durationMs).toBe(7867);
+  });
+
+  it("follows the running call, a subagent's included, until the turn ends", () => {
+    const events = fixture("subagent");
+    const running = replay(
+      events,
+      (e) =>
+        e.type === "sdk" &&
+        e.message.type === "assistant" &&
+        Boolean(e.message.parent_tool_use_id),
+    );
+    expect(running.liveTools.map((t) => [t.name, t.agent])).toEqual([
+      ["Agent", false],
+      ["Bash", true],
+    ]);
+    const done = replay(events);
+    expect(done.liveTools).toEqual([]);
+    expect(done.livePhase).toBeNull();
+  });
+
+  it("says what the request does while no tool runs", () => {
+    const answering = replay(
+      fixture("tools"),
+      (e) =>
+        e.type === "sdk" &&
+        (e.message.event as { delta?: { type?: string } } | undefined)?.delta
+          ?.type === "text_delta",
+    );
+    expect(answering.liveTools).toEqual([]);
+    expect(answering.livePhase).toBe("responding");
+  });
+
+  it("marks an API error written as Claude's reply", () => {
+    const state = reduceChat(
+      EMPTY_CHAT,
+      {
+        type: "sdk",
+        chatId: "c",
+        message: {
+          type: "assistant",
+          uuid: "e1",
+          error: "rate_limit",
+          message: { id: "m", content: [{ type: "text", text: "Limite" }] },
+        },
+      },
+      0,
+    );
+    expect(state.items[0]).toMatchObject({ kind: "text", error: true });
   });
 });

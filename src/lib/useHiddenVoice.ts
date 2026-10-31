@@ -176,6 +176,18 @@ async function takeCapture(paneId: string): Promise<string | null> {
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** How a stop ended: the text handed to `onText`, or why not. */
+export type DictationEnd = { ok: true } | { ok: false; error: string };
+
+/**
+ * Whether the hook shows a failed dictation itself: not while a caller that
+ * asked for quiet is still there to show it (`quiet` answers), so the
+ * failure shows once, never twice nor not at all.
+ */
+export function hookReportsFailure(quiet: (() => boolean) | null): boolean {
+  return !quiet?.();
+}
+
 /**
  * `onText` gets each finished dictation, the safety stop's included, even
  * once the component unmounted: it must write somewhere that outlives it
@@ -209,7 +221,15 @@ export function useHiddenVoice(onText: (text: string) => void) {
 
   // Unmounting stops the microphone, and a dictation under way still ends:
   // its text goes to `onText` like any other.
-  const stopRef = useRef<() => Promise<void>>(async () => {});
+  const stopRef = useRef<() => Promise<DictationEnd>>(async () => ({
+    ok: false,
+    error: "Aucune dictée en cours",
+  }));
+  // The stop under way: a second stop (send after dictation) waits for it.
+  const stoppingRef = useRef<Promise<DictationEnd> | null>(null);
+  // A caller tells the failure itself while it is there (send after
+  // dictation): no error here then (`hookReportsFailure`).
+  const quietRef = useRef<(() => boolean) | null>(null);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -219,39 +239,60 @@ export function useHiddenVoice(onText: (text: string) => void) {
     };
   }, []);
 
-  /** Releases space, waits for the transcript, and hands its text on. */
-  const stop = useCallback(async () => {
-    const paneId = paneRef.current;
-    if (!paneId || repeatRef.current === undefined) {
-      cancelRef.current = true;
-      return;
-    }
-    stopSpaces();
-    setStatus("transcribing");
-    try {
-      // Enter only on the prompt field: on a dialog it would pick its
-      // default answer, and mid-transcription it would send half the text.
-      const ended = await waitForDictationEnd(paneId);
-      const frame = getFrame(paneId);
-      if (!ended || !isPromptField(frame)) {
-        throw new Error("La transcription n'a pas abouti");
+  /**
+   * Releases space, waits for the transcript, and hands its text on. Resolves
+   * once `onText` has it, or with why not. `quiet`: true while the caller is
+   * there to show a failure, so `error` stays unset then (one message, not
+   * two). A caller gone by then leaves the failure to `error`.
+   */
+  const stop = useCallback(
+    (options?: { quiet?: () => boolean }): Promise<DictationEnd> => {
+      if (options?.quiet) quietRef.current = options.quiet;
+      if (stoppingRef.current) return stoppingRef.current;
+      const paneId = paneRef.current;
+      if (!paneId || repeatRef.current === undefined) {
+        cancelRef.current = true;
+        quietRef.current = null;
+        return Promise.resolve({ ok: false, error: "Aucune dictée en cours" });
       }
-      const failure = voiceFailure(frame);
-      if (failure) throw new Error(`Claude Code : ${failure}`);
-      await send(paneId, ENTER);
-      const text = await takeCapture(paneId);
-      if (!text) throw new Error("Aucun texte reçu de la dictée");
-      // Captured: the hook blocked the prompt, which leaves it empty.
-      promptMayHoldText = false;
-      onTextRef.current(text);
-    } catch (e) {
-      if (mountedRef.current) setError(message(e));
-    } finally {
-      busy = false;
-      releasePane();
-      if (mountedRef.current) setStatus("idle");
-    }
-  }, [stopSpaces, releasePane]);
+      stopSpaces();
+      setStatus("transcribing");
+      const stopping = (async () => {
+        try {
+          // Enter only on the prompt field: on a dialog it would pick its
+          // default answer, and mid-transcription it would send half the text.
+          const ended = await waitForDictationEnd(paneId);
+          const frame = getFrame(paneId);
+          if (!ended || !isPromptField(frame)) {
+            throw new Error("La transcription n'a pas abouti");
+          }
+          const failure = voiceFailure(frame);
+          if (failure) throw new Error(`Claude Code : ${failure}`);
+          await send(paneId, ENTER);
+          const text = await takeCapture(paneId);
+          if (!text) throw new Error("Aucun texte reçu de la dictée");
+          // Captured: the hook blocked the prompt, which leaves it empty.
+          promptMayHoldText = false;
+          onTextRef.current(text);
+          return { ok: true } as const;
+        } catch (e) {
+          if (mountedRef.current && hookReportsFailure(quietRef.current)) {
+            setError(message(e));
+          }
+          return { ok: false, error: message(e) } as const;
+        } finally {
+          busy = false;
+          stoppingRef.current = null;
+          quietRef.current = null;
+          releasePane();
+          if (mountedRef.current) setStatus("idle");
+        }
+      })();
+      stoppingRef.current = stopping;
+      return stopping;
+    },
+    [stopSpaces, releasePane],
+  );
   useEffect(() => {
     stopRef.current = stop;
   }, [stop]);

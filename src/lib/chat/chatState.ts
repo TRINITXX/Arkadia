@@ -1,4 +1,20 @@
-import type { ChatEvent, JsonObject } from "@/lib/chat/chatProtocol";
+import type {
+  ChatEvent,
+  JsonObject,
+  PermissionUpdate,
+  SlashCommandInfo,
+} from "@/lib/chat/chatProtocol";
+import {
+  addCommandSent,
+  addHistoryCommand,
+  addServerNotice,
+  commandAnswer,
+  commandList,
+  endCommandTurn,
+  isCommandSent,
+  markCommandStarted,
+  resetConversation,
+} from "@/lib/chat/chatCommands";
 
 /**
  * The chat view's state, built from the chat server's events alone (the same
@@ -6,10 +22,37 @@ import type { ChatEvent, JsonObject } from "@/lib/chat/chatProtocol";
  * comes in with each event.
  */
 
-export type ChatItem =
-  | { kind: "user"; id: string; text: string; images: number }
-  | { kind: "text"; id: string; text: string; streaming: boolean }
+export type ChatItem = (
+  | {
+      kind: "user";
+      id: string;
+      text: string;
+      images: number;
+      /** The pasted images still kept, as data URLs: the newest
+       *  `KEPT_PASTED` of the chat (`keepPasted`); `images` counts them all. */
+      pasted?: string[];
+      /** Sent while Claude worked and not taken yet (`takeQueued`). */
+      queued?: boolean;
+      /** Never taken: Claude Code cancelled it, or the chat ended first. */
+      dropped?: boolean;
+    }
+  | {
+      kind: "text";
+      id: string;
+      text: string;
+      streaming: boolean;
+      /** An API error Claude Code wrote as Claude's reply. */
+      error?: boolean;
+    }
   | { kind: "thinking"; id: string; text: string; streaming: boolean }
+  /** A finished turn: the « Terminé en » line (`turnDoneLine`). */
+  | {
+      kind: "turn";
+      id: string;
+      durationMs: number;
+      tools: number;
+      files: number;
+    }
   | {
       kind: "tool";
       /** The tool_use id: results and permission requests point at it. */
@@ -18,7 +61,50 @@ export type ChatItem =
       input: JsonObject;
       result?: { text: string; isError: boolean };
     }
-  | { kind: "notice"; id: string; text: string; tone: "info" | "error" };
+  | {
+      kind: "notice";
+      id: string;
+      text: string;
+      tone: "info" | "error";
+      /** The answer to the user's own command (« n'existe que dans le
+       *  terminal », « Nouvelle conversation »): « Messages seuls » keeps it. */
+      command?: boolean;
+    }
+  /** A slash command sent, filled by its local answer (`chatCommands`). */
+  | {
+      kind: "command";
+      id: string;
+      name: string;
+      args: string;
+      output?: string;
+      /** Claude's text items its answer came in, gone from the column. */
+      absorbed: string[];
+      /** As a message: waiting for the turn under way, or never taken. */
+      queued?: boolean;
+      dropped?: boolean;
+      /** Claude Code runs it now (`command_lifecycle`): its answer is this card's. */
+      running?: boolean;
+    }
+) & {
+  /** When it was said, started or ended (ms); unknown for an old transcript. */
+  at?: number;
+};
+
+/** A tool call running now, the main loop's or a subagent's. */
+export interface LiveTool {
+  id: string;
+  name: string;
+  input: JsonObject;
+  agent: boolean;
+}
+
+/** What Claude's current request does while no tool runs (its spinner mode). */
+export type LivePhase =
+  | "requesting"
+  | "thinking"
+  | "responding"
+  | "tool-input"
+  | null;
 
 export interface Subagent {
   taskId: string;
@@ -41,6 +127,7 @@ export interface PendingRequest {
   toolUseId: string;
   title?: string;
   description?: string;
+  suggestions?: PermissionUpdate[];
 }
 
 export interface RateWindow {
@@ -58,6 +145,8 @@ export interface ChatState {
   model: string | null;
   mode: string | null;
   slashCommands: string[];
+  /** The same with descriptions (`supportedCommands`, `commands_changed`). */
+  commands: SlashCommandInfo[];
   working: boolean;
   turnStartedAt: number | null;
   /** Output tokens of the current turn, thinking included. */
@@ -75,6 +164,13 @@ export interface ChatState {
   streams: Record<string, string>;
   /** Output tokens already counted per API message of the turn. */
   messageTokens: Record<string, number>;
+  /** Tool calls running now, in start order: the live line's step. */
+  liveTools: LiveTool[];
+  livePhase: LivePhase;
+  /** The main loop's tool calls since the last turn ended, and the files
+   *  they edited: the « Terminé en » line's figures. */
+  turnTools: number;
+  turnFiles: string[];
 }
 
 export const EMPTY_CHAT: ChatState = {
@@ -85,6 +181,7 @@ export const EMPTY_CHAT: ChatState = {
   model: null,
   mode: null,
   slashCommands: [],
+  commands: [],
   working: false,
   turnStartedAt: null,
   turnTokens: 0,
@@ -98,6 +195,10 @@ export const EMPTY_CHAT: ChatState = {
   closed: null,
   streams: {},
   messageTokens: {},
+  liveTools: [],
+  livePhase: null,
+  turnTools: 0,
+  turnFiles: [],
 };
 
 const obj = (v: unknown): JsonObject =>
@@ -146,12 +247,55 @@ export function visibleUserText(text: string): string | null {
   return trimmed;
 }
 
+/** A replaced item keeps the time it first showed (a streamed block's start). */
 function upsertItem(items: ChatItem[], item: ChatItem): ChatItem[] {
   const i = items.findIndex((x) => x.id === item.id);
   if (i < 0) return [...items, item];
   const next = items.slice();
-  next[i] = item;
+  next[i] = { ...item, at: items[i].at ?? item.at };
   return next;
+}
+
+/** When the SDK says a message was written (its `timestamp`), else `fallback`. */
+function messageTime(m: JsonObject, fallback?: number): number | undefined {
+  const ms = Date.parse(str(m.timestamp) ?? "");
+  return Number.isNaN(ms) ? fallback : ms;
+}
+
+/** Pasted images kept in memory per chat, at most this many and this much
+ *  base64, the newest first: older messages keep their count alone. */
+const KEPT_PASTED = 20;
+const KEPT_PASTED_CHARS = 30_000_000;
+
+/** Drops the pasted images of older messages past the caps, whole messages. */
+function keepPasted(items: ChatItem[]): ChatItem[] {
+  let count = 0;
+  let chars = 0;
+  let next = items;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.kind !== "user" || !item.pasted?.length) continue;
+    const size = item.pasted.reduce((n, url) => n + url.length, 0);
+    if (
+      count + item.pasted.length <= KEPT_PASTED &&
+      chars + size <= KEPT_PASTED_CHARS
+    ) {
+      count += item.pasted.length;
+      chars += size;
+      continue;
+    }
+    if (next === items) next = items.slice();
+    next[i] = { ...item, pasted: undefined };
+  }
+  return next;
+}
+
+/** A base64 image block's data URL; undefined for any other source. */
+function imageUrl(block: JsonObject): string | undefined {
+  const source = obj(block.source);
+  const data = str(source.data);
+  if (source.type !== "base64" || !data) return undefined;
+  return `data:${str(source.media_type) ?? "image/png"};base64,${data}`;
 }
 
 function patchItem(
@@ -166,22 +310,36 @@ function patchItem(
   return next;
 }
 
+const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
+
 /** An assistant message's blocks, streamed or not, into items. */
-function addAssistant(state: ChatState, m: JsonObject): ChatState {
+function addAssistant(
+  state: ChatState,
+  m: JsonObject,
+  received?: number,
+): ChatState {
   const message = obj(m.message);
   const msgId = str(message.id) ?? str(m.uuid) ?? "";
-  let { items, streams } = state;
+  const at = messageTime(m, received);
+  let { items, streams, turnTools, turnFiles } = state;
   arr(message.content).forEach((raw, blockIndex) => {
     const block = obj(raw);
     if (block.type === "tool_use") {
       const id = str(block.id) ?? `${msgId}:${blockIndex}`;
+      const name = str(block.name) ?? "?";
+      const input = obj(block.input);
       const prev = items.find((x) => x.id === id);
+      if (!prev) turnTools += 1;
+      const file = str(input.file_path) ?? str(input.notebook_path);
+      if (EDIT_TOOLS.has(name) && file && !turnFiles.includes(file))
+        turnFiles = [...turnFiles, file];
       items = upsertItem(items, {
         kind: "tool",
         id,
-        name: str(block.name) ?? "?",
-        input: obj(block.input),
+        name,
+        input,
         result: prev?.kind === "tool" ? prev.result : undefined,
+        at,
       });
       return;
     }
@@ -201,13 +359,21 @@ function addAssistant(state: ChatState, m: JsonObject): ChatState {
     });
     const id = streamed?.[1] ?? `${str(m.uuid) ?? msgId}:${blockIndex}`;
     if (block.type === "text") {
-      items = upsertItem(items, { kind: "text", id, text, streaming: false });
+      items = upsertItem(items, {
+        kind: "text",
+        id,
+        text,
+        streaming: false,
+        error: typeof m.error === "string" || undefined,
+        at,
+      });
     } else {
       items = upsertItem(items, {
         kind: "thinking",
         id,
         text,
         streaming: false,
+        at,
       });
     }
     if (streamed) {
@@ -215,7 +381,7 @@ function addAssistant(state: ChatState, m: JsonObject): ChatState {
       delete streams[streamed[0]];
     }
   });
-  return { ...state, items, streams };
+  return { ...state, items, streams, turnTools, turnFiles };
 }
 
 /** A user message: tool results go to their calls, text becomes a bubble. */
@@ -224,6 +390,10 @@ function addUser(
   m: JsonObject,
   fromHistory: boolean,
 ): ChatState {
+  if (fromHistory) {
+    const command = addHistoryCommand(state, m);
+    if (command) return command;
+  }
   const message = obj(m.message);
   let items = state.items;
   const content = message.content;
@@ -240,12 +410,14 @@ function addUser(
           id: str(m.uuid) ?? `u${items.length}`,
           text,
           images: 0,
+          at: messageTime(m),
         },
       ],
     };
   }
   let texts: string[] = [];
   let images = 0;
+  let pasted: string[] = [];
   for (const raw of arr(content)) {
     const block = obj(raw);
     if (block.type === "tool_result") {
@@ -266,6 +438,8 @@ function addUser(
       if (text !== null) texts = [...texts, text];
     } else if (block.type === "image" && fromHistory) {
       images += 1;
+      const url = imageUrl(block);
+      if (url) pasted = [...pasted, url];
     }
   }
   if (texts.length > 0 || images > 0) {
@@ -276,13 +450,19 @@ function addUser(
         id: str(m.uuid) ?? `u${items.length}`,
         text: texts.join("\n"),
         images,
+        pasted: pasted.length > 0 ? pasted : undefined,
+        at: messageTime(m),
       },
     ];
   }
   return { ...state, items };
 }
 
-function addStreamEvent(state: ChatState, m: JsonObject): ChatState {
+function addStreamEvent(
+  state: ChatState,
+  m: JsonObject,
+  at: number,
+): ChatState {
   const event = obj(m.event);
   const msgId = str(m.api_message_id) ?? "";
   const key = `${msgId}:${num(event.index) ?? 0}`;
@@ -291,13 +471,17 @@ function addStreamEvent(state: ChatState, m: JsonObject): ChatState {
       const block = obj(event.content_block);
       if (block.type === "tool_use") {
         const id = str(block.id) ?? key;
+        const known = state.items.some((x) => x.id === id);
         return {
           ...state,
+          livePhase: "tool-input",
+          turnTools: known ? state.turnTools : state.turnTools + 1,
           items: upsertItem(state.items, {
             kind: "tool",
             id,
             name: str(block.name) ?? "?",
             input: {},
+            at,
           }),
         };
       }
@@ -305,12 +489,13 @@ function addStreamEvent(state: ChatState, m: JsonObject): ChatState {
       const id = str(m.uuid) ?? key;
       return {
         ...state,
+        livePhase: block.type === "text" ? "responding" : "thinking",
         streams: { ...state.streams, [key]: id },
         items: [
           ...state.items,
           block.type === "text"
-            ? { kind: "text", id, text: "", streaming: true }
-            : { kind: "thinking", id, text: "", streaming: true },
+            ? { kind: "text", id, text: "", streaming: true, at }
+            : { kind: "thinking", id, text: "", streaming: true, at },
         ],
       };
     }
@@ -366,8 +551,17 @@ function addSystem(state: ChatState, m: JsonObject): ChatState {
         m.status === "requesting" || m.status === "compacting"
           ? m.status
           : null;
-      return { ...state, status, mode: str(m.permissionMode) ?? state.mode };
+      return {
+        ...state,
+        status,
+        mode: str(m.permissionMode) ?? state.mode,
+        livePhase: status === "requesting" ? "requesting" : state.livePhase,
+      };
     }
+    case "session_title_changed":
+      return { ...state, title: str(m.title) ?? state.title };
+    case "commands_changed":
+      return { ...state, commands: commandList(m.commands) };
     case "compact_boundary":
       return {
         ...state,
@@ -515,6 +709,57 @@ function usableContextPercent(
   return Math.min(100, (event.totalTokens / usable) * 100);
 }
 
+/**
+ * Messages Claude Code took from its queue: a `command_lifecycle` frame past
+ * « queued » names one, a turn's frames list those it consumed so far
+ * (`user_message_uuids`, the fallback for a CLI without lifecycle frames).
+ * One it « cancelled » was never taken: it shows as not sent.
+ */
+function takeQueued(state: ChatState, m: JsonObject): ChatState {
+  const cancelled = m.type === "command_lifecycle" && m.state === "cancelled";
+  const taken =
+    m.type === "command_lifecycle"
+      ? m.state === "queued"
+        ? []
+        : [m.command_uuid]
+      : arr(m.user_message_uuids);
+  let items = state.items;
+  for (const uuid of taken) {
+    if (typeof uuid !== "string") continue;
+    // Queued messages are the latest: look from the end.
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      if (item.id !== `sent:${uuid}`) continue;
+      // A slash command waits like any message (`addCommandSent`).
+      if ((item.kind === "user" || item.kind === "command") && item.queued) {
+        items = items.slice();
+        items[i] = cancelled
+          ? { ...item, queued: false, dropped: true }
+          : { ...item, queued: false };
+      }
+      break;
+    }
+  }
+  return items === state.items ? state : { ...state, items };
+}
+
+/** The chat ended (closed, its server gone): what still waited was not sent. */
+function dropQueued(items: ChatItem[]): ChatItem[] {
+  if (!hasQueued(items)) return items;
+  return items.map((item) =>
+    (item.kind === "user" || item.kind === "command") && item.queued
+      ? { ...item, queued: false, dropped: true }
+      : item,
+  );
+}
+
+/** A message still waits for Claude (one sent « now » may pass those before it). */
+export function hasQueued(items: ChatItem[]): boolean {
+  return items.some(
+    (item) => (item.kind === "user" || item.kind === "command") && item.queued,
+  );
+}
+
 /** Closes the turn: nothing streams any more. */
 function endTurn(state: ChatState): ChatState {
   return {
@@ -524,6 +769,10 @@ function endTurn(state: ChatState): ChatState {
     status: null,
     streams: {},
     messageTokens: {},
+    liveTools: [],
+    livePhase: null,
+    turnTools: 0,
+    turnFiles: [],
     items: state.items.map((item) =>
       (item.kind === "text" || item.kind === "thinking") && item.streaming
         ? { ...item, streaming: false }
@@ -532,7 +781,44 @@ function endTurn(state: ChatState): ChatState {
   };
 }
 
+/**
+ * Tool calls run from their assistant message to their result, the main
+ * loop's and its subagents' alike: the live line shows the latest.
+ */
+function trackLive(state: ChatState, m: JsonObject): ChatState {
+  const blocks = arr(obj(m.message).content).map(obj);
+  if (m.type === "assistant") {
+    const started: LiveTool[] = blocks.flatMap((b) => {
+      const id = str(b.id);
+      if (b.type !== "tool_use" || !id) return [];
+      if (state.liveTools.some((t) => t.id === id)) return [];
+      return [
+        {
+          id,
+          name: str(b.name) ?? "?",
+          input: obj(b.input),
+          agent: Boolean(m.parent_tool_use_id),
+        },
+      ];
+    });
+    if (started.length === 0) return state;
+    return { ...state, liveTools: [...state.liveTools, ...started] };
+  }
+  if (m.type !== "user") return state;
+  const done = new Set(
+    blocks
+      .filter((b) => b.type === "tool_result")
+      .map((b) => str(b.tool_use_id)),
+  );
+  if (!state.liveTools.some((t) => done.has(t.id))) return state;
+  return {
+    ...state,
+    liveTools: state.liveTools.filter((t) => !done.has(t.id)),
+  };
+}
+
 function addSdk(state: ChatState, m: JsonObject, now: number): ChatState {
+  state = trackLive(state, m);
   // A subagent's own messages belong to its drawer, not to the column.
   if (m.parent_tool_use_id) return state;
   switch (m.type) {
@@ -542,16 +828,33 @@ function addSdk(state: ChatState, m: JsonObject, now: number): ChatState {
       return addStreamEvent(
         state.working ? state : { ...state, working: true, turnStartedAt: now },
         m,
+        now,
       );
     case "assistant":
-      return addAssistant(state, m);
+      return commandAnswer(state, m) ?? addAssistant(state, m, now);
     case "user":
       return addUser(state, m, false);
     case "rate_limit_event":
       return addRateLimit(state, m);
+    case "conversation_reset":
+      return resetConversation(state, m);
     case "result": {
+      // A local command's turn (no model): its answer goes in its card.
+      state = endCommandTurn(state, m);
+      // Kept for every turn; `turnDoneLine` decides whether it shows.
+      const turn: ChatItem = {
+        kind: "turn",
+        id: `turn:${str(m.uuid) ?? state.items.length}`,
+        durationMs:
+          num(m.duration_ms) ??
+          (state.turnStartedAt === null ? 0 : now - state.turnStartedAt),
+        tools: state.turnTools,
+        files: state.turnFiles.length,
+        at: now,
+      };
       const ended = endTurn(state);
-      if (m.is_error !== true && m.subtype === "success") return ended;
+      if (m.is_error !== true && m.subtype === "success")
+        return { ...ended, items: [...ended.items, turn] };
       const text =
         m.subtype === "error_during_execution"
           ? "Tour interrompu"
@@ -566,6 +869,7 @@ function addSdk(state: ChatState, m: JsonObject, now: number): ChatState {
             text,
             tone: m.subtype === "error_during_execution" ? "info" : "error",
           },
+          turn,
         ],
       };
     }
@@ -589,39 +893,64 @@ function addHistory(
   const known = new Set(past.items.map((x) => x.id));
   return {
     ...state,
-    items: [...past.items, ...state.items.filter((x) => !known.has(x.id))],
+    items: keepPasted([
+      ...past.items,
+      ...state.items.filter((x) => !known.has(x.id)),
+    ]),
     historyLoaded: true,
     historyTruncated: truncated,
   };
 }
 
+/**
+ * `received` is when the page got the event; the chat server stamps what it
+ * logs (`at`), so a replay after a reload keeps the times things happened.
+ */
 export function reduceChat(
   state: ChatState,
   event: ChatEvent,
-  now: number,
+  received: number,
 ): ChatState {
+  const now =
+    "at" in event && typeof event.at === "number" ? event.at : received;
   switch (event.type) {
     case "attached":
       return EMPTY_CHAT;
     case "user_sent":
+      if (isCommandSent(state, event)) return addCommandSent(state, event, now);
       return {
         ...state,
         working: true,
-        turnStartedAt: now,
-        turnTokens: 0,
+        // A message queued behind the turn under way doesn't restart its clock.
+        turnStartedAt: state.working ? state.turnStartedAt : now,
+        turnTokens: state.working ? state.turnTokens : 0,
         closed: null,
-        items: [
+        items: keepPasted([
           ...state.items,
           {
             kind: "user",
-            id: `sent:${now}:${state.items.length}`,
+            id: event.uuid
+              ? `sent:${event.uuid}`
+              : `sent:${now}:${state.items.length}`,
             text: event.text,
             images: event.images,
+            // Claude Code queues it until the turn makes room (`takeQueued`).
+            ...(state.working && event.uuid ? { queued: true } : {}),
+            pasted: event.pasted?.length
+              ? event.pasted.map(
+                  (img) => `data:${img.mediaType};base64,${img.data}`,
+                )
+              : undefined,
+            at: now,
           },
-        ],
+        ]),
       };
     case "sdk":
-      return addSdk(state, event.message, now);
+      return addSdk(
+        markCommandStarted(takeQueued(state, event.message), event.message),
+        event.message,
+        now,
+      );
     case "permission":
       return {
         ...state,
@@ -634,6 +963,7 @@ export function reduceChat(
             toolUseId: event.toolUseId,
             title: event.title,
             description: event.description,
+            suggestions: event.suggestions,
           },
         ],
       };
@@ -643,12 +973,21 @@ export function reduceChat(
         requests: state.requests.filter((r) => r.requestId !== event.requestId),
       };
     case "context":
-      return { ...state, context: { percentage: usableContextPercent(event) } };
+      return {
+        ...state,
+        context: { percentage: usableContextPercent(event) },
+        model: event.model ?? state.model,
+      };
     case "usage":
       return addUsage(state, event.rateLimits);
+    case "commands":
+      return { ...state, commands: commandList(event.commands) };
+    case "notice":
+      return addServerNotice(state, event, now);
     case "info":
       return {
         ...state,
+        sessionId: event.sessionId ?? state.sessionId,
         title: event.title ?? state.title,
         gitBranch:
           event.gitBranch === undefined ? state.gitBranch : event.gitBranch,
@@ -657,12 +996,15 @@ export function reduceChat(
       return event.agentId
         ? state
         : addHistory(state, event.messages, event.truncated);
-    case "closed":
+    case "closed": {
+      const ended = endTurn(state);
       return {
-        ...endTurn(state),
+        ...ended,
+        items: dropQueued(ended.items),
         requests: [],
         closed: { error: event.error },
       };
+    }
     case "error":
       return {
         ...state,

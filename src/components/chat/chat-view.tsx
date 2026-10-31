@@ -10,15 +10,20 @@ import { ChatAgentsDrawer } from "@/components/chat/chat-agents-drawer";
 import { ChatComposer, type ChatVoice } from "@/components/chat/chat-composer";
 import type { ChatDraft } from "@/lib/chat/chatDrafts";
 import { followsAfterScroll } from "@/lib/followBottom";
+import { useAnyOverlayOpen } from "@/lib/overlays";
 import { CHAT_CSS } from "@/components/chat/chat-css";
 import { ChatLiveLine } from "@/components/chat/chat-live-line";
 import { ChatModeToggle } from "@/components/chat/chat-mode-toggle";
 import { ChatPermissionPanel } from "@/components/chat/chat-permission-panel";
 import { ChatPlanApproval } from "@/components/chat/chat-plan-approval";
 import { ChatQuestionPanel } from "@/components/chat/chat-question-panel";
+import { ChatSearchBox } from "@/components/chat/chat-search-box";
 import { ChatStatusBar } from "@/components/chat/chat-status-bar";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
+import { chatGallery } from "@/lib/chat/chatImages";
 import { folderOf, modelLabel } from "@/lib/chat/chatLabels";
+import { liveStep } from "@/lib/chat/chatSteps";
+import { useChatSearch } from "@/lib/chat/useChatSearch";
 import type { PermissionMode, PermissionResult } from "@/lib/chat/chatProtocol";
 import {
   latestPlan,
@@ -27,6 +32,7 @@ import {
   type Subagent,
 } from "@/lib/chat/chatState";
 import type { ChatImage } from "@/lib/chat/useChatSession";
+import type { SlashActions } from "@/lib/chat/useSlashActions";
 
 export interface ChatViewProps {
   state: ChatState;
@@ -37,7 +43,8 @@ export interface ChatViewProps {
   switching: boolean;
   onSwitchToTerminal: () => void;
   onActivate: () => void;
-  onSend: (text: string, images: ChatImage[]) => void;
+  /** `now`: Claude Code ends the turn under way for it. */
+  onSend: (text: string, images: ChatImage[], now?: boolean) => void;
   onInterrupt: () => void;
   onAnswer: (requestId: string, result: PermissionResult) => void;
   onMode: (mode: PermissionMode) => void;
@@ -55,6 +62,8 @@ export interface ChatViewProps {
   /** The pane stopped showing (its tab hidden): nothing on screen any more. */
   onHidden?: () => void;
   onToast?: ToastFn;
+  /** What /resume and /rewind ask of the chat (`useSlashActions`). */
+  slashActions?: SlashActions;
 }
 
 /** The chat pane's face ("Colonne calme"): column, live line, input card, status line. */
@@ -80,6 +89,7 @@ export function ChatView({
   onMessagesOnly,
   onHidden,
   onToast,
+  slashActions,
 }: ChatViewProps) {
   const [lightbox, setLightbox] = useState<LightboxContent | null>(null);
   const [drawer, setDrawer] = useState(false);
@@ -105,6 +115,25 @@ export function ChatView({
     [],
   );
   const openAgents = useCallback(() => setDrawer(true), []);
+  // Every image of the conversation, for the lightbox's ←/→.
+  const gallery = useMemo(
+    () => (lightbox ? chatGallery(state.items, cwd).all : []),
+    [lightbox, state.items, cwd],
+  );
+  // A match brought into view leaves the end, as the reader's scroll would.
+  const leaveBottom = useCallback(() => {
+    stuckRef.current = false;
+    setStuck(false);
+  }, []);
+  // Ctrl+F belongs to the pane on screen: not a hidden tab's active pane,
+  // nor one under a layer (sessions, settings, the viewer).
+  const overlayOpen = useAnyOverlayOpen();
+  const search = useChatSearch(
+    scrollRef,
+    isActive && shown && !overlayOpen,
+    leaveBottom,
+  );
+  const searching = search.open && search.total > 0;
 
   const toBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -151,11 +180,14 @@ export function ChatView({
     const el = scrollRef.current;
     if (!el) return;
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // A search's smooth scroll to a match near the end doesn't follow again;
+    // the very end still does (no resume zone, as in the reading view).
     const follows = followsAfterScroll(
       stuckRef.current,
       el.scrollTop,
       lastTopRef.current,
       gap,
+      searching ? 0 : undefined,
     );
     lastTopRef.current = el.scrollTop;
     stuckRef.current = follows;
@@ -196,12 +228,9 @@ export function ChatView({
         <ChatPlanApproval
           key={request.requestId}
           request={request}
-          plan={latestPlan(state.items)}
-          cwd={cwd}
+          hasPlan={latestPlan(state.items) !== null}
           onAnswer={answer}
           onMode={onMode}
-          onOpen={open}
-          onToast={onToast}
         />
       </div>
     );
@@ -222,15 +251,20 @@ export function ChatView({
         working={state.working}
         mode={state.mode}
         model={state.model}
-        slashCommands={state.slashCommands}
+        slash={{
+          commands: state.commands,
+          names: state.slashCommands,
+          sessionId: state.sessionId,
+          actions: slashActions,
+        }}
         draft={draft}
         onDraft={onDraft}
         voice={voice}
         focusKey={isActive}
         active={isActive && shown}
-        onSend={(text, images) => {
+        onSend={(text, images, now) => {
           stuckRef.current = true;
-          onSend(text, images);
+          onSend(text, images, now);
         }}
         onInterrupt={onInterrupt}
         onMode={onMode}
@@ -248,12 +282,24 @@ export function ChatView({
         {CONVERSATION_CSS}
         {HLJS_CSS}
         {CHAT_CSS}
+        {search.css}
       </style>
       <ChatModeToggle
         mode="chat"
         busy={switching}
         onSwitch={onSwitchToTerminal}
       />
+      {search.open && (
+        <ChatSearchBox
+          query={search.query}
+          total={search.total}
+          at={search.at}
+          focusKey={search.focusKey}
+          onQuery={search.search}
+          onStep={search.step}
+          onClose={search.close}
+        />
+      )}
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-col chat-scroll-inner" ref={innerRef}>
           <div className="chat-title">{state.title ?? folderOf(cwd)}</div>
@@ -276,6 +322,9 @@ export function ChatView({
             onOpenAgents={openAgents}
             onOpen={open}
             onToast={onToast}
+            // A queued message's « Envoyer maintenant »: the turn stops, and
+            // Claude Code takes what waits at once.
+            onSendNow={state.closed ? undefined : onInterrupt}
           />
         </div>
       </div>
@@ -297,6 +346,12 @@ export function ChatView({
           <ChatLiveLine
             working={state.working}
             compacting={state.status === "compacting"}
+            step={
+              // The terminal's dialog hides its spinner; here the line stays.
+              request
+                ? "attend ta réponse"
+                : liveStep(state.liveTools, state.livePhase, cwd)
+            }
             turnStartedAt={state.turnStartedAt}
             turnTokens={state.turnTokens}
             subagents={state.subagents}
@@ -331,7 +386,7 @@ export function ChatView({
       {lightbox && (
         <Lightbox
           content={lightbox}
-          gallery={[]}
+          gallery={gallery}
           onClose={() => setLightbox(null)}
         />
       )}

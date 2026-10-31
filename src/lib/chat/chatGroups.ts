@@ -13,6 +13,10 @@ export type ChatUnit =
   | { kind: "text"; item: Extract<ChatItem, { kind: "text" }> }
   | { kind: "thinking"; item: Extract<ChatItem, { kind: "thinking" }> }
   | { kind: "notice"; item: Extract<ChatItem, { kind: "notice" }> }
+  /** A slash command and its answer (`chatCommands`). */
+  | { kind: "command"; item: Extract<ChatItem, { kind: "command" }> }
+  /** « Terminé en », shown for a long turn only (`turnDoneLine`). */
+  | { kind: "turn"; item: Extract<ChatItem, { kind: "turn" }> }
   | { kind: "work"; id: string; tools: ToolItem[] }
   | { kind: "edit"; item: ToolItem }
   | { kind: "agent"; item: ToolItem }
@@ -74,17 +78,27 @@ export function groupChatItems(items: ChatItem[]): ChatUnit[] {
   return units;
 }
 
+const NONE = new Set<string>();
+
 /**
  * « Messages seuls » (the terminal rail's button): the user's words, Claude's
- * replies and the errors. Thinking, tool work, edits, subagents, question
- * recaps, plans and info notices drop out.
+ * replies, the errors, and what answers the user: the commands they typed
+ * (cards and notices) and the plan waiting for their answer, which the panel
+ * below points to (`pending`: the tool calls a request is about). Thinking,
+ * tool work, edits, subagents, question recaps, decided plans, other info
+ * notices and « Terminé en » drop out.
  */
-export function messagesOnly(units: ChatUnit[]): ChatUnit[] {
+export function messagesOnly(
+  units: ChatUnit[],
+  pending: Set<string> = NONE,
+): ChatUnit[] {
   return units.filter(
     (u) =>
       u.kind === "user" ||
       u.kind === "text" ||
-      (u.kind === "notice" && u.item.tone === "error"),
+      u.kind === "command" ||
+      (u.kind === "notice" && (u.item.tone === "error" || u.item.command)) ||
+      (u.kind === "plan" && pending.has(u.item.id)),
   );
 }
 

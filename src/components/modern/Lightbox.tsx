@@ -87,6 +87,7 @@ function initialMedia(content: LightboxContent): Media | null {
  * loads, or is a video this view can't decode (it opens from its thumbnail).
  */
 async function loadMedia(ref: ImageRef): Promise<Media | null> {
+  if (ref.url) return { kind: "image", url: ref.url, path: ref.path };
   if (isVideoPath(ref.path)) {
     const poster = await fetchVideoPoster(ref.path);
     if (!poster?.url) return null;

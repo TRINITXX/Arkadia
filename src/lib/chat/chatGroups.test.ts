@@ -73,12 +73,37 @@ describe("messagesOnly", () => {
         { kind: "notice", id: "n1", text: "Compacté", tone: "info" },
         { kind: "notice", id: "n2", text: "Erreur API", tone: "error" },
         text("C'est corrigé."),
+        // « Terminé en » hides with the tools.
+        { kind: "turn", id: "t1", durationMs: 900_000, tools: 3, files: 1 },
       ]),
     );
     expect(units.map((u) => ("item" in u ? u.item.id : u.id))).toEqual([
       "u",
       "n2",
       "C'est corrigé.",
+    ]);
+  });
+
+  it("keeps what answers the user: their commands and the plan they must approve", () => {
+    const units = messagesOnly(
+      groupChatItems([
+        { kind: "command", id: "c1", name: "context", args: "", absorbed: [] },
+        {
+          kind: "notice",
+          id: "c2",
+          text: "/doctor n'existe que dans le terminal",
+          tone: "info",
+          command: true,
+        },
+        tool("ExitPlanMode", {}, "old"),
+        tool("ExitPlanMode", {}, "p1"),
+      ]),
+      new Set(["p1"]),
+    );
+    expect(units.map((u) => ("item" in u ? u.item.id : u.id))).toEqual([
+      "c1",
+      "c2",
+      "p1",
     ]);
   });
 });

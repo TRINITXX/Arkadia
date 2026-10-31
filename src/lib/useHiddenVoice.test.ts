@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { publishFrame } from "@/lib/frameStore";
-import { waitForPrompt } from "@/lib/useHiddenVoice";
+import { hookReportsFailure, waitForPrompt } from "@/lib/useHiddenVoice";
 import type { CellRun, RenderPayload } from "@/types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -90,5 +90,17 @@ describe("waitForPrompt", () => {
     expect(keys().some((k) => k[0] === ENTER[0])).toBe(false);
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(ready).resolves.toBe(false);
+  });
+});
+
+describe("hookReportsFailure", () => {
+  it("leaves a failure to the caller only while it is there to tell it", () => {
+    let alive = true;
+    const quiet = () => alive;
+    expect(hookReportsFailure(null)).toBe(true);
+    expect(hookReportsFailure(quiet)).toBe(false);
+    // The input waiting to send went away (a question took its place).
+    alive = false;
+    expect(hookReportsFailure(quiet)).toBe(true);
   });
 });

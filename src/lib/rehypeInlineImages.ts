@@ -31,6 +31,8 @@ export const IMAGE_LABEL_PROP = "dataArkadiaImageLabel";
 export function rehypeInlineImages(options: {
   source: string;
   baseDir?: string | null;
+  /** False: marks the paths only, no gallery (they stay text). */
+  group?: boolean;
 }) {
   const walk = (node: HastNode): void => {
     if (!node.children || node.tagName === "code" || node.tagName === "pre") {
@@ -70,7 +72,7 @@ export function rehypeInlineImages(options: {
       out.push(child);
     }
     if (changed) node.children = out;
-    groupGalleries(node, options.baseDir);
+    if (options.group !== false) groupGalleries(node, options.baseDir);
   };
   return (tree: HastNode) => walk(tree);
 }

@@ -1,33 +1,23 @@
 import { useState } from "react";
 import { Check, ClipboardList, Pencil, Zap } from "lucide-react";
-import {
-  MarkdownContent,
-  type ToastFn,
-} from "@/components/modern/MarkdownContent";
-import type { LightboxContent } from "@/components/modern/ImageThumb";
 import type { PermissionMode, PermissionResult } from "@/lib/chat/chatProtocol";
 import type { PendingRequest } from "@/lib/chat/chatState";
 
 /**
- * ExitPlanMode, inside the input card: the plan, then the terminal's choices
- * (go on in auto mode, approve each edit, or keep planning with a remark).
+ * ExitPlanMode, inside the input card: the terminal's choices (go on in auto
+ * mode, approve each edit, or keep planning with a remark). The plan itself
+ * shows in full in the conversation, above (`ChatPlanCard`).
  */
 export function ChatPlanApproval({
   request,
-  plan,
-  cwd,
+  hasPlan,
   onAnswer,
   onMode,
-  onOpen,
-  onToast,
 }: {
   request: PendingRequest;
-  plan: string | null;
-  cwd: string | null;
+  hasPlan: boolean;
   onAnswer: (result: PermissionResult) => void;
   onMode: (mode: PermissionMode) => void;
-  onOpen: (content: LightboxContent) => void;
-  onToast?: ToastFn;
 }) {
   const [remark, setRemark] = useState("");
   const approve = (mode?: PermissionMode) => {
@@ -41,22 +31,11 @@ export function ChatPlanApproval({
         <ClipboardList />
         <span>Claude propose ce plan</span>
       </div>
-      {plan ? (
-        <div className="chat-plan">
-          <div className="reading-md">
-            <MarkdownContent
-              text={plan}
-              baseDir={cwd}
-              onOpen={onOpen}
-              onToast={onToast}
-            />
-          </div>
-        </div>
-      ) : (
-        <div className="chat-ask-sub">
-          Plan introuvable : regarde au-dessus dans la conversation.
-        </div>
-      )}
+      <div className="chat-ask-sub">
+        {hasPlan
+          ? "Le plan est au-dessus, dans la conversation."
+          : "Plan introuvable : regarde au-dessus dans la conversation."}
+      </div>
       <input
         className="chat-ask-other"
         placeholder="Une remarque pour continuer le plan…"

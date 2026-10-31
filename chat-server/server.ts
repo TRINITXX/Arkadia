@@ -9,6 +9,7 @@
 // gets them again by starting the same chat, while Claude goes on working.
 
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +23,7 @@ import {
   type CanUseTool,
   type PermissionMode,
   type PermissionResult,
+  type PermissionUpdate,
   type Query,
   type SDKControlGetUsageResponse,
   type SDKMessage,
@@ -44,7 +46,14 @@ export type Command =
       /** Per-chat variables for Claude Code and its hooks (ARKADIA_PANE_ID…). */
       env?: Record<string, string>;
     }
-  | { type: "send"; chatId: string; text: string; images?: ImageInput[] }
+  | {
+      type: "send";
+      chatId: string;
+      text: string;
+      images?: ImageInput[];
+      /** « Envoyer maintenant »: Claude Code stops the turn under way for it. */
+      priority?: "now";
+    }
   | { type: "interrupt"; chatId: string }
   | {
       type: "answer";
@@ -64,7 +73,37 @@ export type Command =
       /** A subagent's own conversation instead of the session's. */
       agentId?: string;
     }
+  /** /resume's list: the folder's sessions. */
+  | { type: "sessions"; chatId: string; requestId: string }
+  /** /rewind's list: the messages the user wrote in this conversation. */
+  | { type: "rewind_points"; chatId: string; requestId: string }
+  /**
+   * The chat's Claude Code again, on another session (`resume`) or on its own
+   * cut just before a message of the user (`rewind`), files too with `code`.
+   */
+  | {
+      type: "relaunch";
+      chatId: string;
+      resume?: string;
+      rewind?: { before: string; code: boolean };
+    }
+  /** /rewind's « code seul »: the files as they were before the message. */
+  | { type: "restore_code"; chatId: string; before: string }
   | { type: "close"; chatId: string };
+
+type StartCommand = Extract<Command, { type: "start" }>;
+
+/** A start, plus what a /rewind relaunch adds (`Chat.relaunchStart`). */
+type Boot = StartCommand & {
+  /** The last entry kept: the SDK's `resumeSessionAt`. */
+  resumeSessionAt?: string;
+  /** The past shown stops before this message. */
+  historyBefore?: string;
+  /** Said first in the new column (the files restored). */
+  notice?: string;
+};
+
+type SlashCommandInfo = Awaited<ReturnType<Query["supportedCommands"]>>[number];
 
 export type ServerEvent =
   /** A start found the chat running: its events follow, from the beginning. */
@@ -73,7 +112,16 @@ export type ServerEvent =
   | { type: "replayed"; chatId: string }
   | { type: "sdk"; chatId: string; message: SDKMessage }
   /** What the user sent: the SDK doesn't echo it. */
-  | { type: "user_sent"; chatId: string; text: string; images: number }
+  | {
+      type: "user_sent";
+      chatId: string;
+      text: string;
+      images: number;
+      /** The pasted images themselves, for the message's strip in the page. */
+      pasted: ImageInput[];
+      /** Its `command_lifecycle` frames name it: « started » once Claude takes it. */
+      uuid: string;
+    }
   | {
       type: "permission";
       chatId: string;
@@ -84,6 +132,8 @@ export type ServerEvent =
       title?: string;
       description?: string;
       decisionReason?: string;
+      /** What would stop Claude Code asking: the « always allow » buttons. */
+      suggestions?: PermissionUpdate[];
     }
   /** Answered by the page, or dropped by Claude Code (interrupt, timeout). */
   | { type: "permission_resolved"; chatId: string; requestId: string }
@@ -93,9 +143,43 @@ export type ServerEvent =
       percentage: number;
       totalTokens: number;
       maxTokens: number;
+      /** The session's model now: `/model` changes it without an init. */
+      model: string;
     }
   /** The session's title and the folder's git branch (null: none). */
-  | { type: "info"; chatId: string; title?: string; gitBranch?: string | null }
+  | {
+      type: "info";
+      chatId: string;
+      title?: string;
+      gitBranch?: string | null;
+      /** The session resumed: its init only comes with the first turn. */
+      sessionId?: string;
+    }
+  /** Claude Code's slash commands, for the page's `/` menu. */
+  | { type: "commands"; chatId: string; commands: SlashCommandInfo[] }
+  /** A line of the server's own in the column (files of /rewind restored). */
+  | { type: "notice"; chatId: string; text: string; tone: "info" | "error" }
+  | {
+      type: "sessions";
+      chatId: string;
+      requestId: string;
+      sessions: {
+        sessionId: string;
+        title: string;
+        lastModified: number;
+        gitBranch?: string;
+        /** Open in another chat of this server. */
+        open?: boolean;
+      }[];
+      error?: string;
+    }
+  | {
+      type: "rewind_points";
+      chatId: string;
+      requestId: string;
+      points: { uuid: string; text: string; timestamp?: string }[];
+      error?: string;
+    }
   /** The plan's quota windows (`/usage`); null where none apply (API key). */
   | {
       type: "usage";
@@ -210,11 +294,28 @@ class Chat {
   private branch: string | null | undefined;
   private branchTimer: ReturnType<typeof setInterval> | undefined;
   private branchLooking = false;
+  /** What started it: a relaunch (/resume, /rewind) keeps its env. */
+  private start: Boot;
+  /** The session's mode and model now: a relaunch keeps them too. */
+  private mode: PermissionMode | undefined;
+  private model: string | undefined;
+  /** Rewound and nothing sent since: the transcript still ends past the cut. */
+  private cutBefore: string | undefined;
+  /** Stopped for a relaunch: nothing more reaches the page. */
+  private silent = false;
+  private pumping: Promise<void> = Promise.resolve();
+  /** The latest command list: a replay sends it first, the log may have lost it. */
+  private commands: SlashCommandInfo[] | undefined;
 
   // No parameter properties: Node runs this file by stripping its types.
-  constructor(chatId: string, start: Extract<Command, { type: "start" }>) {
+  constructor(chatId: string, start: Boot) {
     this.chatId = chatId;
     this.cwd = start.cwd;
+    this.start = start;
+    this.mode = start.permissionMode;
+    this.model = start.model;
+    this.cutBefore = start.historyBefore;
+    if (start.notice) this.out({ type: "notice", chatId, text: start.notice, tone: "info" });
     this.ready = this.boot(start);
     this.ready.catch((e: unknown) => {
       this.out({ type: "closed", chatId, error: String(e) });
@@ -227,7 +328,7 @@ class Chat {
    * read before Claude Code runs, it holds nothing of this chat. `continue`
    * becomes the folder's latest session, so its past can be read too.
    */
-  private async boot(start: Extract<Command, { type: "start" }>): Promise<Query> {
+  private async boot(start: Boot): Promise<Query> {
     let resume = start.resume;
     if (!resume && start.continue) {
       const [latest] = await listSessions({ dir: start.cwd, limit: 1 });
@@ -236,12 +337,15 @@ class Chat {
     if (resume) {
       this.sessionId = resume;
       const all = await getSessionMessages(resume, { dir: start.cwd });
-      const messages = all.slice(-HISTORY_LIMIT);
+      // Rewound: what follows the message gone back to isn't the past any more.
+      const cut = all.findIndex((m) => m.uuid === start.historyBefore);
+      const kept = cut >= 0 ? all.slice(0, cut) : all;
+      const messages = kept.slice(-HISTORY_LIMIT);
       this.out({
         type: "history",
         chatId: this.chatId,
         messages,
-        truncated: all.length > messages.length,
+        truncated: kept.length > messages.length,
       });
       void this.reportInfo();
     }
@@ -250,6 +354,9 @@ class Chat {
       options: {
         cwd: start.cwd,
         resume,
+        resumeSessionAt: start.resumeSessionAt,
+        // /rewind's « le code aussi »: the terminal keeps these backups too.
+        enableFileCheckpointing: true,
         model: start.model,
         // As the terminal's `ccd`: auto mode, bypass reachable by Shift+Tab.
         permissionMode: start.permissionMode ?? "auto",
@@ -263,8 +370,9 @@ class Chat {
       },
     });
     this.query = q;
-    void this.pump(q);
+    this.pumping = this.pump(q);
     // The status bar's figures before any turn: these answer without one.
+    void this.reportCommands(q);
     void this.reportUsage(q);
     void this.reportContext(q);
     void this.reportBranch();
@@ -274,14 +382,20 @@ class Chat {
 
   /** Sends an event to the page and keeps it for a later reattach. */
   private out(event: ServerEvent): void {
-    this.log.push(event);
+    if (this.silent) return;
+    // Stamped: a page that reloads gets the times things happened.
+    const stamped = { ...event, at: Date.now() };
+    this.log.push(stamped);
     if (this.log.length > LOG_LIMIT) this.log.splice(0, this.log.length - LOG_LIMIT);
-    emit(event);
+    emit(stamped);
   }
 
   /** Replays the chat's life to a page that just (re)opened it. */
   replay(): void {
     emit({ type: "attached", chatId: this.chatId });
+    // First: a long chat's log may have lost it, and the cards replayed
+    // next need it to tell a command from words (`isCommandSent`).
+    if (this.commands) emit({ type: "commands", chatId: this.chatId, commands: this.commands });
     for (const event of this.log) emit(event);
     emit({ type: "replayed", chatId: this.chatId });
     // The status bar's figures again: a long turn may have pushed them out of
@@ -299,11 +413,26 @@ class Chat {
   private async pump(q: Query): Promise<void> {
     try {
       for await (const message of q) {
+        // /clear: a reattach replays the new conversation alone. The command
+        // list goes first of any replay (`this.commands`): a boot list kept
+        // here would come after and override a newer one.
+        if (message.type === "conversation_reset") {
+          this.log = this.log.filter((e) => e.type === "info");
+        }
         this.out({ type: "sdk", chatId: this.chatId, message });
         if (message.type === "system" && message.subtype === "init") {
           this.sessionId = message.session_id;
+          this.model = message.model;
+          this.mode = message.permissionMode;
+        }
+        if (message.type === "system" && message.subtype === "status") {
+          this.mode = message.permissionMode ?? this.mode;
+        }
+        if (message.type === "system" && message.subtype === "commands_changed") {
+          this.commands = message.commands;
         }
         if (message.type === "result") {
+          this.cutBefore = undefined;
           // A finished turn's text lives in its assistant messages: its
           // stream deltas no longer serve a replay.
           this.log = this.log.filter(
@@ -320,7 +449,8 @@ class Chat {
       this.out({ type: "closed", chatId: this.chatId, error: String(e) });
     } finally {
       clearInterval(this.branchTimer);
-      if (chats.get(this.chatId) === this) chats.delete(this.chatId);
+      // Stopped for a relaunch: its successor takes the place.
+      if (!this.silent && chats.get(this.chatId) === this) chats.delete(this.chatId);
     }
   }
 
@@ -328,12 +458,14 @@ class Chat {
   private async reportContext(q: Query): Promise<void> {
     try {
       const usage = await q.getContextUsage({ detail: "summary" });
+      this.model = usage.model;
       this.out({
         type: "context",
         chatId: this.chatId,
         percentage: usage.percentage,
         totalTokens: usage.totalTokens,
         maxTokens: usage.rawMaxTokens,
+        model: usage.model,
       });
     } catch {
       // The chat closed meanwhile.
@@ -359,10 +491,13 @@ class Chat {
     try {
       const info = await getSessionInfo(this.sessionId, { dir: this.cwd });
       if (!info) return;
+      // A session opened by a command (/clear) is no title yet.
+      const summary = info.summary.startsWith("/") ? undefined : info.summary;
       this.out({
         type: "info",
         chatId: this.chatId,
-        title: info.customTitle ?? info.summary,
+        title: info.customTitle ?? summary,
+        sessionId: this.sessionId,
       });
     } catch {
       // No transcript yet.
@@ -380,6 +515,18 @@ class Chat {
       this.out({ type: "info", chatId: this.chatId, gitBranch: branch });
     } finally {
       this.branchLooking = false;
+    }
+  }
+
+  /** The `/` menu's list, before any turn; `commands_changed` updates it. */
+  private async reportCommands(q: Query): Promise<void> {
+    try {
+      const commands = await q.supportedCommands();
+      // A `commands_changed` that came meanwhile is newer.
+      this.commands ??= commands;
+      this.out({ type: "commands", chatId: this.chatId, commands: this.commands });
+    } catch {
+      // The chat closed meanwhile.
     }
   }
 
@@ -407,6 +554,7 @@ class Chat {
         title: options.title,
         description: options.description,
         decisionReason: options.decisionReason,
+        suggestions: options.suggestions,
       });
     });
   }
@@ -419,10 +567,25 @@ class Chat {
     resolve(result);
   }
 
-  send(text: string, images: ImageInput[] = []): void {
-    this.out({ type: "user_sent", chatId: this.chatId, text, images: images.length });
+  /**
+   * The SDK hands every message to Claude Code at once, which queues it while
+   * a turn runs: its `command_lifecycle` frames, named by our uuid, say when
+   * it is taken (« started »). Priority `now` ends the turn under way first.
+   */
+  send(text: string, images: ImageInput[] = [], priority?: "now"): void {
+    const uuid = randomUUID();
+    this.out({
+      type: "user_sent",
+      chatId: this.chatId,
+      text,
+      images: images.length,
+      pasted: images,
+      uuid,
+    });
     this.input.push({
       type: "user",
+      uuid,
+      ...(priority ? { priority } : {}),
       parent_tool_use_id: null,
       message: {
         role: "user",
@@ -451,6 +614,110 @@ class Chat {
 
   async setModel(model: string): Promise<void> {
     await (await this.ready).setModel(model);
+  }
+
+  /** /resume: the folder's sessions; one open in another chat can't be taken. */
+  async sessions(): Promise<Extract<ServerEvent, { type: "sessions" }>["sessions"]> {
+    const open = new Set(
+      [...chats.values()].filter((c) => c !== this).map((c) => c.sessionId),
+    );
+    const list = await listSessions({ dir: this.cwd, limit: SESSIONS_LIMIT });
+    return list.map((s) => ({
+      sessionId: s.sessionId,
+      title: s.customTitle ?? s.summary,
+      lastModified: s.lastModified,
+      gitBranch: s.gitBranch,
+      open: open.has(s.sessionId) || undefined,
+    }));
+  }
+
+  /** /rewind: what the user wrote in the conversation, oldest first. */
+  async rewindPoints(): Promise<Extract<ServerEvent, { type: "rewind_points" }>["points"]> {
+    if (!this.sessionId) return [];
+    const all = await getSessionMessages(this.sessionId, { dir: this.cwd });
+    // Rewound and nothing sent yet: the transcript still holds what went.
+    const cut = all.findIndex((m) => m.uuid === this.cutBefore);
+    return (cut >= 0 ? all.slice(0, cut) : all).flatMap((m) => {
+      const text = m.type === "user" ? promptText(m.message) : null;
+      // Not in the SDK's type, but there: the transcript entry's time.
+      const { timestamp } = m as { timestamp?: string };
+      return text ? [{ uuid: m.uuid, text, timestamp }] : [];
+    });
+  }
+
+  /**
+   * The start of a relaunch: another session, or this one cut just before a
+   * message of the user, as the terminal's Esc Esc does (same session, the
+   * next message branches off). Files go back first when asked: their
+   * backups belong to this Claude Code.
+   */
+  async relaunchStart(cmd: Extract<Command, { type: "relaunch" }>): Promise<Boot> {
+    const base: Boot = {
+      ...this.start,
+      resume: undefined,
+      continue: undefined,
+      resumeSessionAt: undefined,
+      historyBefore: undefined,
+      permissionMode: this.mode,
+      model: this.model,
+    };
+    if (cmd.resume) {
+      // Already this chat's: a second relaunch (double choice) would stop the
+      // Claude Code the first one just started.
+      if (cmd.resume === this.sessionId) throw new Error("Cette conversation est déjà ouverte ici");
+      // Never two Claude Code on one session (the page checks its panes).
+      const held = [...chats.values()].some((c) => c !== this && c.sessionId === cmd.resume);
+      if (held) throw new Error("Cette conversation est ouverte dans un autre volet");
+      return { ...base, resume: cmd.resume };
+    }
+    if (!cmd.rewind || !this.sessionId) throw new Error("Rien à reprendre");
+    const { before, code } = cmd.rewind;
+    const all = await getSessionMessages(this.sessionId, {
+      dir: this.cwd,
+      includeSystemMessages: true,
+    });
+    const at = all.findIndex((m) => m.uuid === before);
+    if (at < 0) throw new Error("Message introuvable dans la conversation");
+    const notice = code ? await this.restoreFiles(before) : undefined;
+    // The entry just before the message (its parent); none for the first.
+    const fork = all[at - 1]?.uuid;
+    return fork
+      ? { ...base, resume: this.sessionId, resumeSessionAt: fork, historyBefore: before, notice }
+      : { ...base, notice };
+  }
+
+  /**
+   * The files as they were just before a message of the user (the backups
+   * `enableFileCheckpointing` keeps): what to say, or an error, nothing
+   * touched. Counted by a dry run, the real one doesn't say.
+   */
+  private async restoreFiles(before: string): Promise<string> {
+    const q = await this.ready;
+    const preview = await q.rewindFiles(before, { dryRun: true });
+    const files = preview.canRewind ? await q.rewindFiles(before) : preview;
+    if (!files.canRewind) {
+      throw new Error(`Code non restauré : ${files.error ?? "aucune sauvegarde"}`);
+    }
+    const n = preview.filesChanged?.length ?? 0;
+    return n === 0
+      ? "Code déjà comme avant ce message"
+      : `Code remis comme avant ce message : ${n} fichier${n > 1 ? "s" : ""}`;
+  }
+
+  /** /rewind's « code seul »: the files go back, the conversation stays. */
+  async restoreCode(before: string): Promise<void> {
+    const text = await this.restoreFiles(before);
+    this.out({ type: "notice", chatId: this.chatId, text, tone: "info" });
+  }
+
+  /** Ends its Claude Code without a word to the page, for a relaunch. */
+  async stop(): Promise<void> {
+    this.silent = true;
+    this.close();
+    await this.ready.then(
+      () => this.pumping,
+      () => {},
+    );
   }
 
   close(): void {
@@ -482,7 +749,85 @@ async function history(cmd: Extract<Command, { type: "history" }>) {
   });
 }
 
+/** How many of the folder's sessions /resume lists. */
+const SESSIONS_LIMIT = 60;
+
+/** How Claude Code opens the summary that replaces a compacted conversation. */
+const COMPACT_SUMMARY = "This session is being continued from a previous conversation";
+
+/** A message the user typed, or null: tool results, commands' output, notes. */
+function promptText(message: unknown): string | null {
+  const content = (message as { content?: unknown } | null)?.content;
+  let text = "";
+  if (typeof content === "string") text = content;
+  else if (Array.isArray(content)) {
+    const blocks = content as { type?: string; text?: string }[];
+    if (blocks.some((b) => b?.type === "tool_result")) return null;
+    text = blocks
+      .filter((b) => b?.type === "text")
+      .map((b) => b.text ?? "")
+      .join("\n");
+  }
+  text = text.trim();
+  if (
+    !text ||
+    text.startsWith("<") ||
+    text.startsWith(COMPACT_SUMMARY) ||
+    text.startsWith("[Request interrupted") ||
+    text.startsWith("Caveat:")
+  )
+    return null;
+  return text;
+}
+
+/**
+ * /resume and /rewind: the chat's Claude Code ends, then another starts in
+ * its place (never two on one session); the page starts its column over.
+ */
+async function relaunch(chat: Chat, cmd: Extract<Command, { type: "relaunch" }>) {
+  let next: Boot;
+  try {
+    next = await chat.relaunchStart(cmd);
+  } catch (e) {
+    // Nothing changed: the chat goes on as it was.
+    emit({ type: "error", chatId: cmd.chatId, message: e instanceof Error ? e.message : String(e) });
+    return;
+  }
+  await chat.stop();
+  // Closed meanwhile: nothing to start again.
+  if (chats.get(cmd.chatId) !== chat) return;
+  emit({ type: "attached", chatId: cmd.chatId });
+  emit({ type: "replayed", chatId: cmd.chatId });
+  chats.set(cmd.chatId, new Chat(cmd.chatId, next));
+}
+
+/** A list the page asked for: its answer, or the error in its place. */
+async function answerList(
+  cmd: Extract<Command, { type: "sessions" | "rewind_points" }>,
+  chat: Chat,
+): Promise<void> {
+  const { chatId, requestId } = cmd;
+  try {
+    if (cmd.type === "sessions") {
+      emit({ type: "sessions", chatId, requestId, sessions: await chat.sessions() });
+    } else {
+      emit({ type: "rewind_points", chatId, requestId, points: await chat.rewindPoints() });
+    }
+  } catch (e) {
+    const error = String(e);
+    if (cmd.type === "sessions") emit({ type: "sessions", chatId, requestId, sessions: [], error });
+    else emit({ type: "rewind_points", chatId, requestId, points: [], error });
+  }
+}
+
+/** Relaunches under way (/resume, /rewind): the chat's next commands wait. */
+const relaunching = new Map<string, Promise<void>>();
+
 async function handle(cmd: Command): Promise<void> {
+  // Awaited only when there is one: a relaunch registers itself before any
+  // command read after it runs.
+  const pending = relaunching.get(cmd.chatId);
+  if (pending) await pending.catch(() => {});
   if (cmd.type === "start") {
     // A page that reloads starts its chats again: they keep running.
     const running = chats.get(cmd.chatId);
@@ -500,7 +845,7 @@ async function handle(cmd: Command): Promise<void> {
   }
   switch (cmd.type) {
     case "send":
-      return chat.send(cmd.text, cmd.images);
+      return chat.send(cmd.text, cmd.images, cmd.priority);
     case "interrupt":
       await chat.interrupt();
       return;
@@ -510,6 +855,19 @@ async function handle(cmd: Command): Promise<void> {
       return chat.setMode(cmd.mode);
     case "set_model":
       return chat.setModel(cmd.model);
+    case "sessions":
+    case "rewind_points":
+      return answerList(cmd, chat);
+    case "relaunch": {
+      const run = relaunch(chat, cmd).finally(() => relaunching.delete(cmd.chatId));
+      relaunching.set(cmd.chatId, run);
+      return run;
+    }
+    case "restore_code":
+      return chat.restoreCode(cmd.before).catch((e: unknown) => {
+        const message = e instanceof Error ? e.message : String(e);
+        emit({ type: "error", chatId: cmd.chatId, message });
+      });
     case "close":
       chats.delete(cmd.chatId);
       return chat.close();

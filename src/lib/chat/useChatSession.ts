@@ -124,8 +124,14 @@ export function useChatSession(
   );
 
   const send = useCallback(
-    (text: string, images: ChatImage[] = []) =>
-      run({ type: "send", chatId, text, images }),
+    (text: string, images: ChatImage[] = [], now = false) =>
+      run({
+        type: "send",
+        chatId,
+        text,
+        images,
+        ...(now ? { priority: "now" as const } : {}),
+      }),
     [run, chatId],
   );
   const interrupt = useCallback(

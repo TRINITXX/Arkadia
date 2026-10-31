@@ -117,3 +117,46 @@ recopiée du terminal coupée au mauvais endroit.
 - Les badges d'onglet (vert / orange) viennent aujourd'hui du titre du terminal : en chat, ils
   viennent de l'état du SDK.
 - Le vocal dépend de l'affichage de Claude Code (déjà le cas pour le rail).
+
+## Choix d'Alexis du 30/10/2026 au soir (maquettes)
+
+- Fond du chat : le gris du terminal `#181a1d`.
+- Messages : cadres vert (toi) et violet (Claude) du terminal, heure et bouton copier.
+- Images : galerie sous le message, flèches dans la visionneuse.
+- Réflexion : visible en italique.
+- Outils : une ligne par série, chaque action avec un résumé de quelques mots comme le mod.
+- Travail en cours : l'étape en cours, puis « Terminé en » à la fin.
+- Questions multiples : une à la fois, avec onglets. Plan : en entier dans la conversation, choix en bas.
+- Autorisation : « Toujours autoriser dans ce projet ».
+- Boutons du rail (insérer, copier le code, messages seuls, effacer) : dans la barre de la saisie.
+- Ligne d'état : gros cercles avec le chiffre dedans, reset court.
+- Sous-agents : une carte vivante par agent, collée au-dessus de la saisie. Workflows : une carte
+  repliée par défaut (nom, barre de progression, x/y agents, durée, jetons), juste contre la saisie,
+  les cartes d'agents au-dessus ; dépliée au clic : phases à gauche, agents de la phase à droite
+  (modèle, jetons, inactivité, durée), lus dans le journal du workflow ; bouton « Arrêter le
+  workflow » avec confirmation. Shells : pastille cyan « N shells » sous la saisie, liste au clic.
+- Oublis retenus : glisser-déposer, envoyer après la dictée, message en attente en gris +
+  Envoyer maintenant, Ctrl+F, flèches de la visionneuse, barre de boutons du bas, capture
+  d'artefact, pop-up en arrière-plan, suivi du quota et alerte iPhone à 90 %.
+- Commandes slash : celles de Claude Code passent telles quelles ; seuls /resume et /rewind sont
+  refaits dans le chat ; les autres commandes du terminal affichent « n'existe que dans le terminal ».
+- Retirés du Lab : mode lecture sur les terminaux, bloc-notes, bouton police compacte.
+- SDK, retenus : résumé d'une ligne par sous-agent, sortie en direct d'un shell, Ctrl+B (envoyer
+  en fond), durée d'un outil en cours, compteur de jetons pendant la réflexion, conversation d'un
+  agent en direct ; vrais diffs, suggestion du prochain message, messages des hooks, notifications,
+  compaction auto visible, sortie et erreurs séparées, réponse coupée marquée ; « Claude réessaie »,
+  cause précise d'une erreur, alertes de quota, refus du mode auto expliqués ; effort à côté du
+  modèle, détail du contexte au survol, retirer un message en attente, mode rapide visible,
+  sous-agents interrompus par une fermeture (marqués « interrompu ») ; pastille MCP en échec,
+  demandes des MCP, hook en cours, autorisations aussi prudentes que le terminal, erreurs des plugins.
+- Échap n'arrête que Claude dans la conversation principale, jamais les sous-agents ni les shells.
+  Pas de bouton arrêter par agent.
+- Idées retenues le 31/10/2026 : reprendre une ancienne session en chat (Sessions récentes, recherche
+  IA, aperçu), brouillon gardé si Arkadia recharge, retour instantané sur un long chat, charger les
+  messages plus anciens, démarrage visible, accueil avec les sessions récentes du dossier ; à la
+  limite d'usage, le chat bascule sur le compte libre dont le quota se réinitialise le plus tôt ;
+  fiche pour répondre aux questions Q1…Qn, taper n'importe où écrit dans la saisie, ↑ rappelle mes
+  derniers messages, modifier un de mes messages ; séparateurs de jour, ouvrir le fichier depuis sa
+  carte de modif, lien d'artefact en carte ; volet étroit propre. Écartés : remonter au début de la
+  réponse, clic droit dans le chat, refus avec consigne, autorisations au clavier, citer, @fichier,
+  longs textes repliés, puces au clavier.

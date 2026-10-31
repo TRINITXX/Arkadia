@@ -12,9 +12,19 @@
  * `BlockRow` draws remains as the coarse fallback.
  */
 
-/** Registry names — also the `::highlight()` selectors in the view's CSS. */
-const ALL = "arkadia-match";
-const CURRENT = "arkadia-match-current";
+/**
+ * Registry names — also the `::highlight()` selectors in the view's CSS. The
+ * registry is the page's: a view whose search must not touch another's
+ * (a chat pane) paints under names of its own.
+ */
+export interface HighlightNames {
+  all: string;
+  current: string;
+}
+const READING: HighlightNames = {
+  all: "arkadia-match",
+  current: "arkadia-match-current",
+};
 
 /** One match, and where it sits, so navigation can scroll to it. */
 export interface Occurrence {
@@ -101,12 +111,13 @@ export function collectOccurrences(rows: Row[], terms: string[]): Occurrence[] {
 export function paintOccurrences(
   occurrences: Occurrence[],
   current: Occurrence | null,
+  names: HighlightNames = READING,
 ): void {
   const reg = registry();
   const Ctor = HighlightCtor();
   if (!reg || !Ctor) return;
   if (occurrences.length === 0) {
-    clearOccurrences();
+    clearOccurrences(names);
     return;
   }
   // The current match is painted by the second registry only; leaving it out of
@@ -114,15 +125,15 @@ export function paintOccurrences(
   const rest = current
     ? occurrences.filter((o) => o !== current).map((o) => o.range)
     : occurrences.map((o) => o.range);
-  reg.set(ALL, new Ctor(...rest));
-  if (current) reg.set(CURRENT, new Ctor(current.range));
-  else reg.delete(CURRENT);
+  reg.set(names.all, new Ctor(...rest));
+  if (current) reg.set(names.current, new Ctor(current.range));
+  else reg.delete(names.current);
 }
 
 /** Drops both registries — on close, on an emptied query, on unmount. */
-export function clearOccurrences(): void {
+export function clearOccurrences(names: HighlightNames = READING): void {
   const reg = registry();
   if (!reg) return;
-  reg.delete(ALL);
-  reg.delete(CURRENT);
+  reg.delete(names.all);
+  reg.delete(names.current);
 }

@@ -42,6 +42,8 @@ export interface PaneChatHandlers {
   onToggle: (paneId: string) => void;
   onSession: (paneId: string, sessionId: string) => void;
   onLabel: (paneId: string, label: string) => void;
+  /** Sessions running in the other panes (`usePaneChats`), for /resume. */
+  liveSessions: (exceptPaneId: string) => Promise<Set<string>>;
 }
 
 export function PaneTreeView({
@@ -68,7 +70,8 @@ export function PaneTreeView({
     const isActive = pane.id === activePaneId;
     if (pane.chat) {
       return (
-        <div className="relative h-full w-full">
+        // Found by its id like a terminal (files dropped from Explorer).
+        <div className="relative h-full w-full" data-pane-id={pane.id}>
           <ChatPane
             key={pane.id}
             pane={pane}
@@ -78,6 +81,7 @@ export function PaneTreeView({
             onActivate={() => onActivate(pane.id)}
             onSession={chat.onSession}
             onLabel={chat.onLabel}
+            liveSessions={chat.liveSessions}
             onSwitchToTerminal={chat.onToggle}
             onToast={onToast}
           />

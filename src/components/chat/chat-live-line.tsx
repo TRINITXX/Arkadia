@@ -5,12 +5,13 @@ import type { Subagent, TaskItem } from "@/lib/chat/chatState";
 
 /**
  * What the terminal shows above its input while Claude works: the spinner,
- * the time and tokens of the turn; and its running subagents and task list,
- * one click away.
+ * the step it is on (« lit chatState.ts », `liveStep`), the time and tokens
+ * of the turn; and its running subagents and task list, one click away.
  */
 export function ChatLiveLine({
   working,
   compacting,
+  step,
   turnStartedAt,
   turnTokens,
   subagents,
@@ -19,6 +20,7 @@ export function ChatLiveLine({
 }: {
   working: boolean;
   compacting: boolean;
+  step: string;
   turnStartedAt: number | null;
   turnTokens: number;
   subagents: Subagent[];
@@ -39,20 +41,21 @@ export function ChatLiveLine({
   if (!working && running === 0 && !openTasks)
     return <div className="chat-live" />;
 
+  const doing = compacting ? "compacte la conversation" : step;
   return (
     <div className="chat-live">
       {working && (
-        <>
+        <span className="chat-live-now">
           <span className="spin" />
-          <span>
-            {compacting
-              ? "Claude compacte la conversation"
-              : "Claude travaille"}
+          <span className="what" title={doing}>
+            {doing}
+          </span>
+          <span className="figures">
             {turnStartedAt !== null &&
               ` · ${elapsedLabel(now - turnStartedAt)}`}
             {turnTokens > 0 && ` · ↓ ${tokensLabel(turnTokens)} jetons`}
           </span>
-        </>
+        </span>
       )}
       {subagents.length > 0 && (
         <span className="chat-chip" onClick={onOpenAgents}>

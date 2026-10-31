@@ -301,9 +301,33 @@ export function usePaneChats({
     [tabsRef, toTerminal, toChat, onToast],
   );
 
+  /**
+   * The sessions a Claude Code runs in now, in every pane but `exceptPaneId`:
+   * a chat's own, a terminal's from the pane map while Claude is up in it (a
+   * bare shell's entry is a session long gone). /resume leaves them alone.
+   */
+  const liveSessions = useCallback(
+    async (exceptPaneId: string): Promise<Set<string>> => {
+      const panes = (tabsRef.current ?? [])
+        .flatMap((t) => Object.values(t.panes))
+        .filter((p) => p.id !== exceptPaneId);
+      const ids = await Promise.all(
+        panes.map((p) => {
+          if (p.chat) return p.chat.resume ?? null;
+          if (!stateFromTitle(p.title)) return null;
+          return invoke<string | null>("pane_session_id", {
+            paneId: p.id,
+          }).catch(() => null);
+        }),
+      );
+      return new Set(ids.filter((id): id is string => !!id));
+    },
+    [tabsRef],
+  );
+
   const handlers = useMemo(
-    () => ({ switching, onToggle, onSession, onLabel }),
-    [switching, onToggle, onSession, onLabel],
+    () => ({ switching, onToggle, onSession, onLabel, liveSessions }),
+    [switching, onToggle, onSession, onLabel, liveSessions],
   );
   return { handlers, startChat };
 }

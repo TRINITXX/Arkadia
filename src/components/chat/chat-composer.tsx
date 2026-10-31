@@ -1,14 +1,17 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Mic, Square, X, Zap } from "lucide-react";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatRailActions } from "@/components/chat/chat-rail-actions";
+import { ChatSlashMenu } from "@/components/chat/chat-slash-menu";
+import { useSlashMenu, type ChatSlash } from "@/lib/chat/useSlashMenu";
 import type { ChatImage } from "@/lib/chat/useChatSession";
-import type { ChatItem } from "@/lib/chat/chatState";
+import { hasQueued, type ChatItem } from "@/lib/chat/chatState";
+import { useSendAfterDictation } from "@/lib/chat/useSendAfterDictation";
 import type {
   ChatDraft,
   DraftImage as Attachment,
 } from "@/lib/chat/chatDrafts";
-import type { VoiceStatus } from "@/lib/useHiddenVoice";
+import type { DictationEnd, VoiceStatus } from "@/lib/useHiddenVoice";
 import type { PermissionMode } from "@/lib/chat/chatProtocol";
 import { MODELS, modeLabel, modelLabel, nextMode } from "@/lib/chat/chatLabels";
 
@@ -16,7 +19,9 @@ import { MODELS, modeLabel, modelLabel, nextMode } from "@/lib/chat/chatLabels";
 export interface ChatVoice {
   status: VoiceStatus;
   start: () => unknown;
-  stop: () => unknown;
+  /** Resolves once the dictated text is in the draft, or with why not
+   *  (`quiet`: true while the caller is there to show the failure). */
+  stop: (options?: { quiet?: () => boolean }) => Promise<DictationEnd>;
 }
 
 const VOICE_TITLES: Record<VoiceStatus, string> = {
@@ -50,14 +55,16 @@ function readImage(file: File): Promise<Attachment> {
  * paste, `/` commands, the terminal rail's actions (`ChatRailActions`), and
  * the session's mode and model.
  * Esc interrupts a working Claude, Shift+Tab cycles the mode, as in the
- * terminal. A message sent while Claude works waits for its turn.
+ * terminal. A message sent while Claude works waits for its turn; Ctrl+Enter
+ * sends it now (the turn under way stops), or, input empty, the ones waiting.
+ * Sent mid-dictation, the draft goes once the dictated text is in.
  */
 export function ChatComposer({
   items,
   working,
   mode,
   model,
-  slashCommands,
+  slash,
   draft,
   onDraft,
   voice,
@@ -76,13 +83,15 @@ export function ChatComposer({
   working: boolean;
   mode: string | null;
   model: string | null;
-  slashCommands: string[];
+  /** The `/` menu's commands and the page's own (`useSlashMenu`). */
+  slash: ChatSlash;
   draft: ChatDraft;
   onDraft: React.Dispatch<React.SetStateAction<ChatDraft>>;
   voice: ChatVoice;
   /** Changes when the composer should take the focus (pane activated). */
   focusKey: unknown;
-  onSend: (text: string, images: ChatImage[]) => void;
+  /** `now`: Claude Code ends the turn under way for it (Ctrl+Enter). */
+  onSend: (text: string, images: ChatImage[], now?: boolean) => void;
   onInterrupt: () => void;
   onMode: (mode: PermissionMode) => void;
   onModel: (model: string) => void;
@@ -96,9 +105,17 @@ export function ChatComposer({
   const setText = (value: string) => onDraft((d) => ({ ...d, text: value }));
   const setImages = (update: (prev: Attachment[]) => Attachment[]) =>
     onDraft((d) => ({ ...d, images: update(d.images) }));
-  const [slashIndex, setSlashIndex] = useState(0);
   const [menu, setMenu] = useState<"model" | null>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const slashMenu = useSlashMenu({
+    text,
+    setText,
+    slash,
+    send: (command, now) => {
+      onSend(command, [], now);
+      setText("");
+    },
+  });
 
   // The mic button lives here: whatever takes the input away (a request, the
   // chat ending) stops the recording it would no longer show.
@@ -131,34 +148,30 @@ export function ChatComposer({
     area.style.height = `${Math.min(area.scrollHeight + 2, max)}px`;
   }, [text]);
 
-  const slash = /^\/(\S*)$/.exec(text);
-  const matches = slash
-    ? slashCommands
-        .filter((c) => c.toLowerCase().startsWith(slash[1].toLowerCase()))
-        .slice(0, 50)
-    : [];
-
   const addFiles = async (files: Iterable<File>) => {
     const picked = [...files].filter((f) => IMAGE_TYPES.includes(f.type));
     const read = await Promise.all(picked.map(readImage));
     setImages((prev) => [...prev, ...read]);
   };
 
-  const submit = () => {
+  const queued = useMemo(() => hasQueued(items), [items]);
+  const send = (now: boolean) => {
     const body = text.trim();
-    if (!body && images.length === 0) return;
+    if (!body && images.length === 0) {
+      // Ctrl+Enter on an empty input: the messages waiting go now.
+      if (now && queued) onInterrupt();
+      return;
+    }
+    // /resume, /rewind, a terminal-only command: the page answers.
+    if (slashMenu.intercept(body)) return;
     onSend(
       body,
       images.map(({ mediaType, data }) => ({ mediaType, data })),
+      now,
     );
     onDraft({ text: "", images: [] });
   };
-
-  const complete = (command: string) => {
-    setText(`/${command} `);
-    setSlashIndex(0);
-    areaRef.current?.focus();
-  };
+  const { waiting, submit } = useSendAfterDictation(voice, send, onToast);
 
   // The rail's gesture: one click starts, the next stops (Ctrl+Space too).
   const toggleVoice = () => {
@@ -174,19 +187,7 @@ export function ChatComposer({
       if (!e.repeat) toggleVoice();
       return;
     }
-    if (matches.length > 0) {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        const step = e.key === "ArrowDown" ? 1 : -1;
-        setSlashIndex((i) => (i + step + matches.length) % matches.length);
-        return;
-      }
-      if (e.key === "Tab" && !e.shiftKey) {
-        e.preventDefault();
-        complete(matches[Math.min(slashIndex, matches.length - 1)]);
-        return;
-      }
-    }
+    if (slashMenu.onKeyDown(e)) return;
     if (e.key === "Tab" && e.shiftKey) {
       e.preventDefault();
       onMode(nextMode(mode));
@@ -199,30 +200,14 @@ export function ChatComposer({
     }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      submit();
+      void submit(e.ctrlKey);
     }
   };
 
   const empty = !text.trim() && images.length === 0;
   return (
     <div className="chat-box">
-      {matches.length > 0 && (
-        <div className="chat-slash">
-          {matches.map((c, i) => (
-            <button
-              key={c}
-              type="button"
-              className={i === slashIndex ? "on" : undefined}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                complete(c);
-              }}
-            >
-              /{c}
-            </button>
-          ))}
-        </div>
-      )}
+      <ChatSlashMenu menu={slashMenu} />
       {images.length > 0 && (
         <div className="chat-attach">
           {images.map((img) => (
@@ -247,13 +232,10 @@ export function ChatComposer({
         value={text}
         placeholder={
           working
-            ? "Claude travaille… ton message attendra son tour"
+            ? "Claude travaille… ton message attendra son tour (Ctrl+Entrée : tout de suite)"
             : "Écris à Claude…"
         }
-        onChange={(e) => {
-          setText(e.target.value);
-          setSlashIndex(0);
-        }}
+        onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
         onPaste={(e) => {
           const files = [...e.clipboardData.files];
@@ -265,14 +247,12 @@ export function ChatComposer({
       />
       <div className="chat-tools-row">
         <ChatRailActions
-          items={items}
           draft={draft}
           onDraft={onDraft}
           areaRef={areaRef}
           messagesOnly={messagesOnly}
           onMessagesOnly={onMessagesOnly}
           active={active}
-          onToast={onToast}
         />
         <span
           className="chat-chip"
@@ -326,7 +306,7 @@ export function ChatComposer({
             <span className="spin" />
           )}
         </button>
-        {working && empty ? (
+        {working && empty && voice.status === "idle" && !waiting ? (
           <button
             type="button"
             className="chat-round stop"
@@ -338,10 +318,16 @@ export function ChatComposer({
         ) : (
           <button
             type="button"
-            className="chat-round send"
-            title="Envoyer (Entrée)"
-            disabled={empty}
-            onClick={submit}
+            className={`chat-round send${waiting ? " waiting" : ""}`}
+            title={
+              waiting
+                ? "Envoi dès la fin de la dictée…"
+                : working
+                  ? "Envoyer après le tour en cours (Entrée) · tout de suite : Ctrl+Entrée"
+                  : "Envoyer (Entrée)"
+            }
+            disabled={empty && voice.status === "idle"}
+            onClick={(e) => void submit(e.ctrlKey)}
           >
             <ArrowUp />
           </button>

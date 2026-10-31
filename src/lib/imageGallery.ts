@@ -12,6 +12,8 @@ export interface ImageRef {
   mediaType?: string;
   /** The prose the message writes around the path, shown in the lightbox. */
   caption?: string;
+  /** Already in memory (an image pasted in the chat): shown, never fetched. */
+  url?: string;
 }
 
 /**

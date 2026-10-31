@@ -17,7 +17,11 @@ function planOutcome(tool: ToolItem, pending: boolean): string {
     : "approuvé";
 }
 
-/** A plan Claude submitted, in the column: folded to its start, open on click. */
+/**
+ * A plan Claude submitted, in the column. Waiting for the user, it shows in
+ * full (the panel below holds only the choices) and stays open once decided;
+ * a plan met later in the history shows folded to its start, open on click.
+ */
 export function ChatPlanCard({
   tool,
   plan,
@@ -33,9 +37,19 @@ export function ChatPlanCard({
   onOpen: (content: LightboxContent) => void;
   onToast?: ToastFn;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(pending);
+  // A live card mounts as Claude writes the call, before its request: it
+  // opens once the request comes and stays open after the answer.
+  const [seenPending, setSeenPending] = useState(pending);
+  if (pending && !seenPending) {
+    setSeenPending(true);
+    setOpen(true);
+  }
+  const full = open || pending;
   return (
-    <div className="chat-unit chat-card">
+    <div
+      className={`chat-unit chat-card chat-plan-card${pending ? " pending" : ""}`}
+    >
       <div className="head" onClick={() => setOpen((o) => !o)}>
         <ClipboardList />
         <span>Plan</span>
@@ -45,19 +59,19 @@ export function ChatPlanCard({
         <span className="tail">
           <ChevronRight
             size={15}
-            style={{ transform: open ? "rotate(90deg)" : undefined }}
+            style={{ transform: full ? "rotate(90deg)" : undefined }}
           />
         </span>
       </div>
-      {/* While it waits, the input card shows it: not twice. */}
-      {plan && !pending && (
-        <div className={`body${open ? "" : " clamp"}`}>
+      {plan && (
+        <div className={`body${full ? "" : " clamp"}`}>
           <div className="reading-md">
             <MarkdownContent
               text={plan}
               baseDir={cwd}
               onOpen={onOpen}
               onToast={onToast}
+              inlineImages={false}
             />
           </div>
         </div>

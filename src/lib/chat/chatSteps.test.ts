@@ -1,0 +1,94 @@
+import { describe, expect, it } from "vitest";
+import {
+  LONG_TURN_MS,
+  liveStep,
+  toolStep,
+  turnDoneLine,
+} from "@/lib/chat/chatSteps";
+
+const CWD = "C:\\Users\\TRINITX\\Desktop\\proj";
+
+describe("toolStep", () => {
+  it("words each call as the terminal's display mod does", () => {
+    const step = (name: string, input: Record<string, unknown>) =>
+      toolStep(name, input, CWD);
+    expect(step("Read", { file_path: `${CWD}\\src\\export.ts` })).toBe(
+      "lit src/export.ts",
+    );
+    expect(step("Edit", { file_path: `${CWD}\\price.ts` })).toBe(
+      "modifie price.ts",
+    );
+    expect(step("Grep", { pattern: "useChat" })).toBe("cherche « useChat »");
+    expect(step("Agent", { description: "Explorer le code" })).toBe(
+      "délègue : Explorer le code",
+    );
+    expect(step("WebSearch", { query: "x" })).toBe("consulte le web");
+    expect(step("Skill", { skill: "commit" })).toBe("lance commit");
+    expect(
+      step("Bash", { command: "pnpm test", description: "Lancer les tests" }),
+    ).toBe("lancer les tests");
+    expect(step("Bash", { command: "pnpm test\necho ok" })).toBe(
+      "lance pnpm test",
+    );
+  });
+
+  it("names a file outside the project from the home folder", () => {
+    expect(
+      toolStep(
+        "Read",
+        { file_path: "C:\\Users\\TRINITX\\.claude\\CLAUDE.md" },
+        CWD,
+      ),
+    ).toBe("lit ~/.claude/CLAUDE.md");
+  });
+});
+
+describe("liveStep", () => {
+  it("shows the latest running call, a subagent's prefixed", () => {
+    expect(
+      liveStep(
+        [
+          { id: "a", name: "Agent", input: { description: "d" }, agent: false },
+          {
+            id: "b",
+            name: "Read",
+            input: { file_path: `${CWD}\\a.ts` },
+            agent: true,
+          },
+        ],
+        "thinking",
+        CWD,
+      ),
+    ).toBe("agent · lit a.ts");
+  });
+
+  it("falls back on what the request does, as the mod's spinner", () => {
+    expect(liveStep([], "thinking", CWD)).toBe("réfléchit");
+    expect(liveStep([], "responding", CWD)).toBe("rédige");
+    expect(liveStep([], "tool-input", CWD)).toBe("prépare un outil");
+    expect(liveStep([], "requesting", CWD)).toBe("attend le modèle");
+    expect(liveStep([], null, CWD)).toBe("travaille");
+  });
+});
+
+describe("turnDoneLine", () => {
+  const endedAt = new Date(2026, 9, 31, 21, 56).getTime();
+
+  it("closes a long turn with its time, its tools and the files it changed", () => {
+    expect(
+      turnDoneLine({ durationMs: 962_000, endedAt, tools: 5, files: 2 }, false),
+    ).toBe("✻ Terminé en 16 min 02 s · 21:56 · 5 outils · 2 fichiers modifiés");
+    expect(
+      turnDoneLine(
+        { durationMs: LONG_TURN_MS, endedAt, tools: 1, files: 0 },
+        false,
+      ),
+    ).toBe("✻ Terminé en 10 min 00 s · 21:56 · 1 outil");
+  });
+
+  it("draws nothing for a short turn, nor with « Messages seuls » on", () => {
+    const turn = { durationMs: LONG_TURN_MS - 1, endedAt, tools: 3, files: 1 };
+    expect(turnDoneLine(turn, false)).toBeNull();
+    expect(turnDoneLine({ ...turn, durationMs: 3_600_000 }, true)).toBeNull();
+  });
+});

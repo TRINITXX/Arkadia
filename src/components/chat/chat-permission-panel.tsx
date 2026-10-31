@@ -1,9 +1,14 @@
-import { Check, ShieldQuestion, X } from "lucide-react";
+import { Check, CheckCheck, ShieldQuestion, X } from "lucide-react";
 import { toolLabel, toolSummary } from "@/lib/chat/chatGroups";
+import { suggestionDetail, suggestionLabel } from "@/lib/chat/chatPermissions";
 import type { PermissionResult } from "@/lib/chat/chatProtocol";
 import type { PendingRequest } from "@/lib/chat/chatState";
 
-/** Any other tool Claude Code asks about: what it would do, allow or refuse. */
+/**
+ * Any other tool Claude Code asks about: what it would do, allow or refuse,
+ * or allow and stop asking (one button per rule change it suggests, as the
+ * terminal's « Yes, and don't ask again… »). Nothing is preselected.
+ */
 export function ChatPermissionPanel({
   request,
   onAnswer,
@@ -19,6 +24,10 @@ export function ChatPermissionPanel({
   };
   const command =
     typeof request.input.command === "string" ? request.input.command : null;
+  const always = (request.suggestions ?? []).flatMap((suggestion) => {
+    const label = suggestionLabel(suggestion);
+    return label ? [{ suggestion, label }] : [];
+  });
   return (
     <div>
       <div className="chat-ask-head">
@@ -44,6 +53,23 @@ export function ChatPermissionPanel({
         >
           <Check /> Autoriser
         </button>
+        {always.map(({ suggestion, label }) => (
+          <button
+            key={label}
+            type="button"
+            className="chat-btn chat-perm-always"
+            title={suggestionDetail(suggestion)}
+            onClick={() =>
+              onAnswer({
+                behavior: "allow",
+                updatedInput: request.input,
+                updatedPermissions: [suggestion],
+              })
+            }
+          >
+            <CheckCheck /> <span>{label}</span>
+          </button>
+        ))}
         <button
           type="button"
           className="chat-btn ghost"

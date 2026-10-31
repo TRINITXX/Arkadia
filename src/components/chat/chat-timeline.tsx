@@ -1,20 +1,32 @@
 import { memo, useMemo } from "react";
-import { CircleHelp, Images } from "lucide-react";
+import { CircleHelp } from "lucide-react";
 import {
+  CodeCopyContext,
   MarkdownContent,
+  type CodeCopyListener,
   type ToastFn,
 } from "@/components/modern/MarkdownContent";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
 import { ChatAgentRow } from "@/components/chat/chat-agent-row";
+import { ChatCommandCard } from "@/components/chat/chat-command-card";
 import { ChatEditCard } from "@/components/chat/chat-edit-card";
+import { ChatGallery } from "@/components/chat/chat-gallery";
+import { ChatMessageFrame } from "@/components/chat/chat-message-frame";
 import { ChatPlanCard } from "@/components/chat/chat-plan-card";
+import { ChatQueuedMark } from "@/components/chat/chat-queued-mark";
 import { ChatWorkGroup } from "@/components/chat/chat-work-group";
 import {
   groupChatItems,
   messagesOnly as onlyMessages,
   questionAnswers,
 } from "@/lib/chat/chatGroups";
+import { chatGallery } from "@/lib/chat/chatImages";
 import { latestPlan, type ChatItem, type Subagent } from "@/lib/chat/chatState";
+import { turnDoneLine } from "@/lib/chat/chatSteps";
+import { copiedCodeMessage } from "@/lib/codeCopy";
+import type { ImageRef } from "@/lib/imageGallery";
+
+const NO_IMAGES: ImageRef[] = [];
 
 interface ChatTimelineProps {
   items: ChatItem[];
@@ -27,6 +39,8 @@ interface ChatTimelineProps {
   onOpenAgents: () => void;
   onOpen: (content: LightboxContent) => void;
   onToast?: ToastFn;
+  /** Stops the turn so Claude takes the queued messages now. */
+  onSendNow?: () => void;
 }
 
 /** The conversation, as the column shows it (see `groupChatItems`). */
@@ -39,43 +53,101 @@ export const ChatTimeline = memo(function ChatTimeline({
   onOpenAgents,
   onOpen,
   onToast,
+  onSendNow,
 }: ChatTimelineProps) {
   const units = useMemo(() => {
     const all = groupChatItems(items);
-    return messagesOnly ? onlyMessages(all) : all;
-  }, [items, messagesOnly]);
+    return messagesOnly ? onlyMessages(all, pendingToolIds) : all;
+  }, [items, messagesOnly, pendingToolIds]);
+  const gallery = useMemo(() => chatGallery(items, cwd), [items, cwd]);
+  // A code block's copy toasts here (the reading view's stays silent).
+  const codeCopy = useMemo<CodeCopyListener>(
+    () => ({
+      copied: (code) => onToast?.("info", copiedCodeMessage(code)),
+      failed: (e) => onToast?.("error", `Copie impossible : ${String(e)}`),
+    }),
+    [onToast],
+  );
   return (
-    <>
+    <CodeCopyContext.Provider value={codeCopy}>
       {units.map((unit) => {
         switch (unit.kind) {
           case "user":
             return (
-              <div key={unit.item.id} className="chat-unit chat-user">
-                {unit.item.images > 0 && (
-                  <span className="imgs">
-                    <Images size={12} /> {unit.item.images} image
-                    {unit.item.images > 1 ? "s" : ""}
-                  </span>
+              <ChatMessageFrame
+                key={unit.item.id}
+                role="user"
+                at={unit.item.at}
+                text={unit.item.text}
+                className={`chat-user${unit.item.queued ? " queued" : ""}`}
+                onToast={onToast}
+              >
+                {unit.item.text && (
+                  <div className="reading-md" data-chat-prose="">
+                    <MarkdownContent
+                      text={unit.item.text}
+                      baseDir={cwd}
+                      onOpen={onOpen}
+                      onToast={onToast}
+                      inlineImages={false}
+                    />
+                  </div>
                 )}
-                {unit.item.text}
-              </div>
+                <ChatGallery
+                  refs={gallery.byItem.get(unit.item.id) ?? NO_IMAGES}
+                  dropped={unit.item.images - (unit.item.pasted?.length ?? 0)}
+                  onOpen={onOpen}
+                />
+                {(unit.item.queued || unit.item.dropped) && (
+                  <ChatQueuedMark
+                    dropped={unit.item.dropped}
+                    onSendNow={onSendNow}
+                  />
+                )}
+              </ChatMessageFrame>
             );
           case "text":
             return (
-              <div
+              <ChatMessageFrame
                 key={unit.item.id}
-                className={`chat-unit chat-text${unit.item.streaming ? " streaming" : ""}`}
+                role="claude"
+                at={unit.item.at}
+                text={unit.item.text}
+                error={unit.item.error}
+                className={`chat-text${unit.item.streaming ? " streaming" : ""}`}
+                onToast={onToast}
               >
-                <div className="reading-md">
+                <div className="reading-md" data-chat-prose="">
                   <MarkdownContent
                     text={unit.item.text || " "}
                     baseDir={cwd}
                     onOpen={onOpen}
                     onToast={onToast}
+                    inlineImages={false}
                   />
                 </div>
-              </div>
+                <ChatGallery
+                  refs={gallery.byItem.get(unit.item.id) ?? NO_IMAGES}
+                  onOpen={onOpen}
+                />
+              </ChatMessageFrame>
             );
+          case "turn": {
+            const line = turnDoneLine(
+              {
+                durationMs: unit.item.durationMs,
+                endedAt: unit.item.at ?? 0,
+                tools: unit.item.tools,
+                files: unit.item.files,
+              },
+              messagesOnly,
+            );
+            return line ? (
+              <div key={unit.item.id} className="chat-unit chat-done">
+                {line}
+              </div>
+            ) : null;
+          }
           case "thinking":
             return (
               <div key={unit.item.id} className="chat-unit chat-text">
@@ -96,8 +168,19 @@ export const ChatTimeline = memo(function ChatTimeline({
                 {unit.item.text}
               </div>
             );
+          case "command":
+            return (
+              <ChatCommandCard
+                key={unit.item.id}
+                item={unit.item}
+                cwd={cwd}
+                onOpen={onOpen}
+                onToast={onToast}
+                onSendNow={onSendNow}
+              />
+            );
           case "work":
-            return <ChatWorkGroup key={unit.id} tools={unit.tools} />;
+            return <ChatWorkGroup key={unit.id} tools={unit.tools} cwd={cwd} />;
           case "edit":
             return (
               <ChatEditCard key={unit.item.id} tool={unit.item} cwd={cwd} />
@@ -154,6 +237,6 @@ export const ChatTimeline = memo(function ChatTimeline({
           }
         }
       })}
-    </>
+    </CodeCopyContext.Provider>
   );
 });

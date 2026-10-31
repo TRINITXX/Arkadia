@@ -124,6 +124,7 @@ import {
   IDLE_CHAT,
 } from "@/lib/chat/chatEvents";
 import { dropDraft, moveDraft } from "@/lib/chat/chatDrafts";
+import { dropPathsInChat } from "@/lib/chat/chatDrop";
 import {
   dropMessagesOnly,
   moveMessagesOnly,
@@ -2363,14 +2364,26 @@ export function App() {
         const targets =
           document.querySelectorAll<HTMLElement>("[data-pane-id]");
         let targetPaneId: string | null = null;
+        let targetEl: HTMLElement | null = null;
         for (const el of Array.from(targets)) {
           const r = el.getBoundingClientRect();
           if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
             targetPaneId = el.dataset.paneId ?? null;
+            targetEl = el;
             break;
           }
         }
         if (!targetPaneId) return;
+        // A chat pane has no terminal: the paths go into its draft.
+        if (targetEl?.querySelector(".chat-root")) {
+          dropPathsInChat(
+            targetPaneId,
+            paths,
+            targetEl.querySelector<HTMLTextAreaElement>(".chat-box textarea"),
+            targetPaneId === activePaneIdRef.current,
+          );
+          return;
+        }
         const quoted = paths.map((p) => `"${p}"`).join(" ");
         const bytes = Array.from(new TextEncoder().encode(quoted));
         void invoke("send_input", { sessionId: targetPaneId, bytes });

@@ -26,6 +26,7 @@ import {
 import { imageCaptions } from "@/lib/imageCaption";
 import { InlineVideo } from "@/components/modern/VideoThumb";
 import { imagePathKey, isVideoPath, splitImagePaths } from "@/lib/imagePaths";
+import { fetchImageUrl } from "@/lib/imageUrlCache";
 
 export type ToastFn = (level: "info" | "error", message: string) => void;
 
@@ -48,6 +49,58 @@ function MentionImage(
 }
 
 /**
+ * An image or video path left as written (`inlineImages` off: the chat shows
+ * it in the message's strip): a click opens it in the lightbox, or with the
+ * PC's own app when it doesn't load. Inline-level, inside a `<p>`/`<li>`.
+ */
+function ImagePathLink({
+  path,
+  label,
+  code,
+  onOpen,
+  onToast,
+}: {
+  path: string;
+  label: string;
+  code: boolean;
+  onOpen: (content: LightboxContent) => void;
+  onToast?: ToastFn;
+}) {
+  const Tag = code ? "code" : "span";
+  return (
+    <Tag
+      className="modern-imgpath"
+      title={`Voir ${path}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (isVideoPath(path)) {
+          onOpen({ kind: "video", path });
+          return;
+        }
+        void fetchImageUrl(path).then((url) => {
+          if (url) onOpen({ kind: "image", url, path });
+          else openPath(path, onToast);
+        });
+      }}
+    >
+      {label}
+    </Tag>
+  );
+}
+
+/** Told what a code block's button copied, or why it couldn't. */
+export interface CodeCopyListener {
+  copied: (code: string) => void;
+  failed: (error: unknown) => void;
+}
+
+/**
+ * Where a code block reports its copies: the chat provides it and toasts,
+ * the reading view leaves it out and stays silent.
+ */
+export const CodeCopyContext = createContext<CodeCopyListener | null>(null);
+
+/**
  * A fenced code block with a hover-revealed "copy" button in its bottom-right
  * corner. The text is read back from the rendered `<pre>` so whatever the
  * highlighter put in there is what lands on the clipboard.
@@ -55,6 +108,7 @@ function MentionImage(
 function CodeBlock({ children, ...rest }: React.ComponentProps<"pre">) {
   const preRef = useRef<HTMLPreElement>(null);
   const [copied, setCopied] = useState(false);
+  const listener = useContext(CodeCopyContext);
 
   return (
     <div className="modern-codeblock">
@@ -75,8 +129,9 @@ function CodeBlock({ children, ...rest }: React.ComponentProps<"pre">) {
             .then(() => {
               setCopied(true);
               setTimeout(() => setCopied(false), 1200);
+              listener?.copied(text);
             })
-            .catch(() => {});
+            .catch((err: unknown) => listener?.failed(err));
         }}
       >
         {copied ? <Check size={12} /> : <Copy size={12} />}
@@ -114,6 +169,7 @@ function buildComponents(
   onOpen: (content: LightboxContent) => void,
   onToast?: ToastFn,
   baseDir?: string | null,
+  inlineImages = true,
 ): Components {
   return {
     // The marker the plugin above leaves behind. Every other span — the
@@ -123,11 +179,16 @@ function buildComponents(
       const path = props?.[IMAGE_PATH_PROP];
       if (typeof path === "string") {
         const label = props?.[IMAGE_LABEL_PROP];
-        return (
-          <MentionImage
+        const text = typeof label === "string" ? label : path;
+        return inlineImages ? (
+          <MentionImage path={path} label={text} onOpen={onOpen} />
+        ) : (
+          <ImagePathLink
             path={path}
-            label={typeof label === "string" ? label : path}
+            label={text}
+            code={false}
             onOpen={onOpen}
+            onToast={onToast}
           />
         );
       }
@@ -165,11 +226,19 @@ function buildComponents(
       if (!className && typeof children === "string") {
         const segments = splitImagePaths(children, baseDir);
         if (segments.length === 1 && segments[0].path) {
-          return (
+          return inlineImages ? (
             <MentionImage
               path={segments[0].path}
               label={children}
               onOpen={onOpen}
+            />
+          ) : (
+            <ImagePathLink
+              path={segments[0].path}
+              label={children}
+              code
+              onOpen={onOpen}
+              onToast={onToast}
             />
           );
         }
@@ -203,6 +272,9 @@ interface MarkdownContentProps {
   baseDir?: string | null;
   onOpen: (content: LightboxContent) => void;
   onToast?: ToastFn;
+  /** Off: an image path stays text that opens it on click, the image itself
+   *  shown elsewhere (the chat's strip under the message). On by default. */
+  inlineImages?: boolean;
 }
 
 /** The shared markdown body of the modern view (bubbles, plan cards). */
@@ -211,10 +283,11 @@ export const MarkdownContent = memo(function MarkdownContent({
   baseDir,
   onOpen,
   onToast,
+  inlineImages = true,
 }: MarkdownContentProps) {
   const components = useMemo(
-    () => buildComponents(onOpen, onToast, baseDir),
-    [onOpen, onToast, baseDir],
+    () => buildComponents(onOpen, onToast, baseDir, inlineImages),
+    [onOpen, onToast, baseDir, inlineImages],
   );
   // Through context, not `components`: rebuilding those on every streamed
   // chunk would remount every image and diagram of the message.
@@ -225,9 +298,9 @@ export const MarkdownContent = memo(function MarkdownContent({
     () =>
       [
         [rehypeHighlight, { detect: false }],
-        [rehypeInlineImages, { source: text, baseDir }],
+        [rehypeInlineImages, { source: text, baseDir, group: inlineImages }],
       ] as never[],
-    [text, baseDir],
+    [text, baseDir, inlineImages],
   );
   return (
     <CaptionsContext.Provider value={captions}>
