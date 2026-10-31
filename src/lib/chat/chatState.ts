@@ -415,7 +415,7 @@ const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
  * (model `<synthetic>`) that closes a conversation left on an interrupt, or
  * fills a turn stopped by the usage limit (whose notice says why).
  */
-function isStandIn(message: JsonObject, text: string): boolean {
+export function isStandIn(message: JsonObject, text: string): boolean {
   return message.model === "<synthetic>" && text === "No response requested.";
 }
 
@@ -950,15 +950,17 @@ function markCut(state: ChatState, m: JsonObject): ChatState {
  * hook runs ends it as `stop_hook_prevented`, a success: only this note
  * tells the user's interrupt from the hook's (verified live 31/10/2026).
  */
-function markInterrupt(state: ChatState, m: JsonObject): ChatState {
+export function isInterruptNote(m: JsonObject): boolean {
   const content = obj(m.message).content;
   const texts =
     typeof content === "string"
       ? [content]
       : arr(content).map((b) => str(obj(b).text) ?? "");
-  return texts.some((t) => t.startsWith("[Request interrupted by user"))
-    ? { ...state, interrupted: true }
-    : state;
+  return texts.some((t) => t.startsWith("[Request interrupted by user"));
+}
+
+function markInterrupt(state: ChatState, m: JsonObject): ChatState {
+  return isInterruptNote(m) ? { ...state, interrupted: true } : state;
 }
 
 /** The reset of the window that blocks: the used-up one, else the session's. */

@@ -64,6 +64,23 @@ export function appendSheetText(
   });
 }
 
+/**
+ * A click on the chat's notification: the round its last reply asks shows
+ * unfolded. A sheet the user closed (×) stays closed: he answers in the
+ * input, whatever notification he clicks later. A chat not loaded yet (page
+ * reloaded) keeps no sheet: its round shows unfolded anyway.
+ */
+export function openRoundSheet(
+  paneId: string,
+  items: readonly ChatItem[],
+): void {
+  const round = lastReplyRound(items);
+  if (!round) return;
+  updateSheet(paneId, round.id, (s) =>
+    s.closed ? s : { ...s, folded: false },
+  );
+}
+
 /** A pane that closes takes its sheet along. */
 export function dropSheet(paneId: string): void {
   sheets.delete(paneId);

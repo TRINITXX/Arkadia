@@ -48,6 +48,16 @@ export type ChatEvent =
       suggestions?: PermissionUpdate[];
     } & PermissionAsk)
   | { type: "permission_resolved"; chatId: string; requestId: string }
+  /** A message Claude Code took that the page doesn't show (not the user's
+   *  own): its `origin.kind`, an artifact comment, an idle notice. Who
+   *  opened a turn, for the notifications (`chatNotify`). */
+  | {
+      type: "user_origin";
+      chatId: string;
+      kind: string | null;
+      artifact: boolean;
+      idleNotice: boolean;
+    }
   | {
       type: "context";
       chatId: string;

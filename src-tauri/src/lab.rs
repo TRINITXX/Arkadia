@@ -2,9 +2,9 @@
 //! try new views without closing it. Built with `ARKADIA_LAB_BUILD=1` and the
 //! `tauri.lab.conf.json` overlay, whose own identifier gives it its own
 //! single-instance lock, store and WebView2 profile (see `Rebuild Arkadia
-//! Lab.bat`). It leaves the phone, the gate, the notification popups, artifact
-//! routing and the usage poller to the daily instance, and starts from its
-//! projects without its tabs.
+//! Lab.bat`). It leaves the phone, the gate, artifact routing and the usage
+//! poller to the daily instance, notifies from its own signal folder
+//! (`popup::signal_dir`), and starts from its projects without its tabs.
 
 use std::path::Path;
 
@@ -13,8 +13,8 @@ pub const LAB: bool = is_lab_flag(option_env!("ARKADIA_LAB_BUILD"));
 /// Build-time switch, set only by the Lab's build script. Kept apart from
 /// `PANE_MARKER`: a daily build run from a Lab pane must not become a Lab.
 pub const BUILD_FLAG: &str = "ARKADIA_LAB_BUILD";
-/// Set on every Lab pane, for the hooks (`arkadia-notify.ps1` stays off the
-/// daily instance's notification folder).
+/// Set on every Lab pane, for the hooks (`arkadia-notify.ps1` drops its
+/// signals into the Lab's own folder, never the daily instance's).
 pub const PANE_MARKER: &str = "ARKADIA_LAB";
 
 /// Only the exact value "1" builds a Lab: "0" or an empty value never does.
@@ -29,13 +29,15 @@ const fn is_lab_flag(flag: Option<&str>) -> bool {
 /// Variables one instance leaves behind for the other: the build flag (a
 /// build run from anything this instance starts would make a Lab), the Lab
 /// pane marker in a daily instance started from a Lab pane (its hooks would
-/// go quiet), and in the Lab a `BROWSER` pointing at the daily exe (its
-/// artifacts would land in an inbox nobody reads).
+/// write to the Lab's folder), in the Lab a `BROWSER` pointing at the daily
+/// exe (its artifacts would land in an inbox nobody reads), and in both the
+/// chat marker of an instance started from a chat session (the hooks of all
+/// its terminals would go quiet).
 fn foreign_vars(lab: bool) -> &'static [&'static str] {
     if lab {
-        &[BUILD_FLAG, "BROWSER"]
+        &[BUILD_FLAG, "BROWSER", crate::chat::CHAT_MARKER]
     } else {
-        &[BUILD_FLAG, PANE_MARKER]
+        &[BUILD_FLAG, PANE_MARKER, crate::chat::CHAT_MARKER]
     }
 }
 
@@ -111,8 +113,9 @@ mod tests {
 
     #[test]
     fn each_instance_drops_what_the_other_leaves() {
-        assert_eq!(foreign_vars(true), [BUILD_FLAG, "BROWSER"]);
-        assert_eq!(foreign_vars(false), [BUILD_FLAG, PANE_MARKER]);
+        let chat = crate::chat::CHAT_MARKER;
+        assert_eq!(foreign_vars(true), [BUILD_FLAG, "BROWSER", chat]);
+        assert_eq!(foreign_vars(false), [BUILD_FLAG, PANE_MARKER, chat]);
     }
 
     fn roaming() -> std::path::PathBuf {

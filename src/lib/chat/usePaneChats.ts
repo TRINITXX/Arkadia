@@ -52,6 +52,18 @@ export function chatForCommand(command: string, cwd: string): PaneChat | null {
 }
 
 /**
+ * The chat a pane restored from the last session reopens: on its own
+ * session, or the folder's latest, never on a pane map's. The hook writes
+ * none for a chat (`ARKADIA_CHAT`), and one left by the terminal before the
+ * switch holds another conversation (or one /clear emptied).
+ */
+export function restoredChat(saved: PaneChat): PaneChat {
+  return saved.resume
+    ? { cwd: saved.cwd, resume: saved.resume }
+    : { cwd: saved.cwd, ...(saved.continue ? { continue: true } : {}) };
+}
+
+/**
  * A chat pane's tab title: the status glyph the sidebar badge reads
  * (`stateFromTitle`). Busy through background subagents too, as a terminal
  * pane is (`withBackgroundTasks`); a background shell leaves it waiting.

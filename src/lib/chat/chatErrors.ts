@@ -150,6 +150,23 @@ function apiErrorText(
 /** Claude Code's own diagnostics, not meant for a reader. */
 const isDiagnostic = (e: string) => e.startsWith("[ede_diagnostic]");
 
+const reasonOf = (m: JsonObject): string | undefined =>
+  str(m.terminal_reason) ?? SUBTYPES[str(m.subtype) ?? ""];
+
+/**
+ * The user ended the turn (Esc, « Envoyer maintenant »). An Esc during a
+ * Stop hook ends it as the hook would: the user's note (`interrupted`) says
+ * who stopped it (verified live 31/10/2026).
+ */
+export function stoppedByUser(m: JsonObject, interrupted: boolean): boolean {
+  const reason = reasonOf(m);
+  return (
+    reason === "aborted_streaming" ||
+    reason === "aborted_tools" ||
+    (interrupted && reason !== undefined && HOOK_ENDS.has(reason))
+  );
+}
+
 /**
  * The notice a finished turn adds, or null: a turn that went well, or one
  * whose end needs no word. Only a user's interrupt says « Tour interrompu ».
@@ -158,18 +175,12 @@ export function resultNotice(
   m: JsonObject,
   ctx: ResultContext,
 ): ErrorNotice | null {
-  const reason = str(m.terminal_reason) ?? SUBTYPES[str(m.subtype) ?? ""];
+  const reason = reasonOf(m);
   const errors = (Array.isArray(m.errors) ? m.errors : []).filter(
     (e): e is string => typeof e === "string" && !isDiagnostic(e),
   );
   const ok = m.subtype === "success" && m.is_error !== true;
-  // An Esc during a Stop hook ends the turn as the hook would: the user's
-  // note says who stopped it (verified live 31/10/2026).
-  if (
-    reason === "aborted_streaming" ||
-    reason === "aborted_tools" ||
-    (ctx.interrupted && reason !== undefined && HOOK_ENDS.has(reason))
-  )
+  if (stoppedByUser(m, ctx.interrupted ?? false))
     return { text: "Tour interrompu", tone: "info" };
   const startup = str(m.startup_failure_reason);
   if (startup) {

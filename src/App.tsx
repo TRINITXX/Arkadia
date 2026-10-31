@@ -124,9 +124,14 @@ import {
   IDLE_CHAT,
 } from "@/lib/chat/chatEvents";
 import { dropDraft, moveDraft } from "@/lib/chat/chatDrafts";
-import { dropLiveChat, liveSessionId } from "@/lib/chat/chatLive";
-import { dropSheet } from "@/lib/chat/chatSheetAnswers";
+import {
+  dropLiveChat,
+  liveChatState,
+  liveSessionId,
+} from "@/lib/chat/chatLive";
+import { dropSheet, openRoundSheet } from "@/lib/chat/chatSheetAnswers";
 import { useChatLimitSwitch } from "@/lib/chat/useChatLimitSwitch";
+import { useChatNotify } from "@/lib/chat/useChatNotify";
 import { dropPathsInChat } from "@/lib/chat/chatDrop";
 import {
   dropMessagesOnly,
@@ -137,6 +142,7 @@ import {
   chatForCommand,
   chatLabelOf,
   chatTitle,
+  restoredChat,
   usePaneChats,
 } from "@/lib/chat/usePaneChats";
 import {
@@ -303,13 +309,16 @@ export function App() {
   const [backgroundTasks, setBackgroundTasks] = useState<
     Record<string, PaneBackground>
   >({});
+  // A chat pane's rings come from its chat (the hook skips chat panes): a
+  // pane map left by its terminal before the switch must not ring it.
+  const chatRings = useChatNotify(tabs);
   const effectivePaneStates = useMemo(() => {
     const merged: Record<string, AgentStateValue> = {};
     for (const tab of tabs) {
       for (const [paneId, pane] of Object.entries(tab.panes)) {
         const fromTitle = stateFromTitle(pane.title);
         if (fromTitle) {
-          const bg = backgroundTasks[paneId];
+          const bg = pane.chat ? chatRings[paneId] : backgroundTasks[paneId];
           merged[paneId] = withPendingQuestion(
             withBackgroundShells(
               withBackgroundTasks(fromTitle, bg?.count ?? 0),
@@ -321,7 +330,7 @@ export function App() {
       }
     }
     return merged;
-  }, [tabs, backgroundTasks]);
+  }, [tabs, backgroundTasks, chatRings]);
   // Sticky set of panes that have ever looked like a Claude Code session (a
   // status glyph in the terminal title — ✳ waiting, or a busy spinner). Once a
   // pane qualifies it stays flagged for the app session, so the bottom prompt
@@ -1170,16 +1179,8 @@ export function App() {
           const sid = await invoke<string | null>("pane_session_id", {
             paneId: p.paneId,
           }).catch(() => null);
-          // A chat pane reopens as a chat, on its session (Arkadia Lab).
-          if (__ARKADIA_LAB__ && p.chat) {
-            const resume = p.chat.resume ?? sid ?? undefined;
-            chat = resume
-              ? { cwd: p.chat.cwd, resume }
-              : {
-                  cwd: p.chat.cwd,
-                  ...(p.chat.continue ? { continue: true } : {}),
-                };
-          }
+          // A chat pane reopens as a chat, on its own session (Arkadia Lab).
+          if (__ARKADIA_LAB__ && p.chat) chat = restoredChat(p.chat);
           // `ccd` is the user's pwsh alias for Claude (skip-permissions +
           // effort), and it forwards @args — so --resume passes straight
           // through. Plain `claude` would drop those flags. Without a session
@@ -1350,7 +1351,8 @@ export function App() {
       );
       if (!spawned) return null;
       // The pane's shell stays under the chat, for a later switch.
-      if (lab) lab.start(spawned.paneId, { cwd: session.cwd, resume: session.id });
+      if (lab)
+        lab.start(spawned.paneId, { cwd: session.cwd, resume: session.id });
       if (activate) setActiveProjectId(project.id);
       // The project is where the user is about to work: surface it in the
       // sidebar's "Active" list now, not on the first keystroke.
@@ -2363,13 +2365,14 @@ export function App() {
   // ─── Focus a pane on request from the notification popup ────────
   // The "open in Arkadia" button emits `focus-pane` with the pane id; bring its
   // project + tab forward and focus the pane so the user lands on the
-  // conversation they were notified about.
+  // conversation they were notified about. A chat's ❓ round shows unfolded.
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let active = true;
     void listen<string>("focus-pane", (event) => {
       if (!active) return;
       revealPane(event.payload);
+      openRoundSheet(event.payload, liveChatState(event.payload).items);
     }).then((fn) => {
       if (active) unlisten = fn;
       else fn();

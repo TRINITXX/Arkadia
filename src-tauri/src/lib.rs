@@ -174,8 +174,9 @@ pub fn run() {
 
                 // Background-notification popup: watch the hook signal dir and
                 // surface a reply popup when Claude is waiting and the main
-                // window is unfocused.
-                if !lab::LAB {
+                // window is unfocused. Arkadia Lab watches its own folder
+                // (`popup::signal_dir`), never the daily one.
+                {
                     let popup_app = app_handle.clone();
                     let popup_registry = registry.clone();
                     std::thread::spawn(move || {
@@ -334,6 +335,7 @@ pub fn run() {
             popup::popup_set_auto_scroll,
             popup::popup_dismiss,
             popup::popup_open_in_main,
+            popup::popup_chat_signal,
             remote::remote_publish_state,
             remote::remote_pane_replaced,
             remote::remote_reply,

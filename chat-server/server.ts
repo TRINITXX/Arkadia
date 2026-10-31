@@ -197,6 +197,19 @@ export type ServerEvent =
     }
   /** Answered by the page, or dropped by Claude Code (interrupt, timeout). */
   | { type: "permission_resolved"; chatId: string; requestId: string }
+  /**
+   * What a message Claude Code took was, when the page doesn't show it (an
+   * echo `isEcho` drops): its `origin.kind`, and whether it is an artifact
+   * comment or a cross-session idle notice. Who opened a turn, for the
+   * notifications (`chatNotify`).
+   */
+  | {
+      type: "user_origin";
+      chatId: string;
+      kind: string | null;
+      artifact: boolean;
+      idleNotice: boolean;
+    }
   /** The model menu (`supportedModels`). */
   | { type: "models"; chatId: string; models: ModelInfo[] }
   /** The effort the next message runs at; null: the model takes none. */
@@ -580,7 +593,12 @@ class Chat {
         }
         // A hook's progress shows nothing in the page.
         if (message.type === "system" && message.subtype === "hook_progress") continue;
-        if (isEcho(message)) continue;
+        if (isEcho(message)) {
+          // The user's own is `user_sent`; the others say who opened a turn.
+          const origin = echoOrigin(this.chatId, message);
+          if (origin) this.out(origin);
+          continue;
+        }
         this.out({ type: "sdk", chatId: this.chatId, message: slimHook(message) });
         this.watchWorkflows(message);
         this.noteOutputFiles(message);
@@ -1248,6 +1266,25 @@ const chats = new Map<string, Chat>();
 function isEcho(message: SDKMessage): boolean {
   if (message.type !== "user" || !("isReplay" in message) || !message.isReplay) return false;
   return message.origin?.kind !== "peer";
+}
+
+/**
+ * What an echo the page doesn't get was, the user's own aside: a task's
+ * report, an artifact comment, a wakeup… Only its kind and two marks, as the
+ * notification hook reads them (`Test-TurnSelfWoken`), never its text.
+ */
+function echoOrigin(chatId: string, message: SDKMessage): ServerEvent | null {
+  if (message.type !== "user") return null;
+  const kind = message.origin?.kind ?? null;
+  if (kind === "human") return null;
+  const text = JSON.stringify(message.message?.content ?? "");
+  return {
+    type: "user_origin",
+    chatId,
+    kind,
+    artifact: text.includes("<task-type>artifact-"),
+    idleNotice: text.includes("[Cross-session idle notice]"),
+  };
 }
 
 /** A hook that went well says nothing the page shows: its output stays here. */

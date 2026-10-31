@@ -10,6 +10,13 @@
 //!
 //! The popup shows one pane at a time with a queue counter; replying or
 //! dismissing advances to the next waiting pane.
+//!
+//! Arkadia Lab watches its own folder (`notify-lab`), so neither instance
+//! takes the other's signals. A chat pane (Lab) has no hook signal: its page
+//! reports the same two moments (`popup_chat_signal`), always shown as the
+//! compact toast whatever the style, the tab named by the chat's title.
+//!
+//! No grace delay (31/10/2026): a signal is decided and shown at once.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -39,12 +46,6 @@ const NOTIF_W_MAX: u32 = 560;
 /// one peeks out to the upper-left instead of hiding completely.
 const CASCADE_DX: f64 = 16.0;
 const CASCADE_DY: f64 = 32.0;
-
-/// Grace period between Claude finishing (or asking) while Arkadia is backgrounded
-/// and the notification actually appearing. If the user returns to Arkadia (or
-/// answers the pane) within this window, the popup AND its sound are cancelled —
-/// we re-check the foreground at the end of the delay, not just at the start.
-const NOTIFY_GRACE: Duration = Duration::from_secs(5);
 
 /// Debounce for the completion chime: Claude Code fires several hooks around one
 /// event, each landing a signal, so without this the pane would chime two or
@@ -89,9 +90,30 @@ fn note_told(told: &mut HashSet<String>, pane_id: &str, kind: &str, away: bool) 
     }
 }
 
-/// Completion chime, played by Arkadia itself (for Arkadia panes) so its timing
-/// tracks the popup's grace delay. Non-Arkadia Claude sessions keep sounding from
-/// `notify-done.ps1`. Matches the file that hook used.
+/// What a chat pane's page says of its signal: a chat has no hook nor PTY
+/// title (`popup_chat_signal`).
+struct ChatInfo {
+    /// The tab name: the chat's title.
+    tab: String,
+    /// A ❓ round in Claude's last words: it rings as a question, but arms the
+    /// one notice per tab like an end (`told_kind`).
+    round: bool,
+}
+
+/// The kind `note_told` records. A terminal pane's ❓ round comes as a Stop
+/// (`done`) and arms the mute; a chat's comes as a `question`, so it is told
+/// as the end it also is. Only a real ask lifts the mute.
+fn told_kind(kind: &str, round: bool) -> &str {
+    if round {
+        "done"
+    } else {
+        kind
+    }
+}
+
+/// Completion chime, played by Arkadia itself (for Arkadia panes) so it follows
+/// the popup's own gates (`mute_self_woken`, debounce). Non-Arkadia Claude
+/// sessions keep sounding from `notify-done.ps1`. Matches the file that hook used.
 #[cfg(windows)]
 const NOTIFY_SOUND: &str = r"C:\Windows\Media\Windows Hardware Fail.wav";
 
@@ -107,6 +129,19 @@ fn style_from_str(s: &str) -> u8 {
         "compact" => STYLE_COMPACT,
         _ => STYLE_MIRROR,
     }
+}
+
+/// Whether an item shows as the compact toast: every item in compact style,
+/// and a chat pane's whatever the style (it has no terminal to mirror).
+/// `off` never queues anything.
+fn compact_for(style: u8, chat: bool) -> bool {
+    chat || style == STYLE_COMPACT
+}
+
+/// Whether the toast is kept built for the style: compact, and in the Lab
+/// any style but `off` (its chat panes always use it).
+fn toast_wanted(style: u8, lab: bool) -> bool {
+    style == STYLE_COMPACT || (lab && style != STYLE_OFF)
 }
 
 /// One waiting pane shown (or queued) in the popup. `pane_id` is the Arkadia
@@ -125,8 +160,11 @@ pub struct WaitingItem {
     /// the compact notification then falls back to the cwd folder name.
     pub project_name: String,
     /// Live terminal title of the pane (the tab name), used by the compact
-    /// notification. Empty when the session isn't in the live map.
+    /// notification. Empty when the session isn't in the live map. A chat
+    /// pane's comes from its page: the chat's title.
     pub tab_title: String,
+    /// A chat pane (Arkadia Lab): always the compact toast (`compact_for`).
+    pub chat: bool,
 }
 
 /// Managed FIFO of panes awaiting the user. Front (`items[0]`) is shown.
@@ -195,11 +233,21 @@ struct Signal {
 }
 
 /// `%LOCALAPPDATA%/Arkadia/notify` — the directory the hook drops signals into.
+/// Arkadia Lab's panes carry `ARKADIA_LAB`, and the hook drops theirs into
+/// `notify-lab`: each instance only hears its own tabs.
 pub fn signal_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Arkadia")
-        .join("notify")
+        .join(signal_folder(crate::lab::LAB))
+}
+
+fn signal_folder(lab: bool) -> &'static str {
+    if lab {
+        "notify-lab"
+    } else {
+        "notify"
+    }
 }
 
 /// Size past which `popup.log` moves to `popup.old.log` and starts over.
@@ -381,7 +429,7 @@ fn handle_signal(
     // the Stop/PreToolUse hook — reliable, no frontend round-trip). We do NOT scroll
     // when backgrounded: the popup mirrors the same Claude Code screen, so scrolling
     // would move what the popup shows. This never suppresses the notification — the
-    // chime still fires after the grace regardless of focus.
+    // chime still fires regardless of focus.
     if main_is_foreground(app)
         && app
             .state::<PopupQueue>()
@@ -393,10 +441,8 @@ fn handle_signal(
         crate::terminal::scroll_pane_to_reply_top(app, &pane_id, sessions.inner());
     }
 
-    // Always wait out the grace period, then: chime unconditionally, and show the
-    // popup only if the user is STILL away. The re-check at the END of the delay
-    // (not just now) is what makes "come back within 5s → no popup" work, while the
-    // sound plays no matter what.
+    // At once, no grace (31/10/2026): chime unconditionally, and the popup if the
+    // user is away. On a thread of its own: the chime blocks it while it plays.
     let app = app.clone();
     let registry = Arc::clone(registry);
     let kind = derive_kind(sig);
@@ -404,12 +450,10 @@ fn handle_signal(
     let cwd = cwd.to_string();
     let ts = sig.ts.unwrap_or(0);
     log_line(&format!(
-        "pane {pane_id} — chiming in {}s; popup too unless Arkadia has focus by then",
-        NOTIFY_GRACE.as_secs()
+        "pane {pane_id} — chiming now; popup too unless Arkadia has focus"
     ));
     std::thread::spawn(move || {
-        std::thread::sleep(NOTIFY_GRACE);
-        show_after_grace(&app, &registry, pane_id, kind, self_woken, cwd, ts);
+        show_signal(&app, &registry, pane_id, kind, self_woken, cwd, ts, None);
     });
 }
 
@@ -424,13 +468,15 @@ fn main_is_foreground(app: &AppHandle) -> bool {
     focused || crate::artifact_view::has_focus(app) || main_is_effective_foreground(app)
 }
 
-/// Fires `NOTIFY_GRACE` after a signal. The chime plays (debounced) whatever the
-/// focus, style or fullscreen — the user wants an audible cue — unless
-/// `mute_self_woken` silences the whole signal. The POPUP is subject to the grace:
-/// it appears only if the user is still away and notifications are on/allowed. All
-/// the style/fullscreen/enrich gates run here, at fire time, so they honor the
-/// current state — not the state when the signal first arrived.
-fn show_after_grace(
+/// Runs as soon as a signal lands (no grace since 31/10/2026), on a throwaway
+/// thread: the chime blocks it while it plays. The chime plays (debounced)
+/// whatever the focus, style or fullscreen — the user wants an audible cue —
+/// unless `mute_self_woken` silences the whole signal. The POPUP appears only
+/// while the user is away and notifications are on/allowed. Every gate reads
+/// the state now. `chat`: a chat pane's signal, from its page: always the
+/// compact toast, never the phone.
+#[allow(clippy::too_many_arguments)]
+fn show_signal(
     app: &AppHandle,
     registry: &Arc<AgentRegistry>,
     pane_id: String,
@@ -438,7 +484,10 @@ fn show_after_grace(
     self_woken: bool,
     cwd: String,
     ts: u64,
+    chat: Option<ChatInfo>,
 ) {
+    let round = chat.as_ref().is_some_and(|c| c.round);
+    let chat_tab = chat.map(|c| c.tab);
     let queue = app.state::<PopupQueue>();
     let already_told = queue.told_while_away.lock().contains(&pane_id);
     if mute_self_woken(self_woken, main_is_foreground(app), already_told) {
@@ -449,8 +498,8 @@ fn show_after_grace(
     }
 
     // The iPhone rings for the panes Alexis drives from it, whatever the PC
-    // shows (`remote::phone`): he is away from the PC then.
-    if crate::remote::phone::FOLLOW.should_notify(&pane_id) {
+    // shows (`remote::phone`): he is away from the PC then. Not for a chat.
+    if chat_tab.is_none() && crate::remote::phone::FOLLOW.should_notify(&pane_id) {
         let project = uuid::Uuid::parse_str(&pane_id)
             .ok()
             .and_then(|u| registry.project_name_for_pane(u))
@@ -464,14 +513,18 @@ fn show_after_grace(
     // focus, notification style and fullscreen on purpose — "quoi qu'il arrive".
     maybe_play_sound(app, &kind);
 
-    // The popup, however, IS cancelled if the user came back (or answered the pane,
-    // which requires focusing Arkadia) during the grace window. Read after the
-    // chime, which blocks ~0.7 s: the user may come back while it plays.
+    // The popup, however, only while the user is away from Arkadia. Read after
+    // the chime, which blocks ~0.7 s: the user may come back while it plays.
     let away = !main_is_foreground(app);
-    note_told(&mut queue.told_while_away.lock(), &pane_id, &kind, away);
+    note_told(
+        &mut queue.told_while_away.lock(),
+        &pane_id,
+        told_kind(&kind, round),
+        away,
+    );
     if !away {
         log_line(&format!(
-            "grace elapsed but Arkadia has focus — chimed, no popup for pane {pane_id}"
+            "Arkadia has focus — chimed, no popup for pane {pane_id}"
         ));
         return;
     }
@@ -500,23 +553,32 @@ fn show_after_grace(
 
     // Enrich with the labels the compact notification shows (the mirror popup
     // ignores them). Project name is frontend-registered; the tab title is the
-    // pane's live terminal title.
+    // pane's live terminal title, or a chat's title from its page.
     let project_name = uuid::Uuid::parse_str(&pane_id)
         .ok()
         .and_then(|u| registry.project_name_for_pane(u))
         .unwrap_or_default();
-    let sessions = app.state::<crate::terminal::SessionMap>();
-    let tab_title = crate::terminal::session_title(sessions.inner(), &pane_id).unwrap_or_default();
+    let chat = chat_tab.is_some();
+    let tab_title = chat_tab.unwrap_or_else(|| {
+        let sessions = app.state::<crate::terminal::SessionMap>();
+        crate::terminal::session_title(sessions.inner(), &pane_id).unwrap_or_default()
+    });
 
-    // Compact style shows ONE notification at a time: while one is up for another
-    // pane, drop the rest (nothing re-appears when it's closed).
-    if style == STYLE_COMPACT && queue.items.lock().iter().any(|i| i.pane_id != pane_id) {
+    // The compact toast shows ONE notification at a time: while it is up for
+    // another pane, drop the rest (nothing re-appears when it's closed).
+    if compact_for(style, chat)
+        && queue
+            .items
+            .lock()
+            .iter()
+            .any(|i| i.pane_id != pane_id && compact_for(style, i.chat))
+    {
         log_line("compact notification busy — dropping this signal");
         return;
     }
 
     log_line(&format!(
-        "showing notification (style {style}) for pane {pane_id}"
+        "showing notification (style {style}, chat {chat}) for pane {pane_id}"
     ));
 
     let item = WaitingItem {
@@ -526,6 +588,7 @@ fn show_after_grace(
         ts,
         project_name,
         tab_title,
+        chat,
     };
 
     {
@@ -537,6 +600,8 @@ fn show_after_grace(
             existing.ts = item.ts;
             existing.project_name = item.project_name.clone();
             existing.tab_title = item.tab_title.clone();
+            // Switched between chat and terminal since: its window changes.
+            existing.chat = item.chat;
         } else {
             // A new conversation goes BEHIND the others, in arrival order — the
             // active (front) popup is never disrupted by a fresh notification.
@@ -562,10 +627,10 @@ fn maybe_play_sound(app: &AppHandle, kind: &str) {
     play_notification_sound();
 }
 
-/// Plays the completion chime synchronously: called from a throwaway grace thread,
-/// so `SND_SYNC` blocks only that disposable thread and keeps the path string alive
-/// for the whole call. Arkadia panes sound from here (with the popup's grace
-/// delay); non-Arkadia sessions still sound from `notify-done.ps1`.
+/// Plays the completion chime synchronously: called from a throwaway signal
+/// thread, so `SND_SYNC` blocks only that disposable thread and keeps the path
+/// string alive for the whole call. Arkadia panes sound from here; non-Arkadia
+/// sessions still sound from `notify-done.ps1`.
 #[cfg(windows)]
 fn play_notification_sound() {
     use windows::core::HSTRING;
@@ -745,6 +810,11 @@ fn window_label(pane_id: &str, compact: bool) -> String {
     }
 }
 
+/// Label of the window showing a queued item under the style (`compact_for`).
+fn item_label(item: &WaitingItem, style: u8) -> String {
+    window_label(&item.pane_id, compact_for(style, item.chat))
+}
+
 /// Creates the window showing a pane, or returns the existing one. `compact`
 /// picks the two-line toast (`window=notif`, the shared `NOTIF_LABEL` window)
 /// vs the terminal-mirror popup (`window=popup`, one per pane). `None` while
@@ -831,16 +901,17 @@ fn build_pane_window(
 /// hidden now, so a late show brought it back empty), nor hide one a newer
 /// notification needs. Showing never activates: built `focused(false)`, the
 /// window keeps tao's no-activate show for good.
-fn show_if_queued(app: &AppHandle, win: WebviewWindow, compact: bool) {
+fn show_if_queued(app: &AppHandle, win: WebviewWindow) {
     let app2 = app.clone();
     let label = win.label().to_string();
     let _ = app.run_on_main_thread(move || {
-        let queued = app2
-            .state::<PopupQueue>()
+        let queue = app2.state::<PopupQueue>();
+        let style = queue.style.load(Ordering::Acquire);
+        let queued = queue
             .items
             .lock()
             .iter()
-            .any(|i| window_label(&i.pane_id, compact) == label);
+            .any(|i| item_label(i, style) == label);
         let _ = if queued { win.show() } else { win.hide() };
     });
 }
@@ -858,7 +929,7 @@ fn prebuild_notif_window(app: AppHandle) {
             Err(e) => log_line(&format!("compact notification window build failed: {e}")),
         }
         // The style changed during the build: the toast has no use left.
-        if queue.style.load(Ordering::Acquire) != STYLE_COMPACT {
+        if !toast_wanted(queue.style.load(Ordering::Acquire), crate::lab::LAB) {
             if let Some(w) = app.get_webview_window(NOTIF_LABEL) {
                 let _ = w.destroy();
             }
@@ -883,18 +954,52 @@ pub fn close_with_main(app: &AppHandle) {
     }
 }
 
+/// Gap (logical px) between the compact toast and mirror popups stacked above it.
+const TOAST_GAP: f64 = 8.0;
+
+/// How far mirror popups rise (logical px) so the compact toast under them
+/// stays visible and clickable: the Lab shows a chat pane's toast beside a
+/// terminal pane's mirror popup, both anchored bottom-right.
+fn mirror_lift(toast_up: bool) -> f64 {
+    if toast_up {
+        NOTIF_H + TOAST_GAP
+    } else {
+        0.0
+    }
+}
+
+/// Physical top-left of a window of `size` at stack `index` in the work area
+/// `wa` (x, y, width, height), raised by `lift` logical px. Right/bottom edges
+/// keep their gap; left/top are clamped too so even a popup larger than the
+/// work area still shows its top-right controls.
+fn cascade_xy(
+    wa: (i32, i32, i32, i32),
+    scale: f64,
+    (ww, wh): (i32, i32),
+    index: usize,
+    lift: f64,
+) -> (i32, i32) {
+    let (wx, wy, width, height) = wa;
+    let margin = (16.0 * scale) as i32;
+    // Sit close above the taskbar — a small gap, not the side margin.
+    let bottom_gap = (8.0 * scale) as i32;
+    let dx = (CASCADE_DX * scale) as i32 * index as i32;
+    let dy = (CASCADE_DY * scale) as i32 * index as i32 + (lift * scale) as i32;
+    let x = (wx + width - ww - margin - dx).max(wx + margin);
+    let y = (wy + height - wh - bottom_gap - dy).max(wy + margin);
+    (x, y)
+}
+
 /// Positions a popup at its stack `index`: index 0 (active) sits bottom-right;
-/// each one further back is offset up-left so it peeks out behind. Clamped to the
-/// monitor. Best-effort — keeps the default placement if the monitor is unknown.
-fn cascade_position(win: &WebviewWindow, index: usize) {
+/// each one further back is offset up-left so it peeks out behind; `lift`
+/// raises it above the toast (`mirror_lift`). Clamped to the monitor.
+/// Best-effort — keeps the default placement if the monitor is unknown.
+fn cascade_position(win: &WebviewWindow, index: usize, lift: f64) {
     if let Ok(Some(monitor)) = win.primary_monitor() {
         let scale = monitor.scale_factor();
         // The work area already excludes the taskbar (and adapts to its size,
         // side, and auto-hide), so no hard-coded taskbar height to guess.
         let wa = monitor.work_area();
-        let margin = (16.0 * scale) as i32;
-        // Sit close above the taskbar — a small gap, not the side margin.
-        let bottom_gap = (8.0 * scale) as i32;
         // Anchor on the window's ACTUAL outer size, not the default POPUP_W/H:
         // the user can resize a popup (drag handles) and the window persists
         // across re-notifications, so assuming 470px would let a widened popup
@@ -904,16 +1009,15 @@ fn cascade_position(win: &WebviewWindow, index: usize) {
             Ok(s) => (s.width as i32, s.height as i32),
             Err(_) => ((POPUP_W * scale) as i32, (POPUP_H * scale) as i32),
         };
-        let dx = (CASCADE_DX * scale) as i32 * index as i32;
-        let dy = (CASCADE_DY * scale) as i32 * index as i32;
-        // Right/bottom edges keep their gap; left/top are clamped too so even a
-        // popup larger than the work area still shows its top-right controls.
-        let x =
-            (wa.position.x + wa.size.width as i32 - ww - margin - dx).max(wa.position.x + margin);
-        let y = (wa.position.y + wa.size.height as i32 - wh - bottom_gap - dy)
-            .max(wa.position.y + margin);
+        let area = (
+            wa.position.x,
+            wa.position.y,
+            wa.size.width as i32,
+            wa.size.height as i32,
+        );
+        let (x, y) = cascade_xy(area, scale, (ww, wh), index, lift);
         log_line(&format!(
-            "cascade[{index}]: work_area=({},{})+{}x{} scale={scale} win={ww}x{wh} -> ({x},{y}) right_edge={}",
+            "cascade[{index}] lift={lift}: work_area=({},{})+{}x{} scale={scale} win={ww}x{wh} -> ({x},{y}) right_edge={}",
             wa.position.x,
             wa.position.y,
             wa.size.width,
@@ -930,18 +1034,15 @@ fn cascade_position(win: &WebviewWindow, index: usize) {
 /// re-raises a window in place WITHOUT stealing OS focus, so a fresh notification
 /// never pulls focus away from whatever the user is doing.
 fn sync_popups(app: &AppHandle) {
-    let (items, compact, notif_w) = {
+    let (items, style, notif_w) = {
         let queue = app.state::<PopupQueue>();
-        let compact = queue.style.load(Ordering::Acquire) == STYLE_COMPACT;
+        let style = queue.style.load(Ordering::Acquire);
         let notif_w = queue.notif_width.load(Ordering::Acquire) as f64;
         let q = queue.items.lock();
-        (q.clone(), compact, notif_w)
+        (q.clone(), style, notif_w)
     };
-    let (fresh_w, fresh_h) = popup_dims(compact, notif_w);
-    let wanted: std::collections::HashSet<String> = items
-        .iter()
-        .map(|i| window_label(&i.pane_id, compact))
-        .collect();
+    let wanted: std::collections::HashSet<String> =
+        items.iter().map(|i| item_label(i, style)).collect();
     // First, so a toast about to hide gets its empty state before it does, and
     // the reused toast never shows its previous pane.
     emit_state(app);
@@ -950,24 +1051,36 @@ fn sync_popups(app: &AppHandle) {
         if !label.starts_with("popup-") || wanted.contains(&label) {
             continue;
         }
-        if compact && label == NOTIF_LABEL {
-            show_if_queued(app, win, compact);
+        if label == NOTIF_LABEL {
+            show_if_queued(app, win);
         } else {
             let _ = win.close();
         }
     }
-    // Create / position / show each queued window by its stack index. (Compact
-    // style keeps at most one item, so this is a single bottom-right window.)
-    for (index, item) in items.iter().enumerate() {
+    // Create / position / show each queued window. The toast holds a single
+    // item, bottom-right; mirror popups cascade by their own stack index,
+    // above the toast while it is up (the Lab mixes both: its chat panes
+    // always use the toast).
+    let lift = mirror_lift(items.iter().any(|i| compact_for(style, i.chat)));
+    let mut stack = 0;
+    for item in &items {
+        let compact = compact_for(style, item.chat);
+        let (index, raise) = if compact {
+            (0, 0.0)
+        } else {
+            stack += 1;
+            (stack - 1, lift)
+        };
         match ensure_pane_window(app, &item.pane_id, compact, notif_w) {
             Ok(Some(win)) => {
                 let fresh = !win.is_visible().unwrap_or(false);
                 if fresh {
-                    let _ = win.set_size(tauri::LogicalSize::new(fresh_w, fresh_h));
+                    let (w, h) = popup_dims(compact, notif_w);
+                    let _ = win.set_size(tauri::LogicalSize::new(w, h));
                 }
-                cascade_position(&win, index);
+                cascade_position(&win, index, raise);
                 if fresh {
-                    show_if_queued(app, win, compact);
+                    show_if_queued(app, win);
                 }
             }
             Ok(None) => log_line("compact notification window still building"),
@@ -976,7 +1089,7 @@ fn sync_popups(app: &AppHandle) {
     }
     // Re-raise z-order back-to-front so index 0 ends up on top of the stack.
     for item in items.iter().rev() {
-        if let Some(win) = app.get_webview_window(&window_label(&item.pane_id, compact)) {
+        if let Some(win) = app.get_webview_window(&item_label(item, style)) {
             let _ = win.set_always_on_top(false);
             let _ = win.set_always_on_top(true);
         }
@@ -985,16 +1098,26 @@ fn sync_popups(app: &AppHandle) {
 }
 
 fn emit_state(app: &AppHandle) {
-    let items = {
+    let (items, style) = {
         let queue = app.state::<PopupQueue>();
+        let style = queue.style.load(Ordering::Acquire);
         let q = queue.items.lock();
-        q.clone()
+        (q.clone(), style)
+    };
+    // Each mirror popup filters the queue down to its own pane; the compact
+    // toast shows its single item, so it gets only the items it holds.
+    let toast = PopupStatePayload {
+        items: items
+            .iter()
+            .filter(|i| compact_for(style, i.chat))
+            .cloned()
+            .collect(),
     };
     let payload = PopupStatePayload { items };
-    // Each mirror popup filters the queue down to its own pane; the compact
-    // toast shows its single item.
     for (label, win) in app.webview_windows() {
-        if label.starts_with("popup-") {
+        if label == NOTIF_LABEL {
+            let _ = win.emit("popup-state", toast.clone());
+        } else if label.starts_with("popup-") {
             let _ = win.emit("popup-state", payload.clone());
         }
     }
@@ -1057,19 +1180,21 @@ pub fn popup_log_ui(msg: String) {
 
 /// Set the notification style from the frontend (`off` / `mirror` / `compact`).
 /// On an actual change we clear the queue and close any open windows, so we
-/// never leave a stale window of the previous style around. The frontend sends
-/// the saved style at startup, which builds the compact toast ahead of time.
+/// never leave a stale window of the previous style around (the toast only
+/// hides while the new style still wants it). The frontend sends the saved
+/// style at startup, which builds the compact toast ahead of time; in the Lab
+/// whatever the style but `off`, for its chat panes (`toast_wanted`).
 #[tauri::command]
 pub fn popup_set_style(style: String, app: AppHandle, queue: State<'_, PopupQueue>) {
     let next = style_from_str(&style);
     let prev = queue.style.swap(next, Ordering::Release);
+    let wanted = toast_wanted(next, crate::lab::LAB);
     if prev != next {
         queue.items.lock().clear();
-        close_all_popups(&app, false);
-        // Arkadia Lab shows no notification: no window to keep ready.
-        if next == STYLE_COMPACT && !crate::lab::LAB {
-            prebuild_notif_window(app);
-        }
+        close_all_popups(&app, wanted);
+    }
+    if wanted && app.get_webview_window(NOTIF_LABEL).is_none() {
+        prebuild_notif_window(app);
     }
 }
 
@@ -1085,13 +1210,10 @@ pub fn popup_set_fullscreen(enabled: bool, queue: State<'_, PopupQueue>) {
 pub fn popup_set_notif_width(width: u32, app: AppHandle, queue: State<'_, PopupQueue>) {
     let clamped = width.clamp(NOTIF_W_MIN, NOTIF_W_MAX);
     queue.notif_width.store(clamped, Ordering::Release);
-    if queue.style.load(Ordering::Acquire) == STYLE_COMPACT {
-        for (label, win) in app.webview_windows() {
-            if label.starts_with("popup-") {
-                let _ = win.set_size(tauri::LogicalSize::new(clamped as f64, NOTIF_H));
-                cascade_position(&win, 0);
-            }
-        }
+    // The toast alone: the Lab's mirror popups may stand beside it.
+    if let Some(win) = app.get_webview_window(NOTIF_LABEL) {
+        let _ = win.set_size(tauri::LogicalSize::new(clamped as f64, NOTIF_H));
+        cascade_position(&win, 0, 0.0);
     }
 }
 
@@ -1118,6 +1240,68 @@ pub fn set_pane_projects(entries: Vec<PaneProject>, registry: State<'_, Arc<Agen
         })
         .collect();
     registry.set_pane_projects(parsed);
+}
+
+/// Whether a chat signal counts as self-woken: an end, or a ❓ round (an end
+/// that rings as a question), keeps the page's flag; a real ask never mutes.
+fn chat_self_woken(kind: &str, round: bool, self_woken: bool) -> bool {
+    (kind == "done" || round) && self_woken
+}
+
+/// A chat pane's turn ended, or Claude waits on the user there: its page says
+/// so (`useChatNotify`), since no hook writes for a chat (`arkadia-notify.ps1`
+/// skips `ARKADIA_CHAT`). From here the path of a hook's signal, as the
+/// compact toast whatever the style, its tab named `tab_title`. `round`: a
+/// ❓ round, sent as a `question` (`told_kind`). Off the main thread: the
+/// chime blocks its thread while it plays.
+#[tauri::command(async)]
+pub fn popup_chat_signal(
+    pane_id: String,
+    kind: String,
+    self_woken: bool,
+    round: bool,
+    tab_title: String,
+    cwd: String,
+    app: AppHandle,
+) {
+    // Window labels and project names go by pane UUID.
+    if uuid::Uuid::parse_str(&pane_id).is_err() {
+        log_line(&format!(
+            "chat signal for an unknown pane {pane_id:?} — ignored"
+        ));
+        return;
+    }
+    let kind = if kind == "question" {
+        "question"
+    } else {
+        "done"
+    }
+    .to_string();
+    let self_woken = chat_self_woken(&kind, round, self_woken);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    log_line(&format!(
+        "chat signal: pane {pane_id} {kind} selfWoken={self_woken} round={round}"
+    ));
+    std::thread::spawn(move || {
+        let registry = Arc::clone(app.state::<Arc<AgentRegistry>>().inner());
+        let chat = ChatInfo {
+            tab: tab_title,
+            round,
+        };
+        show_signal(
+            &app,
+            &registry,
+            pane_id,
+            kind,
+            self_woken,
+            cwd,
+            ts,
+            Some(chat),
+        );
+    });
 }
 
 /// Mirror the "auto-scroll to reply" frontend setting into the backend, which
@@ -1157,12 +1341,74 @@ pub fn popup_open_in_main(pane_id: String, app: AppHandle, queue: State<'_, Popu
 
 #[cfg(test)]
 mod tests {
+    use super::{cascade_xy, chat_self_woken, mirror_lift, told_kind, NOTIF_W, POPUP_H, POPUP_W};
     use super::{
-        chime_allowed, mute_self_woken, note_told, suppress_for_fullscreen, window_label,
-        FullscreenKind, NOTIF_LABEL,
+        chime_allowed, compact_for, mute_self_woken, note_told, signal_folder,
+        suppress_for_fullscreen, toast_wanted, window_label, FullscreenKind, NOTIF_LABEL,
+        STYLE_COMPACT, STYLE_MIRROR, STYLE_OFF,
     };
     use std::collections::HashSet;
     use std::time::Duration;
+
+    /// The Lab shows a chat's toast and a terminal's mirror popup at once,
+    /// both bottom-right: the mirror cascade rises above the toast.
+    #[test]
+    fn a_mirror_popup_never_covers_the_toast() {
+        let area = (0, 0, 1920, 1040);
+        for scale in [1.0, 1.25, 1.5] {
+            let toast = ((NOTIF_W * scale) as i32, (super::NOTIF_H * scale) as i32);
+            let mirror = ((POPUP_W * scale) as i32, (POPUP_H * scale) as i32);
+            let (_, toast_top) = cascade_xy(area, scale, toast, 0, 0.0);
+            let (_, mirror_top) = cascade_xy(area, scale, mirror, 0, mirror_lift(true));
+            assert!(mirror_top + mirror.1 <= toast_top, "scale {scale}");
+        }
+        // Without a toast, the mirror popup keeps its old place.
+        assert_eq!(mirror_lift(false), 0.0);
+    }
+
+    /// A chat's ❓ round rings as a question but arms the one notice per tab
+    /// like a terminal's (a Stop): the next self-woken turn stays silent.
+    #[test]
+    fn a_chat_round_arms_the_mute_like_an_end() {
+        let mut told = HashSet::new();
+        note_told(&mut told, "p", told_kind("question", true), true);
+        assert!(told.contains("p"));
+        assert!(mute_self_woken(true, false, told.contains("p")));
+        // A real ask still lifts it.
+        note_told(&mut told, "p", told_kind("question", false), true);
+        assert!(!told.contains("p"));
+    }
+
+    /// A self-woken ❓ round keeps its flag through the command, so the tab
+    /// that already rang stays silent; a real ask never counts as self-woken.
+    #[test]
+    fn a_self_woken_round_keeps_its_flag() {
+        assert!(chat_self_woken("question", true, true));
+        assert!(chat_self_woken("done", false, true));
+        assert!(!chat_self_woken("question", false, true));
+        assert!(!chat_self_woken("done", false, false));
+    }
+
+    /// The daily instance and the Lab never take each other's signals.
+    #[test]
+    fn each_instance_watches_its_own_folder() {
+        assert_eq!(signal_folder(false), "notify");
+        assert_eq!(signal_folder(true), "notify-lab");
+    }
+
+    /// A chat pane has no terminal to mirror: the toast, whatever the style.
+    #[test]
+    fn a_chat_pane_always_gets_the_toast() {
+        assert!(compact_for(STYLE_MIRROR, true));
+        assert!(!compact_for(STYLE_MIRROR, false));
+        assert!(compact_for(STYLE_COMPACT, false));
+        // So the Lab keeps the toast built in mirror style, not when off; the
+        // daily instance only in compact style.
+        assert!(toast_wanted(STYLE_MIRROR, true));
+        assert!(!toast_wanted(STYLE_OFF, true));
+        assert!(!toast_wanted(STYLE_MIRROR, false));
+        assert!(toast_wanted(STYLE_COMPACT, false));
+    }
 
     #[test]
     fn a_question_lifts_the_mute_since_it_can_be_answered_outside_arkadia() {

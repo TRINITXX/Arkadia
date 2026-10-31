@@ -23,8 +23,9 @@ recopiée du terminal coupée au mauvais endroit.
    terminal. Arkadia ne lit ni ne copie jamais le jeton : le binaire officiel se connecte seul.
 2. **Arkadia Lab** : tout se construit dans le worktree `Arkadia-lab` (branche `master-lab`),
    build séparé qui tourne à côté du quotidien (`lab.rs`, `Rebuild Arkadia Lab.bat`). Le Lab part
-   de la liste de projets du quotidien sans ses onglets, et laisse notifications, téléphone, gate,
-   boîte d'artefacts et hellos de quota au quotidien.
+   de la liste de projets du quotidien sans ses onglets, et laisse téléphone, gate, boîte
+   d'artefacts et hellos de quota au quotidien. Ses notifications sont les siennes (voir
+   « Notifications »).
 3. **Bascule chat / terminal sur le même onglet** : un bouton en haut à droite. La même
    conversation passe de l'un à l'autre (`--resume <id>` d'un côté, `resume` du SDK de l'autre).
    Jamais deux processus Claude sur la même session : on ferme l'un avant d'ouvrir l'autre.
@@ -96,6 +97,34 @@ recopiée du terminal coupée au mauvais endroit.
   le badge et la bascule), `usePaneChats.ts` (bascule, titres, `ccd` → chat), composants
   `src/components/chat/` (maquette A). Aperçu sans l'appli : `chat-preview.html?s=tools|live|question|plan|subagent`.
 - Pas encore : vocal branché dans la saisie, changement de compte d'un volet chat, téléphone.
+
+## Notifications (décidé avec Alexis le 31/10/2026)
+
+1. **Quand** : à la fin d'un tour (une erreur ou la limite d'usage qui arrête Claude compte comme
+   une fin), et dès que Claude attend Alexis : une permission, AskUserQuestion, ExitPlanMode, une
+   demande d'un MCP, ou une ronde ❓ dans sa dernière réponse (type « question », les autres
+   « fini »). Rien sur un tour qu'il a lui-même arrêté (Échap) ni sur une commande locale.
+2. **Silences du quotidien** : rien tant que des sous-agents, des workflows ou un Monitor (jusqu'à
+   son délai) tournent en fond (les shells ne comptent jamais), une seule notif à la vraie fin ;
+   rien sur « No response requested. » ou un ⏳ seul en dernière ligne, sauf si une fin a été tue
+   pour du travail de fond depuis la dernière notif ; un tour que Claude a lancé seul (rapport de
+   tâche, message d'une autre session, réveil) se tait si l'onglet a déjà notifié pendant
+   l'absence d'Alexis. Un commentaire d'artefact ou un tour qu'on ne sait pas placer compte comme
+   celui d'Alexis.
+3. **Source** : pour un volet chat, la page décide sur l'état du chat (`chatNotify.ts`), jamais
+   les hooks. Le hook ignore les volets chat (`ARKADIA_CHAT`) et écrit les signaux des terminaux
+   du Lab dans `notify-lab`, le seul dossier que le Lab surveille : le quotidien et le Lab ne
+   prennent jamais les signaux l'un de l'autre.
+4. **Forme** : toujours la notif compacte « Projet · Onglet » (sauf style coupé), l'onglet nommé
+   par le titre du chat. Clic : le Lab s'ouvre sur ce volet, la fiche des questions dépliée.
+5. **Son et délai** : même son, même anti-doublon. Le son joue toujours ; la notif ne s'affiche
+   que si la fenêtre du Lab n'est pas au premier plan, tout de suite, sans les 5 s de grâce
+   (terminaux compris).
+6. **Badge** : anneau vert tant qu'une ronde ❓ ou un AskUserQuestion attend, bleu tant qu'un shell
+   tourne en fond, orange tant que des sous-agents ou workflows tournent, depuis l'état du chat.
+7. **Jamais sur l'historique** rejoué au montage, au rechargement, à la reprise ou au changement de
+   compte : seuls les événements vivants notifient. Un onglet caché notifie quand même.
+8. **Téléphone** : rien pour l'instant.
 
 ## Étapes
 

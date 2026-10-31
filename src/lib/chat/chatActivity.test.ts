@@ -6,6 +6,7 @@ import {
   chatForCommand,
   chatLabelOf,
   chatTitle,
+  restoredChat,
   terminalBusyReason,
 } from "@/lib/chat/usePaneChats";
 
@@ -153,5 +154,21 @@ describe("chatForCommand", () => {
     ).toEqual({ cwd: "C:/p", resume: "0f3a2b1c-1111-2222-3333-444455556666" });
     expect(chatForCommand("npm run dev", "C:/p")).toBeNull();
     expect(chatForCommand("ccu", "C:/p")).toBeNull();
+  });
+});
+
+describe("restoredChat", () => {
+  it("reopens a chat on its own session only, never a pane map's", () => {
+    const resume = "0f3a2b1c-1111-2222-3333-444455556666";
+    expect(restoredChat({ cwd: "C:/p", resume })).toEqual({
+      cwd: "C:/p",
+      resume,
+    });
+    expect(restoredChat({ cwd: "C:/p", continue: true })).toEqual({
+      cwd: "C:/p",
+      continue: true,
+    });
+    // After /clear: no session of its own, a fresh chat.
+    expect(restoredChat({ cwd: "C:/p" })).toEqual({ cwd: "C:/p" });
   });
 });

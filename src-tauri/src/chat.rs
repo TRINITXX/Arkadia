@@ -32,12 +32,19 @@ fn account_key(account_id: Option<&str>) -> String {
     account_id.unwrap_or("main").to_string()
 }
 
+/// Set for a chat's Claude Code: `arkadia-notify.ps1` then writes nothing (no
+/// signal, no pane map). The page notifies from the chat's own state
+/// (`useChatNotify`) and rings its badge from it.
+pub const CHAT_MARKER: &str = "ARKADIA_CHAT";
+
 /// What a chat's Claude Code and its hooks get from Arkadia, as a pane's
 /// shell does (`terminal::spawn_terminal`): the pane id the hooks report,
-/// and the Lab's marker, or the artifact inbox's `BROWSER` in the daily app.
+/// the chat marker, and the Lab's marker, or the artifact inbox's `BROWSER`
+/// in the daily app.
 fn chat_env(chat_id: &str) -> Value {
     let mut env = serde_json::Map::new();
     env.insert("ARKADIA_PANE_ID".into(), json!(chat_id));
+    env.insert(CHAT_MARKER.into(), json!("1"));
     if crate::lab::LAB {
         env.insert(crate::lab::PANE_MARKER.into(), json!("1"));
     } else if let Some(browser) = crate::artifact_inbox::browser_command() {
@@ -158,6 +165,8 @@ mod tests {
     fn a_start_gets_the_pane_id_and_nothing_else_changes() {
         let start = with_chat_env(json!({ "type": "start", "chatId": "p1", "cwd": "C:/x" }));
         assert_eq!(start["env"]["ARKADIA_PANE_ID"], "p1");
+        // The notify hook skips a chat: its page notifies.
+        assert_eq!(start["env"][CHAT_MARKER], "1");
         assert_eq!(start["cwd"], "C:/x");
         let send = json!({ "type": "send", "chatId": "p1", "text": "t" });
         assert_eq!(with_chat_env(send.clone()), send);

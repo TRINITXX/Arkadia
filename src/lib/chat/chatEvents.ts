@@ -11,6 +11,9 @@ import type { ChatCommand, ChatEvent } from "@/lib/chat/chatProtocol";
 
 type Listener = (event: ChatEvent) => void;
 
+/** A chat's end when its account's server stops. */
+export const SERVER_GONE = "Le serveur du chat s'est arrêté";
+
 const byChat = new Map<string, Set<Listener>>();
 const onExit = new Set<(account: string) => void>();
 let ready: Promise<void> | null = null;
@@ -185,12 +188,20 @@ function dispatch(line: string): void {
   }
   if (event.type === "server_exit") {
     // Its chats are gone: nothing works nor waits in them any more.
+    const gone: string[] = [];
     for (const [chatId, account] of accountOf) {
       if (account !== event.account) continue;
       replaying.delete(chatId);
       setActivity(chatId, IDLE_CHAT);
+      gone.push(chatId);
     }
     for (const cb of onExit) cb(event.account);
+    // Each of them ended: the watch of every chat hears it as its `closed`
+    // (a turn cut there is an end to notify, `chatNotify`).
+    for (const chatId of gone) {
+      const closed: ChatEvent = { type: "closed", chatId, error: SERVER_GONE };
+      for (const cb of everyChat) cb(closed);
+    }
     return;
   }
   if (!("chatId" in event) || !event.chatId) return;
