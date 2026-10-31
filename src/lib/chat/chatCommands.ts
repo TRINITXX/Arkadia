@@ -124,7 +124,8 @@ function answeredAt(items: ChatItem[]): number {
   for (let i = items.length - 1; i >= 0; i--) {
     const kind = items[i].kind;
     if (kind === "command") return i;
-    if (kind === "user") return -1;
+    // A message (the user's or a peer's) started a turn of the model since.
+    if (kind === "user" || kind === "peer") return -1;
   }
   return -1;
 }

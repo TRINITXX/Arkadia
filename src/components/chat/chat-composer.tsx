@@ -11,6 +11,7 @@ import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatRailActions } from "@/components/chat/chat-rail-actions";
 import { ChatSlashMenu } from "@/components/chat/chat-slash-menu";
 import { useSlashMenu, type ChatSlash } from "@/lib/chat/useSlashMenu";
+import { useChatLayers } from "@/lib/chat/useChatLayers";
 import type { ChatImage } from "@/lib/chat/useChatSession";
 import { hasQueued, type ChatItem } from "@/lib/chat/chatState";
 import { useSendAfterDictation } from "@/lib/chat/useSendAfterDictation";
@@ -68,8 +69,8 @@ function readImage(file: File): Promise<Attachment> {
  * The input card: text (Enter sends, Shift+Enter breaks the line), images by
  * paste, `/` commands, the terminal rail's actions (`ChatRailActions`), and
  * the session's mode and model.
- * Esc interrupts a working Claude (its turn only: background agents and
- * workflows go on), Ctrl+B sends its running command or agent to the
+ * Esc first closes what is open in the pane (`chatLayers`), then interrupts
+ * a working Claude (its turn only: background agents and workflows go on), Ctrl+B sends its running command or agent to the
  * background, Shift+Tab cycles the mode, as in the terminal. A message sent while Claude works waits for its turn; Ctrl+Enter
  * sends it now (the turn under way stops), or, input empty, the ones waiting.
  * Sent mid-dictation, the draft goes once the dictated text is in.
@@ -134,6 +135,7 @@ export function ChatComposer({
     onDraft((d) => ({ ...d, images: update(d.images) }));
   const [menu, setMenu] = useState<"model" | null>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const layers = useChatLayers();
   const ghost = useChatSuggestion(suggestion, text, working);
   // ↑ / ↓ bring back the pane's last messages (empty input).
   const history = useInputHistory(items, text, (t) =>
@@ -241,9 +243,13 @@ export function ChatComposer({
       onMode(nextMode(mode));
       return;
     }
-    if (e.key === "Escape" && working) {
-      e.preventDefault();
-      onInterrupt();
+    if (e.key === "Escape") {
+      // A list, menu or sheet of the pane open: Esc is for it, never Claude.
+      if (layers?.closeTop()) e.preventDefault();
+      else if (working) {
+        e.preventDefault();
+        onInterrupt();
+      }
       return;
     }
     if (

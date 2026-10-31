@@ -184,15 +184,17 @@ export const CHAT_CSS = `
 .chat-closed { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: 13px; color: #fca5a5; padding: 8px; }
 
 /* Conversation: messages, images, tools, live line, plan, search. */
-/* Messages in the terminal's frames (the display mod outils-discrets): green for the user, violet for Claude, red edge on an error. Over the old bubble (.chat-user). */
+/* Messages in the terminal's frames (the display mod outils-discrets): green for the user, violet for Claude, blue for another session or a subagent, red edge on an error. Over the old bubble (.chat-user). */
 .chat-root .chat-frame { align-self: stretch; max-width: none; width: 100%; border: 1px solid; border-radius: 10px; padding: 5px 14px 10px; white-space: normal; color: var(--chat-ink); }
 .chat-frame.user { border-color: #1f9f50; background: linear-gradient(rgb(25,36,40), rgb(21,31,34)); }
 .chat-frame.claude { border-color: #8648c5; background: linear-gradient(rgb(33,33,48), rgb(26,25,38)); }
+.chat-frame.peer { border-color: #2f74b5; background: linear-gradient(rgb(22,31,43), rgb(19,26,36)); }
 .chat-frame.error { border-color: #d9534f; }
 .chat-frame-head { display: flex; align-items: center; gap: 7px; height: 24px; font-size: 12.5px; margin-bottom: 2px; user-select: none; }
 .chat-frame-head .lucide { width: 14px; height: 14px; flex-shrink: 0; }
 .chat-frame.user .chat-frame-head { color: #22c55e; }
 .chat-frame.claude .chat-frame-head { color: #b58af7; }
+.chat-frame.peer .chat-frame-head { color: #60a5fa; }
 .chat-frame.error .chat-frame-head { color: #f08a87; }
 .chat-frame-head b { font-weight: 600; }
 .chat-frame-head time { color: var(--chat-mute); font-size: 11.5px; font-variant-numeric: tabular-nums; }

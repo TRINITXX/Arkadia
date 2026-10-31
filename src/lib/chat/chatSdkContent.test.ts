@@ -219,6 +219,59 @@ describe("Claude Code's turn around the column", () => {
     expect(notices(cut).map((n) => n.text)).toEqual(["Tour interrompu"]);
   });
 
+  it("says « Tour interrompu » for an Esc while a Stop hook runs", () => {
+    // Live run of 31/10/2026: the reply is in, a Stop hook runs, Esc.
+    const reply = sdk({
+      type: "assistant",
+      uuid: "a1",
+      message: { id: "m1", content: [{ type: "text", text: "ok" }] },
+    });
+    const stopped = (extra: ChatEvent[]) =>
+      run([
+        reply,
+        ...extra,
+        sdk({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          terminal_reason: "stop_hook_prevented",
+          uuid: "r1",
+        }),
+      ]);
+    const esc = stopped([
+      sdk({
+        type: "user",
+        uuid: "u2",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "[Request interrupted by user]" }],
+        },
+      }),
+    ]);
+    expect(notices(esc).map((n) => n.text)).toEqual(["Tour interrompu"]);
+    // The hook's own stop says so, and the next turn starts clean.
+    expect(notices(stopped([])).map((n) => n.text)).toEqual([
+      "Claude arrêté par un hook Stop",
+    ]);
+    expect(esc.interrupted).toBe(false);
+  });
+
+  it("hides Claude Code's stand-in reply « No response requested. »", () => {
+    const state = run([
+      sdk({
+        type: "assistant",
+        uuid: "a1",
+        message: {
+          id: "m1",
+          model: "<synthetic>",
+          content: [{ type: "text", text: "No response requested." }],
+        },
+      }),
+    ]);
+    expect(state.items.filter((i) => i.kind === "text")).toEqual([]);
+  });
+
   it("gives a tool call its structured result: a command's streams apart", () => {
     const state = run([
       sdk({

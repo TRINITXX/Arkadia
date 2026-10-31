@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { SquareTerminal } from "lucide-react";
 import { elapsedLabel } from "@/lib/chat/chatLabels";
+import { useChatLayer } from "@/lib/chat/useChatLayers";
 import { outputTail, type BackgroundShell } from "@/lib/chat/chatTasks";
 import type { ShellOutput } from "@/lib/chat/useShellOutputs";
 
@@ -41,21 +42,15 @@ export function ChatShellsChip({
     return () => window.clearInterval(timer);
   }, [open, onOutput, ids]);
 
-  // A click elsewhere or Esc closes it.
+  // Esc closes it through the pane (never Claude's turn), a click elsewhere too.
+  useChatLayer(open, () => setOpen(false));
   useEffect(() => {
     if (!open) return;
     const down = (e: MouseEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
     window.addEventListener("mousedown", down);
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("mousedown", down);
-      window.removeEventListener("keydown", key);
-    };
+    return () => window.removeEventListener("mousedown", down);
   }, [open]);
 
   useEffect(() => {

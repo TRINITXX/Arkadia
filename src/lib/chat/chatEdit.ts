@@ -3,7 +3,7 @@ import type { ChatItem } from "@/lib/chat/chatState";
 
 type UserItem = Extract<ChatItem, { kind: "user" }>;
 
-/** The messages (the user's and Claude's) after `item`: what an edit drops. */
+/** The messages (the user's, Claude's, a peer's) after `item`: what an edit drops. */
 export function laterMessages(
   items: readonly ChatItem[],
   item: UserItem,
@@ -13,7 +13,11 @@ export function laterMessages(
   return items
     .slice(at + 1)
     .filter(
-      (i) => i.kind === "user" || i.kind === "text" || i.kind === "command",
+      (i) =>
+        i.kind === "user" ||
+        i.kind === "peer" ||
+        i.kind === "text" ||
+        i.kind === "command",
     ).length;
 }
 

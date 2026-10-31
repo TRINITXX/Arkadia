@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { needsReread, outputFiles, readConsoleTail } from "./taskOutput.ts";
 import { WorkflowWatch, type WorkflowLiveAgent } from "./workflowWatch.ts";
 import {
   getSessionInfo,
@@ -420,6 +421,8 @@ class Chat {
   private effortSent: string | undefined;
   private mcpSent: string | undefined;
   private mcpTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Background shells' output files, by task id (`noteOutputFiles`). */
+  private outputFiles = new Map<string, string>();
 
   // No parameter properties: Node runs this file by stripping its types.
   constructor(chatId: string, start: Boot) {
@@ -497,6 +500,10 @@ class Chat {
         agentProgressSummaries: true,
         // Its text too, not only its tool calls: its sheet follows it live.
         forwardSubagentText: true,
+        // The CLI echoes each user message: the only way another session's
+        // message (SendMessage) reaches the page live, seen on 31/10/2026.
+        // The others are dropped in `pump` (`isEcho`).
+        extraArgs: { "replay-user-messages": null },
         stderr: (data) => process.stderr.write(`[${this.chatId}] ${data}`),
       },
     });
@@ -569,8 +576,10 @@ class Chat {
         }
         // A hook's progress shows nothing in the page.
         if (message.type === "system" && message.subtype === "hook_progress") continue;
+        if (isEcho(message)) continue;
         this.out({ type: "sdk", chatId: this.chatId, message: slimHook(message) });
         this.watchWorkflows(message);
+        this.noteOutputFiles(message);
         // Not in the SDK's types (0.3.314): a message's lifecycle frames.
         const frame = message as { type: string; command_uuid?: unknown };
         if (frame.type === "command_lifecycle" && typeof frame.command_uuid === "string") {
@@ -980,7 +989,32 @@ class Chat {
     await (await this.ready).stopTask(taskId);
   }
 
-  /** The last 8 KiB a background shell wrote, for the shells list (polled). */
+  /**
+   * Where each background shell writes: its Bash call's result names the
+   * file, and its end (`task_notification`) too.
+   */
+  private noteOutputFiles(message: SDKMessage): void {
+    if (message.type === "system" && message.subtype === "task_notification") {
+      if (message.output_file) this.outputFiles.set(message.task_id, message.output_file);
+      return;
+    }
+    if (message.type !== "user" || !Array.isArray(message.message.content)) return;
+    for (const block of message.message.content) {
+      if (block.type !== "tool_result") continue;
+      const content = block.content;
+      const text =
+        typeof content === "string"
+          ? content
+          : (content ?? []).map((b) => (b.type === "text" ? b.text : "")).join("\n");
+      for (const [taskId, path] of outputFiles(text)) this.outputFiles.set(taskId, path);
+    }
+  }
+
+  /**
+   * The last 8 KiB a background shell wrote, for the shells list (polled).
+   * Claude Code decodes it as UTF-8: an output in the console's code page
+   * (Windows' own programs) is read again from its file (`readConsoleTail`).
+   */
   async taskOutput(taskId: string): Promise<void> {
     const q = (await this.ready) as Query & {
       // In sdk.mjs, not yet in its types (0.3.314): `get_task_output`.
@@ -988,7 +1022,12 @@ class Chat {
     };
     const chatId = this.chatId;
     try {
-      const { output, truncated } = await q.getTaskOutput(taskId);
+      let { output, truncated } = await q.getTaskOutput(taskId);
+      const file = this.outputFiles.get(taskId);
+      if (file && needsReread(output, truncated)) {
+        const again = await readConsoleTail(file);
+        if (again) ({ output, truncated } = again);
+      }
       emit({ type: "task_output", chatId, taskId, output, truncated });
     } catch (e) {
       emit({ type: "task_output", chatId, taskId, output: "", truncated: false, error: String(e) });
@@ -1063,7 +1102,7 @@ class Chat {
     // Rewound and nothing sent yet: the transcript still holds what went.
     const cut = all.findIndex((m) => m.uuid === this.cutBefore);
     return (cut >= 0 ? all.slice(0, cut) : all).flatMap((m) => {
-      const text = m.type === "user" ? promptText(m.message) : null;
+      const text = m.type === "user" && typedByUser(m) ? promptText(m.message) : null;
       // Not in the SDK's type, but there: the transcript entry's time.
       const { timestamp } = m as { timestamp?: string };
       return text ? [{ uuid: m.uuid, text, timestamp }] : [];
@@ -1197,6 +1236,16 @@ class Chat {
 
 const chats = new Map<string, Chat>();
 
+/**
+ * The CLI's echo of a user message (`--replay-user-messages`) that the page
+ * has already: the user's own (`user_sent`, images and all). Only another
+ * session's or a subagent's message (`origin.kind: 'peer'`) goes on.
+ */
+function isEcho(message: SDKMessage): boolean {
+  if (message.type !== "user" || !("isReplay" in message) || !message.isReplay) return false;
+  return message.origin?.kind !== "peer";
+}
+
 /** A hook that went well says nothing the page shows: its output stays here. */
 function slimHook(message: SDKMessage): SDKMessage {
   if (message.type !== "system" || message.subtype !== "hook_response") return message;
@@ -1230,6 +1279,17 @@ const SESSIONS_LIMIT = 60;
 
 /** How Claude Code opens the summary that replaces a compacted conversation. */
 const COMPACT_SUMMARY = "This session is being continued from a previous conversation";
+
+/**
+ * Not Claude Code's own (`is_meta`), nor another session's or a subagent's
+ * (`origin`): both live in the transcript as user messages. Neither field is
+ * in the SDK's type, but there (verified on 31/10/2026).
+ */
+function typedByUser(m: unknown): boolean {
+  const { is_meta, origin } = m as { is_meta?: unknown; origin?: { kind?: unknown } };
+  if (is_meta === true) return false;
+  return origin?.kind === undefined || origin.kind === "human";
+}
 
 /** A message the user typed, or null: tool results, commands' output, notes. */
 function promptText(message: unknown): string | null {

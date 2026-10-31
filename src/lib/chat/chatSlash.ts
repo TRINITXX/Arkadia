@@ -159,6 +159,8 @@ function rank(command: SlashCommandInfo, query: string): number {
 export interface SlashEntry {
   command: SlashCommandInfo;
   group: SlashGroup;
+  /** Its name typed in full: pinned first, out of its group (`slashHead`). */
+  exact?: boolean;
 }
 
 /**
@@ -186,7 +188,21 @@ export function slashEntries(
       a.r - b.r ||
       a.command.name.localeCompare(b.command.name),
   );
-  return scored.map(({ command, group }) => ({ command, group }));
+  return scored.map(({ command, group, r }) =>
+    q && r === 0 ? { command, group, exact: true } : { command, group },
+  );
+}
+
+/**
+ * The header above row `i`, or null: where its section starts. The exact
+ * match pinned first has its own, so its group's header never shows twice.
+ */
+export function slashHead(entries: SlashEntry[], i: number): string | null {
+  const section = (e: SlashEntry) => (e.exact ? "exact" : e.group);
+  if (i > 0 && section(entries[i - 1]) === section(entries[i])) return null;
+  return entries[i].exact
+    ? "Correspondance exacte"
+    : SLASH_GROUP_LABELS[entries[i].group];
 }
 
 /** A row of a page command's panel. */

@@ -7,6 +7,7 @@ import {
   mcpSorted,
   mcpStatusLabel,
 } from "@/lib/chat/chatSdkSettings";
+import { useChatLayer } from "@/lib/chat/useChatLayers";
 
 /**
  * « N MCP en échec » in the status bar, only while one is: a click lists
@@ -22,6 +23,7 @@ export function ChatMcpChip({
   onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  useChatLayer(open, () => setOpen(false));
   const failed = mcpFailed(servers).length;
   if (failed === 0 && !open) return null;
   return (

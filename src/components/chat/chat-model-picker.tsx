@@ -9,6 +9,7 @@ import {
   type ModelChoice,
   type SdkState,
 } from "@/lib/chat/chatSdkSettings";
+import { useChatLayer } from "@/lib/chat/useChatLayers";
 
 /** Until Claude Code lists its models: the usual four. */
 const FALLBACK: ModelChoice[] = MODELS.map((m) => ({
@@ -51,6 +52,11 @@ export function ChatModelPicker({
     model,
     effort: sdk.effort,
   });
+  // Esc closes the menu shown, never Claude's turn (`chatLayers`).
+  useChatLayer(
+    menu === "model" || (menu === "effort" && efforts.length > 0 && !!onEffort),
+    () => setMenu(null),
+  );
   const toggle = (which: "model" | "effort") =>
     setMenu(menu === which ? null : which);
   return (

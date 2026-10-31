@@ -70,6 +70,29 @@ export function voiceFailure(screen: RenderPayload | null): string | null {
   return VOICE_FAILURE.test(status) ? status : null;
 }
 
+/** The known failures (`VOICE_FAILURE`) in French. */
+const VOICE_FAILURES_FR: [RegExp, string][] = [
+  [/^No speech detected/, "Aucune parole détectée"],
+  [/^No audio detected/, "Aucun son reçu du micro"],
+  [/^Voice connection failed/, "Connexion au service vocal impossible"],
+  [/^Voice stream error/, "Erreur du flux vocal"],
+  [/^Dictation error/, "Erreur de dictée"],
+];
+
+/**
+ * A dictation's failure as the toast says it: in French, with Claude Code's
+ * own detail after a colon (« Dictation error: … »); an unknown one as is.
+ */
+export function voiceFailureText(failure: string): string {
+  for (const [known, fr] of VOICE_FAILURES_FR) {
+    const match = known.exec(failure);
+    if (!match) continue;
+    const detail = /^\s*:\s*(.+)$/.exec(failure.slice(match[0].length))?.[1];
+    return detail ? `${fr} : ${detail.replace(/\.$/, "")}` : fr;
+  }
+  return `Claude Code : ${failure}`;
+}
+
 /** Column of the first non-space cell of a row, or null when the row is blank. */
 export function firstContentCol(runs: CellRun[]): number | null {
   let col = 0;

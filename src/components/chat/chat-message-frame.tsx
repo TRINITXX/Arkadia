@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, Pencil, Sparkles, User } from "lucide-react";
+import {
+  Check,
+  Copy,
+  MessagesSquare,
+  Pencil,
+  Sparkles,
+  User,
+} from "lucide-react";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { messageTime, messageTimeFull } from "@/lib/messageTime";
 
 const ROLES = {
   user: { label: "Toi", Icon: User },
   claude: { label: "Claude", Icon: Sparkles },
+  peer: { label: "Message d'une autre session", Icon: MessagesSquare },
 };
 
 /** How long a copy button holds its ✓ (the code blocks' too). */
@@ -13,12 +21,14 @@ const COPIED_MS = 1200;
 
 /**
  * A message in the terminal's frames (the display mod `outils-discrets`): the
- * user's in green, Claude's in violet, red-edged when the reply is an error.
- * Its head says who and when. « Copier le message » sits in the user's head
- * on hover, and at the foot of Claude's reply, always there but discreet.
+ * user's in green, Claude's in violet, red-edged when the reply is an error,
+ * another session's or a subagent's in blue (`label` names it). Its head says
+ * who and when. « Copier le message » sits in the head on hover, and at the
+ * foot of Claude's reply, always there but discreet.
  */
 export function ChatMessageFrame({
   role,
+  label: ownLabel,
   at,
   text,
   error = false,
@@ -28,7 +38,9 @@ export function ChatMessageFrame({
   onEdit,
   children,
 }: {
-  role: "user" | "claude";
+  role: "user" | "claude" | "peer";
+  /** The head's words instead of the role's (a peer's « Message de … »). */
+  label?: string;
   /** When it was said (ms); no time shown when unknown. */
   at?: number;
   /** What « Copier le message » copies: the markdown as written. */
@@ -43,7 +55,8 @@ export function ChatMessageFrame({
   onEdit?: () => void;
   children: React.ReactNode;
 }) {
-  const { label, Icon } = ROLES[role];
+  const { Icon } = ROLES[role];
+  const label = ownLabel ?? ROLES[role].label;
   const iso = at === undefined ? null : new Date(at).toISOString();
   const [copied, setCopied] = useState(false);
   const timerRef = useRef(0);
@@ -106,7 +119,7 @@ export function ChatMessageFrame({
             <Pencil />
           </button>
         )}
-        {role === "user" && button}
+        {role !== "claude" && button}
       </div>
       {children}
       {role === "claude" && button && (

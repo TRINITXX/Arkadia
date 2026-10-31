@@ -11,6 +11,7 @@ import {
   rewindRows,
   sessionRows,
   slashEntries,
+  slashHead,
   whenLabel,
 } from "@/lib/chat/chatSlash";
 
@@ -60,6 +61,35 @@ describe("the / menu", () => {
     ]);
     expect(slashEntries(all, "brain").map((e) => e.command.name)).toEqual([
       "superpowers:brainstorming",
+    ]);
+  });
+
+  it("heads the exact match pinned first apart, each group's header once", () => {
+    // A skill typed in full, a built-in and another skill after it: the
+    // skills' header showed twice (31/10/2026).
+    const entries = slashEntries(
+      menuCommands(
+        [...LISTED, cmd("commit-push"), cmd("commit-msg", { builtin: true })],
+        [],
+      ),
+      "commit",
+    );
+    expect(entries.map((e) => e.command.name)).toEqual([
+      "commit",
+      "commit-msg",
+      "commit-push",
+    ]);
+    expect(entries.map((_, i) => slashHead(entries, i))).toEqual([
+      "Correspondance exacte",
+      "Claude Code",
+      "Tes skills et commandes",
+    ]);
+    const all = slashEntries(menuCommands(LISTED, []), "");
+    const heads = all.map((_, i) => slashHead(all, i)).filter(Boolean);
+    expect(heads).toEqual([
+      "Claude Code",
+      "Tes skills et commandes",
+      "Plugins et MCP",
     ]);
   });
 

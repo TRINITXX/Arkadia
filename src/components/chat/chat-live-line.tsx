@@ -3,6 +3,7 @@ import { Bot, Circle, CircleCheck, CircleDot, ListChecks } from "lucide-react";
 import { retryLabel, type RetryInfo } from "@/lib/chat/chatErrors";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import type { Subagent, TaskItem } from "@/lib/chat/chatState";
+import { useChatLayer } from "@/lib/chat/useChatLayers";
 
 /** A call's own time shows once it runs this long (the terminal's). */
 const STEP_TIME_MS = 3_000;
@@ -55,8 +56,12 @@ export function ChatLiveLine({
 
   const done = tasks.filter((t) => t.status === "completed").length;
   const openTasks = tasks.length > 0 && done < tasks.length;
-  if (!working && !hook && subagents.length === 0 && !openTasks)
-    return <div className="chat-live" />;
+  const quiet = !working && !hook && subagents.length === 0 && !openTasks;
+  // Esc closes the tasks shown, never Claude's turn (`chatLayers`).
+  useChatLayer(tasksOpen && tasks.length > 0 && !quiet, () =>
+    setTasksOpen(false),
+  );
+  if (quiet) return <div className="chat-live" />;
   // A call running a while: its time, and Ctrl+B for a command or an agent.
   const stepMs =
     stepSince !== null && !compacting && !retry ? now - stepSince : 0;

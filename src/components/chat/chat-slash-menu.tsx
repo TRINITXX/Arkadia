@@ -1,6 +1,6 @@
 import { Fragment, useLayoutEffect, useRef } from "react";
 import { History, Undo2 } from "lucide-react";
-import { SLASH_GROUP_LABELS, type PickerRow } from "@/lib/chat/chatSlash";
+import { slashHead, type PickerRow } from "@/lib/chat/chatSlash";
 import type { RewindMode } from "@/lib/chat/useSlashActions";
 import type { SlashMenu } from "@/lib/chat/useSlashMenu";
 
@@ -54,16 +54,12 @@ export function ChatSlashMenu({ menu }: { menu: SlashMenu }) {
       <div className="chat-slash" onMouseDown={keep}>
         {view.entries.map((entry, i) => {
           const { command } = entry;
-          const head = i === 0 || view.entries[i - 1].group !== entry.group;
+          const head = slashHead(view.entries, i);
           // Headers beside the rows, not around them: they stick on scroll.
           return (
             // Claude Code's rows can share a name (a built-in and a skill).
             <Fragment key={`${entry.group}:${command.name}:${i}`}>
-              {head && (
-                <div className="chat-slash-group">
-                  {SLASH_GROUP_LABELS[entry.group]}
-                </div>
-              )}
+              {head && <div className="chat-slash-group">{head}</div>}
               <button
                 type="button"
                 ref={

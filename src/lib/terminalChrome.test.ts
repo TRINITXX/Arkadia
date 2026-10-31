@@ -5,6 +5,7 @@ import {
   isPromptField,
   trustAnswerKey,
   voiceFailure,
+  voiceFailureText,
 } from "@/lib/terminalChrome";
 import type { CellRun, RenderPayload } from "@/types";
 
@@ -174,6 +175,19 @@ describe("isDictating", () => {
     expect(
       voiceFailure(box("", "❯ No speech detected in the logs")),
     ).toBeNull();
+  });
+
+  it("says a known failure in French, an unknown one as Claude Code wrote it", () => {
+    expect(voiceFailureText("No speech detected.")).toBe(
+      "Aucune parole détectée",
+    );
+    expect(voiceFailureText("No audio detected from microphone")).toBe(
+      "Aucun son reçu du micro",
+    );
+    expect(voiceFailureText("Dictation error: socket closed.")).toBe(
+      "Erreur de dictée : socket closed",
+    );
+    expect(voiceFailureText("Voice is off")).toBe("Claude Code : Voice is off");
   });
 
   it("ignores the same words in the transcript and in the prompt", () => {

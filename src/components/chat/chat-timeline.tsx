@@ -24,6 +24,7 @@ import {
 } from "@/lib/chat/chatGroups";
 import { withDayBreaks } from "@/lib/chat/chatDays";
 import { chatGallery } from "@/lib/chat/chatImages";
+import { peerLabel } from "@/lib/chat/chatPeer";
 import { latestPlan, type ChatItem, type Subagent } from "@/lib/chat/chatState";
 import { turnDoneLine } from "@/lib/chat/chatSteps";
 import { copiedCodeMessage } from "@/lib/codeCopy";
@@ -156,6 +157,28 @@ export const ChatTimeline = memo(function ChatTimeline({
                     onRemove={remover(unit.item)}
                   />
                 )}
+              </ChatMessageFrame>
+            );
+          case "peer":
+            return (
+              <ChatMessageFrame
+                key={unit.item.id}
+                role="peer"
+                label={peerLabel(unit.item, subagents)}
+                at={unit.item.at}
+                text={unit.item.text}
+                className="chat-peer"
+                onToast={onToast}
+              >
+                <div className="reading-md" data-chat-prose="">
+                  <MarkdownContent
+                    text={unit.item.text || " "}
+                    baseDir={cwd}
+                    onOpen={onOpen}
+                    onToast={onToast}
+                    inlineImages={false}
+                  />
+                </div>
               </ChatMessageFrame>
             );
           case "text":

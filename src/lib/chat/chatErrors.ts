@@ -22,7 +22,12 @@ export interface ResultContext {
   /** The reset of the window that blocks (epoch seconds), if known. */
   resetsAt?: number;
   now: number;
+  /** The turn carries Claude Code's « [Request interrupted by user] ». */
+  interrupted?: boolean;
 }
+
+/** Ends a hook can give a turn, but also the user's Esc while it runs. */
+const HOOK_ENDS = new Set(["stop_hook_prevented", "hook_stopped"]);
 
 const str = (v: unknown): string | undefined =>
   typeof v === "string" ? v : undefined;
@@ -158,7 +163,13 @@ export function resultNotice(
     (e): e is string => typeof e === "string" && !isDiagnostic(e),
   );
   const ok = m.subtype === "success" && m.is_error !== true;
-  if (reason === "aborted_streaming" || reason === "aborted_tools")
+  // An Esc during a Stop hook ends the turn as the hook would: the user's
+  // note says who stopped it (verified live 31/10/2026).
+  if (
+    reason === "aborted_streaming" ||
+    reason === "aborted_tools" ||
+    (ctx.interrupted && reason !== undefined && HOOK_ENDS.has(reason))
+  )
     return { text: "Tour interrompu", tone: "info" };
   const startup = str(m.startup_failure_reason);
   if (startup) {

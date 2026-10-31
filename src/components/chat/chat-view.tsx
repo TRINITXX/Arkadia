@@ -1,4 +1,11 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { ArrowDown, RotateCcw } from "lucide-react";
 import { CONVERSATION_CSS } from "@/components/ConversationView";
 import { HLJS_CSS } from "@/components/modern/css";
@@ -39,6 +46,8 @@ import { ChatStatusBar } from "@/components/chat/chat-status-bar";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
 import { chatGallery } from "@/lib/chat/chatImages";
 import { folderOf, modelLabel } from "@/lib/chat/chatLabels";
+import { createChatLayers } from "@/lib/chat/chatLayers";
+import { ChatLayersContext, useLayer } from "@/lib/chat/useChatLayers";
 import { liveStep } from "@/lib/chat/chatSteps";
 import { useChatSearch } from "@/lib/chat/useChatSearch";
 import type { PermissionMode, PermissionResult } from "@/lib/chat/chatProtocol";
@@ -228,6 +237,28 @@ export function ChatView({
     onDraft,
     onToast,
   });
+  // What is open in the pane: Esc closes the latest before it reaches
+  // Claude (`chatLayers`). Menus and lists register themselves inside.
+  const [layers] = useState(createChatLayers);
+  useLayer(layers, drawer, () => setDrawer(false));
+  useLayer(layers, !!agentSheet.sheet, agentSheet.close);
+  useLayer(layers, search.open, search.close);
+  useLayer(layers, !state.closed && !request && !!edit.pending, edit.cancel);
+  // Esc with the focus on nothing (a chip clicked) or elsewhere in the pane:
+  // the input's own Esc (`ChatComposer`) has handled it already. Armed as
+  // Ctrl+F: the pane on screen, no layer of the app over it.
+  useEffect(() => {
+    if (!isActive || !shown || overlayOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const focused = document.activeElement;
+      const inPane = !!focused && !!rootRef.current?.contains(focused);
+      if (focused && focused !== document.body && !inPane) return;
+      if (layers.closeTop()) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isActive, shown, overlayOpen, layers]);
   // New content, or content that grew (an image, a diagram), keeps the
   // column at its end while the reader is there.
   useLayoutEffect(() => {
@@ -401,7 +432,7 @@ export function ChatView({
     );
   }
 
-  return (
+  const view = (
     <div className="chat-root" ref={rootRef} onMouseDown={onActivate}>
       <style>
         {CONVERSATION_CSS}
@@ -584,5 +615,11 @@ export function ChatView({
         />
       )}
     </div>
+  );
+  // Its menus, lists and sheets register their Esc here (`useChatLayer`).
+  return (
+    <ChatLayersContext.Provider value={layers}>
+      {view}
+    </ChatLayersContext.Provider>
   );
 }

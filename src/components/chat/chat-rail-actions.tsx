@@ -6,6 +6,7 @@ import {
   PICKER_GAP_PX,
   useDraftFilePicker,
 } from "@/lib/chat/useDraftFilePicker";
+import { useChatLayer } from "@/lib/chat/useChatLayers";
 
 /**
  * The terminal rail's buttons (`PaneInputRail`) in the chat's input, with
@@ -38,6 +39,8 @@ export function ChatRailActions({
     close,
     insert,
   } = useDraftFilePicker(areaRef, draft.text, onDraft, active);
+  // Esc with the focus back in the input closes it, not Claude's turn.
+  useChatLayer(picking, close);
 
   return (
     <span

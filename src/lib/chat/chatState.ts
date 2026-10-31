@@ -24,6 +24,7 @@ import {
   resetConversation,
 } from "@/lib/chat/chatCommands";
 import { resultNotice, type RetryInfo } from "@/lib/chat/chatErrors";
+import { peerMessages, type PeerMessage } from "@/lib/chat/chatPeer";
 import { addSdkContent, compactNotice } from "@/lib/chat/chatSdkContent";
 import { toolDetail, type ToolDetail } from "@/lib/chat/chatToolResult";
 import {
@@ -70,6 +71,17 @@ export type ChatItem = (
       aborted?: boolean;
     }
   | { kind: "thinking"; id: string; text: string; streaming: boolean }
+  /** Another Claude session's message, or a background subagent's
+   *  (`chatPeer`): never the user's, so no ↑, no /rewind, no pencil. */
+  | {
+      kind: "peer";
+      id: string;
+      /** The sender's name; absent when not said. */
+      from?: string;
+      /** Sent by a subagent of this session: its task id. */
+      agentId?: string;
+      text: string;
+    }
   /** A finished turn: the « Terminé en » line (`turnDoneLine`). */
   | {
       kind: "turn";
@@ -240,6 +252,9 @@ export interface ChatState {
   quotaSeen: string[];
   /** The turn's API error code (`assistant.error`), for its end's notice. */
   apiError: string | null;
+  /** The user stopped the turn (Claude Code's « [Request interrupted by
+   *  user] »): its end is « Tour interrompu », whatever its reason says. */
+  interrupted: boolean;
   /** Models, effort, fast mode, MCP servers and requests, hooks (`chatSdkSettings`). */
   sdk: SdkState;
 }
@@ -280,6 +295,7 @@ export const EMPTY_CHAT: ChatState = {
   suggestion: null,
   quotaSeen: [],
   apiError: null,
+  interrupted: false,
   sdk: EMPTY_SDK,
 };
 
@@ -396,6 +412,15 @@ function patchItem(
 
 const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 
+/**
+ * Claude Code's stand-in reply, never Claude's words: a message of its own
+ * (model `<synthetic>`) that closes a conversation left on an interrupt, or
+ * fills a turn stopped by the usage limit (whose notice says why).
+ */
+function isStandIn(message: JsonObject, text: string): boolean {
+  return message.model === "<synthetic>" && text === "No response requested.";
+}
+
 /** An assistant message's blocks, streamed or not, into items. */
 function addAssistant(
   state: ChatState,
@@ -430,6 +455,7 @@ function addAssistant(
     if (block.type !== "text" && block.type !== "thinking") return;
     const text =
       (block.type === "text" ? str(block.text) : str(block.thinking)) ?? "";
+    if (block.type === "text" && isStandIn(message, text)) return;
     // The streamed item of this message still open for this kind of block:
     // Claude Code sends one assistant message per block, in stream order.
     const streamed = Object.entries(streams).find(([key, id]) => {
@@ -469,12 +495,37 @@ function addAssistant(
   return { ...state, items, streams, turnTools, turnFiles };
 }
 
+/** Another session's (or subagent's) message: its own frame, never the user's. */
+function addPeers(
+  state: ChatState,
+  m: JsonObject,
+  peers: PeerMessage[],
+): ChatState {
+  const id = str(m.uuid) ?? `p${state.items.length}`;
+  const at = messageTime(m);
+  return {
+    ...state,
+    items: peers.reduce(
+      (items, peer, i) =>
+        upsertItem(items, {
+          kind: "peer",
+          id: peers.length > 1 ? `${id}:${i}` : id,
+          ...peer,
+          at,
+        }),
+      state.items,
+    ),
+  };
+}
+
 /** A user message: tool results go to their calls, text becomes a bubble. */
 function addUser(
   state: ChatState,
   m: JsonObject,
   fromHistory: boolean,
 ): ChatState {
+  const peers = peerMessages(m);
+  if (peers) return addPeers(state, m, peers);
   if (fromHistory) {
     const command = addHistoryCommand(state, m);
     if (command) return command;
@@ -837,6 +888,7 @@ function endTurn(state: ChatState): ChatState {
     turnFiles: [],
     retry: null,
     thinkingTokens: 0,
+    interrupted: false,
     items: state.items.map((item) =>
       (item.kind === "text" || item.kind === "thinking") && item.streaming
         ? { ...item, streaming: false }
@@ -895,6 +947,22 @@ function markCut(state: ChatState, m: JsonObject): ChatState {
   };
 }
 
+/**
+ * Claude Code's note that the user stopped the turn. An Esc while a Stop
+ * hook runs ends it as `stop_hook_prevented`, a success: only this note
+ * tells the user's interrupt from the hook's (verified live 31/10/2026).
+ */
+function markInterrupt(state: ChatState, m: JsonObject): ChatState {
+  const content = obj(m.message).content;
+  const texts =
+    typeof content === "string"
+      ? [content]
+      : arr(content).map((b) => str(obj(b).text) ?? "");
+  return texts.some((t) => t.startsWith("[Request interrupted by user"))
+    ? { ...state, interrupted: true }
+    : state;
+}
+
 /** The reset of the window that blocks: the used-up one, else the session's. */
 function blockingReset(state: ChatState): number | undefined {
   const { fiveHour, sevenDay } = state.limits;
@@ -924,7 +992,7 @@ function addSdk(state: ChatState, m: JsonObject, now: number): ChatState {
     case "assistant":
       return commandAnswer(state, m) ?? addAssistant(state, m, now);
     case "user":
-      return addUser(state, m, false);
+      return addUser(markInterrupt(state, m), m, false);
     case "rate_limit_event":
       return addRateLimit(state, m);
     case "conversation_reset":
@@ -948,6 +1016,7 @@ function addSdk(state: ChatState, m: JsonObject, now: number): ChatState {
         apiError: state.apiError,
         resetsAt: blockingReset(state),
         now,
+        interrupted: state.interrupted,
       });
       const ended = { ...endTurn(markCut(state, m)), apiError: null };
       if (!notice) return { ...ended, items: [...ended.items, turn] };

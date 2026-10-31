@@ -13,6 +13,7 @@ import {
   isPromptField,
   trustAnswerKey,
   voiceFailure,
+  voiceFailureText,
 } from "@/lib/terminalChrome";
 
 /**
@@ -267,7 +268,7 @@ export function useHiddenVoice(onText: (text: string) => void) {
             throw new Error("La transcription n'a pas abouti");
           }
           const failure = voiceFailure(frame);
-          if (failure) throw new Error(`Claude Code : ${failure}`);
+          if (failure) throw new Error(voiceFailureText(failure));
           await send(paneId, ENTER);
           const text = await takeCapture(paneId);
           if (!text) throw new Error("Aucun texte reçu de la dictée");

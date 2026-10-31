@@ -222,3 +222,43 @@ export const SUGGESTION: ChatEvent = sdk({
   type: "prompt_suggestion",
   suggestion: "Ajoute aussi un test pour le cas vide",
 });
+
+/** Another session's message (`?s=peer`): the CLI's echo of 31/10/2026. */
+export function peerEvents(): ChatEvent[] {
+  const body =
+    "Je libère l'émulateur et Metro sur 8081 : tu peux lancer tes tests. Préviens-moi quand tu as fini.";
+  return [
+    sdk({
+      type: "user",
+      uuid: "peer-u1",
+      parent_tool_use_id: null,
+      isReplay: true,
+      isSynthetic: true,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: `Another Claude session sent a message:\n<cross-session-message from="uds:x" from-name="arkadia-85">\n${body}\n</cross-session-message>\n\nThis came from another Claude session…`,
+      },
+      origin: { kind: "peer", from: "uds:x", name: "arkadia-85", body },
+    }),
+    sdk({
+      type: "assistant",
+      uuid: "peer-a1",
+      message: {
+        id: "peer-m1",
+        content: [
+          {
+            type: "text",
+            text: "Bien reçu : je lance les tests sur l'émulateur.",
+          },
+        ],
+      },
+    }),
+    sdk({
+      type: "result",
+      subtype: "success",
+      uuid: "peer-r1",
+      duration_ms: 4200,
+    }),
+  ];
+}

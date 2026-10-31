@@ -10,6 +10,8 @@ export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
 export type ChatUnit =
   | { kind: "user"; item: Extract<ChatItem, { kind: "user" }> }
+  /** Another session's or a subagent's message (`chatPeer`). */
+  | { kind: "peer"; item: Extract<ChatItem, { kind: "peer" }> }
   | { kind: "text"; item: Extract<ChatItem, { kind: "text" }> }
   | { kind: "thinking"; item: Extract<ChatItem, { kind: "thinking" }> }
   | { kind: "notice"; item: Extract<ChatItem, { kind: "notice" }> }
@@ -82,7 +84,7 @@ const NONE = new Set<string>();
 
 /**
  * « Messages seuls » (the terminal rail's button): the user's words, Claude's
- * replies, the errors, and what answers the user: the commands they typed
+ * replies, the messages of other sessions and subagents, the errors, and what answers the user: the commands they typed
  * (cards and notices) and the plan waiting for their answer, which the panel
  * below points to (`pending`: the tool calls a request is about). Thinking,
  * tool work, edits, subagents, question recaps, decided plans, other info
@@ -95,6 +97,7 @@ export function messagesOnly(
   return units.filter(
     (u) =>
       u.kind === "user" ||
+      u.kind === "peer" ||
       u.kind === "text" ||
       u.kind === "command" ||
       (u.kind === "notice" && (u.item.tone === "error" || u.item.command)) ||

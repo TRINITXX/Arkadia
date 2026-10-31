@@ -13,6 +13,7 @@ import {
   useSheetAnswers,
 } from "@/lib/chat/chatSheetAnswers";
 import type { ChatItem } from "@/lib/chat/chatState";
+import { useChatLayer } from "@/lib/chat/useChatLayers";
 
 /**
  * A sheet above the input when Claude's last reply asks a round of questions
@@ -48,6 +49,8 @@ export function ChatQuestionSheet({
   // Closed, gone (Claude answers, a request comes) or replaced by another
   // round: no field of it takes a dictation, which goes to the draft.
   const open = round !== null && !sheet.closed;
+  // Esc folds it (its answers stay), never Claude's turn (`chatLayers`).
+  useChatLayer(open && !folded, () => setFolded(true));
   const liveRef = useRef({ open, replyId });
   useEffect(() => {
     liveRef.current = { open, replyId };

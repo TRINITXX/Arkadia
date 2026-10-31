@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -9,6 +9,7 @@ import {
   Workflow as WorkflowIcon,
 } from "lucide-react";
 import { elapsedLabel, modelLabel, tokensLabel } from "@/lib/chat/chatLabels";
+import { useChatLayer } from "@/lib/chat/useChatLayers";
 import {
   workflowCounts,
   type Workflow,
@@ -38,6 +39,14 @@ export function ChatWorkflowCard({
   const [confirming, setConfirming] = useState(false);
   const { done, total } = workflowCounts(workflow);
   const running = workflow.status === "running";
+  // Folded, or the workflow over: no « stop it? » left waiting unseen.
+  useEffect(() => {
+    if (!open || !running) setConfirming(false);
+  }, [open, running]);
+  // Esc drops the « stop it? » question shown, never Claude's turn.
+  useChatLayer(open && running && !!onStop && confirming, () =>
+    setConfirming(false),
+  );
   const elapsed = (workflow.endedAt ?? now) - workflow.startedAt;
   // The phase at work: its latest running agent's, else the last one.
   const active =

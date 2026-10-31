@@ -11,6 +11,7 @@ import "@/styles/app.css";
 import {
   contentNotices,
   errorEvents,
+  peerEvents,
   retryEvents,
   SUGGESTION,
 } from "@/chat-preview-content";
@@ -346,6 +347,8 @@ const SCENARIOS: Record<string, () => ChatState> = {
       : state;
   },
   suggest: () => replay([...parse(tools), SUGGESTION]),
+  // Another session's message, in its own frame.
+  peer: () => replay([...parse(tools), ...peerEvents()]),
 };
 // SDK settings: model, effort and fast mode chips, MCP chip and requests,
 // a running hook, plugin errors, a cautious permission, a message withdrawn.
@@ -483,7 +486,8 @@ function Preview() {
         onSwitchToTerminal={() => {}}
         onActivate={() => {}}
         onSend={() => {}}
-        onInterrupt={() => {}}
+        // Said in the console: Esc's checks read it (`chatLayers`).
+        onInterrupt={() => console.info("[aperçu] interruption")}
         onAnswer={() => {}}
         onMode={() => {}}
         onModel={() => {}}
