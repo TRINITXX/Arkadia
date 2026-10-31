@@ -74,6 +74,8 @@ windows = { version = "0.61", features = [
     "Win32_System_Registry",
     # Region capture of the artifact panel (screen pixels).
     "Win32_Graphics_Gdi",
+    # Foreground-window hook: the Twitch PiP window follows Arkadia (pip_follow).
+    "Win32_UI_Accessibility",
 ] }
 
 [dev-dependencies]

@@ -17,6 +17,7 @@ import {
   type ToolDensity,
 } from "@/types";
 import { ToolbarSettings } from "@/components/ToolbarSettings";
+import { PipFollowSettings } from "@/components/PipFollowSettings";
 import { useOverlay } from "@/lib/overlays";
 
 interface SettingsDialogProps {
@@ -803,6 +804,8 @@ function GeneralSettings({
           })}
         </div>
       </section>
+
+      <PipFollowSettings />
 
       <section>
         <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">

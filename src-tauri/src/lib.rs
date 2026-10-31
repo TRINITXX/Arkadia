@@ -20,6 +20,7 @@ mod messages_only;
 mod pane_background;
 mod pane_viewers;
 mod photos;
+mod pip_follow;
 mod popup;
 mod remote;
 mod screenshots;
@@ -206,6 +207,11 @@ pub fn run() {
                         }
                     });
                 }
+                // Twitch PiP window placed beside Arkadia while it is in front.
+                // The Lab only: two instances would fight over its rect.
+                if lab::LAB {
+                    pip_follow::spawn();
+                }
                 // Nothing inside a wedged webview can repair it, so the
                 // watchdog lives out here (see `uiwatch`).
                 uiwatch::spawn_watchdog(app.handle().clone());
@@ -266,6 +272,9 @@ pub fn run() {
         // The artifact page is remote: `guard` refuses it every app command.
         .invoke_handler(artifact_view::guard(tauri::generate_handler![
             spawn_terminal,
+            pip_follow::pip_follow_status,
+            pip_follow::pip_follow_save_target,
+            pip_follow::pip_follow_clear_target,
             voice::voice_pane,
             chat::chat_command,
             voice::voice_take,
@@ -361,6 +370,10 @@ pub fn run() {
             }
             tauri::RunEvent::Exit => {
                 messages_only::forget_all();
+                // The Twitch PiP goes back where it was before Arkadia came in front.
+                if lab::LAB {
+                    pip_follow::restore_on_exit();
+                }
                 popup::log_line("[run] exiting");
             }
             tauri::RunEvent::WindowEvent {
