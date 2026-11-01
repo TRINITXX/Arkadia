@@ -59,7 +59,7 @@ describe("slash commands in the column", () => {
       state.items.some(
         (i) =>
           i.kind === "notice" &&
-          /^Conversation compactée · \d+ k → \d+ k jetons$/.test(i.text),
+          /^Conversation compactée · \d+ k → \d+ k tokens$/.test(i.text),
       ),
     ).toBe(true);
     expect(

@@ -107,7 +107,7 @@ function AgentCard({
         {agent.type && <span className="type">{agent.type}</span>}
         <span className="figs">
           {elapsedLabel(elapsed)}
-          {agent.tokens > 0 && ` · ${tokensLabel(agent.tokens)} jetons`}
+          {agent.tokens > 0 && ` · ${tokensLabel(agent.tokens)} tokens`}
         </span>
         {running && onStop && !asking && !stopping && (
           <button

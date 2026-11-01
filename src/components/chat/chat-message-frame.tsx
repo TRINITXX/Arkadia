@@ -1,20 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  Check,
-  Copy,
-  MessagesSquare,
-  Pencil,
-  Sparkles,
-  User,
-} from "lucide-react";
+import { Check, Copy, MessagesSquare, Pencil } from "lucide-react";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { messageTime, messageTimeFull } from "@/lib/messageTime";
 
-const ROLES = {
-  user: { label: "Toi", Icon: User },
-  claude: { label: "Claude", Icon: Sparkles },
-  peer: { label: "Message d'une autre session", Icon: MessagesSquare },
-};
+/** Another session's frame names its sender; the user's and Claude's need no name. */
+const PEER_LABEL = "Message d'une autre session";
 
 /** How long a copy button holds its ✓ (the code blocks' too). */
 const COPIED_MS = 1200;
@@ -22,9 +12,9 @@ const COPIED_MS = 1200;
 /**
  * A message in the terminal's frames (the display mod `outils-discrets`): the
  * user's in green, Claude's in violet, red-edged when the reply is an error,
- * another session's or a subagent's in blue (`label` names it). Its head says
- * who and when. « Copier le message » sits in the head on hover, and at the
- * foot of Claude's reply, always there but discreet.
+ * another session's in blue, under a head naming it (`label`). Its foot has
+ * the time at the left, « Modifier » and « Copier le message » at the right,
+ * discreet (the user's pick of 01/11/2026: no « Toi » nor « Claude »).
  */
 export function ChatMessageFrame({
   role,
@@ -40,7 +30,7 @@ export function ChatMessageFrame({
   children,
 }: {
   role: "user" | "claude" | "peer";
-  /** The head's words instead of the role's (a peer's « Message de … »). */
+  /** A peer's head (« Message de … »); the other roles have none. */
   label?: string;
   /** When it was said (ms); no time shown when unknown. */
   at?: number;
@@ -58,8 +48,7 @@ export function ChatMessageFrame({
   editBlocked?: string | null;
   children: React.ReactNode;
 }) {
-  const { Icon } = ROLES[role];
-  const label = ownLabel ?? ROLES[role].label;
+  const label = ownLabel ?? PEER_LABEL;
   const iso = at === undefined ? null : new Date(at).toISOString();
   const [copied, setCopied] = useState(false);
   const timerRef = useRef(0);
@@ -95,9 +84,14 @@ export function ChatMessageFrame({
     <div
       className={`chat-unit chat-frame ${role}${error ? " error" : ""}${className ? ` ${className}` : ""}`}
     >
-      <div className="chat-frame-head">
-        <Icon />
-        <b>{label}</b>
+      {role === "peer" && (
+        <div className="chat-frame-head">
+          <MessagesSquare />
+          <b>{label}</b>
+        </div>
+      )}
+      {children}
+      <div className="chat-frame-foot">
         {iso && (
           <time dateTime={iso} title={messageTimeFull(iso) ?? undefined}>
             {messageTime(iso)}
@@ -108,30 +102,28 @@ export function ChatMessageFrame({
             coupé
           </span>
         )}
-        {role === "user" && onEdit && (
-          <button
-            type="button"
-            className={`copy edit${editBlocked ? " blocked" : ""}`}
-            title={
-              editBlocked ??
-              "Modifier ce message (la conversation revient juste avant)"
-            }
-            aria-label="Modifier ce message"
-            aria-disabled={editBlocked ? true : undefined}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (!editBlocked) onEdit();
-            }}
-          >
-            <Pencil />
-          </button>
-        )}
-        {role !== "claude" && button}
+        <span className="tools">
+          {role === "user" && onEdit && (
+            <button
+              type="button"
+              className={`copy edit${editBlocked ? " blocked" : ""}`}
+              title={
+                editBlocked ??
+                "Modifier ce message (la conversation revient juste avant)"
+              }
+              aria-label="Modifier ce message"
+              aria-disabled={editBlocked ? true : undefined}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!editBlocked) onEdit();
+              }}
+            >
+              <Pencil />
+            </button>
+          )}
+          {button}
+        </span>
       </div>
-      {children}
-      {role === "claude" && button && (
-        <div className="chat-frame-foot">{button}</div>
-      )}
     </div>
   );
 }

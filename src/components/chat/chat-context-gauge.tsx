@@ -102,7 +102,7 @@ export function ChatContextGauge({
             <b>Contexte</b>
             <span>
               {detail
-                ? `${compactTokens(detail.total)} / ${compactTokens(detail.max)} jetons`
+                ? `${compactTokens(detail.total)} / ${compactTokens(detail.max)} tokens`
                 : ""}
             </span>
           </div>

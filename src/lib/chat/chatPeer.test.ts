@@ -151,6 +151,38 @@ describe("a peer's message in the column", () => {
     ).toEqual(["peer-a-69: Bonjour de A", "arkadia-85: Fini"]);
   });
 
+  it("shows nothing of a subagent's report, nor as the user's", () => {
+    const report = sdk({
+      type: "user",
+      uuid: "r1",
+      message: { role: "user", content: "x" },
+      origin: {
+        kind: "peer",
+        from: "a2475351",
+        senderTaskId: "a2475351",
+        name: "general-purpose",
+        body: "Lot 5 en place.",
+      },
+    });
+    const state = reduceChat(EMPTY_CHAT, report, 1_000);
+    expect(state.items).toEqual([]);
+    // One message carrying both: the other session's stays.
+    const both = sdk({
+      type: "user",
+      uuid: "r2",
+      message: {
+        role: "user",
+        content:
+          '<cross-session-message from-name="arkadia-85">Libre ?</cross-session-message><agent-message from="a2475351">Fini</agent-message>',
+      },
+    });
+    expect(
+      reduceChat(EMPTY_CHAT, both, 1_000).items.map((i) =>
+        i.kind === "peer" ? i.text : i.kind,
+      ),
+    ).toEqual(["Libre ?"]);
+  });
+
   it("counts among the messages an edit drops", () => {
     const user: ChatItem = { kind: "user", id: "u", text: "a", images: 0 };
     const items: ChatItem[] = [

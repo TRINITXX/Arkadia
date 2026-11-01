@@ -351,17 +351,9 @@ export function ChatComposer({
             ? "Commande shell (Git Bash) dans le dossier de l'onglet"
             : undefined
         }
-        placeholder={
-          voice.interim
-            ? ""
-            : asleep
-              ? "Claude en veille : écris pour le réveiller"
-              : ghost
-                ? `${ghost}  ·  Tab`
-                : working
-                  ? "Claude travaille… ton message attendra son tour (Ctrl+Entrée : tout de suite)"
-                  : "Écris à Claude…"
-        }
+        // Only the suggested next message, never a help text (the user's
+        // ask of 01/11/2026): Tab takes it, as in Claude Code.
+        placeholder={voice.interim ? "" : (ghost ?? "")}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
         onPaste={(e) => {

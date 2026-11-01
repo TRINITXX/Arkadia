@@ -768,7 +768,15 @@ class Chat {
         // The next message, grey in the empty input after a turn.
         promptSuggestions: true,
         pathToClaudeCodeExecutable: claudeExecutable(),
-        env: { ...process.env, ...start.env } as Record<string, string>,
+        // Claude Code gives the terminal its claude.ai publish tools
+        // (Artifact, ArtifactComments, ArtifactData) by itself, an SDK
+        // session only when asked (seen 01/11/2026: « cette session n'a pas
+        // l'outil de publication »). A value already set wins.
+        env: {
+          CLAUDE_CODE_ARTIFACT: "1",
+          ...process.env,
+          ...start.env,
+        } as Record<string, string>,
         canUseTool: (toolName, input, options) =>
           this.askPage(toolName, input, options),
         // An MCP server's form or sign-in page: asked in the page, never declined unseen.

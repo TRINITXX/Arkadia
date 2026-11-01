@@ -63,7 +63,7 @@ export function ChatAgentsDrawer({
                 ENDED[agent.status],
                 agent.type,
                 agent.toolUses > 0 && `${agent.toolUses} outils`,
-                agent.tokens > 0 && `${tokensLabel(agent.tokens)} jetons`,
+                agent.tokens > 0 && `${tokensLabel(agent.tokens)} tokens`,
                 agent.durationMs > 0 && elapsedLabel(agent.durationMs),
                 agent.status === "running" &&
                   agent.lastTool &&

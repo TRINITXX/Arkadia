@@ -151,7 +151,7 @@ describe("Claude Code's notices in the column", () => {
       }),
     ]);
     expect(notices(state).map((n) => [n.text, n.tone])).toEqual([
-      ["Compacté automatiquement · 180 k → 32 k jetons", "info"],
+      ["Compacté automatiquement · 180 k → 32 k tokens", "info"],
       ["La compaction a échoué : la conversation reste entière", "error"],
     ]);
   });

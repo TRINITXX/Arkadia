@@ -161,6 +161,15 @@ if(d.arkadiaVisualFit===1&&typeof d.height==="number"){if(isFinite(d.height))doc
 document.addEventListener("click",function(e){if(!e.isTrusted||e.defaultPrevented||e.button!==0)return;var a=e.target&&e.target.closest?e.target.closest("a[href]"):null,u;if(!a)return;
 try{u=new URL(a.getAttribute("href"),document.baseURI);}catch(x){return;}if(u.href.split("#")[0]===location.href.split("#")[0])return;e.preventDefault();if(/^https?:$/.test(u.protocol))post("link",u.href);});
 window.addEventListener("focus",function(){post("focus");});
+function ov(n,y){var s=getComputedStyle(n);return y?s.overflowY:s.overflowX;}
+function room(n,d,y){var r=document.documentElement,b=document.body;
+if(n===r){if(/hidden|clip/.test(ov(r,y))||(b&&/hidden|clip/.test(ov(b,y))))return false;}else if(!/(auto|scroll)/.test(ov(n,y)))return false;
+var p=y?n.scrollTop:n.scrollLeft,m=y?n.scrollHeight-n.clientHeight:n.scrollWidth-n.clientWidth;return m>1&&(d<0?p>0:p<m-1);}
+function wheel(e){if(!e.isTrusted||e.defaultPrevented||e.ctrlKey)return;
+var path=e.composedPath?e.composedPath():[e.target];for(var i=0;i<path.length;i++){var n=path[i];if(!n||n.nodeType!==1)continue;if((e.deltaY&&room(n,e.deltaY,true))||(e.deltaX&&room(n,e.deltaX,false)))return;}
+e.preventDefault();post("wheel",{dx:e.deltaX,dy:e.deltaY,m:e.deltaMode});}
+window.addEventListener("wheel",wheel,{passive:false});
+window.addEventListener("load",function(){window.removeEventListener("wheel",wheel);window.addEventListener("wheel",wheel,{passive:false});});
 window.addEventListener("pointerdown",function(e){if(e.isTrusted)post("down");},true);
 var ro=window.ResizeObserver?new ResizeObserver(size):null;if(ro)ro.observe(document.documentElement);window.addEventListener("resize",size);
 document.addEventListener("DOMContentLoaded",function(){if(ro&&document.body)ro.observe(document.body);size();});
@@ -368,7 +377,15 @@ export type FrameMessage =
   | { kind: "size"; height: number }
   | { kind: "link"; url: string }
   | { kind: "choose"; text: string }
+  /** A wheel the page doesn't use: the conversation scrolls by it. */
+  | { kind: "wheel"; dx: number; dy: number; mode: number }
   | { kind: "report"; report: unknown };
+
+/** A wheel delta as a frame may send it: a number, bounded. */
+const delta = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v)
+    ? Math.max(-4000, Math.min(4000, v))
+    : null;
 
 /**
  * A frame's message, its fields checked; null for anything else. Past the
@@ -400,6 +417,13 @@ export function readFrameMessage(data: unknown, token: string): FrameMessage | n
         : null;
     case "report":
       return { kind: "report", report: v };
+    case "wheel": {
+      const w = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+      const dx = delta(w.dx);
+      const dy = delta(w.dy);
+      const mode = w.m === 1 || w.m === 2 ? w.m : 0;
+      return dx === null || dy === null ? null : { kind: "wheel", dx, dy, mode };
+    }
     default:
       return null;
   }

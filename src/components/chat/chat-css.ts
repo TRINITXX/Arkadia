@@ -207,7 +207,7 @@ export const CHAT_CSS = `
 
 /* Conversation: messages, images, tools, live line, plan, search. */
 /* Messages in the terminal's frames (the display mod outils-discrets): green for the user, violet for Claude, blue for another session or a subagent, red edge on an error. Over the old bubble (.chat-user). */
-.chat-root .chat-frame { align-self: stretch; max-width: none; width: 100%; border: 1px solid; border-radius: 10px; padding: 5px 14px 10px; white-space: normal; color: var(--chat-ink); }
+.chat-root .chat-frame { align-self: stretch; max-width: none; width: 100%; border: 1px solid; border-radius: 10px; padding: 9px 14px 6px; white-space: normal; color: var(--chat-ink); }
 .chat-frame.user { border-color: #1f9f50; background: linear-gradient(rgb(25,36,40), rgb(21,31,34)); }
 .chat-frame.claude { border-color: #8648c5; background: linear-gradient(rgb(33,33,48), rgb(26,25,38)); }
 .chat-frame.peer { border-color: #2f74b5; background: linear-gradient(rgb(22,31,43), rgb(19,26,36)); }
@@ -219,12 +219,13 @@ export const CHAT_CSS = `
 .chat-frame.peer .chat-frame-head { color: #60a5fa; }
 .chat-frame.error .chat-frame-head { color: #f08a87; }
 .chat-frame-head b { font-weight: 600; }
-.chat-frame-head time { color: var(--chat-mute); font-size: 11.5px; font-variant-numeric: tabular-nums; }
-.chat-frame-head .copy { margin-left: auto; width: 24px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--chat-mute); cursor: pointer; opacity: 0; transition: opacity .12s; }
-.chat-frame:hover .chat-frame-head .copy, .chat-frame-head .copy:focus-visible { opacity: 1; }
-.chat-frame-head .copy:hover { color: var(--chat-ink); background: rgba(255,255,255,.08); }
-/* Claude's « Copier le message »: at the foot, always there, discreet; none while it streams. */
-.chat-frame-foot { display: flex; justify-content: flex-end; height: 22px; margin: 2px -8px -6px 0; }
+/* The foot (the user's pick of 01/11/2026): the time at the left, « Modifier » and « Copier » at the right; no copy while Claude writes. */
+.chat-frame-foot { display: flex; align-items: center; gap: 7px; height: 22px; margin: 4px -8px 0 0; font-size: 11.5px; user-select: none; }
+.chat-frame-foot time { color: var(--chat-mute); font-variant-numeric: tabular-nums; }
+.chat-frame-foot .tools { margin-left: auto; display: flex; gap: 2px; }
+/* The time and the buttons show on hover only (the user's pick of 01/11/2026). */
+.chat-frame-foot time, .chat-frame-foot .tools { opacity: 0; transition: opacity .12s; }
+.chat-frame:hover .chat-frame-foot time, .chat-frame:hover .chat-frame-foot .tools, .chat-frame-foot .tools:focus-within { opacity: 1; }
 .chat-frame-foot .copy { width: 26px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #77708c; cursor: pointer; transition: color .12s, background .12s; }
 .chat-frame-foot .copy:hover { color: var(--chat-ink); background: rgba(255,255,255,.08); }
 .chat-frame-foot .lucide { width: 14px; height: 14px; }
@@ -451,7 +452,7 @@ export const CHAT_CSS = `
 .chat-notice-block.warning .text { color: #e7c27a; }
 .chat-notice-block.error { border-color: rgba(248,113,113,.3); }
 .chat-notice-block.error .text { color: #fca5a5; }
-.chat-frame-head .chat-cut { font-size: 11px; line-height: 1.5; padding: 0 7px; border-radius: 999px; border: 1px solid #4a3f2c; color: #e7c27a; }
+.chat-frame-foot .chat-cut { font-size: 11px; line-height: 1.5; padding: 0 7px; border-radius: 999px; border: 1px solid #4a3f2c; color: #e7c27a; }
 .chat-live-now.retry .what { color: #e7c27a; }
 
 /* SDK settings: effort, models, context breakdown, MCP, hooks, permissions. */
@@ -527,7 +528,6 @@ export const CHAT_CSS = `
 .chat-older-btn .lucide { width: 13px; height: 13px; }
 .chat-day { display: flex; align-items: center; gap: 12px; margin: 6px 0 -2px; color: var(--chat-mute); font-size: 11.5px; letter-spacing: .02em; user-select: none; }
 .chat-day::before, .chat-day::after { content: ""; flex: 1; height: 1px; background: var(--chat-line); }
-.chat-frame-head .copy.edit + .copy { margin-left: 0; }
 .chat-card .head .chat-open-file { margin-left: auto; width: 24px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--chat-mute); cursor: pointer; flex-shrink: 0; }
 .chat-card .head .chat-open-file:hover { color: var(--chat-ink); background: rgba(255,255,255,.08); }
 .chat-card .head .chat-open-file .lucide { width: 13px; height: 13px; }
@@ -667,9 +667,9 @@ export const CHAT_CSS = `
 .chat-agent-ask span { margin-right: auto; }
 .chat-agent-ask .chat-btn { padding: 2px 10px; font-size: 12px; }
 /* The pencil when it can't act now: there, dim, its tooltip says why. */
-.chat-frame:hover .chat-frame-head .copy.edit.blocked { opacity: .45; }
-.chat-frame-head .copy.edit.blocked { cursor: help; }
-.chat-frame-head .copy.edit.blocked:hover { color: var(--chat-mute); background: transparent; }
+.chat-frame-foot .copy.edit.blocked { opacity: .45; }
+.chat-frame-foot .copy.edit.blocked { cursor: help; }
+.chat-frame-foot .copy.edit.blocked:hover { color: #77708c; background: transparent; }
 /* The input's bottom row (the user's pick of 31/10/2026): the session's button and its rings on the left, the input's own actions, the mic and send on the right; nothing under the input any more. */
 .chat-tools-end { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
 .chat-tools-row { flex-wrap: wrap; row-gap: 6px; }

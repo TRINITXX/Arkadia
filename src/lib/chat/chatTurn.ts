@@ -6,7 +6,7 @@ import type { ChatState } from "@/lib/chat/chatState";
  * message, a message held behind a `!` command): its clock and its token
  * count from zero. Mid-turn (a message queued behind it), nothing changes.
  * Every path that starts a turn goes through here, or the live line's
- * « ↓ N jetons » would add the last turn's.
+ * « ↓ N tokens » would add the last turn's.
  */
 export function startTurn(state: ChatState, now: number): ChatState {
   if (state.working) return state;

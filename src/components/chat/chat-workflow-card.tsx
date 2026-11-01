@@ -158,7 +158,7 @@ export function ChatWorkflowCard({
         </span>
         <span className="figs">
           {done}/{total} agent{total > 1 ? "s" : ""} · {elapsedLabel(elapsed)}
-          {workflow.tokens > 0 && ` · ${tokensLabel(workflow.tokens)} jetons`}
+          {workflow.tokens > 0 && ` · ${tokensLabel(workflow.tokens)} tokens`}
         </span>
         {open ? (
           <ChevronDown className="chev" />
@@ -206,7 +206,7 @@ function WorkflowAgentRow({
       <span className="meta">
         {[
           agent.model && modelLabel(agent.model),
-          agent.tokens !== undefined && `${tokensLabel(agent.tokens)} jetons`,
+          agent.tokens !== undefined && `${tokensLabel(agent.tokens)} tokens`,
           // Idle past a few seconds only: an agent at work writes all the time.
           idle !== undefined &&
             idle >= 5_000 &&

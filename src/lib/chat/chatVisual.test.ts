@@ -270,6 +270,22 @@ describe("readFrameMessage", () => {
     expect(readFrameMessage({ kind: "choose", v: "B" }, "t0k")).toBeNull();
   });
 
+  it("passes a wheel the page left unused on, its deltas bounded", () => {
+    expect(readFrameMessage(msg("wheel", { dx: 0, dy: 120, m: 0 }), "t0k")).toEqual({
+      kind: "wheel",
+      dx: 0,
+      dy: 120,
+      mode: 0,
+    });
+    expect(readFrameMessage(msg("wheel", { dx: 0, dy: 1e9, m: 9 }), "t0k")).toEqual({
+      kind: "wheel",
+      dx: 0,
+      dy: 4000,
+      mode: 0,
+    });
+    expect(readFrameMessage(msg("wheel", { dy: "x" }), "t0k")).toBeNull();
+  });
+
   it("believes a press or a choice only with the frame's token, which its page never sees", () => {
     expect(readFrameMessage(msg("down"), "t0k")).toEqual({ kind: "down" });
     expect(readFrameMessage(msg("down", undefined, "guess"), "t0k")).toBeNull();

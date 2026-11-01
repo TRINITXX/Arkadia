@@ -20,7 +20,7 @@ recopiée du terminal coupée au mauvais endroit.
 1. **Sans terminal** (option D) : Claude est piloté par le kit officiel `@anthropic-ai/claude-agent-sdk`,
    comme T3 Code. Usage perso sur l'abonnement autorisé (article d'aide Anthropic
    https://support.claude.com/en/articles/15036540, état du 27/10/2026), mêmes quotas que le
-   terminal. Arkadia ne lit ni ne copie jamais le jeton : le binaire officiel se connecte seul.
+   terminal. Arkadia ne lit ni ne copie jamais le token : le binaire officiel se connecte seul.
 2. **Arkadia Lab** : tout se construit dans le worktree `Arkadia-lab` (branche `master-lab`),
    build séparé qui tourne à côté du quotidien (`lab.rs`, `Rebuild Arkadia Lab.bat`). Le Lab part
    de la liste de projets du quotidien sans ses onglets, et laisse téléphone, gate, boîte
@@ -44,7 +44,7 @@ recopiée du terminal coupée au mauvais endroit.
 6. **Maquette A « Colonne calme »** : colonne centrée (~740 px), titre de session à empattements
    avec un mot en italique, messages de l'utilisateur en bulle à droite, texte de Claude sans
    bulle, outils repliés en une ligne (« 4 commandes, 3 fichiers lus · 12 s »), modifications en
-   cartes avec diff, ligne « Claude travaille · durée · jetons » au-dessus de la saisie avec puces
+   cartes avec diff, ligne « Claude travaille · durée · tokens » au-dessus de la saisie avec puces
    sous-agents et tâches, **question qui s'ouvre dans la grande carte de saisie** (options au
    clavier, Échap pour écrire), barre d'état sous la saisie. Un seul accent (terre cuite).
 7. **Sous-agents** : la puce « N sous-agents » ouvre un tiroir (chaque sous-agent, ses étapes,
@@ -198,9 +198,9 @@ Aperçu : `chat-preview.html?s=visuals` (un graphique écarté puis corrigé, tr
 - Boutons du rail (insérer, copier le code, messages seuls, effacer) : dans la barre de la saisie.
 - Ligne d'état : gros cercles avec le chiffre dedans, reset court.
 - Sous-agents : une carte vivante par agent, collée au-dessus de la saisie. Workflows : une carte
-  repliée par défaut (nom, barre de progression, x/y agents, durée, jetons), juste contre la saisie,
+  repliée par défaut (nom, barre de progression, x/y agents, durée, tokens), juste contre la saisie,
   les cartes d'agents au-dessus ; dépliée au clic : phases à gauche, agents de la phase à droite
-  (modèle, jetons, inactivité, durée), lus dans le journal du workflow ; bouton « Arrêter le
+  (modèle, tokens, inactivité, durée), lus dans le journal du workflow ; bouton « Arrêter le
   workflow » avec confirmation. Shells : pastille cyan « N shells » sous la saisie, liste au clic.
 - Oublis retenus : glisser-déposer, envoyer après la dictée, message en attente en gris +
   Envoyer maintenant, Ctrl+F, flèches de la visionneuse, barre de boutons du bas, capture
@@ -209,7 +209,7 @@ Aperçu : `chat-preview.html?s=visuals` (un graphique écarté puis corrigé, tr
   refaits dans le chat ; les autres commandes du terminal affichent « n'existe que dans le terminal ».
 - Retirés du Lab : mode lecture sur les terminaux, bloc-notes, bouton police compacte.
 - SDK, retenus : résumé d'une ligne par sous-agent, sortie en direct d'un shell, Ctrl+B (envoyer
-  en fond), durée d'un outil en cours, compteur de jetons pendant la réflexion, conversation d'un
+  en fond), durée d'un outil en cours, compteur de tokens pendant la réflexion, conversation d'un
   agent en direct ; vrais diffs, suggestion du prochain message, messages des hooks, notifications,
   compaction auto visible, sortie et erreurs séparées, réponse coupée marquée ; « Claude réessaie »,
   cause précise d'une erreur, alertes de quota, refus du mode auto expliqués ; effort à côté du

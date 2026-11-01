@@ -94,7 +94,7 @@ export function ChatLiveLine({
             {elapsed && ` · ${elapsedLabel(elapsed.ms)}`}
             {working &&
               turnTokens > 0 &&
-              ` · ↓ ${tokensLabel(turnTokens)} jetons`}
+              ` · ↓ ${tokensLabel(turnTokens)} tokens`}
             {elapsed?.call && backgroundHint && (
               <span className="bg-hint"> · Ctrl+B : en arrière-plan</span>
             )}

@@ -527,7 +527,11 @@ function addAssistant(
   return { ...state, items, streams, turnTools, turnFiles };
 }
 
-/** Another session's (or subagent's) message: its own frame, never the user's. */
+/**
+ * Another session's message: its own frame, never the user's. A subagent's
+ * report to this session shows nothing: Claude says what matters of it (the
+ * user's ask of 01/11/2026).
+ */
 function addPeers(
   state: ChatState,
   m: JsonObject,
@@ -539,12 +543,14 @@ function addPeers(
     ...state,
     items: peers.reduce(
       (items, peer, i) =>
-        upsertItem(items, {
-          kind: "peer",
-          id: peers.length > 1 ? `${id}:${i}` : id,
-          ...peer,
-          at,
-        }),
+        peer.agentId
+          ? items
+          : upsertItem(items, {
+              kind: "peer",
+              id: peers.length > 1 ? `${id}:${i}` : id,
+              ...peer,
+              at,
+            }),
       state.items,
     ),
   };

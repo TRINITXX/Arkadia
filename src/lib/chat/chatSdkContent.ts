@@ -40,7 +40,7 @@ function kTokens(n: number): string {
   return n < 1000 ? String(n) : `${Math.round(n / 1000)} k`;
 }
 
-/** « Compacté automatiquement · 180 k → 32 k jetons » (`compact_boundary`). */
+/** « Compacté automatiquement · 180 k → 32 k tokens » (`compact_boundary`). */
 export function compactNotice(m: JsonObject): string {
   const meta = obj(m.compact_metadata);
   const head =
@@ -51,8 +51,8 @@ export function compactNotice(m: JsonObject): string {
   const post = num(meta.post_tokens);
   if (pre === undefined) return head;
   return post === undefined
-    ? `${head} · ${kTokens(pre)} jetons avant`
-    : `${head} · ${kTokens(pre)} → ${kTokens(post)} jetons`;
+    ? `${head} · ${kTokens(pre)} tokens avant`
+    : `${head} · ${kTokens(pre)} → ${kTokens(post)} tokens`;
 }
 
 /** A long text: its first line as the notice, the rest under it. */

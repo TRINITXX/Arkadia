@@ -136,7 +136,7 @@ export function olderStart(): ChatEvent[] {
           type: "user",
           uuid: "old-u3",
           timestamp: new Date(Date.now() - 3 * 86_400_000).toISOString(),
-          message: { role: "user", content: "Et le compteur de jetons ?" },
+          message: { role: "user", content: "Et le compteur de tokens ?" },
         },
         {
           type: "assistant",
