@@ -115,8 +115,8 @@ export function useSheetAnswers(paneId: string, replyId: string): SheetAnswers {
 }
 
 /**
- * The reply whose questions the sheet shows right now (it is up, open and
- * unfolded), or null: that message drops its question blocks meanwhile
+ * The replies whose questions the sheet shows right now (it is up, open and
+ * unfolded), or none: those messages drop their question blocks meanwhile
  * (`withoutQuestions`). `up`: the sheet's place is free (no turn, no
  * request, the chat open), as `ChatView` mounts it.
  */
@@ -124,8 +124,10 @@ export function useSheetReply(
   paneId: string | undefined,
   items: ChatItem[],
   up: boolean,
-): string | null {
+): readonly string[] {
   const round = useMemo(() => lastReplyRound(items), [items]);
   const sheet = useSheetAnswers(paneId ?? "", paneId ? (round?.id ?? "") : "");
-  return up && round && !sheet.closed && !sheet.folded ? round.id : null;
+  return up && round && !sheet.closed && !sheet.folded ? round.ids : NO_IDS;
 }
+
+const NO_IDS: readonly string[] = [];

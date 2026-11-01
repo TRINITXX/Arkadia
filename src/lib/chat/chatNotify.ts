@@ -56,6 +56,8 @@ export interface ChatNotifyTrack {
   /** The turn's last words of Claude (main loop), "" for an API error
    *  reply, null for none yet: the ❓ round, as `lastReplyRound` reads it. */
   turnText: string | null;
+  /** A reply of this turn asks a ❓ round (not only its last words). */
+  turnRound: boolean;
   /** The text of the turn's last assistant message, null when that message
    *  holds anything else (a tool call): a turn that asks nothing? */
   endText: string | null;
@@ -77,6 +79,7 @@ export const EMPTY_TRACK: ChatNotifyTrack = {
   queued: [],
   scheduled: false,
   turnText: null,
+  turnRound: false,
   endText: null,
   interrupted: false,
   silenced: false,
@@ -180,6 +183,8 @@ function addAssistant(t: ChatNotifyTrack, m: JsonObject): ChatNotifyTrack {
     endText: blocks.length === 1 && last !== undefined ? last : null,
     turnText:
       last === undefined ? t.turnText : typeof m.error === "string" ? "" : last,
+    // A round in any reply of the turn, not only its last words.
+    turnRound: t.turnRound || texts.some((x) => isRound(x)),
   };
 }
 
@@ -276,7 +281,7 @@ function endTurn(
   activity: ChatActivity,
   now: number,
 ): Step {
-  const round = isRound(t.turnText);
+  const round = t.turnRound || isRound(t.turnText);
   const selfWoken = t.opener === "self";
   const ended: ChatNotifyTrack = {
     ...t,
@@ -285,10 +290,12 @@ function endTurn(
     queued: t.queued.filter((u) => u !== "?"),
     scheduled: false,
     turnText: null,
+    turnRound: false,
     endText: null,
     interrupted: false,
-    // `lastReplyRound`: a turn without words leaves the last reply's.
-    roundPending: t.turnText === null ? t.roundPending : round,
+    // `lastReplyRound`: the round stays until the user answers, whatever
+    // later turns say (its questions may span several replies).
+    roundPending: round || t.roundPending,
     // Those that ended are gone from the shells.
     monitors: Object.fromEntries(
       Object.entries(t.monitors).filter(([id]) => activity.shells.includes(id)),

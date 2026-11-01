@@ -37,6 +37,8 @@ import type { ImageRef } from "@/lib/imageGallery";
 
 const NO_IMAGES: ImageRef[] = [];
 const NO_VISUALS: Record<string, VisualEntry> = {};
+/** No reply bare: the sheet is down. */
+const NO_BARE: readonly string[] = [];
 
 /** Rows a long chat draws first when it comes back (`tailFirst`). */
 const TAIL_ROWS = 40;
@@ -62,7 +64,7 @@ interface ChatTimelineProps {
   /** Why the pencil can't act now (Claude works…): dim, said on hover. */
   editBlocked?: string | null;
   /** Claude's reply whose questions the sheet shows: drawn without them. */
-  bareReplyId?: string | null;
+  bareReplyIds?: readonly string[];
   /** Mounted on a long chat read at its end: its last rows first, the rest
    *  just after, in the background (a return to the project stays instant). */
   tailFirst?: boolean;
@@ -99,7 +101,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   onSendNow,
   onEditMessage,
   editBlocked = null,
-  bareReplyId = null,
+  bareReplyIds = NO_BARE,
   tailFirst = false,
   onRemoveQueued,
   onReloadPlugins,
@@ -213,7 +215,7 @@ export const ChatTimeline = memo(function ChatTimeline({
               >
                 <ChatReplyText
                   text={unit.item.text}
-                  bare={unit.item.id === bareReplyId}
+                  bare={bareReplyIds.includes(unit.item.id)}
                   cwd={cwd}
                   onOpen={onOpen}
                   onToast={onToast}

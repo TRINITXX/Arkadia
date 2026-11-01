@@ -192,6 +192,32 @@ describe("question rounds in Claude's reply", () => {
     expect(lastReplyRound([text("a", GRILL), user])).toBeNull();
   });
 
+  it("gathers a round asked over several replies, a peer's between", () => {
+    // The report of 01/11/2026: questions in one reply, a subagent's
+    // report, one more question in another, « J'attends » last.
+    const text = (id: string, t: string): ChatItem => ({
+      kind: "text",
+      id,
+      text: t,
+      streaming: false,
+    });
+    const more = [
+      "❓ **Q3** - **Être prévenu** : un email par vente ?",
+      "",
+      "➡️ Oui.",
+    ].join("\n");
+    const peer: ChatItem = { kind: "peer", id: "p", from: "x", text: "Fini" };
+    const round = lastReplyRound([
+      text("a", GRILL),
+      peer,
+      text("b", more),
+      text("c", "J'attends tes réponses aux questions 1 à 3."),
+    ]);
+    expect(round?.id).toBe("a");
+    expect(round?.ids).toEqual(["a", "b"]);
+    expect(round?.questions.map((q) => q.id)).toEqual(["Q1", "Q2", "Q3"]);
+  });
+
   it("leaves Claude's other words in place once the questions go to the sheet", () => {
     const mixed = [
       "J'ai fini la migration, les tests passent.",

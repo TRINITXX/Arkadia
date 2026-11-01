@@ -602,7 +602,7 @@ function ChatViewBody({
             onSendNow={state.closed || bashId ? undefined : onInterrupt}
             onEditMessage={edit.onEdit}
             editBlocked={edit.blocked}
-            bareReplyId={sheetReply}
+            bareReplyIds={sheetReply}
             tailFirst={tailFirst}
             onRemoveQueued={state.closed ? undefined : sdkActions?.removeQueued}
             onReloadPlugins={sdkActions?.reloadPlugins}

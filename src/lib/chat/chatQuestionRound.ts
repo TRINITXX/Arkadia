@@ -314,21 +314,38 @@ export function withoutQuestions(text: string): string {
 }
 
 /**
- * The round Claude's last reply asks, if any: its text after the user's last
- * message, finished. `id` names the reply, so a sheet closed stays closed.
+ * The round Claude asks since the user's last message, finished: the
+ * questions of every reply since then, in order, a question asked again
+ * taking its new words (the user's report of 01/11/2026: Q8 to Q11 in one
+ * message, a subagent's report, Q12 in another, « J'attends tes réponses »
+ * last). `id` names the first reply that asks, so answers and a closed
+ * sheet stay as later replies add questions; `ids` are all those replies.
  */
 export function lastReplyRound(
   items: readonly ChatItem[],
-): { id: string; questions: RoundQuestion[] } | null {
+): { id: string; ids: string[]; questions: RoundQuestion[] } | null {
+  const replies: { id: string; questions: RoundQuestion[] }[] = [];
+  let latest = true;
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i];
-    if (item.kind === "user" || item.kind === "command") return null;
+    if (item.kind === "user" || item.kind === "command") break;
     if (item.kind !== "text") continue;
-    if (item.streaming || item.error) return null;
+    // Claude still writing, or his last word an error: no sheet yet.
+    if (item.streaming || (latest && item.error)) return null;
+    latest = false;
+    if (item.error) continue;
     const questions = parseQuestionRound(item.text);
-    return questions.length > 0 ? { id: item.id, questions } : null;
+    if (questions.length > 0) replies.unshift({ id: item.id, questions });
   }
-  return null;
+  if (replies.length === 0) return null;
+  const byId = new Map<string, RoundQuestion>();
+  for (const reply of replies)
+    for (const q of reply.questions) byId.set(q.id, q);
+  return {
+    id: replies[0].id,
+    ids: replies.map((r) => r.id),
+    questions: [...byId.values()],
+  };
 }
 
 /**
