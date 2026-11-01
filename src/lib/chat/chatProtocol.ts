@@ -77,6 +77,8 @@ export type ChatEvent =
       sessionId?: string;
       /** The mode the chat starts in, before its first turn's init. */
       mode?: string;
+      /** A /rewind's cut nothing was sent after yet; null: gone. */
+      rewind?: { before: string; at: string } | null;
     }
   /** Claude Code's slash commands, at boot (`supportedCommands`). */
   | { type: "commands"; chatId: string; commands: SlashCommandInfo[] }
@@ -178,6 +180,38 @@ export type ChatEvent =
       toolUseId: string;
       html: string | null;
     }
+  /** Its Claude Code stopped while nothing ran (`chat-server/sleep.ts`): the column stays. */
+  | { type: "asleep"; chatId: string }
+  /** It starts again on the same session (a key typed, a command sent). */
+  | { type: "awake"; chatId: string }
+  /** A `!` command: `running`, then its end with what the column keeps. */
+  | {
+      type: "bash";
+      chatId: string;
+      id: string;
+      command: string;
+      state: "running" | "done";
+      stdout?: string;
+      stderr?: string;
+      /** Bash's exit code; null when stopped or never started. */
+      code?: number | null;
+      stopped?: boolean;
+      /** It couldn't start (no Git Bash…). */
+      error?: string;
+      /** How much of the output Claude gets, of how much there was. */
+      sent?: number;
+      total?: number;
+    }
+  /** That command's entries are written: the chat no longer waits on it. */
+  | { type: "bash_written"; chatId: string; id: string }
+  /** A running `!` command's output as it comes (not replayed). */
+  | {
+      type: "bash_output";
+      chatId: string;
+      id: string;
+      stream: "stdout" | "stderr";
+      text: string;
+    }
   | { type: "closed"; chatId: string; error?: string }
   | { type: "error"; chatId?: string; message: string }
   /** From Rust: the server process of an account ended. */
@@ -271,6 +305,19 @@ export type ChatCommand =
       continue?: boolean;
       permissionMode?: PermissionMode;
       model?: string;
+      /** The session's effort (a restart after the server stopped keeps it). */
+      effort?: EffortLevel;
+      /** The page shows the conversation already: its past goes to the log only. */
+      keep?: boolean;
+      /** A /rewind's cut still pending (`info.rewind`): resumed at it, never past. */
+      historyBefore?: string;
+      resumeSessionAt?: string;
+      /** The server's restart cut a turn: the column says so. */
+      cut?: boolean;
+      /** Starts asleep: no Claude Code until woken. */
+      asleep?: boolean;
+      /** The Lab's sleep delay, for the whole server; null: never. */
+      sleepAfterMs?: number | null;
     }
   | {
       type: "send";
@@ -333,6 +380,18 @@ export type ChatCommand =
   | { type: "set_effort"; chatId: string; effort: EffortLevel }
   /** Withdraws a message Claude hasn't taken yet (`queued_removed`). */
   | { type: "cancel_queued"; chatId: string; uuid: string }
+  /** A key typed in an asleep chat's input: its Claude Code starts again. */
+  | { type: "wake"; chatId: string }
+  /** To sleep now if nothing runs nor waits (checks only). */
+  | { type: "sleep"; chatId: string }
+  /** The Lab's sleep delay changed, for the whole server; null: never. */
+  | { type: "sleep_after"; chatId: string; ms: number | null }
+  /** The pane shows again: the git branch looked at anew. */
+  | { type: "refresh_branch"; chatId: string }
+  /** `!command`: run in the chat's folder, its output to Claude with the next message. */
+  | { type: "bash"; chatId: string; id: string; command: string }
+  /** Esc on a running `!` command. */
+  | { type: "bash_stop"; chatId: string; id: string }
   | {
       type: "elicit_answer";
       chatId: string;

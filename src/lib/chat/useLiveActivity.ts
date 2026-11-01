@@ -9,9 +9,9 @@ const TICK_MS = 1_000;
 /**
  * What runs beside Claude's turn, for the docked cards and the shells chip,
  * with a clock that ticks while any of it shows (a card that ended leaves
- * on a tick, `CARD_LINGER_MS` later).
+ * on a tick, `CARD_LINGER_MS` later), never while the tab is hidden.
  */
-export function useLiveActivity(state: ChatState) {
+export function useLiveActivity(state: ChatState, shown = true) {
   const [now, setNow] = useState(() => Date.now());
   const cards = useMemo(
     () => agentCards(state.subagents, now),
@@ -27,7 +27,7 @@ export function useLiveActivity(state: ChatState) {
     [shells, state.items, state.agentMessages],
   );
   const ticking =
-    cards.length > 0 || workflow !== undefined || shells.length > 0;
+    shown && (cards.length > 0 || workflow !== undefined || shells.length > 0);
   useEffect(() => {
     if (!ticking) return;
     // The clock stood still while nothing showed.

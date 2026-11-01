@@ -3278,6 +3278,7 @@ export function App() {
                     setPaneRatio(tab.id, path, ratio)
                   }
                   chat={chatHandlers}
+                  shown={tab.id === activeTabId}
                 />
               </div>
             ))}

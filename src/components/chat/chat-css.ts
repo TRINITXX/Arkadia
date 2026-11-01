@@ -346,6 +346,24 @@ export const CHAT_CSS = `
 .chat-cmd.queued .head .name { color: #8f8f9a; }
 .chat-cmd .head .chat-queued-mark { margin: 0 0 0 auto; font-family: "Segoe UI", system-ui, sans-serif; }
 
+/* A \`!\` command of the user: the shell's words, its output, how it ended. */
+/* Drawn at its real size, never the 60px estimate: several of them at the end
+   of a column shown just past the viewport made the browser nudge the column
+   up 3px on its first frame, read as the reader scrolling away (preview, 01/11). */
+.chat-bash { content-visibility: visible; }
+.chat-bash .head .name { color: var(--chat-accent); font-weight: 600; }
+.chat-bash .head .args { color: #d4d4d8; }
+.chat-bash .head .stop, .chat-bash .head .end { margin-left: auto; flex-shrink: 0; align-self: center; font-family: "Segoe UI", system-ui, sans-serif; font-size: 11.5px; color: var(--chat-mute); }
+.chat-bash .head .stop { display: inline-flex; align-items: center; gap: 6px; padding: 1px 9px; border: 1px solid #3a3d43; border-radius: 999px; background: transparent; cursor: pointer; }
+.chat-bash .head .stop:hover { color: #fca5a5; border-color: rgba(248,113,113,.45); }
+.chat-bash .head .stop .lucide { width: 10px; height: 10px; color: inherit; }
+.chat-bash .head .stop .spin { width: 11px; height: 11px; border-radius: 50%; border: 2px solid #464a51; border-top-color: var(--chat-accent); animation: chat-spin .8s linear infinite; }
+.chat-bash .head .end.bad { color: #fca5a5; }
+.chat-bash .body.out { max-height: 320px; padding: 8px 12px 9px; font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--chat-dim); }
+.chat-bash .body .chat-stderr { margin-top: 4px; color: #fca5a5; }
+.chat-bash .note { border-top: 1px solid #26292e; padding: 5px 12px 6px; font-size: 11.5px; color: #e7c27a; }
+.chat-box textarea.bash { font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace; font-size: 13px; color: #f0b48f; }
+
 /* Live activity: agent cards, workflow card, shells chip. */
 .chat-agent-cards { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; max-height: 32vh; overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
 .chat-agent-card { border: 1px solid #2b2e33; border-radius: 12px; background: #1d2024; padding: 7px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; min-width: 0; flex-shrink: 0; transition: border-color .15s; }

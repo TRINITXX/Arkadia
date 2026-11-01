@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { SquareTerminal } from "lucide-react";
 import { elapsedLabel } from "@/lib/chat/chatLabels";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
+import { useChatShown } from "@/lib/chat/useChatShown";
 import { outputTail, type BackgroundShell } from "@/lib/chat/chatTasks";
 import type { ShellOutput } from "@/lib/chat/useShellOutputs";
 
@@ -33,14 +34,15 @@ export function ChatShellsChip({
   const rootRef = useRef<HTMLSpanElement>(null);
   const ids = shells.map((s) => s.taskId).join(" ");
 
-  // Asked at once, then every second, while the list shows.
+  // Asked at once, then every second, while the list shows (its tab too).
+  const shown = useChatShown();
   useEffect(() => {
-    if (!open || !onOutput || !ids) return;
+    if (!open || !shown || !onOutput || !ids) return;
     const ask = () => ids.split(" ").forEach((id) => onOutput(id));
     ask();
     const timer = window.setInterval(ask, OUTPUT_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [open, onOutput, ids]);
+  }, [open, shown, onOutput, ids]);
 
   // Esc closes it through the pane (never Claude's turn), a click elsewhere too.
   useChatLayer(open, () => setOpen(false));

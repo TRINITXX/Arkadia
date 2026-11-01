@@ -6,6 +6,7 @@ import { ChatRing } from "@/components/chat/chat-ring";
 import type { ContextDetail } from "@/lib/chat/chatProtocol";
 import { resetLabel } from "@/lib/chat/chatLabels";
 import { liveWindow, type ChatState } from "@/lib/chat/chatState";
+import { useChatShown } from "@/lib/chat/useChatShown";
 
 /** Past this share of a window, its figure turns amber. */
 const HOT = 0.8;
@@ -35,13 +36,16 @@ export function ChatStatusBar({
   const [now, setNow] = useState(() => Date.now());
   const fiveReset = state.limits.fiveHour?.resetsAt;
   const sevenReset = state.limits.sevenDay?.resetsAt;
+  // Hidden tab: no countdown to keep; right again on return.
+  const shown = useChatShown();
   useEffect(() => {
+    if (!shown) return;
     if (fiveReset === undefined && sevenReset === undefined) return;
     // The clock stood still while no reset was known.
     setNow(Date.now());
     const id = window.setInterval(() => setNow(Date.now()), TICK_MS);
     return () => window.clearInterval(id);
-  }, [fiveReset, sevenReset]);
+  }, [fiveReset, sevenReset, shown]);
 
   const fiveHour = liveWindow(state.limits.fiveHour, now);
   const sevenDay = liveWindow(state.limits.sevenDay, now);

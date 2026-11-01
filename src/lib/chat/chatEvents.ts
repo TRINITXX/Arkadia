@@ -25,12 +25,18 @@ let ready: Promise<void> | null = null;
  * the background after its turn. As in a terminal pane: a subagent or a
  * workflow keeps Claude busy (`withBackgroundTasks`), a shell or a watcher
  * leaves it waiting (`withBackgroundShells`). Ambient tasks count for none.
+ * The user's `!` commands count until Claude Code wrote their entries
+ * (`bangs`): a relaunch, a switch or a change of account would kill them.
  */
 export interface ChatActivity {
   busy: boolean;
   pending: number;
   tasks: string[];
   shells: string[];
+  /** `!` commands running, then waiting for their entries to be written (ids). */
+  bangs: string[];
+  /** Messages and commands the server holds behind them (uuids), not taken yet. */
+  held: string[];
 }
 
 export const IDLE_CHAT: ChatActivity = {
@@ -38,6 +44,8 @@ export const IDLE_CHAT: ChatActivity = {
   pending: 0,
   tasks: [],
   shells: [],
+  bangs: [],
+  held: [],
 };
 
 const SHELL_TASKS = new Set(["local_bash", "monitor"]);
@@ -89,6 +97,22 @@ function systemActivity(
   };
 }
 
+/**
+ * A message or command held behind a `!` command, taken by Claude Code: its
+ * turn starts (/compact streams nothing). Only those: a `!` entry's own
+ * frames would leave `busy` set, their result never comes.
+ */
+function heldTaken(
+  prev: ChatActivity,
+  m: Record<string, unknown>,
+): ChatActivity {
+  const uuid = typeof m.command_uuid === "string" ? m.command_uuid : null;
+  if (!uuid || !prev.held.includes(uuid) || m.state === "queued") return prev;
+  const held = without(prev.held, uuid);
+  if (m.state === "cancelled") return { ...prev, held };
+  return { ...prev, held, busy: true };
+}
+
 export function nextActivity(
   prev: ChatActivity,
   event: ChatEvent,
@@ -97,8 +121,30 @@ export function nextActivity(
     case "attached":
     case "closed":
       return IDLE_CHAT;
+    // Held behind a `!` command, it waits in the server: its turn starts
+    // when Claude Code takes it (`heldTaken`).
     case "user_sent":
-      return { ...prev, busy: true };
+      if (prev.bangs.length === 0) return { ...prev, busy: true };
+      return event.uuid ? { ...prev, held: [...prev.held, event.uuid] } : prev;
+    case "queued_removed":
+      return prev.held.includes(event.uuid)
+        ? { ...prev, held: without(prev.held, event.uuid) }
+        : prev;
+    case "bash":
+      if (event.state === "running") {
+        return prev.bangs.includes(event.id)
+          ? prev
+          : { ...prev, bangs: [...prev.bangs, event.id] };
+      }
+      // An end not counted (after its chat's `closed`) counts for nothing;
+      // one that couldn't start has no entries to wait for.
+      if (!prev.bangs.includes(event.id) || !event.error) return prev;
+      return { ...prev, bangs: without(prev.bangs, event.id) };
+    // Its entries written, as the server alone judges it.
+    case "bash_written":
+      return prev.bangs.includes(event.id)
+        ? { ...prev, bangs: without(prev.bangs, event.id) }
+        : prev;
     // An MCP server's request waits on the user as a permission does.
     case "permission":
     case "elicitation":
@@ -109,6 +155,7 @@ export function nextActivity(
     case "sdk": {
       const m = event.message;
       if (m.type === "system") return systemActivity(prev, m);
+      if (m.type === "command_lifecycle") return heldTaken(prev, m);
       if (m.parent_tool_use_id) return prev;
       // A request still open (a subagent's) outlives the turn: only a close
       // or a reattach clears them.
@@ -129,12 +176,20 @@ const sameActivity = (a: ChatActivity, b: ChatActivity) =>
   a.busy === b.busy &&
   a.pending === b.pending &&
   sameIds(a.tasks, b.tasks) &&
-  sameIds(a.shells, b.shells);
+  sameIds(a.shells, b.shells) &&
+  sameIds(a.bangs, b.bangs) &&
+  sameIds(a.held, b.held);
 
 const activity = new Map<string, ChatActivity>();
 const onActivity = new Set<(chatId: string) => void>();
 /** Each chat's account key (`chat.rs`), to clear its chats when its server stops. */
 const accountOf = new Map<string, string>();
+/**
+ * Accounts whose server runs now, as far as this page knows: a start went
+ * there, no exit since. Rust starts a server for any command: a command for
+ * the whole server (the sleep delay) goes to these only.
+ */
+const liveServers = new Set<string>();
 /** Chats replaying their life after a reattach: their activity isn't current yet. */
 const replaying = new Set<string>();
 
@@ -187,6 +242,7 @@ function dispatch(line: string): void {
     return;
   }
   if (event.type === "server_exit") {
+    liveServers.delete(event.account);
     // Its chats are gone: nothing works nor waits in them any more.
     const gone: string[] = [];
     for (const [chatId, account] of accountOf) {
@@ -268,6 +324,14 @@ export async function closeChat(
   await new Promise((r) => setTimeout(r, CLOSE_GRACE_MS));
 }
 
+/**
+ * The accounts whose server runs (`liveServers`), as `chatCommand` takes
+ * them: never one that stopped, a command would start it again for nothing.
+ */
+export function liveServerAccounts(): (string | undefined)[] {
+  return [...liveServers].map((key) => (key === "main" ? undefined : key));
+}
+
 /** A command to the server that runs `chatId` (its start named the account). */
 export function chatCommandFor(
   chatId: string,
@@ -281,7 +345,12 @@ export function chatCommand(
   accountId: string | undefined,
   command: ChatCommand,
 ): Promise<void> {
-  if (command.type === "start")
+  if (command.type === "start") {
     accountOf.set(command.chatId, accountId ?? "main");
+    liveServers.add(accountId ?? "main");
+    // A new Claude Code (« Reprendre ») starts at rest: nothing of the
+    // last one's still counts. A reattach replays from `attached` anyway.
+    setActivity(command.chatId, IDLE_CHAT);
+  }
   return invoke("chat_command", { accountId: accountId ?? null, command });
 }

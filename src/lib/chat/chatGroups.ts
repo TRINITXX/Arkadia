@@ -18,6 +18,8 @@ export type ChatUnit =
   | { kind: "notice"; item: Extract<ChatItem, { kind: "notice" }> }
   /** A slash command and its answer (`chatCommands`). */
   | { kind: "command"; item: Extract<ChatItem, { kind: "command" }> }
+  /** A `!` command of the user and its output. */
+  | { kind: "bash"; item: Extract<ChatItem, { kind: "bash" }> }
   /** « Terminé en », shown for a long turn only (`turnDoneLine`). */
   | { kind: "turn"; item: Extract<ChatItem, { kind: "turn" }> }
   | { kind: "work"; id: string; tools: ToolItem[] }
@@ -90,7 +92,7 @@ const NONE = new Set<string>();
 
 /**
  * « Messages seuls » (the terminal rail's button): the user's words, Claude's
- * replies, the messages of other sessions and subagents, the errors, and what answers the user: the commands they typed
+ * replies, the messages of other sessions and subagents, the errors, and what answers the user: the commands they typed (`/` and `!`)
  * (cards and notices) and the plan waiting for their answer, which the panel
  * below points to (`pending`: the tool calls a request is about), and
  * Claude's visuals, but not one found broken (a fixed one follows). Thinking,
@@ -107,6 +109,7 @@ export function messagesOnly(
       u.kind === "peer" ||
       u.kind === "text" ||
       u.kind === "command" ||
+      u.kind === "bash" ||
       (u.kind === "notice" && (u.item.tone === "error" || u.item.command)) ||
       (u.kind === "plan" && pending.has(u.item.id)) ||
       (u.kind === "visual" && !u.item.result?.isError),

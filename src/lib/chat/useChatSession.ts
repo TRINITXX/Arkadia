@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { chatCommand } from "@/lib/chat/chatEvents";
 import {
   attachLiveChat,
@@ -30,17 +36,23 @@ export interface ChatImage {
 /** How many older messages « Charger les messages plus anciens » brings. */
 const OLDER_PAGE = 200;
 
+/** What the pane itself shows of its chat, hidden or not: the tab's title, the session kept. */
+const paneFacts = (s: ChatState) => `${s.title ?? ""}|${s.sessionId ?? ""}`;
+
 /**
  * One chat, driven by its pane. Its state lives page-side (`chatLive`) and
  * outlives the pane: back on screen, it shows at once and starts nothing.
  * Starting it on a running conversation (page reload) reattaches: the chat
  * ends only with `close`, which the pane's owner sends when the pane goes
- * away or switches to the terminal.
+ * away or switches to the terminal. While its tab is hidden (`shown` false)
+ * the pane doesn't render on each event, only for its title and session;
+ * back on screen, it reads the state as it is.
  */
 export function useChatSession(
   chatId: string,
   accountId: string | undefined,
   start: ChatStart,
+  shown = true,
 ) {
   const startRef = useRef(start);
   // Declared before the reads below: React runs it before they subscribe.
@@ -49,8 +61,20 @@ export function useChatSession(
       void startLiveChat(chatId, accountId, startRef.current);
     }
   }, [chatId, accountId]);
+  const shownRef = useRef(shown);
+  useLayoutEffect(() => {
+    shownRef.current = shown;
+  }, [shown]);
   const subscribe = useCallback(
-    (cb: () => void) => subscribeLiveChat(chatId, cb),
+    (cb: () => void) => {
+      let facts = paneFacts(liveChatState(chatId));
+      return subscribeLiveChat(chatId, () => {
+        const next = paneFacts(liveChatState(chatId));
+        if (!shownRef.current && next === facts) return;
+        facts = next;
+        cb();
+      });
+    },
     [chatId],
   );
   const state = useSyncExternalStore(subscribe, () => liveChatState(chatId));
@@ -158,6 +182,24 @@ export function useChatSession(
     [run, chatId, state.sessionId],
   );
 
+  /** A key typed in the input of a chat asleep: its Claude Code starts again. */
+  const wake = useCallback(() => run({ type: "wake", chatId }), [run, chatId]);
+  /** `!command`: runs in the tab's folder, Claude gets it with the next message. */
+  const bash = useCallback(
+    (command: string) =>
+      run({
+        type: "bash",
+        chatId,
+        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        command,
+      }),
+    [run, chatId],
+  );
+  const stopBash = useCallback(
+    (id: string) => run({ type: "bash_stop", chatId, id }),
+    [run, chatId],
+  );
+
   /** A chat that ended starts again on its session, its past reloaded. */
   const restart = useCallback(() => {
     // The pane's chat as it is now: after a /clear it names no session.
@@ -193,6 +235,9 @@ export function useChatSession(
     setMode,
     setModel,
     openAgent,
+    wake,
+    bash,
+    stopBash,
   };
 }
 

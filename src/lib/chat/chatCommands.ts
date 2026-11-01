@@ -3,6 +3,7 @@ import type {
   JsonObject,
   SlashCommandInfo,
 } from "@/lib/chat/chatProtocol";
+import { startTurn } from "@/lib/chat/chatTurn";
 import {
   isListed,
   parseSlash,
@@ -84,11 +85,16 @@ export function isCommandSent(state: ChatState, event: UserSent): boolean {
   );
 }
 
-/** A command sent (`isCommandSent`): its card instead of a bubble. */
+/**
+ * A command sent (`isCommandSent`): its card instead of a bubble. `held`:
+ * the server keeps it behind a `!` command still running, waiting (its ×
+ * withdraws it) with no turn yet.
+ */
 export function addCommandSent(
   state: ChatState,
   event: UserSent,
   now: number,
+  held = false,
 ): ChatState {
   const cmd = parseSlash(event.text);
   if (!cmd) return state;
@@ -99,14 +105,12 @@ export function addCommandSent(
     args: cmd.args,
     absorbed: [],
     // Claude Code queues it like any message (`takeQueued`).
-    ...(state.working && event.uuid ? { queued: true } : {}),
+    ...((state.working || held) && event.uuid ? { queued: true } : {}),
     at: now,
   };
+  if (held) return { ...state, closed: null, items: [...state.items, card] };
   return {
-    ...state,
-    working: true,
-    turnStartedAt: state.working ? state.turnStartedAt : now,
-    turnTokens: state.working ? state.turnTokens : 0,
+    ...startTurn(state, now),
     closed: null,
     items: [...state.items, card],
   };
@@ -135,8 +139,16 @@ const notRunning = (items: ChatItem[]): ChatItem[] =>
     x.kind === "command" && x.running ? { ...x, running: false } : x,
   );
 
-/** Claude Code takes a message (`command_lifecycle` « started »): a command's card runs. */
-export function markCommandStarted(state: ChatState, m: JsonObject): ChatState {
+/**
+ * Claude Code takes a message (`command_lifecycle` « started »): a command's
+ * card runs. One held behind a `!` command opens its turn here: /compact
+ * streams nothing, its live line, Stop and Esc start with it.
+ */
+export function markCommandStarted(
+  state: ChatState,
+  m: JsonObject,
+  now: number,
+): ChatState {
   if (m.type !== "command_lifecycle" || m.state !== "started") return state;
   const id = `sent:${str(m.command_uuid) ?? ""}`;
   const at = state.items.findIndex((x) => x.id === id);
@@ -144,7 +156,7 @@ export function markCommandStarted(state: ChatState, m: JsonObject): ChatState {
   if (card?.kind !== "command") return state;
   const items = notRunning(state.items);
   items[at] = { ...card, running: true };
-  return { ...state, items };
+  return { ...startTurn(state, now), items };
 }
 
 /** A turn's end: a local command's answer (`num_turns: 0`) fills its card, and none runs any more. */

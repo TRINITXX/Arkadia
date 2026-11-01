@@ -1,0 +1,133 @@
+// When a chat's Claude Code may go to sleep (`Chat.sleepIfDue`): each one
+// costs 1.6 to 3 GB with its MCP servers, so a chat left alone stops it and
+// starts it again on the session when the user comes back. Pure: the page
+// reads the defaults too (the Lab's setting, `chatSleep.ts`).
+
+/** The Lab's default: 30 min without anything done in the chat. */
+export const DEFAULT_SLEEP_MS = 30 * 60_000;
+
+/** How often the server looks for chats to put to sleep. */
+export const SLEEP_CHECK_MS = 30_000;
+
+/** The Lab setting's choices; null: never. */
+export const SLEEP_CHOICES: readonly (number | null)[] = [
+  15 * 60_000,
+  30 * 60_000,
+  60 * 60_000,
+  null,
+];
+
+/** What keeps a chat awake, whatever the time. */
+export interface SleepFacts {
+  /** A turn runs (a message sent, Claude streaming), until its `result`. */
+  turn: boolean;
+  /** Background agents, workflows, shells, monitors (ambient ones aside). */
+  tasks: number;
+  /** Permissions, AskUserQuestion, plans, MCP requests waiting on the user. */
+  requests: number;
+  /** Messages sent that Claude Code hasn't taken yet. */
+  queued: number;
+  /** `!` commands of the user still running. */
+  bangs: number;
+  /** Wakeups Claude scheduled (ScheduleWakeup, CronCreate, /loop): asleep, they would never fire. */
+  crons: number;
+}
+
+export const AT_REST: SleepFacts = {
+  turn: false,
+  tasks: 0,
+  requests: 0,
+  queued: 0,
+  bangs: 0,
+  crons: 0,
+};
+
+/** Nothing runs nor waits in the chat. */
+export function atRest(f: SleepFacts): boolean {
+  return (
+    !f.turn &&
+    f.tasks === 0 &&
+    f.requests === 0 &&
+    f.queued === 0 &&
+    f.bangs === 0 &&
+    f.crons === 0
+  );
+}
+
+/** Time to sleep: at rest, and nothing done in it for `afterMs` (null: never). */
+export function sleepDue(
+  facts: SleepFacts,
+  lastActive: number,
+  now: number,
+  afterMs: number | null,
+): boolean {
+  if (afterMs === null || !atRest(facts)) return false;
+  return now - lastActive >= afterMs;
+}
+
+/** The setting as a command carries it: a delay in ms, null (never), or undefined (not said). */
+export function readSleepAfter(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  return undefined;
+}
+
+type Message = Record<string, unknown>;
+
+/** A turn opens with its first streamed or written reply, ends with its `result`. */
+export function turnAfter(turn: boolean, m: Message): boolean {
+  if (m.parent_tool_use_id) return turn;
+  if (m.type === "result") return false;
+  if (m.type === "stream_event" || m.type === "assistant") return true;
+  return turn;
+}
+
+type TaskInfo = { task_id?: unknown; ambient?: unknown };
+
+const ENDED = new Set(["completed", "failed", "stopped", "killed"]);
+
+/**
+ * The background tasks running, by id: `background_tasks_changed` replaces
+ * the set (a task whose end never came goes), a start adds one, its end or a
+ * final status removes it. Ambient ones (Claude Code's housekeeping) count
+ * for none, as in the page's `chatActivity`.
+ */
+export function tasksAfter(running: readonly string[], m: Message): readonly string[] {
+  if (m.type !== "system") return running;
+  if (m.subtype === "background_tasks_changed" && Array.isArray(m.tasks)) {
+    return (m.tasks as TaskInfo[]).flatMap((t) =>
+      typeof t.task_id === "string" && t.ambient !== true ? [t.task_id] : [],
+    );
+  }
+  const id = typeof m.task_id === "string" ? m.task_id : null;
+  if (!id) return running;
+  if (m.subtype === "task_started") {
+    return m.ambient === true || running.includes(id) ? running : [...running, id];
+  }
+  const status = (m.patch as { status?: unknown } | undefined)?.status;
+  const ended =
+    m.subtype === "task_notification" ||
+    (m.subtype === "task_updated" && typeof status === "string" && ENDED.has(status));
+  return ended ? running.filter((t) => t !== id) : running;
+}
+
+/**
+ * Messages sent and not yet taken: a lifecycle frame past « queued » takes
+ * one (started, or cancelled: gone either way), a turn's frames list those it
+ * consumed, and a turn's end lets the rest go to its successor.
+ */
+export function queuedAfter(queued: readonly string[], m: Message): readonly string[] {
+  if (queued.length === 0) return queued;
+  if (m.type === "result" && !m.parent_tool_use_id) return [];
+  if (m.type === "command_lifecycle") {
+    return m.state === "queued" ? queued : queued.filter((u) => u !== m.command_uuid);
+  }
+  const taken = Array.isArray(m.user_message_uuids) ? m.user_message_uuids : [];
+  return taken.length === 0 ? queued : queued.filter((u) => !taken.includes(u));
+}
+
+/** The wakeups a Stop hook says are scheduled (`session_crons`). */
+export function cronCount(input: unknown): number {
+  const crons = (input as { session_crons?: unknown } | null)?.session_crons;
+  return Array.isArray(crons) ? crons.length : 0;
+}

@@ -106,6 +106,97 @@ describe("background tasks", () => {
   });
 });
 
+describe("nextActivity on the user's `!` commands", () => {
+  it("counts a command until Claude Code wrote its entries", () => {
+    const running = nextActivity(IDLE_CHAT, {
+      type: "bash",
+      chatId: "c",
+      id: "b1",
+      command: "pnpm test",
+      state: "running",
+    });
+    expect(running.bangs).toEqual(["b1"]);
+    // A message sent meanwhile waits in the server: no turn yet.
+    const held = nextActivity(running, {
+      type: "user_sent",
+      chatId: "c",
+      text: "x",
+      images: 0,
+      uuid: "m",
+    });
+    expect(held.busy).toBe(false);
+    const ended = nextActivity(held, {
+      type: "bash",
+      chatId: "c",
+      id: "b1",
+      command: "pnpm test",
+      state: "done",
+    });
+    // Until the server says its entries written: it alone judges.
+    expect(ended.bangs).toEqual(["b1"]);
+    const written = nextActivity(ended, {
+      type: "bash_written",
+      chatId: "c",
+      id: "b1",
+    });
+    expect(written.bangs).toEqual([]);
+    expect(chatBusyReason(ended, false)).toMatch(/commande ! tourne/);
+    expect(chatBusyReason(written, false)).toBeNull();
+  });
+
+  it("is busy once Claude Code takes what waited behind a command, never for its entries", () => {
+    const start: ChatEvent = {
+      type: "bash",
+      chatId: "c",
+      id: "b1",
+      command: "pnpm build",
+      state: "running",
+    };
+    const held = nextActivity(nextActivity(IDLE_CHAT, start), {
+      type: "user_sent",
+      chatId: "c",
+      text: "/compact",
+      images: 0,
+      uuid: "c1",
+    });
+    expect(held.busy).toBe(false);
+    // A `!` entry taken: its result is swallowed, `busy` would stick.
+    const entry = nextActivity(
+      held,
+      sdk("command_lifecycle", { command_uuid: "e1", state: "started" }),
+    );
+    expect(entry.busy).toBe(false);
+    const taken = nextActivity(
+      entry,
+      sdk("command_lifecycle", { command_uuid: "c1", state: "started" }),
+    );
+    expect(taken).toMatchObject({ busy: true, held: [] });
+    expect(chatBusyReason({ ...taken, bangs: [] }, false)).toMatch(/travaille/);
+  });
+
+  it("counts nothing of a command whose chat ended before it", () => {
+    const closed = nextActivity(
+      nextActivity(IDLE_CHAT, {
+        type: "bash",
+        chatId: "c",
+        id: "b1",
+        command: "sleep 9",
+        state: "running",
+      }),
+      { type: "closed", chatId: "c", error: "gone" },
+    );
+    // Its end arrives after the `closed`: no entries to wait for.
+    const late = nextActivity(closed, {
+      type: "bash",
+      chatId: "c",
+      id: "b1",
+      command: "sleep 9",
+      state: "done",
+    });
+    expect(late.bangs).toEqual([]);
+  });
+});
+
 describe("chatBusyReason", () => {
   it("lets a chat go to the terminal only at rest, and not mid-replay", () => {
     expect(chatBusyReason(IDLE_CHAT, false)).toBeNull();

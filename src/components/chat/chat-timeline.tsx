@@ -7,6 +7,7 @@ import {
 } from "@/components/modern/MarkdownContent";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
 import { ChatAgentRow } from "@/components/chat/chat-agent-row";
+import { ChatBashCard } from "@/components/chat/chat-bash-card";
 import { ChatCommandCard } from "@/components/chat/chat-command-card";
 import { ChatEditCard } from "@/components/chat/chat-edit-card";
 import { ChatGallery } from "@/components/chat/chat-gallery";
@@ -77,6 +78,8 @@ interface ChatTimelineProps {
   /** A visual's choice: into the input, not sent. */
   onChoose?: (text: string) => void;
   onOpenVisual?: (html: string, title: string) => void;
+  /** A running `!` command's stop, by its server id. */
+  onStopBash?: (id: string) => void;
 }
 
 /** The uuid the chat server sent a message under (`sent:<uuid>`). */
@@ -104,6 +107,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   onVisualHtml,
   onChoose,
   onOpenVisual,
+  onStopBash,
 }: ChatTimelineProps) {
   const remover = (item: { id: string; queued?: boolean }) => {
     const uuid = item.queued ? sentUuid(item.id) : null;
@@ -267,6 +271,18 @@ export const ChatTimeline = memo(function ChatTimeline({
                 onToast={onToast}
                 onSendNow={onSendNow}
                 onRemove={remover(unit.item)}
+              />
+            );
+          case "bash":
+            return (
+              <ChatBashCard
+                key={unit.item.id}
+                item={unit.item}
+                onStop={
+                  onStopBash && unit.item.id.startsWith("bash:")
+                    ? () => onStopBash(unit.item.id.slice("bash:".length))
+                    : undefined
+                }
               />
             );
           case "work":

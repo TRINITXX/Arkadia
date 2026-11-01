@@ -14,12 +14,14 @@ const REFRESH_MS = 2_000;
  * workflow card or the drawer. A subagent this chat ran shows from its live
  * messages (`agentMessages`), so it follows the agent as it works; any other
  * (a resumed session's, a workflow's) from its transcript, read again every
- * 2 s while it runs.
+ * 2 s while it runs and its tab shows.
  */
 export function useAgentSheet(
   state: ChatState,
   agents: Record<string, ChatState>,
   onOpenAgent: (agentId: string) => void,
+  /** Its tab on screen: hidden, the transcript isn't read again. */
+  shown = true,
 ) {
   const [opened, setOpened] = useState<Subagent | null>(null);
   // The opened agent as it is now: its card's figures move.
@@ -55,10 +57,10 @@ export function useAgentSheet(
   const streamed = liveConversation !== undefined;
   const taskId = sheet?.taskId;
   useEffect(() => {
-    if (!taskId || !running || streamed) return;
+    if (!taskId || !running || streamed || !shown) return;
     const id = window.setInterval(() => onOpenAgent(taskId), REFRESH_MS);
     return () => window.clearInterval(id);
-  }, [taskId, running, streamed, onOpenAgent]);
+  }, [taskId, running, streamed, shown, onOpenAgent]);
 
   const openSheet = useCallback(
     (agent: Subagent) => {

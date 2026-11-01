@@ -32,6 +32,8 @@ interface PaneTreeViewProps {
   onSetRatio: (path: number[], ratio: number) => void;
   /** Chat panes (Arkadia Lab): see `ChatPane`. */
   chat: PaneChatHandlers;
+  /** Its tab is the one on screen: a hidden tab's chat panes rest. */
+  shown?: boolean;
   path?: number[];
 }
 
@@ -61,6 +63,7 @@ export function PaneTreeView({
   onContextMenu,
   onSetRatio,
   chat,
+  shown = true,
   path = [],
 }: PaneTreeViewProps) {
   if (tree.kind === "leaf") {
@@ -81,6 +84,7 @@ export function PaneTreeView({
             onLabel={chat.onLabel}
             liveSessions={chat.liveSessions}
             onToast={onToast}
+            shown={shown}
           />
         </div>
       );
@@ -155,6 +159,7 @@ export function PaneTreeView({
           onContextMenu={onContextMenu}
           onSetRatio={onSetRatio}
           chat={chat}
+          shown={shown}
           path={[...path, 0]}
         />
       </div>
@@ -182,6 +187,7 @@ export function PaneTreeView({
           onContextMenu={onContextMenu}
           onSetRatio={onSetRatio}
           chat={chat}
+          shown={shown}
           path={[...path, 1]}
         />
       </div>

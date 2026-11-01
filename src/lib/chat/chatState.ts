@@ -24,6 +24,7 @@ import {
   resetConversation,
 } from "@/lib/chat/chatCommands";
 import { resultNotice, type RetryInfo } from "@/lib/chat/chatErrors";
+import { startTurn } from "@/lib/chat/chatTurn";
 import { peerMessages, type PeerMessage } from "@/lib/chat/chatPeer";
 import { addSdkContent, compactNotice } from "@/lib/chat/chatSdkContent";
 import { toolDetail, type ToolDetail } from "@/lib/chat/chatToolResult";
@@ -114,6 +115,23 @@ export type ChatItem = (
       command?: boolean;
       /** A button under it: plugins that failed load again (`chatSdkSettings`). */
       action?: "reload_plugins";
+    }
+  /** A `!` command of the user and its output (`chat-server/bash.ts`). */
+  | {
+      kind: "bash";
+      id: string;
+      command: string;
+      stdout: string;
+      stderr: string;
+      running: boolean;
+      /** Bash's exit code; null when stopped or never started, absent from the past. */
+      code?: number | null;
+      stopped?: boolean;
+      /** It couldn't start (no Git Bash…). */
+      error?: string;
+      /** How much of the output Claude gets, of how much there was. */
+      sent?: number;
+      total?: number;
     }
   /** A slash command sent, filled by its local answer (`chatCommands`). */
   | {
@@ -258,6 +276,16 @@ export interface ChatState {
   sdk: SdkState;
   /** Claude's visuals (`show_visual`) by tool call: their page and check. */
   visuals: Record<string, VisualEntry>;
+  /**
+   * Its Claude Code sleeps (nothing ran for the Lab's delay): the column and
+   * the figures stay as they were, the empty input says so, a key wakes it.
+   */
+  asleep: boolean;
+  /**
+   * A /rewind's cut nothing was sent after yet (`info.rewind`): a restart
+   * after the server stopped resumes at it, never on the turns rewound away.
+   */
+  rewind: { before: string; at: string } | null;
 }
 
 export const EMPTY_CHAT: ChatState = {
@@ -299,6 +327,8 @@ export const EMPTY_CHAT: ChatState = {
   interrupted: false,
   sdk: EMPTY_SDK,
   visuals: {},
+  asleep: false,
+  rewind: null,
 };
 
 const obj = (v: unknown): JsonObject =>
@@ -537,6 +567,8 @@ function addUser(
   const content = message.content;
   if (typeof content === "string") {
     if (!fromHistory) return state;
+    const bash = pastBash(state, m, content);
+    if (bash) return bash;
     const text = visibleUserText(content);
     if (text === null) return state;
     return {
@@ -598,6 +630,133 @@ function addUser(
     ];
   }
   return { ...state, items };
+}
+
+/** Claude Code's escapes in a `!` command's output (`escapeOutput` of the server). */
+const unescapeOutput = (text: string) =>
+  text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
+/** What the server adds to the errors of a `!` command stopped by Esc. */
+const BASH_STOPPED = "[Command stopped by the user]";
+
+/**
+ * A `!` command read from the past: its `<bash-input>` entry becomes its
+ * card, the `<bash-stdout>` one right after fills it. Null: not one of them.
+ */
+function pastBash(
+  state: ChatState,
+  m: JsonObject,
+  content: string,
+): ChatState | null {
+  const input = /^<bash-input>([\s\S]*)<\/bash-input>$/.exec(content.trim());
+  if (input) {
+    const item: ChatItem = {
+      kind: "bash",
+      id: str(m.uuid) ?? `b${state.items.length}`,
+      command: input[1].trim(),
+      stdout: "",
+      stderr: "",
+      running: false,
+      at: messageTime(m),
+    };
+    return { ...state, items: [...state.items, item] };
+  }
+  const output =
+    /^<bash-stdout>([\s\S]*)<\/bash-stdout><bash-stderr>([\s\S]*)<\/bash-stderr>$/.exec(
+      content.trim(),
+    );
+  if (!output) return null;
+  const last = state.items[state.items.length - 1];
+  // Its command's card only: an output alone shows nothing.
+  if (last?.kind !== "bash" || last.stdout || last.stderr) return state;
+  const stdout = unescapeOutput(output[1]);
+  let stderr = unescapeOutput(output[2]);
+  const stopped = stderr.endsWith(BASH_STOPPED);
+  if (stopped) stderr = stderr.slice(0, -BASH_STOPPED.length).trimEnd();
+  const filled: ChatItem = {
+    ...last,
+    stdout: stdout === "(Bash completed with no output)" ? "" : stdout,
+    stderr,
+    stopped: stopped || undefined,
+  };
+  return { ...state, items: [...state.items.slice(0, -1), filled] };
+}
+
+/** A live `!` command's output is kept to its last this many characters per stream. */
+const BASH_KEPT = 60_000;
+
+/** A `!` command: its card when it starts, its output as it comes, its end. */
+function addBash(
+  state: ChatState,
+  event: Extract<ChatEvent, { type: "bash" | "bash_output" }>,
+  now: number,
+): ChatState {
+  const id = `bash:${event.id}`;
+  if (event.type === "bash_output") {
+    return {
+      ...state,
+      items: patchItem(state.items, id, (item) =>
+        item.kind === "bash" && item.running
+          ? {
+              ...item,
+              [event.stream]: (item[event.stream] + event.text).slice(
+                -BASH_KEPT,
+              ),
+            }
+          : item,
+      ),
+    };
+  }
+  const item: ChatItem = {
+    kind: "bash",
+    id,
+    command: event.command,
+    stdout: event.stdout ?? "",
+    stderr: event.stderr ?? "",
+    running: event.state === "running",
+    code: event.code,
+    stopped: event.stopped,
+    error: event.error,
+    sent: event.sent,
+    total: event.total,
+    at: now,
+  };
+  // Typed with an empty input: something else was written, the suggestion goes.
+  return { ...state, suggestion: null, items: upsertItem(state.items, item) };
+}
+
+/** A `!` command still runs: what the user sends waits for it (`chat-server`). */
+function runningBashIn(items: ChatItem[]): boolean {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.kind === "bash" && item.running) return true;
+  }
+  return false;
+}
+
+/** What still ran when its Claude Code went: a `!` command is stopped with it. */
+function endBashes(items: ChatItem[]): ChatItem[] {
+  if (!items.some((x) => x.kind === "bash" && x.running)) return items;
+  return items.map((x) =>
+    x.kind === "bash" && x.running
+      ? { ...x, running: false, stopped: true, code: null }
+      : x,
+  );
+}
+
+/**
+ * Its Claude Code went mid-turn and the chat goes on (the server restarted,
+ * `chatLive`): the turn, its tasks and its requests end where they were,
+ * what waited was not sent; the chat stays open.
+ */
+export function cutTurn(state: ChatState, now: number): ChatState {
+  const ended = endTurn(interruptTasks(state, now));
+  return {
+    ...ended,
+    items: endBashes(dropQueued(ended.items)),
+    requests: [],
+    sdk: closeSdk(ended.sdk),
+  };
 }
 
 function addStreamEvent(
@@ -830,7 +989,7 @@ function usableContextPercent(
  * (`user_message_uuids`, the fallback for a CLI without lifecycle frames).
  * One it « cancelled » was never taken: it shows as not sent.
  */
-function takeQueued(state: ChatState, m: JsonObject): ChatState {
+function takeQueued(state: ChatState, m: JsonObject, now: number): ChatState {
   const cancelled = m.type === "command_lifecycle" && m.state === "cancelled";
   const taken =
     m.type === "command_lifecycle"
@@ -851,6 +1010,9 @@ function takeQueued(state: ChatState, m: JsonObject): ChatState {
         items[i] = cancelled
           ? { ...item, queued: false, dropped: true }
           : { ...item, queued: false };
+        // Held behind a `!` command (no turn ran): taken, its turn opens now,
+        // not at Claude's first word.
+        if (!cancelled) state = startTurn(state, now);
       }
       break;
     }
@@ -987,12 +1149,10 @@ function addSdk(state: ChatState, m: JsonObject, now: number): ChatState {
   switch (m.type) {
     case "system":
       return addSystem(state, m, now);
+    // Claude's first reply opens a turn it started itself (a task's report,
+    // a wakeup, another session's message, a message held behind a `!`).
     case "stream_event":
-      return addStreamEvent(
-        state.working ? state : { ...state, working: true, turnStartedAt: now },
-        m,
-        now,
-      );
+      return addStreamEvent(startTurn(state, now), m, now);
     case "assistant":
       return commandAnswer(state, m) ?? addAssistant(state, m, now);
     case "user":
@@ -1135,16 +1295,41 @@ export function reduceChat(
   switch (event.type) {
     case "attached":
       return EMPTY_CHAT;
-    case "user_sent":
+    case "user_sent": {
       // Something else was written: the suggestion goes.
       if (state.suggestion) state = { ...state, suggestion: null };
-      if (isCommandSent(state, event)) return addCommandSent(state, event, now);
+      // Sent to a chat asleep: the server wakes it first (`awake`).
+      if (state.asleep) state = { ...state, asleep: false };
+      // Held by the server behind a `!` command still running: it waits
+      // (its × withdraws it), and the turn starts with Claude's first reply.
+      const held = !state.working && !!event.uuid && runningBashIn(state.items);
+      if (isCommandSent(state, event))
+        return addCommandSent(state, event, now, held);
+      if (held) {
+        return {
+          ...state,
+          closed: null,
+          items: keepPasted([
+            ...state.items,
+            {
+              kind: "user",
+              id: `sent:${event.uuid}`,
+              text: event.text,
+              images: event.images,
+              queued: true,
+              pasted: event.pasted?.length
+                ? event.pasted.map(
+                    (img) => `data:${img.mediaType};base64,${img.data}`,
+                  )
+                : undefined,
+              at: now,
+            },
+          ]),
+        };
+      }
       return {
-        ...state,
-        working: true,
         // A message queued behind the turn under way doesn't restart its clock.
-        turnStartedAt: state.working ? state.turnStartedAt : now,
-        turnTokens: state.working ? state.turnTokens : 0,
+        ...startTurn(state, now),
         closed: null,
         items: keepPasted([
           ...state.items,
@@ -1166,9 +1351,14 @@ export function reduceChat(
           },
         ]),
       };
+    }
     case "sdk":
       return addSdk(
-        markCommandStarted(takeQueued(state, event.message), event.message),
+        markCommandStarted(
+          takeQueued(state, event.message, now),
+          event.message,
+          now,
+        ),
         event.message,
         now,
       );
@@ -1220,6 +1410,7 @@ export function reduceChat(
           event.gitBranch === undefined ? state.gitBranch : event.gitBranch,
         // Only until the first turn's init says it: later, init and status rule.
         mode: state.mode ?? event.mode ?? null,
+        rewind: event.rewind === undefined ? state.rewind : event.rewind,
       };
     case "history":
       if (event.agentId) return state;
@@ -1281,17 +1472,20 @@ export function reduceChat(
         },
       };
     }
-    case "closed": {
+    case "closed":
       // Its Claude Code is gone, and the background work it ran with it.
-      const ended = endTurn(interruptTasks(state, now));
       return {
-        ...ended,
-        items: dropQueued(ended.items),
-        requests: [],
-        sdk: closeSdk(ended.sdk),
+        ...cutTurn(state, now),
+        asleep: false,
         closed: { error: event.error },
       };
-    }
+    case "asleep":
+      return { ...state, asleep: true };
+    case "awake":
+      return { ...state, asleep: false };
+    case "bash":
+    case "bash_output":
+      return addBash(state, event, now);
     case "models":
     case "effort":
     case "mcp":

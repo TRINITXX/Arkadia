@@ -9,6 +9,7 @@ import {
 import { folderOf } from "@/lib/chat/chatLabels";
 import { usePaneMessagesOnly } from "@/lib/chat/chatMessagesOnly";
 import { startupPhase } from "@/lib/chat/chatStartup";
+import { useBranchRefresh } from "@/lib/chat/useBranchRefresh";
 import { useChatSdkActions } from "@/lib/chat/useChatSdkActions";
 import { useChatSession } from "@/lib/chat/useChatSession";
 import { useShellOutputs } from "@/lib/chat/useShellOutputs";
@@ -31,10 +32,13 @@ export function ChatPane({
   onLabel,
   liveSessions,
   onToast,
+  shown = true,
 }: {
   pane: PaneState;
   chat: PaneChat;
   isActive: boolean;
+  /** Its tab is the one on screen: hidden, the pane rests (no clock, no render per event). */
+  shown?: boolean;
   onActivate: () => void;
   /** The chat's Claude session, once known (kept in the pane for later). */
   onSession: (paneId: string, sessionId: string) => void;
@@ -44,9 +48,11 @@ export function ChatPane({
   liveSessions: (exceptPaneId: string) => Promise<Set<string>>;
   onToast?: ToastFn;
 }) {
-  const session = useChatSession(pane.id, pane.accountId, chat);
+  const session = useChatSession(pane.id, pane.accountId, chat, shown);
   const shellOutputs = useShellOutputs(pane.id);
   const { state } = session;
+  // Never for an ended chat: a command would start its server for nothing.
+  useBranchRefresh(pane.id, pane.accountId, shown && !state.closed);
   const [draft, setDraft] = usePaneDraft(pane.id);
   const [messagesOnly, setMessagesOnly] = usePaneMessagesOnly(pane.id);
   // A dictation still lands in this pane's draft if the pane unmounted
@@ -115,6 +121,10 @@ export function ChatPane({
       onModel={session.setModel}
       onOpenAgent={session.openAgent}
       onRestart={session.restart}
+      hidden={!shown}
+      onWake={session.wake}
+      onBash={session.bash}
+      onStopBash={session.stopBash}
       draft={draft}
       onDraft={setDraft}
       voice={voice}

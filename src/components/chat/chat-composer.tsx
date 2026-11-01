@@ -31,6 +31,7 @@ import {
 import type { DictationEnd, VoiceStatus } from "@/lib/useHiddenVoice";
 import type { PermissionMode } from "@/lib/chat/chatProtocol";
 import { nextMode } from "@/lib/chat/chatLabels";
+import { bashCommand } from "@/lib/chat/chatBash";
 
 /** Claude's dictation (`useHiddenVoice`): its text lands in the draft. */
 export interface ChatVoice {
@@ -81,7 +82,9 @@ function readImage(file: File): Promise<Attachment> {
  * a working Claude (its turn only: background agents and workflows go on), Ctrl+B sends its running command or agent to the
  * background, Shift+Tab cycles the mode, as in the terminal. A message sent while Claude works waits for its turn; Ctrl+Enter
  * sends it now (the turn under way stops), or, input empty, the ones waiting.
- * Sent mid-dictation, the draft goes once the dictated text is in.
+ * Sent mid-dictation, the draft goes once the dictated text is in. A message
+ * that starts with `!` runs as a shell command (`onBash`), Esc stops it.
+ * Asleep, the empty input says so: the first key wakes Claude (`ChatView`).
  */
 export function ChatComposer({
   items,
@@ -103,6 +106,9 @@ export function ChatComposer({
   suggestion = null,
   onOpen,
   leading,
+  onBash,
+  onStopBash,
+  asleep = false,
 }: {
   /** The conversation, for the copy of Claude's last code block. */
   items: ChatItem[];
@@ -132,6 +138,12 @@ export function ChatComposer({
   onOpen?: (content: LightboxContent) => void;
   /** First in the bottom row: the session's button and rings (`ChatView`). */
   leading?: React.ReactNode;
+  /** `!command`: runs in the tab's folder instead of going to Claude. */
+  onBash?: (command: string) => void;
+  /** A `!` command runs: Esc stops it before anything else of Claude's. */
+  onStopBash?: () => void;
+  /** Claude Code sleeps: the empty input says a key wakes it. */
+  asleep?: boolean;
 }) {
   const { text, images } = draft;
   const files = draft.files ?? NO_FILES;
@@ -140,7 +152,8 @@ export function ChatComposer({
     onDraft((d) => ({ ...d, images: update(d.images) }));
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const layers = useChatLayers();
-  const ghost = useChatSuggestion(suggestion, text, working);
+  // Asleep, the input's only words are the sleep's (its first key wakes it).
+  const ghost = useChatSuggestion(asleep ? null : suggestion, text, working);
   // ↑ / ↓ bring back the pane's last messages (empty input), their
   // attachments as cards.
   const history = useInputHistory(
@@ -237,6 +250,13 @@ export function ChatComposer({
       if (now && queued) onInterrupt();
       return;
     }
+    // `!command`: the shell's, not Claude's; the attachments stay for the next message.
+    const command = onBash ? bashCommand(body) : null;
+    if (command) {
+      onBash?.(command);
+      setText("");
+      return;
+    }
     // /resume, /rewind, a terminal-only command: the page answers.
     if (files.length === 0 && slashMenu.intercept(body)) return;
     // The attached files as Claude Code reads them: their quoted paths.
@@ -282,7 +302,11 @@ export function ChatComposer({
     if (e.key === "Escape") {
       // A list, menu or sheet of the pane open: Esc is for it, never Claude.
       if (layers?.closeTop()) e.preventDefault();
-      else if (working) {
+      // The user's own `!` command first, as the terminal's bash mode.
+      else if (onStopBash) {
+        e.preventDefault();
+        onStopBash();
+      } else if (working) {
         e.preventDefault();
         onInterrupt();
       }
@@ -307,6 +331,7 @@ export function ChatComposer({
   };
 
   const empty = !text.trim() && images.length === 0 && files.length === 0;
+  const bashMode = !!onBash && text.trimStart().startsWith("!");
   return (
     <div className="chat-box">
       <ChatSlashMenu menu={slashMenu} />
@@ -320,15 +345,22 @@ export function ChatComposer({
         ref={areaRef}
         rows={1}
         value={text}
-        className={ghost ? "suggest" : undefined}
+        className={ghost ? "suggest" : bashMode ? "bash" : undefined}
+        title={
+          bashMode
+            ? "Commande shell (Git Bash) dans le dossier de l'onglet"
+            : undefined
+        }
         placeholder={
           voice.interim
             ? ""
-            : ghost
-              ? `${ghost}  ·  Tab`
-              : working
-                ? "Claude travaille… ton message attendra son tour (Ctrl+Entrée : tout de suite)"
-                : "Écris à Claude…"
+            : asleep
+              ? "Claude en veille : écris pour le réveiller"
+              : ghost
+                ? `${ghost}  ·  Tab`
+                : working
+                  ? "Claude travaille… ton message attendra son tour (Ctrl+Entrée : tout de suite)"
+                  : "Écris à Claude…"
         }
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}

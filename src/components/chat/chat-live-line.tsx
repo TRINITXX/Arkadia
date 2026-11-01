@@ -5,6 +5,7 @@ import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import type { Subagent, TaskItem } from "@/lib/chat/chatState";
 import { liveElapsed } from "@/lib/chat/chatSteps";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
+import { useChatShown } from "@/lib/chat/useChatShown";
 
 /**
  * What the terminal shows above its input while Claude works, the one line
@@ -47,11 +48,14 @@ export function ChatLiveLine({
 }) {
   const [now, setNow] = useState(() => Date.now());
   const [tasksOpen, setTasksOpen] = useState(false);
+  // Its clock stops while the tab is hidden, and is right again on return.
+  const shown = useChatShown();
   useEffect(() => {
-    if (!working) return;
+    if (!working || !shown) return;
+    setNow(Date.now());
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, [working]);
+  }, [working, shown]);
 
   const done = tasks.filter((t) => t.status === "completed").length;
   const openTasks = tasks.length > 0 && done < tasks.length;

@@ -8,13 +8,37 @@
 // its life, and a page that reloads (Arkadia's watchdog rebuilds its window)
 // gets them again by starting the same chat, while Claude goes on working.
 
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import {
+  bangBlocks,
+  entriesEnd,
+  BANG_SHOWN_MAX,
+  BANG_SENT_MAX,
+  keep,
+  keptText,
+  NOTHING_KEPT,
+  runBang,
+  type BangRun,
+  type Kept,
+} from "./bash.ts";
+import { pipeGone, strayVerdict } from "./guard.ts";
+import {
+  cronCount,
+  DEFAULT_SLEEP_MS,
+  queuedAfter,
+  readSleepAfter,
+  SLEEP_CHECK_MS,
+  sleepDue,
+  tasksAfter,
+  turnAfter,
+  type SleepFacts,
+} from "./sleep.ts";
 import { needsReread, outputFiles, readConsoleTail } from "./taskOutput.ts";
 import { storedVisual, visualServer, VISUAL_RULE, type PreparedVisual } from "./visual.ts";
 import { readVisualReport, VISUAL_SERVER, VISUAL_TOOL_NAME, type VisualReport } from "./visualHtml.ts";
@@ -55,6 +79,26 @@ export type Command =
       model?: string;
       /** Per-chat variables for Claude Code and its hooks (ARKADIA_PANE_ID…). */
       env?: Record<string, string>;
+      /** The session's effort, for this session only (a restart keeps it). */
+      effort?: EffortLevel;
+      /**
+       * The page shows this conversation already (a restart after the server
+       * stopped): the past goes to the log only, for a later reload.
+       */
+      keep?: boolean;
+      /** That restart cut a turn: the column says so (`RESTART_CUT`). */
+      cut?: boolean;
+      /** Starts asleep (it was when the server stopped): no Claude Code until woken. */
+      asleep?: boolean;
+      /**
+       * A /rewind's cut the page carries over a restart (`info.rewind`): the
+       * past stops before `historyBefore`, Claude Code resumes at
+       * `resumeSessionAt`, never on the turns rewound away.
+       */
+      historyBefore?: string;
+      resumeSessionAt?: string;
+      /** The Lab's setting, for the whole server (`sleep.ts`); null: never. */
+      sleepAfterMs?: number | null;
     }
   | {
       type: "send";
@@ -121,6 +165,18 @@ export type Command =
   | { type: "set_effort"; chatId: string; effort: EffortLevel }
   /** Withdraws a message Claude hasn't taken yet. */
   | { type: "cancel_queued"; chatId: string; uuid: string }
+  /** A key typed in the input of a chat asleep: its Claude Code starts again. */
+  | { type: "wake"; chatId: string }
+  /** Puts the chat to sleep now if nothing runs nor waits in it (tests, checks). */
+  | { type: "sleep"; chatId: string }
+  /** The Lab's setting changed: for the whole server; null: never. */
+  | { type: "sleep_after"; chatId: string; ms: number | null }
+  /** The pane shows again (or the window came back): the branch looked at anew. */
+  | { type: "refresh_branch"; chatId: string }
+  /** `!command` in the input: run in the chat's folder, its output to Claude with the next message. */
+  | { type: "bash"; chatId: string; id: string; command: string }
+  /** Esc on a running `!` command. */
+  | { type: "bash_stop"; chatId: string; id: string }
   /** The page's answer to an MCP server's request. */
   | { type: "elicit_answer"; chatId: string; requestId: string; result: ElicitationResult }
   /** The context by category (token counts: asked on hover only). */
@@ -139,17 +195,26 @@ export type Command =
 
 type StartCommand = Extract<Command, { type: "start" }>;
 
-/** A start, plus what a /rewind relaunch adds (`Chat.relaunchStart`). */
-type Boot = StartCommand & {
-  /** The last entry kept: the SDK's `resumeSessionAt`. */
-  resumeSessionAt?: string;
-  /** The past shown stops before this message. */
-  historyBefore?: string;
-  /** Said first in the new column (the files restored). */
-  notice?: string;
-};
+/**
+ * A start, plus what a /rewind relaunch adds (`Chat.relaunchStart`): its cut
+ * (`resumeSessionAt`, `historyBefore`, a start's own fields too) and what
+ * the new column says first (the files restored).
+ */
+type Boot = StartCommand & { notice?: string };
 
 type SlashCommandInfo = Awaited<ReturnType<Query["supportedCommands"]>>[number];
+
+/** What the user typed, waiting its turn to reach Claude Code (`Chat.outbox`). */
+type Outgoing =
+  | {
+      kind: "message";
+      uuid: string;
+      message: SDKUserMessage;
+      /** Handed to Claude Code (true), or withdrawn / the chat closed (false). */
+      sent: (pushed: boolean) => void;
+    }
+  /** A `!` command: its two entries once it ended, null while it runs. */
+  | { kind: "bash"; id: string; entries: SDKUserMessage[] | null };
 
 /** An MCP server as the page lists it. */
 type McpServerInfo = { name: string; status: string; error?: string; source?: string };
@@ -277,6 +342,11 @@ export type ServerEvent =
       sessionId?: string;
       /** The mode it starts in: the init that says it comes with a turn. */
       mode?: PermissionMode;
+      /**
+       * A /rewind's cut nothing was sent after yet (null: gone): a restart
+       * after the server stopped resumes at it, never past it.
+       */
+      rewind?: { before: string; at: string } | null;
     }
   /** Claude Code's slash commands, for the page's `/` menu. */
   | { type: "commands"; chatId: string; commands: SlashCommandInfo[] }
@@ -354,11 +424,49 @@ export type ServerEvent =
       truncated: boolean;
       error?: string;
     }
+  /** Its Claude Code stopped while nothing ran (`sleep.ts`): the column stays as is. */
+  | { type: "asleep"; chatId: string }
+  /** It starts again on the session (a key typed, a command sent). */
+  | { type: "awake"; chatId: string }
+  /**
+   * A `!` command: `running` when it starts, then its end with what the
+   * column keeps of each stream; `sent` of `total` characters go to Claude.
+   */
+  | {
+      type: "bash";
+      chatId: string;
+      id: string;
+      command: string;
+      state: "running" | "done";
+      stdout?: string;
+      stderr?: string;
+      /** Bash's exit code; null when stopped or never started. */
+      code?: number | null;
+      stopped?: boolean;
+      error?: string;
+      sent?: number;
+      total?: number;
+    }
+  /** That command's entries are written: the chat no longer waits on it. */
+  | { type: "bash_written"; chatId: string; id: string }
+  /** A running `!` command's output as it comes (not kept for a replay). */
+  | { type: "bash_output"; chatId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "closed"; chatId: string; error?: string }
   | { type: "error"; chatId?: string; message: string };
 
 function emit(event: ServerEvent): void {
-  process.stdout.write(`${JSON.stringify(event)}\n`);
+  let line: string;
+  try {
+    line = JSON.stringify(event);
+  } catch (e) {
+    // An event that won't serialize ends nothing: its chat hears why.
+    line = JSON.stringify({
+      type: "error",
+      chatId: "chatId" in event ? event.chatId : undefined,
+      message: `Événement illisible (${event.type}) : ${String(e)}`,
+    });
+  }
+  process.stdout.write(`${line}\n`);
 }
 
 /** The user's Claude Code, so the chat runs the same version as the terminal. */
@@ -371,9 +479,6 @@ function claudeExecutable(): string | undefined {
   }
   return undefined;
 }
-
-/** The terminal's status line caches the branch 5 s; a chat looks every 10 s. */
-const BRANCH_POLL_MS = 10_000;
 
 /**
  * The folder's branch as the status line reads it: null when detached or no
@@ -441,13 +546,68 @@ const LOG_LIMIT = 20_000;
 /** How much of a resumed session's past the column gets. */
 const HISTORY_LIMIT = 400;
 
+/** Said in the column of a chat whose turn the server's restart cut. */
+const RESTART_CUT = "Claude Code a redémarré : le tour en cours a été coupé.";
+
+/** `ready` while asleep: what awaits it without waking hears why. */
+function asleepReady(): Promise<Query> {
+  const ready = Promise.reject(new Error("Claude est en veille"));
+  ready.catch(() => {});
+  return ready;
+}
+
+/** The Lab's setting, for every chat of this server (`sleep_after`, `start`). */
+let sleepAfterMs: number | null = DEFAULT_SLEEP_MS;
+
 class Chat {
   private chatId: string;
   private cwd: string;
   private input = new InputQueue();
+  /** The Claude Code running now; null while it starts, and asleep. */
   private query: Query | null = null;
-  /** Resolves once the query runs: commands wait for it. */
+  /** Resolves once the query runs: commands wait for it. A wake replaces it. */
   private ready: Promise<Query>;
+  /** The past read at start, resolved once its session is known: a wake waits for it too. */
+  private past: Promise<void>;
+  /** No Claude Code runs: what needs one wakes it (`awake`), the column stays. */
+  private asleep = false;
+  /** What keeps it awake (`SleepFacts`), from its messages and the page's commands. */
+  private turn = false;
+  private tasks: readonly string[] = [];
+  private queued: readonly string[] = [];
+  private crons = 0;
+  /** The last thing done in it: a command of the user, a message of Claude Code. */
+  private lastActive = Date.now();
+  /** The effort set for this session (never saved): a wake applies it again. */
+  private effort: EffortLevel | undefined;
+  /** The user's `!` commands still running, by id. */
+  private bangs = new Map<string, BangRun>();
+  /**
+   * What goes to Claude Code, in the order the user typed it: a message, or
+   * a `!` command's two entries once it ended. A command still running
+   * holds what follows it (its output rides the next message, as in the
+   * terminal); a message held there can still be withdrawn (`cancelQueued`).
+   */
+  private outbox: Outgoing[] = [];
+  /**
+   * The `!` entries handed to Claude Code, by uuid. Claude Code ends a turn
+   * of its own for them, without the model (`num_turns` 0, its
+   * `user_message_uuids` naming them, seen live on 01/11/2026): no one's
+   * turn, the page never sees those ends (no « fin de tour », no
+   * notification, no slash command's card filled by them).
+   */
+  private entries = new Set<string>();
+  /**
+   * Those not written yet, with their command's id: the chat isn't at rest.
+   * Once a command's last one is written, the page hears `bash_written`
+   * (the server alone decides: a lifecycle frame or the turn that took it).
+   */
+  private writing = new Map<string, string>();
+  /**
+   * Ended (closed, its Claude Code gone, it never started): a command that
+   * ends now tells no one and hands nothing (`bash`), never after `closed`.
+   */
+  private ended = false;
   /** Permission requests waiting for the page, by SDK request id. */
   private pending = new Map<string, (result: PermissionResult) => void>();
   /** Running workflows' folders watched (`WorkflowWatch`), by task id. */
@@ -457,9 +617,12 @@ class Chat {
   /** Everything sent to the page, for a page that comes back. */
   private log: ServerEvent[] = [];
   private sessionId: string | undefined;
-  /** The branch last sent; undefined before the first look. */
+  /**
+   * The branch last sent; undefined before the first look. Looked at when
+   * the chat starts, at each turn's end, and when its pane shows again
+   * (`refresh_branch`): never in a loop, a hidden or idle chat costs nothing.
+   */
   private branch: string | null | undefined;
-  private branchTimer: ReturnType<typeof setInterval> | undefined;
   private branchLooking = false;
   /** What started it: a relaunch (/resume, /rewind) keeps its env. */
   private start: Boot;
@@ -493,56 +656,113 @@ class Chat {
     this.start = start;
     this.mode = start.permissionMode;
     this.model = start.model;
+    this.effort = start.effort;
     this.cutBefore = start.historyBefore;
     if (start.notice) this.out({ type: "notice", chatId, text: start.notice, tone: "info" });
-    this.ready = this.boot(start);
-    this.ready.catch((e: unknown) => {
-      this.out({ type: "closed", chatId, error: String(e) });
-      if (chats.get(chatId) === this) chats.delete(chatId);
-    });
+    if (start.cut) this.out({ type: "notice", chatId, text: RESTART_CUT, tone: "error" });
+    // The page keeps the cut: a restart after the server stopped resumes at it.
+    if (start.historyBefore && start.resumeSessionAt) {
+      const rewind = { before: start.historyBefore, at: start.resumeSessionAt };
+      this.out({ type: "info", chatId, rewind });
+    }
+    this.past = this.readPast(start);
+    if (start.asleep) {
+      this.asleep = true;
+      this.ready = asleepReady();
+      this.out({ type: "asleep", chatId });
+      this.past.catch((e: unknown) => this.end(String(e)));
+    } else {
+      this.ready = this.launch();
+    }
+  }
+
+  /** The chat ended on an error of its own: said, and forgotten by the server. */
+  private end(error: string): void {
+    this.out({ type: "closed", chatId: this.chatId, error });
+    this.finish();
+    if (chats.get(this.chatId) === this) chats.delete(this.chatId);
+  }
+
+  /**
+   * The chat is over (closed, its Claude Code gone by itself, it never
+   * started): its `!` commands killed, what waited to go dropped, and
+   * nothing of them reaches the page after its `closed`.
+   */
+  private finish(): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.stopped = this.stopBangs();
+    for (const held of this.outbox) if (held.kind === "message") held.sent(false);
+    this.outbox = [];
+    this.writing.clear();
   }
 
   /**
    * A resumed session first gets its past, kept in the log like the rest:
    * read before Claude Code runs, it holds nothing of this chat. `continue`
-   * becomes the folder's latest session, so its past can be read too.
+   * becomes the folder's latest session, so its past can be read too. A
+   * page that shows it already (`keep`) gets nothing now: the log keeps it
+   * for a reload.
    */
-  private async boot(start: Boot): Promise<Query> {
+  private async readPast(start: Boot): Promise<void> {
+    const tell = (event: ServerEvent) => {
+      if (start.keep) this.remember(event);
+      else this.out(event);
+    };
     let resume = start.resume;
     if (!resume && start.continue) {
       const [latest] = await listSessions({ dir: start.cwd, limit: 1 });
       resume = latest?.sessionId;
       // Nothing to go on with: the page stops waiting for a past.
-      if (!resume) {
-        this.out({ type: "history", chatId: this.chatId, messages: [], truncated: false });
-      }
+      if (!resume) tell({ type: "history", chatId: this.chatId, messages: [], truncated: false });
     }
-    if (resume) {
-      this.sessionId = resume;
-      const all = await getSessionMessages(resume, { dir: start.cwd });
-      // Rewound: what follows the message gone back to isn't the past any more.
-      const cut = all.findIndex((m) => m.uuid === start.historyBefore);
-      const kept = cut >= 0 ? all.slice(0, cut) : all;
-      const messages = kept.slice(-HISTORY_LIMIT);
-      this.out({
-        type: "history",
-        chatId: this.chatId,
-        messages,
-        truncated: kept.length > messages.length,
-      });
-      void this.reportInfo();
-    }
+    if (!resume) return;
+    this.sessionId = resume;
+    const all = await getSessionMessages(resume, { dir: start.cwd });
+    // Rewound: what follows the message gone back to isn't the past any more.
+    const cut = all.findIndex((m) => m.uuid === start.historyBefore);
+    const kept = cut >= 0 ? all.slice(0, cut) : all;
+    const messages = kept.slice(-HISTORY_LIMIT);
+    tell({
+      type: "history",
+      chatId: this.chatId,
+      messages,
+      truncated: kept.length > messages.length,
+    });
+    void this.reportInfo();
+  }
+
+  /** Starts its Claude Code once the past is read: at start, and at each wake. */
+  private launch(): Promise<Query> {
+    const run = this.past.then(() => this.run());
+    run.catch((e: unknown) => {
+      // Put to sleep or woken again meanwhile: that run is no one's end.
+      if (this.ready === run) this.end(String(e));
+    });
+    return run;
+  }
+
+  /**
+   * Claude Code on the chat's session as it is now: its model, mode and
+   * effort, the env of its start (account, pane id, Lab marker). A rewind
+   * nothing was sent after still stops at its cut. Each run picks the
+   * installed Claude Code again: a wake takes a newer one (`claude update`).
+   */
+  private async run(): Promise<Query> {
+    const start = this.start;
+    // A new process has no background task yet: its set comes with the first change.
+    this.tasks = [];
     const q = query({
       prompt: this.input,
       options: {
         cwd: start.cwd,
-        resume,
-        resumeSessionAt: start.resumeSessionAt,
+        resume: this.sessionId,
+        resumeSessionAt: this.cutBefore ? start.resumeSessionAt : undefined,
         // /rewind's « le code aussi »: the terminal keeps these backups too.
         enableFileCheckpointing: true,
-        model: start.model,
+        model: this.model,
         // As the terminal's `ccd`: auto mode, bypass reachable by Shift+Tab.
-        permissionMode: start.permissionMode ?? "auto",
+        permissionMode: this.mode ?? "auto",
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
         // The next message, grey in the empty input after a turn.
@@ -555,6 +775,9 @@ class Chat {
         onElicitation: (request, options) => this.askElicitation(request, options),
         // « hook … en cours » in the live line, a failed hook in the column.
         includeHookEvents: true,
+        // The wakeups Claude scheduled, said at each turn's end: asleep, they
+        // would never fire, so they keep the chat awake (`SleepFacts.crons`).
+        hooks: { Stop: [{ hooks: [async (input) => this.noteCrons(input)] }] },
         // Esc stops Claude's turn only: background agents and workflows go
         // on (verified live 31/10/2026); the page stops a workflow by its card.
         perTaskStopAffordance: true,
@@ -587,8 +810,16 @@ class Chat {
     });
     this.query = q;
     // The input's mode chip before any turn: the init only comes with one.
-    this.out({ type: "info", chatId: this.chatId, mode: start.permissionMode ?? "auto" });
+    this.out({ type: "info", chatId: this.chatId, mode: this.mode ?? "auto" });
     this.pumping = this.pump(q);
+    // The effort chosen for this session, again on a new process.
+    const effort = this.effort;
+    if (effort) {
+      void q
+        .applyFlagSettings({ effortLevel: effort })
+        .then(() => this.reportEffort(q))
+        .catch(() => {});
+    }
     // The status bar's figures before any turn: these answer without one.
     void this.reportCommands(q);
     void this.reportUsage(q);
@@ -597,8 +828,210 @@ class Chat {
     void this.reportModels(q);
     void this.reportEffort(q);
     void this.reportMcp(q, MCP_POLLS);
-    this.branchTimer = setInterval(() => void this.reportBranch(), BRANCH_POLL_MS);
     return q;
+  }
+
+  /** The Stop hook's `session_crons`: the hook itself changes nothing. */
+  private async noteCrons(input: unknown): Promise<Record<string, never>> {
+    this.crons = cronCount(input);
+    return {};
+  }
+
+  /** Something done in the chat: its sleep waits from now. */
+  touch(): void {
+    this.lastActive = Date.now();
+  }
+
+  /** What keeps it awake now (`sleepDue`). */
+  private sleepFacts(): SleepFacts {
+    return {
+      turn: this.turn,
+      tasks: this.tasks.length,
+      requests: this.pending.size + this.elicitations.size,
+      queued: this.queued.length,
+      // Their entries count until Claude Code wrote them.
+      bangs: this.bangs.size + this.writing.size,
+      crons: this.crons,
+    };
+  }
+
+  /**
+   * Its Claude Code, woken first if asleep: what needs Claude Code (a
+   * message, a slash command, a change of model, effort or mode) starts it
+   * again on the session, the past shown as it is.
+   */
+  private awake(): Promise<Query> {
+    this.wake();
+    return this.ready;
+  }
+
+  /**
+   * Starts Claude Code again on the session, nothing sent to Claude: a
+   * message sent meanwhile waits in the new input and goes once it runs.
+   */
+  wake(): void {
+    if (!this.asleep) return;
+    this.asleep = false;
+    this.touch();
+    this.input = new InputQueue();
+    this.out({ type: "awake", chatId: this.chatId });
+    this.ready = this.launch();
+  }
+
+  /**
+   * Puts its Claude Code (and its MCP servers) to sleep when nothing ran in
+   * the chat for `afterMs` and nothing runs nor waits: not a word but
+   * `asleep`, no `closed` (no turn ended: no notification, no badge).
+   * `afterMs` 0: now, if at rest. False when it stays awake.
+   */
+  sleepIfDue(now: number, afterMs: number | null): boolean {
+    // Starting, waking, asleep, or stopped for a relaunch: not now.
+    if (this.asleep || this.silent || !this.query) return false;
+    if (!sleepDue(this.sleepFacts(), this.lastActive, now, afterMs)) return false;
+    const q = this.query;
+    this.asleep = true;
+    // Its pump ends without a word: it is no longer this chat's query.
+    this.query = null;
+    this.ready = asleepReady();
+    clearTimeout(this.mcpTimer);
+    this.input.end();
+    q.close();
+    this.out({ type: "asleep", chatId: this.chatId });
+    return true;
+  }
+
+  /** The pane shows again: the branch may have changed meanwhile. */
+  refreshBranch(): void {
+    void this.reportBranch();
+  }
+
+  /**
+   * A `!` command: it wakes Claude, runs in the chat's folder with the
+   * chat's env, streams its output to the page (live only, the log keeps
+   * its end), and once it ends, hands Claude the command and its output as
+   * Claude Code does, without starting a turn: they ride the next message.
+   */
+  bash(id: string, command: string): void {
+    if (this.bangs.has(id)) return;
+    this.wake();
+    // Its place in the user's order, filled once it ends.
+    const slot: Extract<Outgoing, { kind: "bash" }> = { kind: "bash", id, entries: null };
+    this.outbox.push(slot);
+    const chatId = this.chatId;
+    const env = { ...process.env, ...this.start.env } as Record<string, string>;
+    let stdout: Kept = NOTHING_KEPT;
+    let stderr: Kept = NOTHING_KEPT;
+    this.out({ type: "bash", chatId, id, command, state: "running" });
+    const run = runBang(command, this.cwd, env, (stream, text) => {
+      const room = Math.max(BANG_SENT_MAX, BANG_SHOWN_MAX);
+      if (stream === "stdout") stdout = keep(stdout, text, room);
+      else stderr = keep(stderr, text, room);
+      if (!this.silent && !this.ended) emit({ type: "bash_output", chatId, id, stream, text });
+    });
+    this.bangs.set(id, run);
+    void run.done.then((end) => {
+      this.bangs.delete(id);
+      // The chat ended meanwhile (and killed it): no event after its `closed`.
+      if (this.ended) return;
+      const blocks = bangBlocks(command, stdout, stderr, end.stopped);
+      // Claude Code's two entries; they start no turn, the next message takes them.
+      slot.entries = end.error
+        ? []
+        : [blocks.input, blocks.output].map((content) => ({
+            type: "user" as const,
+            uuid: randomUUID(),
+            parent_tool_use_id: null,
+            shouldQuery: false,
+            message: { role: "user" as const, content },
+          }));
+      this.touch();
+      this.out({
+        type: "bash",
+        chatId,
+        id,
+        command,
+        state: "done",
+        stdout: keptText(stdout, BANG_SHOWN_MAX).text,
+        stderr: keptText(stderr, BANG_SHOWN_MAX).text,
+        code: end.code,
+        stopped: end.stopped,
+        error: end.error,
+        sent: blocks.sent,
+        total: blocks.total,
+      });
+      this.flushOutbox();
+      // `git checkout` and the like.
+      void this.reportBranch();
+    });
+  }
+
+  /**
+   * Claude Code's frames about our `!` entries: written (`completed`), and
+   * the end of a turn that took them alone, swallowed (true).
+   */
+  private ownEnd(message: SDKMessage): boolean {
+    const end = entriesEnd(message as unknown as Record<string, unknown>, this.entries);
+    for (const uuid of end.written) {
+      const id = this.writing.get(uuid);
+      this.writing.delete(uuid);
+      if (end.swallow || end.taken) this.entries.delete(uuid);
+      // Its command's last entry: the page stops counting it.
+      if (id && ![...this.writing.values()].includes(id)) {
+        this.out({ type: "bash_written", chatId: this.chatId, id });
+      }
+    }
+    return end.swallow;
+  }
+
+  /** Esc, or the card's stop: the command and what it started. */
+  stopBash(id: string): void {
+    void this.bangs.get(id)?.stop();
+  }
+
+  /**
+   * Hands Claude Code what the user typed, in order, up to a `!` command
+   * still running. Its entries going in, the transcript goes on past a
+   * /rewind's cut: a wake resumes its end.
+   */
+  private flushOutbox(): void {
+    while (this.outbox.length > 0) {
+      const head = this.outbox[0];
+      if (head.kind === "bash" && head.entries === null) return;
+      this.outbox.shift();
+      if (head.kind === "message") {
+        this.input.push(head.message);
+        head.sent(true);
+        continue;
+      }
+      for (const entry of head.entries ?? []) {
+        if (entry.uuid) {
+          this.entries.add(entry.uuid);
+          this.writing.set(entry.uuid, head.id);
+        }
+        this.input.push(entry);
+      }
+      if (head.entries?.length) this.clearCut();
+    }
+  }
+
+  /** The chat goes on past a /rewind's cut: no more `resumeSessionAt`, the page told. */
+  private clearCut(): void {
+    if (this.cutBefore === undefined) return;
+    this.cutBefore = undefined;
+    this.out({ type: "info", chatId: this.chatId, rewind: null });
+  }
+
+  /** What is still running or not yet written of the user's `!` commands, or null. */
+  bangBusy(): string | null {
+    if (this.bangs.size > 0 || this.writing.size > 0) {
+      return "Une commande ! tourne : attends sa fin (Échap l'arrête)";
+    }
+    return null;
+  }
+
+  /** Every `!` command still running stopped, its processes gone. */
+  stopBangs(): Promise<void> {
+    return Promise.all([...this.bangs.values()].map((run) => run.stop())).then(() => {});
   }
 
   /** Sends an event to the page and keeps it for a later reattach. */
@@ -649,6 +1082,14 @@ class Chat {
   private async pump(q: Query): Promise<void> {
     try {
       for await (const message of q) {
+        // Put to sleep: what that Claude Code still says is no one's.
+        if (this.query !== q) break;
+        this.touch();
+        // The end of a turn Claude Code ran for our `!` entries alone: no one's.
+        if (this.ownEnd(message)) continue;
+        this.turn = turnAfter(this.turn, message);
+        this.tasks = tasksAfter(this.tasks, message);
+        this.queued = queuedAfter(this.queued, message);
         // /clear: a reattach replays the new conversation alone. The command
         // list goes first of any replay (`this.commands`): a boot list kept
         // here would come after and override a newer one.
@@ -688,7 +1129,7 @@ class Chat {
           this.commands = message.commands;
         }
         if (message.type === "result") {
-          this.cutBefore = undefined;
+          this.clearCut();
           // A finished turn's text lives in its assistant messages: its
           // stream deltas no longer serve a replay.
           this.log = this.log.filter(
@@ -705,13 +1146,16 @@ class Chat {
           void this.reportMcp(q);
         }
       }
-      this.out({ type: "closed", chatId: this.chatId });
+      // Asleep: the chat stays, says nothing (no `closed`, no notification).
+      if (this.query === q) this.out({ type: "closed", chatId: this.chatId });
     } catch (e) {
-      this.out({ type: "closed", chatId: this.chatId, error: String(e) });
+      if (this.query === q) this.out({ type: "closed", chatId: this.chatId, error: String(e) });
     } finally {
-      clearInterval(this.branchTimer);
-      // Stopped for a relaunch: its successor takes the place.
-      if (!this.silent && chats.get(this.chatId) === this) chats.delete(this.chatId);
+      // Stopped for a relaunch: its successor takes the place. Asleep: it stays.
+      const asleep = this.query !== q;
+      // Its Claude Code gone, by itself or closed: so are its `!` commands.
+      if (!asleep) this.finish();
+      if (!asleep && !this.silent && chats.get(this.chatId) === this) chats.delete(this.chatId);
     }
   }
 
@@ -769,11 +1213,18 @@ class Chat {
 
   /** The page opened the MCP list: their state now, and while some connect. */
   async refreshMcp(): Promise<void> {
+    // Asleep: the list keeps its last states, nothing woken to look.
+    if (this.asleep) return;
     await this.reportMcp(await this.ready, MCP_POLLS);
   }
 
   /** The context by category for the ring's hover: token counts, a second or two. */
   async contextDetail(requestId: string): Promise<void> {
+    // Asleep: the ring keeps its figure; counting would wake Claude Code.
+    if (this.asleep) {
+      emit({ type: "context_detail", chatId: this.chatId, requestId, error: "Claude en veille : détail indisponible" });
+      return;
+    }
     try {
       const u = await (await this.ready).getContextUsage({ detail: "full" });
       emit({
@@ -794,7 +1245,8 @@ class Chat {
 
   /** The effort for this session alone: `applyFlagSettings`, never a settings file. */
   async setEffort(effort: EffortLevel): Promise<void> {
-    const q = await this.ready;
+    this.effort = effort;
+    const q = await this.awake();
     await q.applyFlagSettings({ effortLevel: effort });
     await this.reportEffort(q);
   }
@@ -804,6 +1256,15 @@ class Chat {
    * frame) only while still queued. Too late, it was taken: it stays so.
    */
   async cancelQueued(uuid: string): Promise<void> {
+    // Still held here behind a `!` command: Claude Code never had it.
+    const held = this.outbox.findIndex((o) => o.kind === "message" && o.uuid === uuid);
+    if (held >= 0) {
+      const [message] = this.outbox.splice(held, 1);
+      if (message.kind === "message") message.sent(false);
+      this.queued = this.queued.filter((u) => u !== uuid);
+      this.out({ type: "queued_removed", chatId: this.chatId, uuid });
+      return;
+    }
     const cancelled = await extras(await this.ready).cancelAsyncMessage(uuid);
     if (cancelled) this.out({ type: "queued_removed", chatId: this.chatId, uuid });
     else emit({ type: "error", chatId: this.chatId, message: "Trop tard : Claude a déjà pris ce message" });
@@ -811,7 +1272,7 @@ class Chat {
 
   /** « Recharger » under plugins that failed: plugins and skills read again. */
   async reloadPlugins(): Promise<void> {
-    const q = await this.ready;
+    const q = await this.awake();
     const reloaded = await q.reloadPlugins();
     await q.reloadSkills().catch(() => {});
     this.commands = reloaded.commands;
@@ -1020,7 +1481,11 @@ class Chat {
     priority?: "now",
     spare: string[] = [],
   ): Promise<void> {
+    // Asleep: Claude Code starts again, the message waits in its input.
+    this.wake();
     const uuid = randomUUID();
+    // Not taken yet: its lifecycle frames, then the turn's replies, say when.
+    this.queued = [...this.queued, uuid];
     this.out({
       type: "user_sent",
       chatId: this.chatId,
@@ -1029,11 +1494,7 @@ class Chat {
       pasted: images,
       uuid,
     });
-    // Sent now while foreground agents run: a `now` would end them with the
-    // turn. Queued once Claude Code has it, their backgrounding hands the
-    // Agent calls a result, and Claude takes it at that boundary.
-    const queued = spare.length > 0 ? this.lifecycleSeen(uuid) : null;
-    this.input.push({
+    const message: SDKUserMessage = {
       type: "user",
       uuid,
       ...(priority ? { priority } : {}),
@@ -1052,9 +1513,20 @@ class Chat {
           { type: "text" as const, text },
         ],
       },
+    };
+    // A `!` command typed before it still running: its output goes to
+    // Claude with this message, as in the terminal, so it waits in order
+    // (withdrawn meanwhile by its ×: never sent).
+    const pushed = await new Promise<boolean>((sent) => {
+      this.outbox.push({ kind: "message", uuid, message, sent });
+      this.flushOutbox();
     });
-    if (!queued) return;
-    await queued;
+    if (!pushed || spare.length === 0) return;
+    // Sent now while foreground agents run: a `now` would end them with the
+    // turn. Queued once Claude Code has it, their backgrounding hands the
+    // Agent calls a result, and Claude takes it at that boundary. Its frames
+    // come on Claude Code's output, after this: the wait is set in time.
+    await this.lifecycleSeen(uuid);
     const q = await this.ready;
     // Nothing sent away: no boundary takes it, so the turn stops for it (a
     // message waiting outlives an interrupt and runs next).
@@ -1083,6 +1555,8 @@ class Chat {
    * page then sends `background` alone (`stopTurnPlan`).
    */
   async interrupt(spare: string[] = []): Promise<void> {
+    // Asleep: no turn to stop.
+    if (this.asleep) return;
     const q = await this.ready;
     for (const toolUseId of spare) await q.backgroundTasks(toolUseId).catch(() => false);
     await q.interrupt();
@@ -1090,6 +1564,7 @@ class Chat {
 
   /** Ctrl+B: every foreground Bash command and subagent, as in the terminal. */
   async background(toolUseIds?: string[]): Promise<void> {
+    if (this.asleep) return;
     const q = await this.ready;
     if (!toolUseIds?.length) {
       await q.backgroundTasks();
@@ -1111,6 +1586,8 @@ class Chat {
   }
 
   async stopTask(taskId: string): Promise<void> {
+    // Asleep: no task runs (one running keeps it awake).
+    if (this.asleep) return;
     await (await this.ready).stopTask(taskId);
   }
 
@@ -1141,6 +1618,10 @@ class Chat {
    * (Windows' own programs) is read again from its file (`readConsoleTail`).
    */
   async taskOutput(taskId: string): Promise<void> {
+    if (this.asleep) {
+      emit({ type: "task_output", chatId: this.chatId, taskId, output: "", truncated: false, error: "Claude est en veille" });
+      return;
+    }
     const q = (await this.ready) as Query & {
       // In sdk.mjs, not yet in its types (0.3.314): `get_task_output`.
       getTaskOutput(id: string): Promise<{ output: string; truncated: boolean }>;
@@ -1195,11 +1676,13 @@ class Chat {
   }
 
   async setMode(mode: PermissionMode): Promise<void> {
-    await (await this.ready).setPermissionMode(mode);
+    this.mode = mode;
+    await (await this.awake()).setPermissionMode(mode);
   }
 
   async setModel(model: string): Promise<void> {
-    const q = await this.ready;
+    this.model = model;
+    const q = await this.awake();
     await q.setModel(model);
     // Another model may take other efforts, or none.
     void this.reportEffort(q);
@@ -1241,14 +1724,23 @@ class Chat {
    * backups belong to this Claude Code.
    */
   async relaunchStart(cmd: Extract<Command, { type: "relaunch" }>): Promise<Boot> {
+    // A `!` command would die with this Claude Code, its output never Claude's.
+    const busy = this.bangBusy();
+    if (busy) throw new Error(busy);
     const base: Boot = {
       ...this.start,
       resume: undefined,
       continue: undefined,
       resumeSessionAt: undefined,
       historyBefore: undefined,
+      // A new column, awake: what a restart after the server stopped asked is past.
+      keep: undefined,
+      cut: undefined,
+      asleep: undefined,
+      notice: undefined,
       permissionMode: this.mode,
       model: this.model,
+      effort: this.effort,
     };
     if (cmd.resume) {
       // Already this chat's: a second relaunch (double choice) would stop the
@@ -1281,7 +1773,8 @@ class Chat {
    * touched. Counted by a dry run, the real one doesn't say.
    */
   private async restoreFiles(before: string): Promise<string> {
-    const q = await this.ready;
+    // The backups belong to Claude Code: an asleep chat wakes to read them.
+    const q = await this.awake();
     const preview = await q.rewindFiles(before, { dryRun: true });
     const files = preview.canRewind ? await q.rewindFiles(before) : preview;
     if (!files.canRewind) {
@@ -1341,8 +1834,17 @@ class Chat {
     );
   }
 
+  /** Closes it without a word to the page: the server leaves (`shutdown`). */
+  leave(): void {
+    this.silent = true;
+    this.close();
+  }
+
+  /** Resolves once its `!` commands' processes are killed (`close`). */
+  stopped: Promise<void> = Promise.resolve();
+
   close(): void {
-    clearInterval(this.branchTimer);
+    this.finish();
     for (const { watch } of this.workflows.values()) watch.stop();
     this.workflows.clear();
     for (const resolve of this.pending.values()) {
@@ -1383,6 +1885,8 @@ function echoOrigin(chatId: string, message: SDKMessage): ServerEvent | null {
   const kind = message.origin?.kind ?? null;
   if (kind === "human") return null;
   const text = JSON.stringify(message.message?.content ?? "");
+  // A `!` command's entries (`Chat.bash`): the user's, and no turn opens on them.
+  if (text.startsWith('"<bash-')) return null;
   return {
     type: "user_origin",
     chatId,
@@ -1533,12 +2037,37 @@ async function answerList(
 /** Relaunches under way (/resume, /rewind): the chat's next commands wait. */
 const relaunching = new Map<string, Promise<void>>();
 
+/**
+ * What the user does in a chat: its sleep waits from then. Looking at it
+ * (branch, context's hover, MCP list, shells' output, a page's report) is
+ * not: the tab on screen may sleep too.
+ */
+const ACTIVE_COMMANDS = new Set<Command["type"]>([
+  "send",
+  "interrupt",
+  "answer",
+  "set_mode",
+  "set_model",
+  "set_effort",
+  "background",
+  "stop_task",
+  "cancel_queued",
+  "elicit_answer",
+  "reload_plugins",
+  "restore_code",
+  "wake",
+  "bash",
+  "bash_stop",
+]);
+
 async function handle(cmd: Command): Promise<void> {
   // Awaited only when there is one: a relaunch registers itself before any
   // command read after it runs.
   const pending = relaunching.get(cmd.chatId);
   if (pending) await pending.catch(() => {});
   if (cmd.type === "start") {
+    const after = readSleepAfter(cmd.sleepAfterMs);
+    if (after !== undefined) sleepAfterMs = after;
     // A page that reloads starts its chats again: they keep running.
     const running = chats.get(cmd.chatId);
     if (running) return running.replay();
@@ -1546,6 +2075,13 @@ async function handle(cmd: Command): Promise<void> {
     return;
   }
   if (cmd.type === "history") return history(cmd);
+  if (cmd.type === "sleep_after") {
+    const after = readSleepAfter(cmd.ms);
+    if (after !== undefined) sleepAfterMs = after;
+    return;
+  }
+  // Sent whenever a pane shows: one not started yet (or gone) has no branch to look at.
+  if (cmd.type === "refresh_branch") return chats.get(cmd.chatId)?.refreshBranch();
   // A closed chat's past visuals show too: no live chat needed.
   if (cmd.type === "visual_html") return visualHtml(cmd);
   if (cmd.type === "visual_open") return openVisual(cmd);
@@ -1566,6 +2102,7 @@ async function handle(cmd: Command): Promise<void> {
     emit({ type: "error", chatId: cmd.chatId, message: "Conversation fermée" });
     return;
   }
+  if (ACTIVE_COMMANDS.has(cmd.type)) chat.touch();
   switch (cmd.type) {
     case "send":
       return chat.send(cmd.text, cmd.images, cmd.priority, cmd.spare);
@@ -1614,6 +2151,15 @@ async function handle(cmd: Command): Promise<void> {
       return chat.refreshMcp();
     case "reload_plugins":
       return chat.reloadPlugins();
+    case "wake":
+      return chat.wake();
+    case "bash":
+      return chat.bash(cmd.id, cmd.command);
+    case "bash_stop":
+      return chat.stopBash(cmd.id);
+    case "sleep":
+      chat.sleepIfDue(Date.now(), 0);
+      return;
     case "close":
       chats.delete(cmd.chatId);
       return chat.close();
@@ -1635,7 +2181,74 @@ lines.on("line", (line) => {
   );
 });
 // Arkadia closed our stdin: it is gone, so are the chats.
-lines.on("close", () => {
-  for (const chat of chats.values()) chat.close();
-  process.exit(0);
-});
+lines.on("close", () => shutdown(0));
+
+/** What the chats' Claude Code get to leave on their own, their input ended. */
+const SHUTDOWN_GRACE_MS = 3_000;
+let leaving = false;
+
+/**
+ * Every way out of the server (Arkadia gone, its pipes closed, too many
+ * errors): each chat closes, its `!` commands' processes killed and its
+ * Claude Code's input ended, so it leaves on its own. A moment later what is
+ * still under the server is killed with it: the page resumes these chats in
+ * the next server, never two Claude Code on one session, and no `!`
+ * command outlives it.
+ */
+function shutdown(code: number): void {
+  if (leaving) return;
+  leaving = true;
+  const all = [...chats.values()];
+  // Without a word: a `closed` would keep the page from resuming them.
+  for (const chat of all) chat.leave();
+  const killed = Promise.all(all.map((chat) => chat.stopped));
+  const grace = new Promise((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS));
+  void Promise.all([killed, grace]).then(() => {
+    try {
+      // Its whole tree, itself included: what is left of it goes too.
+      execFileSync("taskkill", ["/F", "/T", "/PID", String(process.pid)], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+    } catch {
+      // Nothing left to kill but itself, or taskkill missing.
+    }
+    process.exit(code);
+  });
+}
+
+// Chats nothing ran in for the Lab's delay put their Claude Code to sleep.
+setInterval(() => {
+  const now = Date.now();
+  for (const [chatId, chat] of chats) {
+    if (!relaunching.has(chatId)) chat.sleepIfDue(now, sleepAfterMs);
+  }
+}, SLEEP_CHECK_MS).unref();
+
+/**
+ * An error no chat caught ends nothing: every command's own error goes to
+ * its chat (`handle`), a chat's Claude Code that breaks ends that chat
+ * (`pump`), and what is left lands here. Only a pile of them in a minute
+ * (`strayVerdict`) ends the server: Arkadia starts another on the next
+ * command, and the page resumes each chat on its session (`chatLive`).
+ */
+let strays: number[] = [];
+function onStray(kind: string, error: unknown): void {
+  // Arkadia is gone: nobody to write to.
+  if (pipeGone(error)) return shutdown(0);
+  const text = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  process.stderr.write(`[guard] ${kind}: ${text}\n`);
+  const verdict = strayVerdict(strays, Date.now());
+  strays = verdict.times;
+  // Already leaving: said once.
+  if (!verdict.exit || leaving) return;
+  process.stderr.write("[guard] too many errors in a minute: the server exits\n");
+  shutdown(1);
+}
+process.on("uncaughtException", (e) => onStray("uncaughtException", e));
+process.on("unhandledRejection", (e) => onStray("unhandledRejection", e));
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (e) => {
+    if (pipeGone(e)) shutdown(0);
+  });
+}

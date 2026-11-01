@@ -95,6 +95,9 @@ export function chatBusyReason(
   if (replaying) return "Le chat se recharge : réessaie dans un instant";
   if (activity.pending > 0) return "Réponds d'abord à Claude, puis bascule";
   if (activity.busy) return "Claude travaille : bascule à la fin de son tour";
+  // Closing its Claude Code would kill the command, its output never Claude's.
+  if (activity.bangs.length > 0)
+    return "Une commande ! tourne : attends sa fin (Échap l'arrête)";
   if (activity.tasks.length > 0 || activity.shells.length > 0) {
     return "Des tâches tournent en fond : bascule quand elles ont fini";
   }

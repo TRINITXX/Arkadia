@@ -39,6 +39,7 @@ import tools from "../chat-server/fixtures/tools.jsonl?raw";
 import pastedPng from "../src-tauri/icons/128x128@2x.png?inline";
 import { attachDraft, attachEvents } from "@/chat-preview-attach";
 import { tallEvents, visualNext, visualStart } from "@/chat-preview-visuals";
+import { sleepScenarios } from "@/chat-preview-sleep";
 import { createVisualProbe } from "@/lib/chat/chatVisualDom";
 
 /**
@@ -373,6 +374,8 @@ Object.assign(
 );
 // Live activity: agent cards, the workflow card, the shells chip.
 Object.assign(SCENARIOS, activityScenarios());
+// Chats at rest: asleep, `!` commands, resumed after the server stopped.
+Object.assign(SCENARIOS, sleepScenarios(SCENARIOS.tools, SCENARIOS.live));
 
 /** /resume's and /rewind's lists, without a chat server. */
 const ago = (min: number) => Date.now() - min * 60_000;
@@ -556,6 +559,10 @@ function Preview() {
         onBackground={() => {}}
         // Said in the console: no chat server to stop a task.
         onStopTask={(taskId) => console.info("[aperçu] arrêt de", taskId)}
+        // `&hidden=1`: as a hidden tab's view, its clocks stopped (`useChatShown`).
+        hidden={params.get("hidden") === "1"}
+        onBash={(command) => console.info("[aperçu] commande", command)}
+        onStopBash={(id) => console.info("[aperçu] arrêt de la commande", id)}
         memoryKey="preview"
         startup={(params.get("startup") as StartupPhase) ?? null}
         onLoadOlder={

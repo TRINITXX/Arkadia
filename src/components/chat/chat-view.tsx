@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -18,6 +19,10 @@ import { ChatAgentCards } from "@/components/chat/chat-agent-cards";
 import { ChatShellsChip } from "@/components/chat/chat-shells-chip";
 import { ChatWorkflowCard } from "@/components/chat/chat-workflow-card";
 import { useAgentSheet } from "@/lib/chat/useAgentSheet";
+import { runningBash } from "@/lib/chat/chatBash";
+import { restsWhileHidden } from "@/lib/chat/chatHiddenView";
+import { ChatShownContext } from "@/lib/chat/useChatShown";
+import { useWakeOnInput } from "@/lib/chat/useWakeOnInput";
 import { useDoneAgentsLink } from "@/lib/chat/useDoneAgentsLink";
 import { useLiveActivity } from "@/lib/chat/useLiveActivity";
 import type { ShellOutput } from "@/lib/chat/useShellOutputs";
@@ -107,6 +112,17 @@ export interface ChatViewProps {
   shellOutputs?: Record<string, ShellOutput>;
   /** Effort, queued message withdrawn, MCP requests, context detail, plugins. */
   sdkActions?: ChatSdkActions;
+  /**
+   * Its tab is hidden: the view stops rendering (`ChatView`'s memo) and its
+   * clocks stop (`ChatShownContext`) until it shows again.
+   */
+  hidden?: boolean;
+  /** The chat is asleep and its input changed: Claude Code starts again. */
+  onWake?: () => void;
+  /** `!command` sent: runs in the tab's folder (`chatBash`). */
+  onBash?: (command: string) => void;
+  /** Esc or the card's stop on a running `!` command. */
+  onStopBash?: (id: string) => void;
 }
 
 const NO_OUTPUTS: Record<string, ShellOutput> = {};
@@ -115,8 +131,16 @@ const NO_AGENTS: Subagent[] = [];
 /** A foreground call Ctrl+B can send to the background, as the terminal hints. */
 const BACKGROUNDABLE = new Set(["Bash", "PowerShell", "Agent", "Task"]);
 
-/** The chat pane's face ("Colonne calme"): column, live line, input card, status line. */
-export function ChatView({
+/**
+ * The chat pane's face ("Colonne calme"): column, live line, input card,
+ * status line. A hidden tab's view keeps its last render: no work per event
+ * while nobody sees it, the state read as it is when it shows again; what it
+ * was finishing (a dictation, the send after it) still gets through
+ * (`restsWhileHidden`).
+ */
+export const ChatView = memo(ChatViewBody, restsWhileHidden);
+
+function ChatViewBody({
   state,
   agents,
   cwd,
@@ -145,16 +169,24 @@ export function ChatView({
   onShellOutput,
   shellOutputs = NO_OUTPUTS,
   sdkActions,
+  hidden = false,
+  onWake,
+  onBash,
+  onStopBash,
 }: ChatViewProps) {
   // « hook … en cours » once one lasts; an MCP server's request waits like a tool's.
   const hook = useRunningHook(state.sdk.hooks);
   const elicitation = state.sdk.elicitations[0];
   const [lightbox, setLightbox] = useState<LightboxContent | null>(null);
   const [drawer, setDrawer] = useState(false);
+  // Off while its tab is hidden (the pane sized to nothing), or said hidden:
+  // its clocks stop, here and in its children (`ChatShownContext`).
+  const [sized, setSized] = useState(true);
+  const shown = sized && !hidden;
   // Subagents' and workflow agents' conversations, live while they run.
-  const agentSheet = useAgentSheet(state, agents, onOpenAgent);
+  const agentSheet = useAgentSheet(state, agents, onOpenAgent, shown);
   // The docked cards and the shells chip, with their ticking clock.
-  const live = useLiveActivity(state);
+  const live = useLiveActivity(state, shown);
   const finishedAgents = useMemo(
     () => state.subagents.filter((s) => s.status !== "running"),
     [state.subagents],
@@ -164,8 +196,6 @@ export function ChatView({
   // The call whose time the live line shows (a foreground agent's own).
   const timed = timedCall(state.liveTools);
   const [stuck, setStuck] = useState(true);
-  // Off while its tab is hidden (the pane sized to nothing).
-  const [shown, setShown] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const gutter = useScrollbarGutter(scrollRef);
@@ -217,6 +247,13 @@ export function ChatView({
     leaveBottom,
   );
   const searching = search.open && search.total > 0;
+  // Asleep: the first change to the input starts Claude Code again.
+  useWakeOnInput(state.asleep, draft, onWake);
+  const bashId = useMemo(() => runningBash(state.items), [state.items]);
+  const stopBash = useMemo(
+    () => (bashId && onStopBash ? () => onStopBash(bashId) : undefined),
+    [bashId, onStopBash],
+  );
 
   const toBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -319,7 +356,7 @@ export function ChatView({
     const ro = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
       const hidden = width === 0 && height === 0;
-      setShown(!hidden);
+      setSized(!hidden);
       if (hidden) onHiddenRef.current?.();
     });
     ro.observe(root);
@@ -491,6 +528,15 @@ export function ChatView({
           stuckRef.current = true;
           onSend(text, images, now);
         }}
+        onBash={
+          onBash &&
+          ((command) => {
+            stuckRef.current = true;
+            onBash(command);
+          })
+        }
+        onStopBash={stopBash}
+        asleep={state.asleep}
         onInterrupt={onInterrupt}
         onBackground={onBackground}
         onMode={onMode}
@@ -552,7 +598,9 @@ export function ChatView({
             onToast={onToast}
             // A queued message's « Envoyer maintenant »: the turn stops, and
             // Claude Code takes what waits at once.
-            onSendNow={state.closed ? undefined : onInterrupt}
+            // Held behind a running `!` command, it goes when the command
+            // ends: stopping Claude's turn wouldn't send it. × still withdraws it.
+            onSendNow={state.closed || bashId ? undefined : onInterrupt}
             onEditMessage={edit.onEdit}
             editBlocked={edit.blocked}
             bareReplyId={sheetReply}
@@ -563,6 +611,7 @@ export function ChatView({
             onVisualHtml={sdkActions?.visualHtml}
             onChoose={choose}
             onOpenVisual={sdkActions?.openVisual}
+            onStopBash={onStopBash}
           />
         </div>
       </div>
@@ -681,10 +730,13 @@ export function ChatView({
       )}
     </div>
   );
-  // Its menus, lists and sheets register their Esc here (`useChatLayer`).
+  // Its menus, lists and sheets register their Esc here (`useChatLayer`),
+  // its clocks ask whether it shows (`useChatShown`).
   return (
     <ChatLayersContext.Provider value={layers}>
-      {view}
+      <ChatShownContext.Provider value={shown}>
+        {view}
+      </ChatShownContext.Provider>
     </ChatLayersContext.Provider>
   );
 }

@@ -1,14 +1,18 @@
 import {
   chatCommand,
   chatEventsReady,
+  SERVER_GONE,
   subscribeChat,
   subscribeServerExit,
 } from "@/lib/chat/chatEvents";
 import { messageDraft } from "@/lib/chat/chatAttachments";
 import { putBackInDraft } from "@/lib/chat/chatDrafts";
 import type { ChatEvent } from "@/lib/chat/chatProtocol";
+import { mayAutoResume, restartStart } from "@/lib/chat/chatRestart";
 import { withdrawnItem } from "@/lib/chat/chatSdkSettings";
+import { sleepAfter } from "@/lib/chat/chatSleep";
 import {
+  cutTurn,
   EMPTY_CHAT,
   reduceChat,
   type ChatItem,
@@ -55,6 +59,10 @@ interface LiveChat {
   listeners: Set<() => void>;
   off: () => void;
   column: ColumnPlace | null;
+  /** How this page started it: a resume after its server stopped starts from it. */
+  start: ChatStart | null;
+  /** Its automatic resumes lately (`mayAutoResume`). */
+  resumes: number[];
 }
 
 const NO_AGENTS: Record<string, ChatState> = {};
@@ -174,15 +182,12 @@ function open(chatId: string, accountId: string | undefined): LiveChat {
     listeners: new Set(),
     off: () => {},
     column: null,
+    start: null,
+    resumes: [],
   };
   const offEvents = subscribeChat(chatId, (event) => push(chat, event));
   const offExit = subscribeServerExit((account) => {
-    if (account !== (chat.accountId ?? "main")) return;
-    push(chat, {
-      type: "closed",
-      chatId,
-      error: "Le serveur du chat s'est arrêté",
-    });
+    if (account === (chat.accountId ?? "main")) resumeAfterExit(chat);
   });
   chat.off = () => {
     offEvents();
@@ -191,6 +196,45 @@ function open(chatId: string, accountId: string | undefined): LiveChat {
   };
   chats.set(chatId, chat);
   return chat;
+}
+
+/**
+ * Its server stopped (crash, error): the chat starts again on its session
+ * at once, no click, its column kept (`restartStart`). What ran is cut and
+ * not run again, and the column says a turn was cut. A chat that had ended,
+ * one this page never started, or a server that keeps dying
+ * (`mayAutoResume`) waits for « Reprendre » as before.
+ */
+function resumeAfterExit(chat: LiveChat): void {
+  // What came before the server went, folded first: the state as it was.
+  if (chat.timer !== undefined) {
+    clearTimeout(chat.timer);
+    flush(chat);
+  }
+  const now = Date.now();
+  const verdict = mayAutoResume(chat.resumes, now);
+  chat.resumes = verdict.times;
+  const start = chat.start;
+  if (chat.state.closed || chat.replay || !start || !verdict.ok) {
+    push(chat, { type: "closed", chatId: chat.chatId, error: SERVER_GONE });
+    return;
+  }
+  const before = chat.state;
+  chat.state = cutTurn(before, now);
+  notify(chat, before);
+  const chatId = chat.chatId;
+  void chatEventsReady()
+    .then(() =>
+      chatCommand(chat.accountId, {
+        type: "start",
+        chatId,
+        ...restartStart(before, start),
+        sleepAfterMs: sleepAfter(),
+      }),
+    )
+    .catch((e: unknown) =>
+      push(chat, { type: "closed", chatId, error: String(e) }),
+    );
 }
 
 /** The session a chat runs now, as far as this page heard. */
@@ -241,9 +285,17 @@ export function startLiveChat(
   chat.state = EMPTY_CHAT;
   chat.agents = NO_AGENTS;
   chat.column = null;
+  chat.start = start;
   notify(chat);
   return chatEventsReady()
-    .then(() => chatCommand(accountId, { type: "start", chatId, ...start }))
+    .then(() =>
+      chatCommand(accountId, {
+        type: "start",
+        chatId,
+        ...start,
+        sleepAfterMs: sleepAfter(),
+      }),
+    )
     .catch((e: unknown) =>
       push(chat, { type: "closed", chatId, error: String(e) }),
     );
