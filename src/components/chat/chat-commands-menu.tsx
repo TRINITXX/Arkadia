@@ -1,10 +1,11 @@
-import { useContext, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 import { SquareSlash } from "lucide-react";
 import { getIcon } from "@/icons";
 import {
   commandSections,
   PromptButtonsContext,
 } from "@/lib/chat/promptButtonsContext";
+import { fitAbove } from "@/lib/chat/fitAbove";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 import type { ActionButton } from "@/types";
 
@@ -22,9 +23,14 @@ export function ChatCommandsMenu({
   const buttons = useContext(PromptButtonsContext);
   const sections = useMemo(() => commandSections(buttons), [buttons]);
   const [open, setOpen] = useState(false);
+  // Its buttons all gone (settings changed): closed, not open on their return.
+  const empty = sections.length === 0;
+  useEffect(() => {
+    if (empty) setOpen(false);
+  }, [empty]);
   // Esc closes the menu, never Claude's turn (`chatLayers`).
-  useChatLayer(open, () => setOpen(false));
-  if (sections.length === 0) return null;
+  useChatLayer(open && !empty, () => setOpen(false));
+  if (empty) return null;
   return (
     <span className="chat-anchor">
       <button
@@ -43,6 +49,7 @@ export function ChatCommandsMenu({
         <div
           className="chat-menu chat-commands-menu"
           style={{ right: 0 }}
+          ref={fitAbove}
           onMouseLeave={() => setOpen(false)}
         >
           {sections.map((section, i) => (

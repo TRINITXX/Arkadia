@@ -157,23 +157,28 @@ export function useSlashMenu({
     view = { kind: "menu", entries, index: at(entries.length) };
   }
 
+  /** Whether `intercept` takes this message: it then rewrites the input. */
+  const takes = (message: string): boolean => {
+    const cmd = parseSlash(message);
+    return (
+      !!cmd &&
+      (!!pageCommand(cmd.name) ||
+        (TERMINAL_ONLY.has(cmd.name) &&
+          !isListed(slash.commands, slash.names, cmd.name)))
+    );
+  };
+
   /** A command the page answers itself: true when nothing is to be sent. */
   const intercept = (message: string): boolean => {
     const cmd = parseSlash(message);
-    if (!cmd) return false;
+    if (!cmd || !takes(message)) return false;
     if (pageCommand(cmd.name)) {
       setText(`/${cmd.name} ${cmd.args}`);
       return true;
     }
-    if (
-      TERMINAL_ONLY.has(cmd.name) &&
-      !isListed(slash.commands, slash.names, cmd.name)
-    ) {
-      setText(message);
-      setHint({ text: terminalOnlyNotice(cmd.name), for: message });
-      return true;
-    }
-    return false;
+    setText(message);
+    setHint({ text: terminalOnlyNotice(cmd.name), for: message });
+    return true;
   };
 
   const complete = (entry: SlashEntry) =>
@@ -279,7 +284,7 @@ export function useSlashMenu({
     return false;
   };
 
-  return { view, onKeyDown, intercept, select, choose, pick };
+  return { view, onKeyDown, takes, intercept, select, choose, pick };
 }
 
 export type SlashMenu = ReturnType<typeof useSlashMenu>;

@@ -36,7 +36,7 @@ export function ChatContextGauge({
   hot,
   onDetail,
 }: {
-  /** Of the usable window, as the terminal's « Ctx(u) ». */
+  /** Of the whole window, as its detail counts it (not « Ctx(u) »). */
   percentage: number;
   hot: boolean;
   onDetail?: () => Promise<ContextDetail>;

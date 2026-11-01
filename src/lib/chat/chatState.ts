@@ -982,7 +982,7 @@ export function liveWindow(
  * user's pick of 01/11/2026: « 57 % », not the terminal's « Ctx(u) » 71 %
  * of the part usable before auto-compact).
  */
-function usableContextPercent(
+function contextPercent(
   event: Extract<ChatEvent, { type: "context" }>,
 ): number {
   if (event.maxTokens <= 0) return event.percentage;
@@ -1390,7 +1390,7 @@ export function reduceChat(
     case "context":
       return {
         ...state,
-        context: { percentage: usableContextPercent(event) },
+        context: { percentage: contextPercent(event) },
         model: event.model ?? state.model,
       };
     case "usage":

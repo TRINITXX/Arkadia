@@ -128,7 +128,7 @@ export const CHAT_CSS = `
 .chat-ib.amber { background: rgba(245,158,11,.10); } .chat-ib.amber:hover { background: rgba(245,158,11,.20); } .chat-ib.amber.on { background: rgba(245,158,11,.28); color: #fde68a; }
 .chat-ib:disabled { opacity: .45; cursor: default; }
 /* « Commandes »: the prompt bar's buttons of the settings (the user's ask of 01/11/2026). */
-.chat-commands-menu { min-width: 220px; max-height: min(420px, 60vh); overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
+.chat-commands-menu { min-width: 220px; max-height: min(420px, 60vh, var(--room, 100vh)); overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
 .chat-commands-menu h6 { margin: 6px 10px 4px; font-size: 11px; font-weight: 600; color: var(--chat-mute); }
 .chat-commands-menu .lucide { width: 14px; height: 14px; flex-shrink: 0; color: var(--chat-dim); }
 .chat-commands-menu .dot { width: 14px; flex-shrink: 0; }
@@ -393,7 +393,7 @@ export const CHAT_CSS = `
 .chat-agent-detail .stop { display: flex; align-items: center; gap: 6px; margin-left: auto; color: var(--chat-dim); }
 .chat-agent-detail .stop button { width: auto; padding: 2px 8px; font-size: 12px; border-radius: 6px; gap: 5px; }
 .chat-agent-detail .stop .lucide { width: 13px; height: 13px; }
-.chat-agent-more { width: max-content; max-width: min(360px, 80vw); }
+.chat-agent-more { width: max-content; max-width: min(360px, 80vw); max-height: min(320px, var(--room, 100vh)); overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
 .chat-agent-more button { flex-direction: column; align-items: stretch; gap: 2px; padding: 7px 10px; text-align: left; }
 .chat-agent-more .m { margin-left: 23px; font-size: 11.5px; color: var(--chat-mute); }
 .chat-wf .figs { margin-left: auto; flex-shrink: 0; font-size: 12px; color: var(--chat-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -450,7 +450,7 @@ export const CHAT_CSS = `
 .chat-agents-done:hover { color: var(--chat-dim); }
 .chat-agents-done .lucide { width: 13px; height: 13px; }
 /* The finished agents' menu on hover (the user's pick B of 01/11/2026): title, a line of summary, time and tokens. */
-.chat-agents-menu { width: min(520px, 90vw); max-height: min(420px, 60vh); overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
+.chat-agents-menu { width: min(520px, 90vw); max-height: min(420px, 60vh, var(--room, 100vh)); overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
 .chat-agents-menu button { flex-direction: column; align-items: stretch; gap: 2px; padding: 8px 10px; text-align: left; }
 .chat-agents-menu .h { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .chat-agents-menu .h b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

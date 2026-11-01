@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Bot, CircleAlert, CircleCheck } from "lucide-react";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import type { Subagent } from "@/lib/chat/chatState";
+import { fitAbove } from "@/lib/chat/fitAbove";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 
 /** The pointer crosses the gap to the menu within this, without it closing. */
@@ -45,7 +46,11 @@ export function ChatAgentsMenu({
         <Bot /> Agents terminés ({agents.length})
       </span>
       {open && (
-        <div className="chat-menu chat-agents-menu" style={{ left: 0 }}>
+        <div
+          className="chat-menu chat-agents-menu"
+          style={{ left: 0 }}
+          ref={fitAbove}
+        >
           {[...agents].reverse().map((agent) => {
             const ok = agent.status === "completed";
             const meta = [

@@ -279,14 +279,38 @@ export function ChatComposer({
   };
   const { waiting, submit } = useSendAfterDictation(voice, send, onToast);
   // A prompt-bar command (« Commandes »): sent at once when set so, else
-  // written in the input to edit. The draft being written stays as it is.
+  // typed at the caret to edit. The draft being written is never lost.
   const runCommand = (button: ActionButton) => {
+    const area = areaRef.current;
     if (button.submit) {
-      if (!slashMenu.intercept(button.command)) onSend(button.command, []);
+      // `!command`: the shell's, as typed.
+      const command = onBash ? bashCommand(button.command) : null;
+      if (command) {
+        onBash?.(command);
+        return;
+      }
+      if (slashMenu.takes(button.command)) {
+        // /resume and the like open in the input: never over a draft.
+        if (text.trim()) {
+          onToast?.(
+            "info",
+            `Saisie en cours : envoie-la ou vide-la avant ${button.command}`,
+          );
+          return;
+        }
+        slashMenu.intercept(button.command);
+        return;
+      }
+      onSend(button.command, []);
       return;
     }
-    setText(button.command);
-    areaRef.current?.focus();
+    // As the terminal's bar types it: at the caret, the rest kept.
+    const start = area?.selectionStart ?? text.length;
+    const end = area?.selectionEnd ?? start;
+    setText(text.slice(0, start) + button.command + text.slice(end));
+    area?.focus();
+    const caret = start + button.command.length;
+    requestAnimationFrame(() => area?.setSelectionRange(caret, caret));
   };
 
   // The rail's gesture: one click starts, the next stops (Ctrl+Space too).
@@ -327,18 +351,29 @@ export function ChatComposer({
         if (!talk.talking && voice.status === "idle") {
           talk.talking = true;
           // The tap's space, typed a moment ago, goes.
-          if (text[talk.at] === " ")
-            setText(text.slice(0, talk.at) + text.slice(talk.at + 1));
-          if (paneKey) {
-            const at = talk.at;
+          const base =
+            text[talk.at] === " "
+              ? text.slice(0, talk.at) + text.slice(talk.at + 1)
+              : text;
+          if (base !== text) setText(base);
+          const at = talk.at;
+          // The input gets the dictation only once listening began: a start
+          // refused (another pane dictating) leaves no target behind.
+          void Promise.resolve(voice.start()).then((started) => {
+            if (started !== true || !paneKey) return;
             redirectDictation(paneKey, (dictated) =>
               onDraft((d) => ({
                 ...d,
-                text: insertDictation(d.text, at, dictated),
+                // The text changed meanwhile: the caret's spot is no
+                // longer sure, the dictation goes at the end.
+                text: insertDictation(
+                  d.text,
+                  d.text === base ? at : d.text.length,
+                  dictated,
+                ),
               })),
             );
-          }
-          void voice.start();
+          });
         }
         return;
       }

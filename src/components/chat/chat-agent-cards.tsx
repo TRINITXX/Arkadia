@@ -3,6 +3,7 @@ import { CircleAlert, CircleCheck, OctagonX } from "lucide-react";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import type { Subagent } from "@/lib/chat/chatState";
 import { toolStep } from "@/lib/chat/chatSteps";
+import { fitAbove } from "@/lib/chat/fitAbove";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 
 /** The pointer crosses the gap to a pill's detail within this. */
@@ -71,8 +72,25 @@ export function ChatAgentCards({
   const [stops, setStops] = useState<Record<string, StopState>>({});
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
+  const shown = agents.slice(0, fit);
+  const rest = agents.slice(fit);
+  // A pill gone from under the pointer (its agent left, or it went into
+  // « +N ») sends no mouseleave: its hover ends with it, never left as an
+  // invisible layer that would take the next Esc, nor reopened when an
+  // agent run again comes back under the same id.
+  const hovered =
+    hover === MORE
+      ? rest.length > 0
+        ? MORE
+        : null
+      : shown.some((a) => a.taskId === hover)
+        ? hover
+        : null;
+  useEffect(() => {
+    if (hover !== null && hovered === null) setHover(null);
+  }, [hover, hovered]);
   // Esc closes a detail (or its question), never Claude's turn.
-  useChatLayer(hover !== null, () => setHover(null));
+  useChatLayer(hovered !== null, () => setHover(null));
 
   // As many pills as the row holds, measured on a hidden twin of them.
   useLayoutEffect(() => {
@@ -128,8 +146,6 @@ export function ChatAgentCards({
           : 0;
     if (dx) el.style.transform = `translateX(${dx}px)`;
   };
-  const shown = agents.slice(0, fit);
-  const rest = agents.slice(fit);
   const pill = (agent: Subagent) => (
     <>
       <StatusIcon agent={agent} />
@@ -154,13 +170,13 @@ export function ChatAgentCards({
           onMouseLeave={hide}
         >
           <span
-            className={`chat-agent-pill${agent.status === "running" ? "" : " ended"}${hover === agent.taskId ? " on" : ""}`}
+            className={`chat-agent-pill${agent.status === "running" ? "" : " ended"}${hovered === agent.taskId ? " on" : ""}`}
             title="Ouvrir sa conversation"
             onClick={() => onOpen(agent)}
           >
             {pill(agent)}
           </span>
-          {hover === agent.taskId && (
+          {hovered === agent.taskId && (
             <AgentDetail
               agent={agent}
               cwd={cwd}
@@ -187,15 +203,18 @@ export function ChatAgentCards({
           onMouseLeave={hide}
         >
           <span
-            className={`chat-agent-pill more${hover === MORE ? " on" : ""}`}
+            className={`chat-agent-pill more${hovered === MORE ? " on" : ""}`}
           >
             +{rest.length}
           </span>
-          {hover === MORE && (
+          {hovered === MORE && (
             <div
               className="chat-menu chat-agent-more"
               style={{ right: 0 }}
-              ref={keepInRow}
+              ref={(el) => {
+                keepInRow(el);
+                fitAbove(el);
+              }}
             >
               {rest.map((agent) => (
                 <button

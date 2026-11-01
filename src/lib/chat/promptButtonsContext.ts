@@ -14,6 +14,12 @@ export interface CommandSection {
   buttons: ActionButton[];
 }
 
+/**
+ * A button the chat can run: a text. A keyboard shortcut (`mode: "keys"`)
+ * sends the terminal's raw keys, which mean nothing to a chat.
+ */
+const runnable = (b: ActionButton) => b.mode !== "keys" && !!b.command.trim();
+
 export function commandSections(
   buttons: readonly ToolbarButton[],
 ): CommandSection[] {
@@ -21,10 +27,10 @@ export function commandSections(
     [...list].sort((a, b) => a.order - b.order);
   const actions = (list: readonly ToolbarButton[]): ActionButton[] =>
     byOrder(list).flatMap((b) =>
-      b.kind === "action" ? [b] : actions(b.children),
+      b.kind === "action" ? (runnable(b) ? [b] : []) : actions(b.children),
     );
   const root: ActionButton[] = byOrder(buttons).flatMap((b) =>
-    b.kind === "action" ? [b] : [],
+    b.kind === "action" && runnable(b) ? [b] : [],
   );
   const folders = byOrder(buttons).flatMap((b) =>
     b.kind === "folder"

@@ -33,9 +33,6 @@ import { CHAT_CSS } from "@/components/chat/chat-css";
 import { ChatLiveLine } from "@/components/chat/chat-live-line";
 import { useScrollbarGutter } from "@/lib/chat/useScrollbarGutter";
 import { warmHiddenVoice } from "@/lib/useHiddenVoice";
-
-/** After a chat shows, the dictation's Claude Code starts (`warmHiddenVoice`). */
-const VOICE_WARM_MS = 5_000;
 import { glideBy, scrollsItself, wheelPixels } from "@/lib/chat/glideScroll";
 import { ChatEditConfirm } from "@/components/chat/chat-edit-confirm";
 import { ChatOlderButton } from "@/components/chat/chat-older-button";
@@ -72,6 +69,9 @@ import {
 import type { ChatImage } from "@/lib/chat/useChatSession";
 import type { SlashActions } from "@/lib/chat/useSlashActions";
 import { withChoice } from "@/lib/chat/chatVisual";
+
+/** After a chat shows, the dictation's Claude Code starts (`warmHiddenVoice`). */
+const VOICE_WARM_MS = 5_000;
 
 export interface ChatViewProps {
   state: ChatState;
@@ -202,11 +202,13 @@ function ChatViewBody({
   const scrollRef = useRef<HTMLDivElement>(null);
   const gutter = useScrollbarGutter(scrollRef);
   // The dictation's hidden Claude Code starts a few seconds after a chat
-  // shows: the mic's first click then listens at once.
+  // shows (not one mounted in a hidden tab): the mic's first click then
+  // listens at once.
   useEffect(() => {
+    if (!shown) return;
     const id = window.setTimeout(warmHiddenVoice, VOICE_WARM_MS);
     return () => window.clearTimeout(id);
-  }, []);
+  }, [shown]);
   const innerRef = useRef<HTMLDivElement>(null);
   const stuckRef = useRef(true);
   /** `scrollTop` at the last scroll event or stick, for `followsAfterScroll`. */
@@ -549,8 +551,29 @@ function ChatViewBody({
     );
   }
 
+  // The wheel anywhere below the conversation (question sheet, input, the
+  // room either side of them) scrolls it, unless what's under the pointer
+  // scrolls itself that way: no dead zone (the user's reports of 01/11/2026).
+  const onRootWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    const scroller = scrollRef.current;
+    if (!scroller || e.ctrlKey || e.deltaY === 0) return;
+    const target = e.target as Element;
+    // The column scrolls natively; a sheet or a lightbox keeps its wheel.
+    if (target !== e.currentTarget && !target.closest(".chat-bottom")) return;
+    if (scrollsItself(target, e.currentTarget, e.deltaY)) return;
+    glideBy(
+      scroller,
+      wheelPixels(e.deltaY, e.deltaMode, scroller.clientHeight),
+    );
+  };
+
   const view = (
-    <div className="chat-root" ref={rootRef} onMouseDown={onActivate}>
+    <div
+      className="chat-root"
+      ref={rootRef}
+      onMouseDown={onActivate}
+      onWheel={onRootWheel}
+    >
       <style>
         {CONVERSATION_CSS}
         {HLJS_CSS}
@@ -621,19 +644,6 @@ function ChatViewBody({
         className="chat-bottom"
         // The scrollbar's width on the right: the same column as above.
         style={gutter > 0 ? { paddingRight: gutter } : undefined}
-        // The wheel over the bottom (question sheet, input) scrolls the
-        // conversation, unless what's under it scrolls itself that way
-        // (the user's report of 01/11/2026).
-        onWheel={(e) => {
-          const scroller = scrollRef.current;
-          if (!scroller || e.ctrlKey || e.deltaY === 0) return;
-          if (scrollsItself(e.target as Element, e.currentTarget, e.deltaY))
-            return;
-          glideBy(
-            scroller,
-            wheelPixels(e.deltaY, e.deltaMode, scroller.clientHeight),
-          );
-        }}
       >
         <div className="chat-col" style={{ position: "relative" }}>
           <ChatLiveLine
