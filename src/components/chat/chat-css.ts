@@ -615,8 +615,9 @@ export const CHAT_CSS = `
 .chat-artifact .ico { width: 15px; height: 15px; color: var(--chat-accent); flex-shrink: 0; }
 .chat-artifact .k { color: var(--chat-accent); font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; flex-shrink: 0; }
 .chat-artifact .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-artifact .go { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 2px 9px; border-radius: 7px; background: #2a2d32; color: #d4d4d8; font-size: 12px; }
-.chat-artifact .go .lucide { width: 12px; height: 12px; }
+/* The open icon alone, no « Ouvrir » (the user's ask of 01/11/2026). */
+.chat-artifact .go { width: 14px; height: 14px; flex-shrink: 0; margin-right: 4px; color: var(--chat-mute); }
+.chat-artifact:hover .go { color: var(--chat-ink); }
 .chat-edit-confirm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; padding: 8px 10px 8px 14px; border: 1px solid #5a3a2c; border-radius: 14px; background: #241f1c; font-size: 13px; color: #e4e4e7; }
 .chat-edit-confirm > .lucide { width: 15px; height: 15px; color: var(--chat-accent); flex-shrink: 0; }
 .chat-edit-confirm > span { flex: 1; min-width: 200px; }

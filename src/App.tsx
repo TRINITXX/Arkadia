@@ -50,6 +50,7 @@ import {
   type OpenSource,
   type ArtifactsByTab,
 } from "@/lib/artifactTabs";
+import { rememberArtifactTitle } from "@/lib/artifactTitles";
 import { snipTarget } from "@/lib/artifactSnip";
 import { SessionsOverlay } from "@/components/SessionsOverlay";
 import { Toaster, useToasts } from "@/components/Toaster";
@@ -736,10 +737,19 @@ export function App() {
       changeArtifacts((state) => closeArtifactByKey(state, e.payload)),
     ).then(keep);
     void listen<{ key: string; title: string }>("artifact-title", (e) =>
-      changeArtifacts((state) => ({
-        state: setArtifactTitle(state, e.payload.key, e.payload.title),
-        closed: [],
-      })),
+      changeArtifacts((state) => {
+        // Kept by link too: the chat's card names the artifact with it.
+        for (const current of Object.values(state)) {
+          const item = [...current.items, current.parked].find(
+            (i) => i?.key === e.payload.key,
+          );
+          if (item) rememberArtifactTitle(item.url, e.payload.title);
+        }
+        return {
+          state: setArtifactTitle(state, e.payload.key, e.payload.title),
+          closed: [],
+        };
+      }),
     ).then(keep);
     return () => {
       cancelled = true;
