@@ -33,6 +33,7 @@ import { useAnyOverlayOpen } from "@/lib/overlays";
 import { CHAT_CSS } from "@/components/chat/chat-css";
 import { ChatLiveLine } from "@/components/chat/chat-live-line";
 import { useScrollbarGutter } from "@/lib/chat/useScrollbarGutter";
+import { glideBy, scrollsItself, wheelPixels } from "@/lib/chat/glideScroll";
 import { ChatEditConfirm } from "@/components/chat/chat-edit-confirm";
 import { ChatOlderButton } from "@/components/chat/chat-older-button";
 import { ChatQuestionSheet } from "@/components/chat/chat-question-sheet";
@@ -619,6 +620,19 @@ function ChatViewBody({
         className="chat-bottom"
         // The scrollbar's width on the right: the same column as above.
         style={gutter > 0 ? { paddingRight: gutter } : undefined}
+        // The wheel over the bottom (question sheet, input) scrolls the
+        // conversation, unless what's under it scrolls itself that way
+        // (the user's report of 01/11/2026).
+        onWheel={(e) => {
+          const scroller = scrollRef.current;
+          if (!scroller || e.ctrlKey || e.deltaY === 0) return;
+          if (scrollsItself(e.target as Element, e.currentTarget, e.deltaY))
+            return;
+          glideBy(
+            scroller,
+            wheelPixels(e.deltaY, e.deltaMode, scroller.clientHeight),
+          );
+        }}
       >
         <div className="chat-col" style={{ position: "relative" }}>
           {!stuck && (
