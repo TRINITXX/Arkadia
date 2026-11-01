@@ -1,3 +1,5 @@
+import { PromptButtonsContext } from "@/lib/chat/promptButtonsContext";
+import type { ToolbarButton } from "@/types";
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { flushSync } from "react-dom";
@@ -484,10 +486,13 @@ function Preview() {
     const onEvent = createVisualProbe((_chatId, checkId, report) => {
       if (!live) return;
       const next = visualNext(checkId, report);
-      setChat((s) => next.reduce((acc, e) => reduceChat(acc, e, Date.now()), s));
+      setChat((s) =>
+        next.reduce((acc, e) => reduceChat(acc, e, Date.now()), s),
+      );
       for (const e of next) if (e.type === "visual_check") onEvent(e, false);
     });
-    for (const e of visualStart()) if (e.type === "visual_check") onEvent(e, false);
+    for (const e of visualStart())
+      if (e.type === "visual_check") onEvent(e, false);
     return () => {
       live = false;
     };
@@ -579,8 +584,28 @@ function Preview() {
   );
 }
 
+/** The prompt bar's buttons as the user set them (01/11/2026), for « Commandes ». */
+const PREVIEW_COMMANDS: ToolbarButton[] = [
+  ["commit", "/commit", "check", true],
+  ["clear", "/clear", "x", true],
+  ["compact", "/compact", "database", true],
+  ["resume", "/resume", "play", true],
+  ["fais", "Fais le", "check", true],
+  ["continue", "Continue", "play", true],
+].map(([id, label, icon, submit], order) => ({
+  id: String(id),
+  kind: "action" as const,
+  label: String(label),
+  icon: String(icon),
+  command: String(label),
+  submit: Boolean(submit),
+  order,
+}));
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <Preview />
+    <PromptButtonsContext.Provider value={PREVIEW_COMMANDS}>
+      <Preview />
+    </PromptButtonsContext.Provider>
   </React.StrictMode>,
 );

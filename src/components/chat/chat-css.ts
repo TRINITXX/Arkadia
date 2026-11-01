@@ -123,7 +123,13 @@ export const CHAT_CSS = `
 .chat-rail { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .chat-ib.sky { background: rgba(56,189,248,.10); } .chat-ib.sky:hover { background: rgba(56,189,248,.20); } .chat-ib.sky.on { background: rgba(56,189,248,.28); color: #bae6fd; }
 .chat-ib.rose { background: rgba(244,63,94,.10); } .chat-ib.rose:hover { background: rgba(244,63,94,.20); } .chat-ib.rose.on { background: rgba(244,63,94,.28); color: #fecdd3; }
+.chat-ib.amber { background: rgba(245,158,11,.10); } .chat-ib.amber:hover { background: rgba(245,158,11,.20); } .chat-ib.amber.on { background: rgba(245,158,11,.28); color: #fde68a; }
 .chat-ib:disabled { opacity: .45; cursor: default; }
+/* « Commandes »: the prompt bar's buttons of the settings (the user's ask of 01/11/2026). */
+.chat-commands-menu { min-width: 220px; max-height: min(420px, 60vh); overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
+.chat-commands-menu h6 { margin: 6px 10px 4px; font-size: 11px; font-weight: 600; color: var(--chat-mute); }
+.chat-commands-menu .lucide { width: 14px; height: 14px; flex-shrink: 0; color: var(--chat-dim); }
+.chat-commands-menu .dot { width: 14px; flex-shrink: 0; }
 .chat-ib .lucide { width: 16px; height: 16px; }
 .chat-round { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; border: 0; cursor: pointer; flex-shrink: 0; }
 .chat-round .lucide { width: 17px; height: 17px; }

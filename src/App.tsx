@@ -132,6 +132,7 @@ import {
 } from "@/lib/chat/chatLive";
 import { dropSheet, openRoundSheet } from "@/lib/chat/chatSheetAnswers";
 import { useChatLimitSwitch } from "@/lib/chat/useChatLimitSwitch";
+import { PromptButtonsContext } from "@/lib/chat/promptButtonsContext";
 import { useChatNotify } from "@/lib/chat/useChatNotify";
 import { useVisualProbe } from "@/lib/chat/useVisualProbe";
 import { dropPathsInChat } from "@/lib/chat/chatDrop";
@@ -3272,31 +3273,33 @@ export function App() {
                   tab.id === activeTabId ? "" : "hidden"
                 }`}
               >
-                <PaneTreeView
-                  tree={tab.tree}
-                  panes={tab.panes}
-                  activePaneId={tab.activePaneId}
-                  font={font}
-                  palette={palette}
-                  useWebGPU={useWebGPU}
-                  editorProtocol={editorProtocol}
-                  showMessageFrames={messageFramesEnabled}
-                  onToast={pushToast}
-                  inputRailEnabled={navRailEnabled}
-                  onActivate={(paneId) => focusPane(tab.id, paneId)}
-                  onUserInput={() => {
-                    markProjectInput(tab.projectId);
-                    revealSidebarTab(tab.id);
-                  }}
-                  onContextMenu={(paneId, x, y) =>
-                    setPaneMenu({ tabId: tab.id, paneId, x, y })
-                  }
-                  onSetRatio={(path, ratio) =>
-                    setPaneRatio(tab.id, path, ratio)
-                  }
-                  chat={chatHandlers}
-                  shown={tab.id === activeTabId}
-                />
+                <PromptButtonsContext.Provider value={promptButtons}>
+                  <PaneTreeView
+                    tree={tab.tree}
+                    panes={tab.panes}
+                    activePaneId={tab.activePaneId}
+                    font={font}
+                    palette={palette}
+                    useWebGPU={useWebGPU}
+                    editorProtocol={editorProtocol}
+                    showMessageFrames={messageFramesEnabled}
+                    onToast={pushToast}
+                    inputRailEnabled={navRailEnabled}
+                    onActivate={(paneId) => focusPane(tab.id, paneId)}
+                    onUserInput={() => {
+                      markProjectInput(tab.projectId);
+                      revealSidebarTab(tab.id);
+                    }}
+                    onContextMenu={(paneId, x, y) =>
+                      setPaneMenu({ tabId: tab.id, paneId, x, y })
+                    }
+                    onSetRatio={(path, ratio) =>
+                      setPaneRatio(tab.id, path, ratio)
+                    }
+                    chat={chatHandlers}
+                    shown={tab.id === activeTabId}
+                  />
+                </PromptButtonsContext.Provider>
               </div>
             ))}
           {!sessionPreview &&

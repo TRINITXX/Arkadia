@@ -12,6 +12,8 @@ import { ChatAttachments } from "@/components/chat/chat-attachments";
 import type { AttachmentSource } from "@/components/chat/chat-attachment-card";
 import { messageDraft, withAttachedPaths } from "@/lib/chat/chatAttachments";
 import { usePastedPaths } from "@/lib/chat/usePastedPaths";
+import type { ActionButton } from "@/types";
+import { ChatCommandsMenu } from "@/components/chat/chat-commands-menu";
 import { ChatRailActions } from "@/components/chat/chat-rail-actions";
 import { ChatSlashMenu } from "@/components/chat/chat-slash-menu";
 import { useSlashMenu, type ChatSlash } from "@/lib/chat/useSlashMenu";
@@ -271,6 +273,16 @@ export function ChatComposer({
     onDraft(EMPTY_DRAFT);
   };
   const { waiting, submit } = useSendAfterDictation(voice, send, onToast);
+  // A prompt-bar command (« Commandes »): sent at once when set so, else
+  // written in the input to edit. The draft being written stays as it is.
+  const runCommand = (button: ActionButton) => {
+    if (button.submit) {
+      if (!slashMenu.intercept(button.command)) onSend(button.command, []);
+      return;
+    }
+    setText(button.command);
+    areaRef.current?.focus();
+  };
 
   // The rail's gesture: one click starts, the next stops (Ctrl+Space too).
   const toggleVoice = () => {
@@ -376,6 +388,7 @@ export function ChatComposer({
         {leading}
         {/* Insert, hide, mic, send: one group on the right, never split. */}
         <div className="chat-tools-end">
+          <ChatCommandsMenu onRun={runCommand} />
           <ChatRailActions
             onDraft={onDraft}
             areaRef={areaRef}
