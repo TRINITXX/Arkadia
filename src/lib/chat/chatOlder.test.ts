@@ -147,3 +147,29 @@ describe("older messages of a resumed chat", () => {
     expect(state.mode).toBe("plan");
   });
 });
+
+describe("Claude Code's own notes in a past conversation", () => {
+  it("never show as the user's words", () => {
+    const state = reduceChat(
+      EMPTY_CHAT,
+      history(
+        [
+          user("u1", "vois la capture"),
+          {
+            type: "user",
+            uuid: "m1",
+            isMeta: true,
+            message: {
+              role: "user",
+              content:
+                "[Image: original 2400x1350, displayed at 2000x1125. Multiply coordinates by 1.20 to map to original image.]",
+            },
+          },
+        ],
+        false,
+      ),
+      0,
+    );
+    expect(state.items.filter((i) => i.kind === "user")).toHaveLength(1);
+  });
+});

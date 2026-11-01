@@ -574,6 +574,10 @@ function addUser(
   const message = obj(m.message);
   let items = state.items;
   const content = message.content;
+  // Claude Code's own notes in the user's turn (« [Image: original
+  // 2400x1350…] » after an image read, a skill's text): never the user's
+  // words, never a frame (seen in a subagent's sheet, 01/11/2026).
+  if (m.isMeta === true && typeof content === "string") return state;
   if (typeof content === "string") {
     if (!fromHistory) return state;
     const bash = pastBash(state, m, content);

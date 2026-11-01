@@ -1,35 +1,22 @@
 import { Brain } from "lucide-react";
 import type { ThinkingItem } from "@/lib/chat/chatGroups";
-
-/** A summary's bold title (« **Checking the build** ») as its words alone,
- *  its blank lines closed up: a line break each. */
-const plain = (text: string) =>
-  text
-    .replace(/\*\*(.+?)\*\*/g, "$1")
-    .replace(/\n\s*\n/g, "\n")
-    .trim();
+import { thoughtTitle } from "@/lib/chat/chatThoughts";
 
 /**
- * Claude's thinking between two messages, whole, in indigo and italics so it
- * never reads as the grey line of its work below (the user's pick C of
- * 01/11/2026, « pas replié, je veux les voir entièrement »). Several blocks
- * gather here, one paragraph each.
+ * Claude's thinking between two messages on one line, in indigo and
+ * italics so it never reads as the grey line of its work below: its
+ * summary's title alone, the latest one (the user's ask of 01/11/2026:
+ * « juste le résumé »). Several blocks: every title on hover.
  */
 export function ChatThoughts({ items }: { items: ThinkingItem[] }) {
-  const blocks = items
-    .map((item) => ({ id: item.id, text: plain(item.text) }))
-    .filter((b) => b.text);
-  if (blocks.length === 0) return null;
+  const titles = items.map((i) => thoughtTitle(i.text)).filter(Boolean);
+  if (titles.length === 0) return null;
   return (
-    <div className="chat-unit chat-thoughts">
+    <div className="chat-unit chat-thoughts" title={titles.join("\n")}>
       <Brain className="ic" />
       <div className="tx">
-        {blocks.map(({ id, text }, i) => (
-          <p key={id}>
-            {i === 0 && <b>Réflexion · </b>}
-            {text}
-          </p>
-        ))}
+        <b>Réflexion · </b>
+        {titles[titles.length - 1]}
       </div>
     </div>
   );
