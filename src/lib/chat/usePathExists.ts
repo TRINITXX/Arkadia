@@ -8,10 +8,13 @@ const KEPT = 500;
 /** A path not found yet may be written soon (a capture, a report): asked again after this. */
 const MISS_KEPT_MS = 10_000;
 
-/** True when the file or folder exists (`path_exists`), asked once a while. */
-export function pathExists(path: string): Promise<boolean> {
+/**
+ * True when the file or folder exists (`path_exists`), asked once a while;
+ * `fresh` asks the disk now (a click: the file may be gone since).
+ */
+export function pathExists(path: string, fresh = false): Promise<boolean> {
   const cached = probes.get(path);
-  if (cached) return cached;
+  if (cached && !fresh) return cached;
   const probe = backendInvoke<boolean>("path_exists", { path }).catch(
     () => false,
   );

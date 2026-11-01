@@ -900,7 +900,8 @@ class Chat {
     return {
       turn: this.turn,
       tasks: this.tasks.length,
-      requests: this.pending.size + this.elicitations.size,
+      // A sign-in open in the browser: its callback goes to this Claude Code.
+      requests: this.pending.size + this.elicitations.size + this.signIns.size,
       queued: this.queued.length,
       // Their entries count until Claude Code wrote them.
       bangs: this.bangs.size + this.writing.size,
@@ -1288,7 +1289,8 @@ class Chat {
       emit({ type: "mcp_action_done", chatId: this.chatId, requestId, ...extra });
     let q: Query;
     try {
-      q = await this.ready;
+      // Asleep, its Claude Code starts again: the buttons need it.
+      q = await this.awake();
     } catch (e) {
       done({ error: e instanceof Error ? e.message : String(e) });
       return;
@@ -1301,8 +1303,12 @@ class Chat {
           done({});
         } else {
           const auth = await (q as unknown as McpSignIn).mcpAuthenticate(server);
-          done({ authUrl: auth?.authUrl });
-          this.awaitSignIn(q, server, auth?.callbackExpected !== false, MCP_SIGNIN_LOOKS);
+          if (!auth?.authUrl) {
+            done({ error: "Claude Code ne donne pas de page de connexion pour ce serveur" });
+          } else {
+            done({ authUrl: auth.authUrl });
+            this.awaitSignIn(q, server, auth.callbackExpected !== false, MCP_SIGNIN_LOOKS);
+          }
         }
       } else {
         if (action === "reconnect") await q.reconnectMcpServer(server);
@@ -1327,13 +1333,17 @@ class Chat {
     this.signIns.set(
       server,
       setTimeout(async () => {
-        this.signIns.delete(server);
+        // Kept in the map while it looks: the chat stays awake meanwhile.
         try {
           if (!calledBack) await q.reconnectMcpServer(server).catch(() => {});
           const now = (await q.mcpServerStatus()).find((s) => s.name === server);
           await this.reportMcp(q);
-          if (!now || now.status === "connected" || now.status === "disabled") return;
+          if (!now || now.status === "connected" || now.status === "disabled") {
+            this.signIns.delete(server);
+            return;
+          }
         } catch {
+          this.signIns.delete(server);
           return; // The chat closed meanwhile.
         }
         this.awaitSignIn(q, server, calledBack, looks - 1);
@@ -2199,6 +2209,7 @@ const relaunching = new Map<string, Promise<void>>();
  */
 const ACTIVE_COMMANDS = new Set<Command["type"]>([
   "send",
+  "mcp_action",
   "interrupt",
   "answer",
   "set_mode",

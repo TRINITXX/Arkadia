@@ -19,7 +19,9 @@ import {
   slashEntries,
   TERMINAL_ONLY,
   terminalOnlyNotice,
+  settleMcpPending,
   type McpAction,
+  type McpPending,
   type McpRow,
   type PagePanel,
   type PickerRow,
@@ -44,8 +46,8 @@ export interface ChatSlash {
   };
 }
 
-/** A /mcp row's action under way: asked, its sign-in open, or why it failed. */
-export type McpPending = { state: "asking" | "signin" } | { error: string };
+/** A sign-in left open this long is let go: the chat server stops looking then. */
+const MCP_SIGNIN_MS = 3 * 60_000;
 
 /** What the popup above the input shows. */
 export type SlashView =
@@ -98,6 +100,8 @@ export function useSlashMenu({
   const [hint, setHint] = useState<{ text: string; for: string } | null>(null);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [mcpPending, setMcpPending] = useState<Record<string, McpPending>>({});
+  /** /mcp's selected server: its rows move between sections as it acts. */
+  const [mcpSelected, setMcpSelected] = useState<string | null>(null);
   /** A /resume or /rewind choice under way (`pick`). */
   const picking = useRef(false);
 
@@ -173,10 +177,13 @@ export function useSlashMenu({
       error: panel === "mcp" ? undefined : loaded?.error,
       pending: mcpPending,
       // The current session can't be taken: start on the next one.
-      index: at(
-        rows?.length ?? 0,
-        Math.max(0, rows?.findIndex((r) => !r.disabled) ?? 0),
-      ),
+      index:
+        panel === "mcp" && rows?.some((r) => r.id === mcpSelected)
+          ? rows.findIndex((r) => r.id === mcpSelected)
+          : at(
+              rows?.length ?? 0,
+              Math.max(0, rows?.findIndex((r) => !r.disabled) ?? 0),
+            ),
     };
   } else if (entries.length > 0 && dismissed !== text) {
     view = { kind: "menu", entries, index: at(entries.length) };
@@ -225,8 +232,11 @@ export function useSlashMenu({
     const action = toggle ? row.toggle : row.action;
     const mcp = slash.mcp;
     const now = mcpPending[row.id];
-    if (!action || !mcp || (now && "state" in now)) return;
+    // Only a question asked holds the row: a sign-in can be asked again.
+    if (!action || !mcp || (now && "state" in now && now.state === "asking"))
+      return;
     const server = row.id;
+    const { status } = row;
     const set = (p: McpPending | null) =>
       setMcpPending((all) => {
         const next = { ...all };
@@ -234,41 +244,42 @@ export function useSlashMenu({
         else delete next[server];
         return next;
       });
-    set({ state: "asking" });
+    set({ state: "asking", status });
     mcp.act(server, action).then(
       (authUrl) => {
         if (!authUrl) return set(null);
-        // Signed in in the browser: the row turns green once the chat sees it.
-        set({ state: "signin" });
-        openUrl(authUrl).catch((e: unknown) => set({ error: String(e) }));
+        // Signed in in the browser: the row turns green once the chat sees
+        // it (`settleMcpPending`), or lets go when the chat stops looking.
+        const signin: McpPending = { state: "signin", status };
+        set(signin);
+        window.setTimeout(
+          () =>
+            setMcpPending((all) => {
+              if (all[server] !== signin) return all;
+              const next = { ...all };
+              delete next[server];
+              return next;
+            }),
+          MCP_SIGNIN_MS,
+        );
+        openUrl(authUrl).catch((e: unknown) =>
+          set({ error: String(e), status }),
+        );
       },
       (e: unknown) =>
-        set({ error: e instanceof Error ? e.message : String(e) }),
+        set({ error: e instanceof Error ? e.message : String(e), status }),
     );
   };
 
-  // A server connected or cut off since: its sign-in is over.
+  // A server whose state changed since: its sign-in or its error is over.
   useEffect(() => {
-    setMcpPending((all) => {
-      const over = Object.keys(all).filter((name) => {
-        const p = all[name];
-        const s = mcpServers?.find((x) => x.name === name);
-        return (
-          "state" in p &&
-          p.state === "signin" &&
-          (s?.status === "connected" || s?.status === "disabled")
-        );
-      });
-      if (over.length === 0) return all;
-      const next = { ...all };
-      for (const name of over) delete next[name];
-      return next;
-    });
+    setMcpPending((all) => settleMcpPending(all, mcpServers ?? []));
   }, [mcpServers]);
 
   const pick = (row: PickerRow, mode: RewindMode = "conversation") => {
     if (panel === "mcp") {
-      mcpPick(row as McpRow, mode !== "conversation");
+      // Ctrl+Enter switches it off or on; Enter (and Alt+Enter) acts.
+      mcpPick(row as McpRow, mode === "both");
       return;
     }
     // One choice at a time: a second relaunch would stop the Claude Code the
@@ -309,7 +320,11 @@ export function useSlashMenu({
     }
   };
 
-  const select = (i: number) => setSelected({ i, text });
+  const select = (i: number) => {
+    setSelected({ i, text });
+    if (view?.kind === "panel" && view.panel === "mcp")
+      setMcpSelected(view.rows?.[i]?.id ?? null);
+  };
 
   /** The input's keys while the popup shows; true when the key was its. */
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {

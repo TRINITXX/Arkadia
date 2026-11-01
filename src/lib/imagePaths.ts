@@ -35,9 +35,11 @@ const IMG_PATH_RE = new RegExp(
  * extension that ends a name, never a folder's (`v1.2\`), both slash styles.
  * Spaces are allowed, as in `IMG_PATH_RE`: a prose false positive
  * (`C:\proj holds app.ts`) fails its probe (`path_exists`) and stays text.
+ * A name that starts with its dot (`.claude`, `.gitignore`) is no file's:
+ * often a folder.
  */
 const FILE_PATH_RE = new RegExp(
-  String.raw`(?<![A-Za-z])[A-Za-z]:[\\/]${NAME_CHAR}*?\.[A-Za-z0-9]{1,8}(?![\w\\/])(?![.-]\w)`,
+  String.raw`(?<![A-Za-z])[A-Za-z]:[\\/]${NAME_CHAR}*?(?<![\\/])\.[A-Za-z0-9]{1,8}(?![\w\\/])(?![.-]\w)`,
   "gu",
 );
 

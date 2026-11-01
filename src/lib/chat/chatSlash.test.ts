@@ -11,6 +11,7 @@ import {
   resumeRefusal,
   rewindRows,
   sessionRows,
+  settleMcpPending,
   slashEntries,
   slashHead,
   whenLabel,
@@ -303,5 +304,24 @@ describe("the /mcp panel", () => {
 
   it("filters on the name or where it is set", () => {
     expect(mcpRows(servers, "claude").map((r) => r.title)).toEqual(["Gmail"]);
+  });
+
+  it("lets a sign-in or an error go once its server's state changed", () => {
+    const pending = {
+      cloudflare: { state: "signin" as const, status: "needs-auth" },
+      posthog: { error: "Connection closed", status: "failed" },
+      exa: { state: "asking" as const, status: "connected" },
+    };
+    const now = [
+      { name: "cloudflare", status: "connected" },
+      { name: "posthog", status: "failed" },
+      { name: "exa", status: "disabled" },
+    ];
+    // Connected: the sign-in is over; still failed: its error stays; a
+    // question asked waits for its answer.
+    expect(Object.keys(settleMcpPending(pending, now))).toEqual([
+      "posthog",
+      "exa",
+    ]);
   });
 });

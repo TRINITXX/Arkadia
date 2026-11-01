@@ -58,6 +58,10 @@ describe("splitFilePaths", () => {
     expect(splitFilePaths("dans C:\\proj\\src ici")).toEqual([
       { text: "dans C:\\proj\\src ici" },
     ]);
+    // A dot folder is no file: its tag would open the Explorer.
+    expect(splitFilePaths("voir C:\\Users\\me\\.claude ici")).toEqual([
+      { text: "voir C:\\Users\\me\\.claude ici" },
+    ]);
   });
 
   it("says when a code is one file's path alone", () => {

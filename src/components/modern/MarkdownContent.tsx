@@ -37,7 +37,7 @@ import {
 import { fetchImageUrl } from "@/lib/imageUrlCache";
 import { LinkCardsContext } from "@/lib/linkCards";
 import { usePathHover } from "@/lib/pathHover";
-import { usePathExists } from "@/lib/chat/usePathExists";
+import { pathExists, usePathExists } from "@/lib/chat/usePathExists";
 import { usePathImage } from "@/lib/chat/usePathImage";
 
 export type ToastFn = (level: "info" | "error", message: string) => void;
@@ -181,7 +181,11 @@ function FilePathTag({
       title={`Ouvrir ${path}`}
       onClick={(e) => {
         e.stopPropagation();
-        openPath(path, onToast);
+        // Asked again: `open_path` would create a text file deleted since.
+        void pathExists(path, true).then((still) => {
+          if (still) openPath(path, onToast);
+          else onToast?.("error", `Fichier introuvable : ${name}`);
+        });
       }}
     >
       <FileText />

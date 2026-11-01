@@ -38,8 +38,8 @@ const detailCache = new Map<
   { at: number; detail: Promise<ContextDetail> }
 >();
 
-/** A sign-in's page asked: a reconnection first, a few seconds. */
-const MCP_ACTION_TIMEOUT_MS = 30_000;
+/** A sign-in's page asked: a reconnection first, a slow server's too. */
+const MCP_ACTION_TIMEOUT_MS = 60_000;
 
 /** `getContextUsage` full counts tokens: a few seconds at most. */
 const DETAIL_TIMEOUT_MS = 20_000;

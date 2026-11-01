@@ -48,6 +48,17 @@ describe("rehypeInlineImages", () => {
     expect(html).toContain(" pour la suite");
   });
 
+  it("keeps the text around a path as markdown drew it", () => {
+    // Taken from the source, a quote's line kept its `>` and its escapes.
+    const html = render(
+      "> Voir C:\\a\\x.png\n> est \\*vraiment\\* à jour &amp; prêt.",
+    );
+    expect(html).toContain('src="C:\\a\\x.png"');
+    expect(html).toContain("est *vraiment* à jour &amp; prêt.");
+    expect(html).not.toContain("&gt;");
+    expect(html).not.toContain("\\*");
+  });
+
   it("resolves a relative mention against the base dir", () => {
     const html = render("voir .screenshots/x.png", "C:\\proj");
     expect(html).toContain('src="C:\\proj\\.screenshots\\x.png"');

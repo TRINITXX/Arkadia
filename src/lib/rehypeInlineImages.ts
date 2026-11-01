@@ -71,7 +71,7 @@ export function rehypeInlineImages(options: {
         });
         if (nodes.some((n) => n.type === "element")) {
           changed = true;
-          out.push(...nodes);
+          out.push(...renderedAround(nodes, child.value ?? ""));
           continue;
         }
       }
@@ -82,6 +82,33 @@ export function rehypeInlineImages(options: {
     if (options.group !== false) groupGalleries(node, options.baseDir);
   };
   return (tree: HastNode) => walk(tree);
+}
+
+/** A markdown escape (`\.`, `\*`): its character, as the text shows it. */
+const unescape = (text: string) => text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+
+/**
+ * The markers cut out of the source, with the text around them taken from
+ * the node's rendered value: the source keeps what markdown drew otherwise
+ * (a quote's `>`, `\*`, `&amp;`). A marker not found in the value as
+ * rendered leaves the source's text, as before.
+ */
+function renderedAround(nodes: HastNode[], value: string): HastNode[] {
+  const out: HastNode[] = [];
+  let cursor = 0;
+  for (const node of nodes) {
+    if (node.type !== "element") continue;
+    const label = node.properties?.[IMAGE_LABEL_PROP];
+    const at =
+      typeof label === "string" ? value.indexOf(unescape(label), cursor) : -1;
+    if (at < 0) return nodes;
+    if (at > cursor) out.push({ type: "text", value: value.slice(cursor, at) });
+    out.push(node);
+    cursor = at + unescape(label as string).length;
+  }
+  if (cursor < value.length)
+    out.push({ type: "text", value: value.slice(cursor) });
+  return out;
 }
 
 /** Class names the modern view's stylesheet lays out as a wrapping strip. */

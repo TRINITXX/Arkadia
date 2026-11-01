@@ -422,3 +422,32 @@ export function mcpRows(servers: McpServerInfo[], query: string): McpRow[] {
   }
   return rows;
 }
+
+/**
+ * A /mcp row's action under way, with the server's state when it began:
+ * asked, its sign-in open in the browser, or why it failed.
+ */
+export type McpPending =
+  | { state: "asking"; status: string }
+  | { state: "signin"; status: string }
+  | { error: string; status: string };
+
+/**
+ * The actions under way once the servers' states come: a sign-in or an
+ * error is over as soon as its server's state changed (connected, failed,
+ * cut off: the row says it). A question asked waits for its answer.
+ */
+export function settleMcpPending(
+  all: Record<string, McpPending>,
+  servers: McpServerInfo[],
+): Record<string, McpPending> {
+  const over = Object.keys(all).filter((name) => {
+    const p = all[name];
+    if ("state" in p && p.state === "asking") return false;
+    return servers.find((s) => s.name === name)?.status !== p.status;
+  });
+  if (over.length === 0) return all;
+  const next = { ...all };
+  for (const name of over) delete next[name];
+  return next;
+}
