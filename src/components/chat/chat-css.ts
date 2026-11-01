@@ -565,6 +565,13 @@ export const CHAT_CSS = `
 .chat-welcome { margin-top: 18px; border: 1px solid var(--chat-line); border-radius: 14px; background: var(--chat-card); padding: 6px; display: flex; flex-direction: column; }
 .chat-welcome .hd { display: flex; align-items: center; gap: 8px; padding: 6px 10px 8px; font-size: 12.5px; color: var(--chat-dim); }
 .chat-welcome .hd .lucide { width: 14px; height: 14px; color: var(--chat-accent); }
+/* Its search, top right: a session older than the list, found at each letter. */
+.chat-welcome .hd .search { margin-left: auto; display: flex; align-items: center; gap: 6px; min-width: 0; border: 1px solid var(--chat-line); border-radius: 8px; background: #141619; padding: 3px 8px; cursor: text; }
+.chat-welcome .hd .search:focus-within { border-color: #5a3a2c; }
+.chat-welcome .hd .search .lucide { width: 13px; height: 13px; flex-shrink: 0; color: var(--chat-mute); }
+.chat-welcome .hd .search input { width: 150px; min-width: 0; border: 0; outline: none; background: transparent; color: var(--chat-ink); font: inherit; font-size: 12.5px; }
+.chat-welcome .hd .search input::placeholder { color: var(--chat-mute); }
+.chat-welcome .none { padding: 7px 10px; font-size: 13px; color: var(--chat-mute); }
 .chat-welcome .row { display: flex; align-items: baseline; gap: 12px; width: 100%; padding: 7px 10px; border: 0; border-radius: 9px; background: transparent; color: #e4e4e7; font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; min-width: 0; }
 .chat-welcome .row:hover:not(:disabled) { background: #202327; }
 .chat-welcome .row:disabled { cursor: default; color: var(--chat-mute); }

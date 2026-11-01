@@ -163,6 +163,20 @@ describe("the /resume and /rewind panels", () => {
     expect(
       sessionRows([onMain], "", null, now, { branch: false })[0].meta,
     ).not.toContain("main");
+    // A search at each letter: every word, accents aside.
+    const found = (query: string) =>
+      sessionRows(
+        [
+          { sessionId: "r", title: "Réponse au brouillon", lastModified: now },
+          { sessionId: "q", title: "Quota Vercel", lastModified: now },
+        ],
+        query,
+        null,
+        now,
+      ).map((r) => r.id);
+    expect(found("reponse brouil")).toEqual(["r"]);
+    expect(found("vercel reponse")).toEqual([]);
+    expect(found("")).toEqual(["r", "q"]);
     expect(
       sessionRows(
         rows.map((r) => ({ sessionId: r.id, title: r.title, lastModified: 0 })),

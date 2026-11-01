@@ -237,9 +237,15 @@ export function whenLabel(ms: number, now: number): string {
   });
 }
 
+/** Lower case, accents gone: « reponse » finds « Réponse ». */
+const fold = (text: string) =>
+  text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+
+/** Every word of the query in one of the texts, accents aside. */
 const matches = (query: string, ...texts: (string | undefined)[]) => {
-  const q = query.trim().toLowerCase();
-  return !q || texts.some((t) => t?.toLowerCase().includes(q));
+  const words = fold(query).split(/\s+/).filter(Boolean);
+  const hay = texts.map((t) => fold(t ?? ""));
+  return words.every((w) => hay.some((t) => t.includes(w)));
 };
 
 /**

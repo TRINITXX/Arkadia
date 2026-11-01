@@ -800,7 +800,15 @@ class Chat {
         // Claude in Chrome: the terminal turns it on from the account's
         // setting, an SDK session only with `--chrome` (checked 01/11/2026:
         // without it, no claude-in-chrome among its MCP servers).
-        extraArgs: { "replay-user-messages": null, chrome: null },
+        // Claude's thinking in words: the terminal asks for its summaries
+        // (`showThinkingSummaries`), an SDK session gets empty thinking
+        // blocks unless `--thinking-display summarized` (checked 01/11/2026:
+        // 0 characters without, 245 with). It keeps the model's own thinking.
+        extraArgs: {
+          "replay-user-messages": null,
+          chrome: null,
+          "thinking-display": "summarized",
+        },
         // Another session's message always comes in, whatever the sender's
         // mode: the user's choice (31/10/2026), and the chat has no accept
         // button for a held one. Session only, never written to a file.
