@@ -82,6 +82,8 @@ export const CHAT_CSS = `
 .chat-visual-btn .lucide { width: 14px; height: 14px; flex-shrink: 0; }
 @container (max-width: 460px) { .chat-visual-btn .lbl { display: none; } }
 .chat-visual-box iframe { display: block; width: 100%; height: 100%; border: 0; background: var(--chat-bg); color-scheme: dark; }
+/* « Replier » under the page too (the user's ask of 01/11/2026). */
+.chat-visual-foot { display: flex; justify-content: flex-end; padding: 2px 6px; background: var(--chat-card); border-top: 1px solid #26292e; }
 .chat-visual-wait { display: flex; align-items: center; height: 120px; padding: 0 16px; color: var(--chat-mute); font-size: 12.5px; }
 .chat-visual-broken { cursor: default; }
 .chat-visual-broken:hover { background: transparent; color: var(--chat-mute); }

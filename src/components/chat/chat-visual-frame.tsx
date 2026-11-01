@@ -109,8 +109,8 @@ function scrollAround(
 /**
  * The room a card has in its column, read from the layout itself: the
  * column's visible height less its own padding, the card's band (the
- * element over the frame) and the card's border. Null in a hidden tab (a
- * column sized to nothing).
+ * element over the frame), its foot (« Replier », under it) and the card's
+ * border. Null in a hidden tab (a column sized to nothing).
  */
 function roomIn(box: HTMLElement): number | null {
   const scroller = box.closest<HTMLElement>(".chat-scroll");
@@ -128,7 +128,9 @@ function roomIn(box: HTMLElement): number | null {
     : 0;
   const band =
     (box.previousElementSibling as HTMLElement | null)?.offsetHeight ?? 0;
-  return Math.max(0, Math.floor(visible - pad - band - border));
+  const foot =
+    (box.nextElementSibling as HTMLElement | null)?.offsetHeight ?? 0;
+  return Math.max(0, Math.floor(visible - pad - band - foot - border));
 }
 
 /**
