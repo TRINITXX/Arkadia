@@ -96,6 +96,8 @@ export function ChatPasteTags({
     if (!on || !area || !twin) return;
     const box = () => area.closest(".chat-box")?.getBoundingClientRect();
     const onMove = (e: MouseEvent) => {
+      // Typing in a tag's hover: it stays on that tag, wherever the pointer goes.
+      if (editing()) return;
       for (const mark of twin.querySelectorAll<HTMLElement>("mark")) {
         for (const r of mark.getClientRects()) {
           if (
@@ -177,7 +179,10 @@ export function ChatPasteTags({
             }}
           />
           <div className="ft">
-            <span>{wordCount(shown.text)} mots · modifiable ici</span>
+            <span>
+              {wordCount(shown.text)} mot{wordCount(shown.text) > 1 ? "s" : ""}{" "}
+              · modifiable ici
+            </span>
             <button
               type="button"
               onClick={() => {

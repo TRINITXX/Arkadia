@@ -28,6 +28,7 @@ import {
   groupChatItems,
   messagesOnly as onlyMessages,
   questionAnswers,
+  stepReplyIds,
   type ChatUnit,
 } from "@/lib/chat/chatGroups";
 import { withDayBreaks } from "@/lib/chat/chatDays";
@@ -86,6 +87,8 @@ interface ChatTimelineProps {
   onOpenVisual?: (html: string, title: string) => void;
   /** A running `!` command's stop, by its server id. */
   onStopBash?: (id: string) => void;
+  /** Claude's turn under way: its last reply is a step until it ends. */
+  working?: boolean;
 }
 
 /** A unit's time for the day breaks; a gathered one's, its first known. */
@@ -124,19 +127,24 @@ export const ChatTimeline = memo(function ChatTimeline({
   onChoose,
   onOpenVisual,
   onStopBash,
+  working = false,
 }: ChatTimelineProps) {
   const remover = (item: { id: string; queued?: boolean }) => {
     const uuid = item.queued ? sentUuid(item.id) : null;
     return uuid && onRemoveQueued ? () => onRemoveQueued(uuid) : undefined;
   };
-  const units = useMemo(() => {
+  const { units, steps } = useMemo(() => {
     const all = groupChatItems(items);
     const shown = foldActivity(
       messagesOnly ? onlyMessages(all, pendingToolIds) : all,
     );
-    // « Aujourd'hui », « Hier », « lun. 27 oct. » where the day changes.
-    return withDayBreaks(shown, unitAt);
-  }, [items, messagesOnly, pendingToolIds]);
+    return {
+      // « Aujourd'hui », « Hier », « lun. 27 oct. » where the day changes.
+      units: withDayBreaks(shown, unitAt),
+      // Read on the whole column: « Messages seuls » hides the work.
+      steps: stepReplyIds(foldActivity(all), working),
+    };
+  }, [items, messagesOnly, pendingToolIds, working]);
   const [whole, setWhole] = useState(!tailFirst);
   useEffect(() => {
     if (!whole) startTransition(() => setWhole(true));
@@ -214,6 +222,20 @@ export const ChatTimeline = memo(function ChatTimeline({
           </ChatMessageFrame>
         );
       case "text":
+        // A reply that only says what Claude does next: a quiet line, so
+        // the one that ends the turn stands out (`stepReplyIds`).
+        if (steps.has(unit.item.id))
+          return (
+            <div key={unit.item.id} className="chat-unit chat-step-reply">
+              <ChatReplyText
+                text={unit.item.text}
+                bare={bareReplyIds.includes(unit.item.id)}
+                cwd={cwd}
+                onOpen={onOpen}
+                onToast={onToast}
+              />
+            </div>
+          );
         return (
           <ChatMessageFrame
             key={unit.item.id}

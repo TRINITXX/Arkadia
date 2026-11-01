@@ -131,3 +131,24 @@ describe("a withdrawn message back in the input", () => {
     );
   });
 });
+
+describe("pasted images put back in the input", () => {
+  const PNG = "data:image/png;base64,AAA";
+  it("keep the numbers their text gives them", () => {
+    const back = messageDraft("vois [Image #2] et [Image #3]", [PNG, PNG]);
+    expect(back.images.map((i) => i.n)).toEqual([2, 3]);
+  });
+
+  it("number the input's own after them, their tags following", () => {
+    const back = messageDraft("vois [Image #1]", [PNG]);
+    const now = {
+      text: "et [Image #1]",
+      images: [
+        { id: "x", url: PNG, mediaType: "image/png", data: "AAA", n: 1 },
+      ],
+    };
+    const merged = mergeDrafts(back, now);
+    expect(merged.text).toBe("vois [Image #1]\net [Image #2]");
+    expect(merged.images.map((i) => i.n)).toEqual([1, 2]);
+  });
+});

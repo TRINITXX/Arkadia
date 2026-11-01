@@ -382,6 +382,8 @@ export function ChatComposer({
   // key's repeat takes that space back and dictates, the text landing where
   // the caret was; the release stops it.
   const talkRef = useRef<{ talking: boolean; at: number } | null>(null);
+  // Where the caret was: a move into a tag goes over it, its way.
+  const caretRef = useRef<number | null>(null);
   const plainSpace = (e: React.KeyboardEvent) =>
     e.key === " " && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
 
@@ -543,9 +545,16 @@ export function ChatComposer({
         // nothing is typed, dictated or inserted into it.
         onSelect={(e) => {
           const area = e.currentTarget;
+          const from = caretRef.current;
+          caretRef.current = area.selectionStart;
           if (area.selectionStart !== area.selectionEnd) return;
           const span = tagAt(text, pastes, area.selectionStart, "inside");
-          if (span) area.setSelectionRange(span.end, span.end);
+          if (!span) return;
+          // Coming from its end (←, Ctrl+←): over it to its start; else
+          // to its end. Never stuck behind it.
+          const to = from !== null && from >= span.end ? span.start : span.end;
+          caretRef.current = to;
+          area.setSelectionRange(to, to);
         }}
         // Space released elsewhere: the dictation still stops.
         onBlur={() => {

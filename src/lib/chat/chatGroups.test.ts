@@ -5,6 +5,7 @@ import {
   groupChatItems,
   messagesOnly,
   questionAnswers,
+  stepReplyIds,
   toolLabel,
   workSummary,
   type ToolItem,
@@ -171,5 +172,22 @@ describe("foldActivity", () => {
       "1 fichier modifié",
       "1 sous-agent",
     ]);
+  });
+});
+
+describe("stepReplyIds", () => {
+  it("makes a reply followed by work a step, the turn's last one its answer", () => {
+    const units = foldActivity(
+      groupChatItems([
+        text("Je prépare.", "a"),
+        tool("Bash", { command: "ls" }, "b1"),
+        text("Je cale les questions.", "b"),
+        tool("Read", { file_path: "C:/a.ts" }, "r1"),
+        text("Relevé prêt.", "c"),
+      ]),
+    );
+    expect([...stepReplyIds(units, false)]).toEqual(["a", "b"]);
+    // Still working: the last reply is a step until the turn ends.
+    expect([...stepReplyIds(units, true)]).toEqual(["a", "b", "c"]);
   });
 });

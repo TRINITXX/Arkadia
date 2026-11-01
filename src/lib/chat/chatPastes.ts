@@ -174,7 +174,7 @@ export function brokenPastes(
 ): PastedText[] {
   const whole = new Set(pasteSpans(text, pastes).map((s) => s.paste.id));
   return pastes.filter(
-    (p) => !whole.has(p.id) && text.includes(`[Texte collé #${p.id}`),
+    (p) => !whole.has(p.id) && text.includes(`[Texte collé #${p.id} ·`),
   );
 }
 

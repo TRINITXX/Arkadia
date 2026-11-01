@@ -312,3 +312,35 @@ export function questionAnswers(tool: ToolItem): [string, string][] {
   const text = tool.result?.text ?? "";
   return [...text.matchAll(/"([^"]+)"="([^"]*)"/g)].map((m) => [m[1], m[2]]);
 }
+
+/** What comes after a reply of Claude's that makes it a step, not its answer. */
+const WORK_AFTER = new Set<ChatUnit["kind"]>([
+  "activity",
+  "work",
+  "edit",
+  "agent",
+  "visual",
+]);
+
+/**
+ * Claude's replies that only say what it does next (« Je prépare le
+ * relevé… »): its work follows them in the same turn. Drawn as a quiet line,
+ * so the reply that ends the turn stands out (the user's pick 1 of
+ * 01/11/2026). The last reply, nothing after it, is a step while Claude
+ * still works: it becomes the answer once the turn ends. An error never is
+ * a step.
+ */
+export function stepReplyIds(
+  units: readonly ChatUnit[],
+  working: boolean,
+): Set<string> {
+  const steps = new Set<string>();
+  units.forEach((unit, i) => {
+    if (unit.kind !== "text" || unit.item.error) return;
+    const next = units
+      .slice(i + 1)
+      .find((u) => u.kind !== "thoughts" && u.kind !== "thinking");
+    if (next ? WORK_AFTER.has(next.kind) : working) steps.add(unit.item.id);
+  });
+  return steps;
+}

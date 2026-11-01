@@ -673,6 +673,7 @@ function ChatViewBody({
           />
           <ChatTimeline
             items={state.items}
+            working={state.working}
             cwd={cwd}
             subagents={state.subagents}
             pendingToolIds={pendingToolIds}

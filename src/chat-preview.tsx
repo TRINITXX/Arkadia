@@ -256,6 +256,19 @@ const SCENARIOS: Record<string, () => ChatState> = {
     });
     return { ...s, items };
   },
+  // A reply that only says what comes next, before Claude's work: a step.
+  narration: () => {
+    const s = replay(parse(tools));
+    const at = s.items.findIndex((i) => i.kind === "tool");
+    const items = [...s.items];
+    items.splice(at, 0, {
+      kind: "text",
+      id: "preview-step",
+      text: "Je lis d'abord note.txt, puis j'écris le résumé dans resume.txt.",
+      streaming: false,
+    });
+    return { ...s, items };
+  },
   live: () => replay(parse(tools), firstTextDelta),
   // Two questions: the terminal's tabs.
   questions: () =>

@@ -185,7 +185,7 @@ export function attachPaths(draft: ChatDraft, paths: string[]): ChatDraft {
 }
 
 /** A pasted image kept as a data URL, back as an image of the input. */
-function draftImage(url: string, n: number): DraftImage | null {
+function draftImage(url: string, n: number, label: number): DraftImage | null {
   const m = /^data:([^;,]+);base64,(.*)$/s.exec(url);
   if (!m) return null;
   nextId += 1;
@@ -195,9 +195,16 @@ function draftImage(url: string, n: number): DraftImage | null {
     url,
     mediaType: m[1],
     data: m[2],
-    n: n + 1,
+    n: label,
   };
 }
+
+const IMAGE_TAG = /\[Image #(\d+)\]/g;
+
+/** The image numbers a text's tags give, in order, once each. */
+const imageTags = (text: string) => [
+  ...new Set([...text.matchAll(IMAGE_TAG)].map((m) => Number(m[1]))),
+];
 
 /**
  * A sent message as a draft again: its text, its attachment lines as cards,
@@ -205,10 +212,13 @@ function draftImage(url: string, n: number): DraftImage | null {
  */
 export function messageDraft(text: string, pasted: string[] = []): ChatDraft {
   const split = splitAttachedLines(text);
+  // The numbers its text gives them, in order (« [Image #2] [Image #3] »
+  // once #1 was removed); else 1, 2, …
+  const named = imageTags(split.text);
   return {
     text: split.text,
     images: pasted
-      .map(draftImage)
+      .map((url, i) => draftImage(url, i, named[i] ?? i + 1))
       .filter((img): img is DraftImage => img !== null),
     files: split.paths.map(draftFile),
   };
@@ -216,12 +226,30 @@ export function messageDraft(text: string, pasted: string[] = []): ChatDraft {
 
 /** `back` put into the input before what it holds now, one line apart. */
 export function mergeDrafts(back: ChatDraft, now: ChatDraft): ChatDraft {
+  // The input's images numbered after those coming back, their tags with
+  // them: never two « [Image #1] ».
+  const after = Math.max(
+    0,
+    ...back.images.map((img) => img.n ?? 0),
+    ...imageTags(back.text),
+  );
+  const nowText = after
+    ? now.text.replace(
+        IMAGE_TAG,
+        (_, d: string) => `[Image #${Number(d) + after}]`,
+      )
+    : now.text;
   const text =
-    back.text && now.text ? `${back.text}\n${now.text}` : back.text || now.text;
+    back.text && nowText ? `${back.text}\n${nowText}` : back.text || nowText;
   return attachPaths(
     {
       text,
-      images: [...back.images, ...now.images],
+      images: [
+        ...back.images,
+        ...now.images.map((img) =>
+          img.n && after ? { ...img, n: img.n + after } : img,
+        ),
+      ],
       files: back.files,
       // The input's pasted texts: their tags stay in its text.
       ...(now.pastes ? { pastes: now.pastes } : {}),
