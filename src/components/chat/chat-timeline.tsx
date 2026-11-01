@@ -53,8 +53,8 @@ interface ChatTimelineProps {
   pendingToolIds: Set<string>;
   /** « Messages seuls » (`messagesOnly` in `chatGroups`). */
   messagesOnly?: boolean;
-  /** With its agent: that one's conversation; without: the finished ones. */
-  onOpenAgents: (agent?: Subagent) => void;
+  /** A subagent row's conversation (a row whose agent isn't known has none). */
+  onOpenAgents: (agent: Subagent) => void;
   onOpen: (content: LightboxContent) => void;
   onToast?: ToastFn;
   /** Stops the turn so Claude takes the queued messages now. */

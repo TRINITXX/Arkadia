@@ -40,6 +40,8 @@ export const CHAT_CSS = `
 
 .chat-line { display: flex; align-items: center; gap: 8px; color: var(--chat-mute); font-size: 13px; cursor: pointer; user-select: none; width: fit-content; max-width: 100%; border-radius: 8px; padding: 2px 6px 2px 2px; margin-left: -2px; }
 .chat-line:hover { color: var(--chat-dim); background: #202327; }
+.chat-line.static { cursor: default; }
+.chat-line.static:hover { color: var(--chat-mute); background: transparent; }
 .chat-line b { color: var(--chat-dim); font-weight: 500; }
 .chat-line .lucide { width: 15px; height: 15px; flex-shrink: 0; }
 .chat-line .chev { transition: transform .14s ease-out; }

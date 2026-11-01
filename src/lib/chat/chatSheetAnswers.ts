@@ -10,6 +10,7 @@ import type { ChatItem } from "@/lib/chat/chatState";
 
 export interface SheetAnswers {
   replyId: string;
+  /** By the question's `key` (`RoundQuestion`). */
   answers: Record<string, RoundAnswer>;
   /** Closed by the user: not shown again for this reply. */
   closed: boolean;
@@ -42,21 +43,21 @@ export function updateSheet(
   for (const cb of listeners.get(paneId) ?? []) cb();
 }
 
-/** Dictated words, after what the question's field holds. */
+/** Dictated words, after what the question's field holds (by its `key`). */
 export function appendSheetText(
   paneId: string,
   replyId: string,
-  questionId: string,
+  questionKey: string,
   text: string,
 ): void {
   updateSheet(paneId, replyId, (s) => {
-    const prev = s.answers[questionId]?.text?.trimEnd() ?? "";
+    const prev = s.answers[questionKey]?.text?.trimEnd() ?? "";
     return {
       ...s,
       answers: {
         ...s.answers,
-        [questionId]: {
-          ...s.answers[questionId],
+        [questionKey]: {
+          ...s.answers[questionKey],
           text: prev ? `${prev} ${text}` : text,
         },
       },

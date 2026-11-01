@@ -14,6 +14,8 @@ const STATUS: Record<Subagent["status"], string> = {
 /**
  * A subagent Claude started: one line, its conversation a click away. No
  * spinner while it runs: its card and the live line above the input say it.
+ * An agent not known (an older page, before its `task_started`) has no
+ * conversation to open: its line takes no click.
  */
 export function ChatAgentRow({
   tool,
@@ -22,13 +24,15 @@ export function ChatAgentRow({
 }: {
   tool: ToolItem;
   agent: Subagent | undefined;
-  /** Its conversation when known, else the finished agents. */
-  onOpen: (agent?: Subagent) => void;
+  onOpen: (agent: Subagent) => void;
 }) {
   const running = agent ? agent.status === "running" : toolRunning(tool);
   return (
     <div className="chat-unit">
-      <div className="chat-line" onClick={() => onOpen(agent)}>
+      <div
+        className={agent ? "chat-line" : "chat-line static"}
+        onClick={agent ? () => onOpen(agent) : undefined}
+      >
         <Bot />
         <b>Sous-agent</b>
         <span>· {toolSummary(tool)}</span>
@@ -36,7 +40,7 @@ export function ChatAgentRow({
           · {agent ? STATUS[agent.status] : running ? "en cours" : "fini"}
         </span>
         {agent && agent.toolUses > 0 && <span>· {agent.toolUses} outils</span>}
-        <ChevronRight />
+        {agent && <ChevronRight />}
       </div>
     </div>
   );

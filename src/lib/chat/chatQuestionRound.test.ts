@@ -63,6 +63,8 @@ describe("question rounds in Claude's reply", () => {
     expect(parseQuestionRound(SERIES)).toEqual([
       {
         id: "Q2",
+        numbered: true,
+        key: "#1",
         title: "On accepte la virgule partout ?",
         body: "Le champ prix refuse la virgule.",
         options: [
@@ -246,13 +248,50 @@ describe("question rounds in Claude's reply", () => {
   });
 
   it("answers one line per question answered", () => {
-    const questions = parseQuestionRound(GRILL);
+    const [q1, q2] = parseQuestionRound(GRILL);
     expect(
-      roundReply(questions, {
-        Q1: { option: "a", text: "plus sûr" },
-        Q2: { reco: true },
+      roundReply([q1, q2], {
+        [q1.key]: { option: "a", text: "plus sûr" },
+        [q2.key]: { reco: true },
       }),
     ).toBe("Q1 : a) Le store de l'app, plus sûr\nQ2 : OK pour ta reco");
-    expect(roundReply(questions, { Q2: { text: "  " } })).toBe("");
+    expect(roundReply([q1, q2], { [q2.key]: { text: "  " } })).toBe("");
+  });
+
+  it("keeps an unnumbered question its reply's own, and a question asked again unanswered", () => {
+    const text = (id: string, t: string): ChatItem => ({
+      kind: "text",
+      id,
+      text: t,
+      streaming: false,
+    });
+    const a = text(
+      "a",
+      "❓ **Q1** - **Couleur** : laquelle ?\n\n❓ **Q2** - **Taille** : laquelle ?",
+    );
+    const b = text("b", "❓ **Prix** : combien ?");
+    const round = lastReplyRound([a, b]);
+    expect(round?.questions.map((q) => q.title)).toEqual([
+      "Couleur",
+      "Taille",
+      "Prix",
+    ]);
+    const [color, , price] = round!.questions;
+    // Claude names it by its title: « Q1 » would name « Couleur » too.
+    expect(
+      roundReply(round!.questions, {
+        [color.key]: { text: "vert" },
+        [price.key]: { text: "10 €" },
+      }),
+    ).toBe("Q1 : vert\nPrix : 10 €");
+    // A new round numbered from Q1 again: its Q1 starts unanswered.
+    const again = lastReplyRound([
+      a,
+      text("c", "❓ **Q1** - **Police** : laquelle ?"),
+    ]);
+    expect(again?.questions[0].title).toBe("Police");
+    expect(
+      roundReply(again!.questions, { [color.key]: { text: "vert" } }),
+    ).toBe("");
   });
 });

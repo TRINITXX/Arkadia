@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Bot, CircleAlert, CircleCheck } from "lucide-react";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import type { Subagent } from "@/lib/chat/chatState";
+import { useChatLayer } from "@/lib/chat/useChatLayers";
 
 /** The pointer crosses the gap to the menu within this, without it closing. */
 const CLOSE_AFTER_MS = 180;
@@ -28,6 +29,8 @@ export function ChatAgentsMenu({
   const [open, setOpen] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
+  // Esc closes the menu, never Claude's turn (`chatLayers`).
+  useChatLayer(open, () => setOpen(false));
   const show = () => {
     window.clearTimeout(timer.current);
     setOpen(true);

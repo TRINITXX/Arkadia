@@ -64,7 +64,7 @@ export function tokensLabel(n: number): string {
   if (n < 1000) return String(n);
   // « 1 M », never « 1000,0 k » (the user's ask of 01/11/2026).
   if (n < 999_950) return `${(n / 1000).toFixed(1).replace(".", ",")} k`;
-  return `${(n / 1_000_000).toFixed(1).replace(/.0$/, "").replace(".", ",")} M`;
+  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "").replace(".", ",")} M`;
 }
 
 /**

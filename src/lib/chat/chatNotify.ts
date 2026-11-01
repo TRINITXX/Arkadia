@@ -18,8 +18,9 @@ import {
  *   Code gone mid-turn included, never an end the user caused (Esc) nor a
  *   local command's answer;
  * - Claude waiting on the user notifies at once (`question`): a permission,
- *   AskUserQuestion, ExitPlanMode, an MCP's request, or a ❓ round in the
- *   turn's last words;
+ *   AskUserQuestion, ExitPlanMode, an MCP's request, or a ❓ round in a
+ *   reply of the turn, as the sheet shows it (`lastReplyRound`: after the
+ *   user's last message, no API error last);
  * - an end stays silent while background subagents, workflows or a
  *   Monitor (until its timeout) run (shells never count), and when it asks
  *   nothing (« No response requested. », a lone ⏳ last line), unless an
@@ -53,11 +54,15 @@ export interface ChatNotifyTrack {
   queued: string[];
   /** A scheduled wakeup fired: the next prompt without origin is Claude's. */
   scheduled: boolean;
-  /** The turn's last words of Claude (main loop), "" for an API error
-   *  reply, null for none yet: the ❓ round, as `lastReplyRound` reads it. */
-  turnText: string | null;
-  /** A reply of this turn asks a ❓ round (not only its last words). */
+  /** Claude's latest reply (main loop) is an API error: no round shows
+   *  until another comes (`lastReplyRound`). */
+  replyError: boolean;
+  /** A reply of this turn asks a ❓ round (not only its last words), since
+   *  the user's last message. */
   turnRound: boolean;
+  /** A reply since the user's last message asks a ❓ round, in this turn or
+   *  an earlier one: the round the sheet gathers (`lastReplyRound`). */
+  roundAsked: boolean;
   /** The text of the turn's last assistant message, null when that message
    *  holds anything else (a tool call): a turn that asks nothing? */
   endText: string | null;
@@ -65,7 +70,8 @@ export interface ChatNotifyTrack {
   interrupted: boolean;
   /** An end kept silent for background work, no notice since. */
   silenced: boolean;
-  /** The ❓ round of Claude's last reply waits for the user. */
+  /** The ❓ round the sheet shows waits for the user, from a turn's end
+   *  until his next message (`roundAsked`, no `replyError`). */
   roundPending: boolean;
   /** Open AskUserQuestion requests. */
   asks: string[];
@@ -78,8 +84,9 @@ export const EMPTY_TRACK: ChatNotifyTrack = {
   opener: null,
   queued: [],
   scheduled: false,
-  turnText: null,
+  replyError: false,
   turnRound: false,
+  roundAsked: false,
   endText: null,
   interrupted: false,
   silenced: false,
@@ -178,13 +185,16 @@ function addAssistant(t: ChatNotifyTrack, m: JsonObject): ChatNotifyTrack {
   // The stand-in alone: never Claude's reply (a usage limit's turn ends on it).
   if (texts.length === 0 && blocks.every((b) => b.type === "text")) return t;
   const last = texts[texts.length - 1];
+  // An API error's reply asks nothing, and hides the round until another.
+  const errored = typeof m.error === "string";
+  const asks = !errored && texts.some((x) => isRound(x));
   return {
     ...t,
     endText: blocks.length === 1 && last !== undefined ? last : null,
-    turnText:
-      last === undefined ? t.turnText : typeof m.error === "string" ? "" : last,
+    replyError: last === undefined ? t.replyError : errored,
     // A round in any reply of the turn, not only its last words.
-    turnRound: t.turnRound || texts.some((x) => isRound(x)),
+    turnRound: t.turnRound || asks,
+    roundAsked: t.roundAsked || asks,
   };
 }
 
@@ -243,20 +253,28 @@ function typedByUser(m: JsonObject): boolean {
     );
 }
 
-/** A resumed session's last reply asks a ❓ round nobody answered yet. */
-function historyRound(messages: JsonObject[]): boolean {
+/**
+ * A resumed session's round, as the sheet reads its column
+ * (`lastReplyRound`): any reply since the user's last message may ask it,
+ * and Claude's latest may be an API error.
+ */
+function historyRound(
+  messages: JsonObject[],
+): Pick<ChatNotifyTrack, "roundAsked" | "replyError"> {
+  let replyError: boolean | null = null;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.parent_tool_use_id) continue;
-    if (m.type === "assistant") {
-      const texts = textsOf(obj(m.message));
-      const last = texts[texts.length - 1];
-      if (last === undefined) continue;
-      return typeof m.error !== "string" && isRound(last);
-    }
-    if (m.type === "user" && typedByUser(m)) return false;
+    if (m.type === "user" && typedByUser(m)) break;
+    if (m.type !== "assistant") continue;
+    const texts = textsOf(obj(m.message));
+    if (texts.length === 0) continue;
+    const errored = typeof m.error === "string";
+    replyError ??= errored;
+    if (!errored && texts.some((x) => isRound(x)))
+      return { roundAsked: true, replyError };
   }
-  return false;
+  return { roundAsked: false, replyError: replyError ?? false };
 }
 
 /** Background work Claude will resume on: subagents and workflows, and
@@ -281,7 +299,8 @@ function endTurn(
   activity: ChatActivity,
   now: number,
 ): Step {
-  const round = t.turnRound || isRound(t.turnText);
+  // As the sheet shows it: an API error last hides the round.
+  const round = t.turnRound && !t.replyError;
   const selfWoken = t.opener === "self";
   const ended: ChatNotifyTrack = {
     ...t,
@@ -289,13 +308,12 @@ function endTurn(
     opener: t.queued.length > 0 ? "user" : null,
     queued: t.queued.filter((u) => u !== "?"),
     scheduled: false,
-    turnText: null,
     turnRound: false,
     endText: null,
     interrupted: false,
     // `lastReplyRound`: the round stays until the user answers, whatever
     // later turns say (its questions may span several replies).
-    roundPending: round || t.roundPending,
+    roundPending: t.roundAsked && !t.replyError,
     // Those that ended are gone from the shells.
     monitors: Object.fromEntries(
       Object.entries(t.monitors).filter(([id]) => activity.shells.includes(id)),
@@ -338,7 +356,9 @@ function addSdk(
     case "conversation_reset":
       return quiet({
         ...t,
-        turnText: null,
+        replyError: false,
+        turnRound: false,
+        roundAsked: false,
         endText: null,
         roundPending: false,
       });
@@ -375,8 +395,15 @@ function step(
             : null,
       };
     case "user_sent": {
-      // His words: whatever was kept silent, he sees it now.
-      const sent = { ...t, silenced: false, roundPending: false };
+      // His words: whatever was kept silent, he sees it now. Mid-turn too,
+      // they answer the round: the sheet's starts after them in the column.
+      const sent = {
+        ...t,
+        silenced: false,
+        turnRound: false,
+        roundAsked: false,
+        roundPending: false,
+      };
       if (!t.busy) return quiet({ ...sent, opener: "user" });
       // Mid-turn, Claude Code takes it now or after the turn (`takeMessages`).
       return quiet({
@@ -408,9 +435,15 @@ function step(
         : quiet(t);
     case "elicitation":
       return { track: t, signal: question };
-    case "history":
+    case "history": {
       if (event.agentId || event.older || event.unreachable) return quiet(t);
-      return quiet({ ...t, roundPending: historyRound(event.messages) });
+      const past = historyRound(event.messages);
+      return quiet({
+        ...t,
+        ...past,
+        roundPending: past.roundAsked && !past.replyError,
+      });
+    }
     case "sdk": {
       const at = (event as { at?: unknown }).at;
       const when = typeof at === "number" ? at : now;

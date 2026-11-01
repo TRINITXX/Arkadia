@@ -228,15 +228,8 @@ function ChatViewBody({
     (content: LightboxContent) => setLightbox(content),
     [],
   );
-  // A subagent's row opens its conversation (none known: nothing; the
-  // panel listing them is gone, the live line's menu lists them).
+  // A known subagent's conversation: from its row or the live line's menu.
   const { openSheet } = agentSheet;
-  const openAgentRow = useCallback(
-    (agent?: Subagent) => {
-      if (agent) openSheet(agent);
-    },
-    [openSheet],
-  );
   // Every image of the conversation, for the lightbox's ←/→.
   const gallery = useMemo(
     () => (lightbox ? chatGallery(state.items, cwd).all : []),
@@ -600,7 +593,9 @@ function ChatViewBody({
             subagents={state.subagents}
             pendingToolIds={pendingToolIds}
             messagesOnly={messagesOnly}
-            onOpenAgents={openAgentRow}
+            // A subagent's row opens its conversation; a row whose agent
+            // isn't known takes no click (`ChatAgentRow`).
+            onOpenAgents={openSheet}
             onOpen={open}
             onToast={onToast}
             // A queued message's « Envoyer maintenant »: the turn stops, and

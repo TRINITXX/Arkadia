@@ -163,9 +163,14 @@ export function ChatQuestionPanel({
           ref={tabsRef}
           className="chat-ask-tabs"
           role="tablist"
-          // A row too narrow for its tabs scrolls under the wheel.
+          // A row too narrow for its tabs scrolls under the wheel, and keeps
+          // it: the bottom's handler would scroll the conversation too.
           onWheel={(e) => {
-            if (!e.deltaX) e.currentTarget.scrollLeft += e.deltaY;
+            if (e.deltaX) return;
+            const row = e.currentTarget;
+            const before = row.scrollLeft;
+            row.scrollLeft += e.deltaY;
+            if (row.scrollLeft !== before) e.stopPropagation();
           }}
         >
           <button

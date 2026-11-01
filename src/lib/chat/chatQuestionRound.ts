@@ -16,8 +16,14 @@ export interface RoundOption {
 }
 
 export interface RoundQuestion {
-  /** `Q1`: how the answer names it. */
+  /** `Q1`: Claude's number, else its place in its reply. */
   id: string;
+  /** Claude wrote its number (`Q1`, « Question 1 sur 3 »): the same number
+   *  in a later reply asks it again. */
+  numbered: boolean;
+  /** Where the sheet keeps its answer: unique to the reply that asked it,
+   *  so a question asked again, or a new round, starts unanswered. */
+  key: string;
   title: string;
   body: string;
   options: RoundOption[];
@@ -183,8 +189,11 @@ function grillingBlocks(lines: string[]): [number, number][] {
   return blocks;
 }
 
+/** A question as its reply reads it, before `parseQuestionRound` keys it. */
+type ParsedQuestion = Omit<RoundQuestion, "key">;
+
 /** `❓ **Q1** - **Titre** : corps…` blocks (`grillingBlocks`). */
-function grillingRound(lines: string[]): RoundQuestion[] {
+function grillingRound(lines: string[]): ParsedQuestion[] {
   const blocks = grillingBlocks(lines).map(([start, end]) => [
     ...splitArrow(lines[start]),
     ...lines.slice(start + 1, end),
@@ -214,6 +223,7 @@ function grillingRound(lines: string[]): RoundQuestion[] {
     const text = kept.join("\n").trim();
     return {
       id: `Q${number?.[1] ?? i + 1}`,
+      numbered: !!number,
       title: title || unbold(text.split("\n")[0] ?? ""),
       body: title ? text : text.split("\n").slice(1).join("\n").trim(),
       options,
@@ -230,7 +240,7 @@ function grillingRound(lines: string[]): RoundQuestion[] {
  */
 function seriesRead(
   lines: string[],
-): { question: RoundQuestion; start: number; end: number } | null {
+): { question: ParsedQuestion; start: number; end: number } | null {
   const start = lines.findIndex((l) => SERIES.test(l));
   if (start < 0) return null;
   const n = SERIES.exec(lines[start])![1];
@@ -255,6 +265,7 @@ function seriesRead(
   return {
     question: {
       id: `Q${n}`,
+      numbered: true,
       title,
       body: prose.filter((_, i) => i !== (qi >= 0 ? qi : 0)).join("\n"),
       options,
@@ -266,7 +277,7 @@ function seriesRead(
   };
 }
 
-function seriesQuestion(lines: string[]): RoundQuestion[] {
+function seriesQuestion(lines: string[]): ParsedQuestion[] {
   const read = seriesRead(lines);
   return read ? [read.question] : [];
 }
@@ -280,11 +291,17 @@ const linesOf = (text: string) => text.replace(/\r\n/g, "\n").split("\n");
 const isGrilling = (lines: string[]) =>
   lines.some((l) => QUESTION_MARK.test(l));
 
-/** The questions of a reply, or none when it asks no round. */
-export function parseQuestionRound(text: string): RoundQuestion[] {
+/** The questions of a reply, or none when it asks no round. `replyId`:
+ *  the reply's item, which their `key`s name. */
+export function parseQuestionRound(
+  text: string,
+  replyId = "",
+): RoundQuestion[] {
   const lines = linesOf(text);
-  if (isGrilling(lines)) return grillingRound(lines);
-  return seriesQuestion(lines);
+  const questions = isGrilling(lines)
+    ? grillingRound(lines)
+    : seriesQuestion(lines);
+  return questions.map((q, i) => ({ ...q, key: `${replyId}#${i + 1}` }));
 }
 
 /**
@@ -320,6 +337,8 @@ export function withoutQuestions(text: string): string {
  * message, a subagent's report, Q12 in another, « J'attends tes réponses »
  * last). `id` names the first reply that asks, so answers and a closed
  * sheet stay as later replies add questions; `ids` are all those replies.
+ * Only Claude's number names a question across replies: one he left
+ * unnumbered stays its reply's own, never taking another's place.
  */
 export function lastReplyRound(
   items: readonly ChatItem[],
@@ -334,17 +353,17 @@ export function lastReplyRound(
     if (item.streaming || (latest && item.error)) return null;
     latest = false;
     if (item.error) continue;
-    const questions = parseQuestionRound(item.text);
+    const questions = parseQuestionRound(item.text, item.id);
     if (questions.length > 0) replies.unshift({ id: item.id, questions });
   }
   if (replies.length === 0) return null;
-  const byId = new Map<string, RoundQuestion>();
+  const bySlot = new Map<string, RoundQuestion>();
   for (const reply of replies)
-    for (const q of reply.questions) byId.set(q.id, q);
+    for (const q of reply.questions) bySlot.set(q.numbered ? q.id : q.key, q);
   return {
     id: replies[0].id,
     ids: replies.map((r) => r.id),
-    questions: [...byId.values()],
+    questions: [...bySlot.values()],
   };
 }
 
@@ -367,14 +386,18 @@ export function recoReason(
   return rest.replace(/^[\s:,.\-–—]+/, "").trim();
 }
 
-/** One line per answered question: `Q1 : b) Label, mes mots`. */
+/**
+ * One line per answered question, `answers` by `key`: `Q1 : b) Label, mes
+ * mots`. A question Claude left unnumbered goes by its title: its place
+ * in its reply could name another reply's question.
+ */
 export function roundReply(
   questions: readonly RoundQuestion[],
   answers: Readonly<Record<string, RoundAnswer>>,
 ): string {
   return questions
     .flatMap((q) => {
-      const a = answers[q.id];
+      const a = answers[q.key];
       if (!a) return [];
       const option = q.options.find((o) => o.key === a.option);
       const parts = [
@@ -382,7 +405,8 @@ export function roundReply(
         option ? `${option.key}) ${option.label}` : null,
         a.text?.trim() || null,
       ].filter(Boolean);
-      return parts.length > 0 ? [`${q.id} : ${parts.join(", ")}`] : [];
+      const name = q.numbered ? q.id : q.title || q.id;
+      return parts.length > 0 ? [`${name} : ${parts.join(", ")}`] : [];
     })
     .join("\n");
 }

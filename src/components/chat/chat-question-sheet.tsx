@@ -108,7 +108,7 @@ export function ChatQuestionSheet({
   const more = view.replyId === replyId && view.more;
   const goTo = (i: number) => setView({ replyId, step: i, more: false });
   const q = questions[step];
-  const a = sheet.answers[q.id] ?? {};
+  const a = sheet.answers[q.key] ?? {};
   const set = (id: string, patch: RoundAnswer) =>
     updateSheet(paneKey, replyId, (s) => ({
       ...s,
@@ -116,7 +116,7 @@ export function ChatQuestionSheet({
     }));
   // Picked: on to the next question left, after this one first.
   const pickAndGo = (patch: RoundAnswer) => {
-    set(q.id, patch);
+    set(q.key, patch);
     const left = (i: number) => i !== step && !isAnswered(questions[i]);
     const order = questions.map((_, i) => i);
     const next =
@@ -154,7 +154,7 @@ export function ChatQuestionSheet({
     close();
   };
   const recording = dictating !== null && voice.status !== "idle";
-  const listening = recording && dictating === q.id;
+  const listening = recording && dictating === q.key;
 
   const last = questions.length - 1;
   // An option it names carries its reason; else the recommendation is a
@@ -186,12 +186,12 @@ export function ChatQuestionSheet({
           <div className="steps" role="tablist" aria-label="Questions">
             {questions.map((x, i) => (
               <button
-                key={x.id}
+                key={x.key}
                 type="button"
                 role="tab"
                 aria-selected={i === step}
                 aria-label={`${x.id} : ${x.title}`}
-                className={`seg${i === step ? " on" : ""}${isAnswered(x) ? " done" : ""}${dictating === x.id && voice.status !== "idle" ? " rec" : ""}`}
+                className={`seg${i === step ? " on" : ""}${isAnswered(x) ? " done" : ""}${dictating === x.key && voice.status !== "idle" ? " rec" : ""}`}
                 title={`${x.id} · ${x.title}${isAnswered(x) ? " (répondue)" : ""}`}
                 onClick={() => goTo(i)}
               />
@@ -252,7 +252,7 @@ export function ChatQuestionSheet({
                       className={`opt${on ? " on" : ""}${rec ? " rec" : ""}`}
                       onClick={() =>
                         on
-                          ? set(q.id, { option: undefined })
+                          ? set(q.key, { option: undefined })
                           : pickAndGo({ option: o.key, reco: false })
                       }
                     >
@@ -278,7 +278,7 @@ export function ChatQuestionSheet({
                     className={`opt rec${a.reco ? " on" : ""}`}
                     onClick={() =>
                       a.reco
-                        ? set(q.id, { reco: false })
+                        ? set(q.key, { reco: false })
                         : pickAndGo({ reco: true, option: undefined })
                     }
                   >
@@ -300,9 +300,9 @@ export function ChatQuestionSheet({
                 }
                 disabled={
                   voice.status === "transcribing" ||
-                  (voice.status !== "idle" && dictating !== q.id)
+                  (voice.status !== "idle" && dictating !== q.key)
                 }
-                onClick={() => dictate(q.id)}
+                onClick={() => dictate(q.key)}
               >
                 {listening ? <Square /> : <Mic />}
               </button>
@@ -311,11 +311,11 @@ export function ChatQuestionSheet({
                   rows={1}
                   value={a.text ?? ""}
                   aria-label={`Ta réponse à ${q.id}`}
-                  onChange={(e) => set(q.id, { text: e.target.value })}
+                  onChange={(e) => set(q.key, { text: e.target.value })}
                   onKeyDown={(e) => {
                     if (e.key === " " && e.ctrlKey) {
                       e.preventDefault();
-                      if (!e.repeat) dictate(q.id);
+                      if (!e.repeat) dictate(q.key);
                     } else if (
                       e.key === "Enter" &&
                       !e.shiftKey &&
@@ -339,7 +339,7 @@ export function ChatQuestionSheet({
       {/* Folded, or another question shown: the words still come, named. */}
       {recording && (folded || !listening) && voice.interim && (
         <div className="chat-voice-live">
-          {dictating} : {voice.interim}
+          {questions.find((x) => x.key === dictating)?.id} : {voice.interim}
         </div>
       )}
       {!folded && (

@@ -190,6 +190,60 @@ describe("Claude waiting on the user", () => {
       { kind: "question", selfWoken: false, round: true },
     ]);
   });
+
+  const q1 = said("❓ **Q1** - **Couleur** : laquelle ?");
+  const roundAsked: ChatSignal = {
+    kind: "question",
+    selfWoken: false,
+    round: true,
+  };
+
+  it("notifies a round asked over several replies, pending through later turns until the user answers", () => {
+    const asked = run([
+      sent(),
+      q1,
+      toolCall,
+      said("❓ **Q2** - **Taille** : laquelle ?"),
+      said("J'attends tes réponses."),
+      result(),
+      report,
+      said("L'agent a fini, j'attends toujours tes réponses."),
+      result(),
+    ]);
+    expect(asked.signals).toEqual([roundAsked, done(true)]);
+    expect(asked.track.roundPending).toBe(true);
+  });
+
+  it("takes a message sent mid-turn as the answer: no question, nothing pending", () => {
+    const { signals, track } = run([
+      sent(),
+      q1,
+      sent("u2"),
+      sdk({ type: "command_lifecycle", command_uuid: "u2", state: "started" }),
+      said("Noté : vert."),
+      result(),
+    ]);
+    expect(signals).toEqual([done(false)]);
+    expect(track.roundPending).toBe(false);
+  });
+
+  it("ends on an API error after the round as an error, the round hidden until another reply", () => {
+    const failed = [
+      sent(),
+      q1,
+      toolCall,
+      said("API Error: 500", { error: "server_error" }),
+      result({ subtype: "error_during_execution", is_error: true }),
+    ];
+    const ended = run(failed);
+    expect(ended.signals).toEqual([done(false)]);
+    expect(ended.track.roundPending).toBe(false);
+    // Claude's next reply (no message of the user): the round shows again.
+    expect(
+      run([...failed, report, said("Me revoilà."), result()]).track
+        .roundPending,
+    ).toBe(true);
+  });
 });
 
 describe("silences", () => {
@@ -333,5 +387,17 @@ describe("chatRing", () => {
       history([asked, { type: "user", message: { content: "Vert" } }]),
     ]);
     expect(chatRing(answered.track, answered.activity).question).toBe(false);
+    // Asked before Claude's last reply: the sheet still gathers it.
+    const reply = (text: string, extra: JsonObject = {}) => ({
+      type: "assistant",
+      message: { content: [{ type: "text", text }] },
+      ...extra,
+    });
+    const later = run([history([asked, reply("J'attends tes réponses.")])]);
+    expect(chatRing(later.track, later.activity).question).toBe(true);
+    const failed = run([
+      history([asked, reply("API Error: 500", { error: "server_error" })]),
+    ]);
+    expect(chatRing(failed.track, failed.activity).question).toBe(false);
   });
 });
