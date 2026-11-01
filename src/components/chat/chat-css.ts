@@ -209,8 +209,6 @@ export const CHAT_CSS = `
 .chat-sheet .sh button { margin-left: auto; }
 .chat-sheet .chat-scroll { background: var(--chat-bg); }
 
-.chat-down { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(100% + 8px); border-radius: 999px; border: 1px solid #31353b; background: #202327; color: #d4d4d8; padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
-.chat-down .lucide { width: 13px; height: 13px; }
 .chat-closed { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: 13px; color: #fca5a5; padding: 8px; }
 
 /* Conversation: messages, images, tools, live line, plan, search. */

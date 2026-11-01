@@ -252,7 +252,7 @@ describe("reduceChat on the status bar's figures", () => {
     expect(reduceChat(seen, usage(null), 0)).toBe(seen);
   });
 
-  it("measures the context against 80 % of the window, as the terminal's Ctx(u)", () => {
+  it("measures the context against the whole window, as its detail does", () => {
     const context = (totalTokens: number) =>
       reduceChat(
         EMPTY_CHAT,
@@ -265,8 +265,8 @@ describe("reduceChat on the status bar's figures", () => {
         },
         0,
       ).context;
-    expect(context(42_000)).toEqual({ percentage: 26.25 });
-    expect(context(190_000)).toEqual({ percentage: 100 });
+    expect(context(42_000)).toEqual({ percentage: 21 });
+    expect(context(190_000)).toEqual({ percentage: 95 });
   });
 
   it("drops the branch when the folder has none any more", () => {

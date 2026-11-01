@@ -142,6 +142,23 @@ export function redirectDictation(
   else dictationTargets.delete(current(paneId));
 }
 
+/**
+ * A dictated text put where the caret was (push-to-talk mid-sentence, the
+ * user's ask of 01/11/2026), a space each side unless one is there.
+ */
+export function insertDictation(
+  text: string,
+  at: number,
+  dictated: string,
+): string {
+  const pos = Math.max(0, Math.min(text.length, at));
+  const before = text.slice(0, pos);
+  const after = text.slice(pos);
+  const lead = before && !/\s$/.test(before) ? " " : "";
+  const trail = after && !/^\s/.test(after) ? " " : "";
+  return before + lead + dictated + trail + after;
+}
+
 /** A dictated text, after what the input already holds. */
 export function appendDictation(paneId: string, text: string): void {
   const target = dictationTargets.get(current(paneId));

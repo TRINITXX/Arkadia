@@ -977,16 +977,16 @@ export function liveWindow(
   return { utilization: 0 };
 }
 
-/** The share of the window usable before auto-compact, as ccstatusline counts it. */
-const USABLE_CONTEXT = 0.8;
-
-/** Context used, 0-100, of the usable window: the terminal's "Ctx(u)". */
+/**
+ * Context used, 0-100, of the whole window, as its detail counts it (the
+ * user's pick of 01/11/2026: « 57 % », not the terminal's « Ctx(u) » 71 %
+ * of the part usable before auto-compact).
+ */
 function usableContextPercent(
   event: Extract<ChatEvent, { type: "context" }>,
 ): number {
-  const usable = Math.floor(event.maxTokens * USABLE_CONTEXT);
-  if (usable <= 0) return event.percentage;
-  return Math.min(100, (event.totalTokens / usable) * 100);
+  if (event.maxTokens <= 0) return event.percentage;
+  return Math.min(100, (event.totalTokens / event.maxTokens) * 100);
 }
 
 /**

@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowDown, RotateCcw } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { CONVERSATION_CSS } from "@/components/ConversationView";
 import { HLJS_CSS } from "@/components/modern/css";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
@@ -198,7 +198,6 @@ function ChatViewBody({
   const doneLink = useDoneAgentsLink(state.subagents, state.items);
   // The call whose time the live line shows (a foreground agent's own).
   const timed = timedCall(state.liveTools);
-  const [stuck, setStuck] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const gutter = useScrollbarGutter(scrollRef);
@@ -246,7 +245,6 @@ function ChatViewBody({
   // A match brought into view leaves the end, as the reader's scroll would.
   const leaveBottom = useCallback(() => {
     stuckRef.current = false;
-    setStuck(false);
   }, []);
   // Ctrl+F belongs to the pane on screen: not a hidden tab's active pane,
   // nor one under a layer (sessions, settings, the viewer).
@@ -393,7 +391,6 @@ function ChatViewBody({
     savedTopRef.current = el.scrollTop;
     measuredRef.current = true;
     stuckRef.current = follows;
-    setStuck(follows);
   };
 
   const answer = (result: PermissionResult) => {
@@ -519,6 +516,7 @@ function ChatViewBody({
     bottom = (
       <ChatComposer
         leading={sessionItems}
+        paneKey={memoryKey}
         items={state.items}
         working={state.working}
         mode={state.mode}
@@ -643,19 +641,6 @@ function ChatViewBody({
         }}
       >
         <div className="chat-col" style={{ position: "relative" }}>
-          {!stuck && (
-            <button
-              type="button"
-              className="chat-down"
-              onClick={() => {
-                stuckRef.current = true;
-                setStuck(true);
-                toBottom();
-              }}
-            >
-              <ArrowDown /> Aller en bas
-            </button>
-          )}
           <ChatLiveLine
             working={state.working}
             compacting={state.status === "compacting"}

@@ -6,6 +6,7 @@ import {
   getDraft,
   moveDraft,
   setDraft,
+  insertDictation,
 } from "@/lib/chat/chatDrafts";
 
 describe("chatDrafts", () => {
@@ -34,5 +35,14 @@ describe("chatDrafts", () => {
     expect(getDraft("a2")).toBe(EMPTY_DRAFT);
     appendDictation("a1", "après fermeture");
     expect(getDraft("a2")).toBe(EMPTY_DRAFT);
+  });
+});
+
+describe("insertDictation", () => {
+  it("puts the dictated words at the caret, a space each side", () => {
+    expect(insertDictation("Bonjour monde", 8, "le")).toBe("Bonjour le monde");
+    expect(insertDictation("Bonjour", 7, "à tous")).toBe("Bonjour à tous");
+    expect(insertDictation("", 0, "Salut")).toBe("Salut");
+    expect(insertDictation("fin", 0, "Début")).toBe("Début fin");
   });
 });

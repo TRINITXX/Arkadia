@@ -26,6 +26,8 @@ import { attachedKey, useInputHistory } from "@/lib/chat/useInputHistory";
 import { useTypeToInput } from "@/lib/chat/useTypeToInput";
 import {
   EMPTY_DRAFT,
+  insertDictation,
+  redirectDictation,
   type ChatDraft,
   type DraftFile,
   type DraftImage as Attachment,
@@ -108,6 +110,7 @@ export function ChatComposer({
   suggestion = null,
   onOpen,
   leading,
+  paneKey,
   onBash,
   onStopBash,
   asleep = false,
@@ -142,6 +145,8 @@ export function ChatComposer({
   leading?: React.ReactNode;
   /** `!command`: runs in the tab's folder instead of going to Claude. */
   onBash?: (command: string) => void;
+  /** The pane's key: a push-to-talk dictation lands at the caret (`redirectDictation`). */
+  paneKey?: string;
   /** A `!` command runs: Esc stops it before anything else of Claude's. */
   onStopBash?: () => void;
   /** Claude Code sleeps: the empty input says a key wakes it. */
@@ -291,12 +296,52 @@ export function ChatComposer({
     areaRef.current?.focus();
   };
 
+  // Space held talks, as Claude Code's push-to-talk, anywhere in the
+  // input (the user's asks of 01/11/2026): a tap types its space; held, the
+  // key's repeat takes that space back and dictates, the text landing where
+  // the caret was; the release stops it.
+  const talkRef = useRef<{ talking: boolean; at: number } | null>(null);
+  const plainSpace = (e: React.KeyboardEvent) =>
+    e.key === " " && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === " " && e.ctrlKey) {
       e.preventDefault();
       // Held down, the key repeats: only its first press toggles.
       if (!e.repeat) toggleVoice();
       return;
+    }
+    if (plainSpace(e)) {
+      const area = e.currentTarget;
+      if (!e.repeat) {
+        // A selection replaced by the space can't be given back: no talk.
+        talkRef.current =
+          area.selectionStart === area.selectionEnd
+            ? { talking: false, at: area.selectionStart }
+            : null;
+        return;
+      }
+      const talk = talkRef.current;
+      if (talk) {
+        e.preventDefault();
+        if (!talk.talking && voice.status === "idle") {
+          talk.talking = true;
+          // The tap's space, typed a moment ago, goes.
+          if (text[talk.at] === " ")
+            setText(text.slice(0, talk.at) + text.slice(talk.at + 1));
+          if (paneKey) {
+            const at = talk.at;
+            redirectDictation(paneKey, (dictated) =>
+              onDraft((d) => ({
+                ...d,
+                text: insertDictation(d.text, at, dictated),
+              })),
+            );
+          }
+          void voice.start();
+        }
+        return;
+      }
     }
     if (history.onKeyDown(e)) return;
     if (slashMenu.onKeyDown(e)) return;
@@ -342,6 +387,14 @@ export function ChatComposer({
     }
   };
 
+  const onKeyUp = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== " " || !talkRef.current) return;
+    const { talking } = talkRef.current;
+    talkRef.current = null;
+    if (talking && voice.status !== "idle" && voice.status !== "transcribing")
+      void voice.stop();
+  };
+
   const empty = !text.trim() && images.length === 0 && files.length === 0;
   const bashMode = !!onBash && text.trimStart().startsWith("!");
   return (
@@ -368,6 +421,17 @@ export function ChatComposer({
         placeholder={voice.interim ? "" : (ghost ?? "")}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
+        onKeyUp={onKeyUp}
+        // Space released elsewhere: the dictation still stops.
+        onBlur={() => {
+          if (
+            talkRef.current?.talking &&
+            voice.status !== "idle" &&
+            voice.status !== "transcribing"
+          )
+            void voice.stop();
+          talkRef.current = null;
+        }}
         onPaste={(e) => {
           const pasted = [...e.clipboardData.files];
           if (pasted.some((f) => IMAGE_TYPES.includes(f.type))) {
