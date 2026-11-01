@@ -29,4 +29,13 @@ describe("an empty chat column", () => {
       ),
     ).toBe("welcome");
   });
+
+  it("welcomes a chat opened asleep: no Claude Code, its sessions shown", () => {
+    expect(startupPhase({ ...EMPTY_CHAT, asleep: true }, false)).toBe(
+      "welcome",
+    );
+    // Woken by a letter, Claude Code booting: still its sessions, not
+    // « Claude démarre… ».
+    expect(startupPhase(EMPTY_CHAT, false, true)).toBe("welcome");
+  });
 });

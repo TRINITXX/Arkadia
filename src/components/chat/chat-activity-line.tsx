@@ -71,7 +71,9 @@ export function ChatActivityLine({
             );
           })}
         </span>
-        {failed > 0 && <span className="ko">· {failed} en erreur</span>}
+        {/* Grey as the rest of the line: an error Claude got past is no alarm
+            (the user's ask of 01/11/2026). */}
+        {failed > 0 && <span>· {failed} en erreur</span>}
         {last && (
           <span className="chat-step" title={last}>
             · {last}

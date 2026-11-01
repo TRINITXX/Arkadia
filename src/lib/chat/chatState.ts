@@ -333,6 +333,9 @@ export const EMPTY_CHAT: ChatState = {
 
 const obj = (v: unknown): JsonObject =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as JsonObject) : {};
+/** A pasted image's label sent before it (« [Image #2] »): no line of the message. */
+const IMAGE_LABEL = /^\[Image #\d+\]$/;
+
 const str = (v: unknown): string | undefined =>
   typeof v === "string" ? v : undefined;
 const num = (v: unknown): number | undefined =>
@@ -613,7 +616,11 @@ function addUser(
             }
           : item,
       );
-    } else if (block.type === "text" && fromHistory) {
+    } else if (
+      block.type === "text" &&
+      fromHistory &&
+      !IMAGE_LABEL.test(str(block.text) ?? "")
+    ) {
       const text = visibleUserText(str(block.text) ?? "");
       if (text !== null) texts = [...texts, text];
     } else if (block.type === "image" && fromHistory) {

@@ -64,7 +64,7 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
-type ImageInput = { mediaType: string; data: string };
+type ImageInput = { mediaType: string; data: string; label?: string };
 
 export type Command =
   | {
@@ -1522,14 +1522,21 @@ class Chat {
       message: {
         role: "user",
         content: [
-          ...images.map((img) => ({
-            type: "image" as const,
-            source: {
-              type: "base64" as const,
-              media_type: img.mediaType as "image/png",
-              data: img.data,
+          // Each image named first (« [Image #2] »), as its tag names it
+          // in the text where the user pasted it: Claude knows which is which.
+          ...images.flatMap((img) => [
+            ...(img.label
+              ? [{ type: "text" as const, text: `[${img.label}]` }]
+              : []),
+            {
+              type: "image" as const,
+              source: {
+                type: "base64" as const,
+                media_type: img.mediaType as "image/png",
+                data: img.data,
+              },
             },
-          })),
+          ]),
           { type: "text" as const, text },
         ],
       },
@@ -1998,7 +2005,8 @@ function promptText(message: unknown): string | null {
     const blocks = content as { type?: string; text?: string }[];
     if (blocks.some((b) => b?.type === "tool_result")) return null;
     text = blocks
-      .filter((b) => b?.type === "text")
+      // An image's label (« [Image #2] ») is no line of the prompt.
+      .filter((b) => b?.type === "text" && !/^\[Image #\d+\]$/.test(b.text ?? ""))
       .map((b) => b.text ?? "")
       .join("\n");
   }

@@ -282,6 +282,12 @@ export function Sidepanel({
   // is explicitly opened. A second click closes it; opening another project
   // replaces it, so the default list always stays compact.
   const activateInactiveProject = (projectId: string) => {
+    // Arkadia Lab: the project opens on a chat listing its sessions in the
+    // middle: no list under its row as well (the user's ask of 01/11/2026).
+    if (__ARKADIA_LAB__) {
+      onActivate(projectId);
+      return;
+    }
     const nextOpenId = toggleSidebarSessionProject(
       openSessionProjectId,
       projectId,

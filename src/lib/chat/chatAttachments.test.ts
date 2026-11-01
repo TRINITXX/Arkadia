@@ -120,5 +120,14 @@ describe("a withdrawn message back in the input", () => {
     expect(merged.text).toBe("ancien\nnouveau");
     expect(paths(merged)).toEqual([SHOT, NOTE]);
     expect(mergeDrafts(messageDraft("seul"), EMPTY_DRAFT).text).toBe("seul");
+    // The input's pasted texts stay: their tags still stand for them.
+    const tagged = {
+      text: "[Texte collé #1 · 2 mots]",
+      images: [],
+      pastes: [{ id: 1, text: "deux mots" }],
+    };
+    expect(mergeDrafts(messageDraft("ancien"), tagged).pastes).toEqual(
+      tagged.pastes,
+    );
   });
 });

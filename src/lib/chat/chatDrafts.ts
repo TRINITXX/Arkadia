@@ -5,6 +5,7 @@ import {
   serializeDrafts,
 } from "@/lib/chat/chatDraftStore";
 import { mergeDrafts } from "@/lib/chat/chatAttachments";
+import type { PastedText } from "@/lib/chat/chatPastes";
 import type { ChatImage } from "@/lib/chat/useChatSession";
 
 /**
@@ -16,6 +17,8 @@ import type { ChatImage } from "@/lib/chat/useChatSession";
 export interface DraftImage extends ChatImage {
   id: string;
   url: string;
+  /** Its number: « [Image #n] » in the text where it was pasted. */
+  n?: number;
 }
 
 /** A file attached by its path (picker, drop, pasted path): the path alone
@@ -30,6 +33,8 @@ export interface ChatDraft {
   images: DraftImage[];
   /** Shown as cards above the input; absent is none. */
   files?: DraftFile[];
+  /** Long texts pasted, standing as tags in `text` (`chatPastes`). */
+  pastes?: PastedText[];
 }
 
 export const EMPTY_DRAFT: ChatDraft = { text: "", images: [] };

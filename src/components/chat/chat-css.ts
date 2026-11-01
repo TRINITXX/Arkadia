@@ -52,7 +52,6 @@ export const CHAT_CSS = `
 .chat-counts { display: inline-flex; align-items: center; gap: 10px; }
 .chat-counts .n { display: inline-flex; align-items: center; gap: 3px; color: var(--chat-dim); font-variant-numeric: tabular-nums; }
 .chat-line .chat-counts .lucide { width: 14px; height: 14px; }
-.chat-line .ko { color: #f87171; }
 /* Claude's thinking between two messages, whole, in indigo italics: never read as the grey work line (ChatThoughts). */
 .chat-thoughts { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.55; color: #8b93c9; font-style: italic; }
 .chat-thoughts .ic { width: 15px; height: 15px; flex-shrink: 0; margin-top: 2px; color: #a5b4fc; }
@@ -130,6 +129,19 @@ export const CHAT_CSS = `
 .chat-box.ask { border-color: #5a3a2c; }
 .chat-box textarea { width: 100%; resize: none; border: 0; outline: none; background: transparent; color: var(--chat-ink); font: inherit; line-height: 1.55; padding: 2px 6px; max-height: 40vh; min-height: 26px; }
 .chat-box textarea::placeholder { color: #6b6f76; }
+/* A long paste's tag: a twin of the input lies behind its transparent text and draws the tag as a chip; hovered, its text, editable (ChatPasteTags). */
+.chat-box > textarea { position: relative; z-index: 1; }
+.chat-paste-twin { position: absolute; z-index: 0; box-sizing: border-box; border-style: solid; border-color: transparent; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; color: transparent; pointer-events: none; }
+.chat-paste-twin mark { color: transparent; background: #3a2519; border-radius: 5px; box-shadow: 0 0 0 1px #5a3a2c; }
+.chat-paste-hover { position: absolute; z-index: 7; width: min(440px, calc(100% - 16px)); background: #202327; border: 1px solid #31353b; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.45); padding: 8px; }
+.chat-box .chat-paste-hover textarea { display: block; width: 100%; min-height: 84px; max-height: 240px; resize: vertical; border: 1px solid #5a3a2c; border-radius: 8px; background: #141619; color: var(--chat-ink); font: inherit; font-size: 12.5px; line-height: 1.5; padding: 7px 9px; outline: none; }
+.chat-paste-hover .ft { display: flex; align-items: center; gap: 8px; margin-top: 7px; font-size: 12px; color: var(--chat-mute); }
+.chat-paste-hover .ft button { margin-left: auto; border: 1px solid #31353b; border-radius: 7px; background: transparent; color: #d4d4d8; font: inherit; font-size: 12px; padding: 2px 9px; cursor: pointer; }
+.chat-paste-hover .ft button:hover { border-color: #464a51; background: #2a2d32; }
+/* A sent paste in the user's frame: its tag, its text on hover in the page's top layer (ChatPasteChip). */
+.chat-paste-chip { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; margin: 0 1px; border-radius: 6px; background: #2c2f36; border: 1px solid #3d414a; color: #d4d4d8; font-size: 12.5px; line-height: 1.7; vertical-align: 1px; cursor: default; white-space: nowrap; }
+.chat-paste-chip .lucide { width: 13px; height: 13px; color: #e2865f; }
+.chat-paste-pop { position: fixed; z-index: 50; width: min(460px, calc(100vw - 16px)); max-height: 280px; overflow: hidden; background: #202327; border: 1px solid #31353b; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.45); padding: 9px 11px; font: 12.5px/1.5 "Segoe UI", system-ui, sans-serif; color: #e4e4e7; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; }
 .chat-tools-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #2b2e33; color: var(--chat-dim); font-size: 12.5px; }
 .chat-tools-row > .chat-chip, .chat-tools-row > .chat-anchor, .chat-anchor > .chat-chip { min-width: 0; }
 .chat-tools-row .chat-chip .lucide { flex-shrink: 0; }

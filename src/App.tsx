@@ -1734,7 +1734,12 @@ export function App() {
       dropSheet(old.id);
       const next: PaneChat = resume
         ? { cwd: chat.cwd, resume }
-        : { cwd: chat.cwd, ...(chat.continue ? { continue: true } : {}) };
+        : {
+            cwd: chat.cwd,
+            ...(chat.continue ? { continue: true } : {}),
+            // Never typed in: no Claude Code on the new account either.
+            ...(chat.asleep ? { asleep: true } : {}),
+          };
       setTabs((prev) =>
         prev.map((t) => {
           if (t.id !== tabId) return t;
@@ -2433,7 +2438,15 @@ export function App() {
         projectChanged &&
         !autoRestoringProjectIds.current.has(activeProject.id)
       ) {
-        void spawnTabFor(activeProject);
+        // Arkadia Lab: a chat asleep, its sessions to resume in the middle;
+        // Claude Code starts at the first letter typed (the user's ask of
+        // 01/11/2026). The pane's shell stays under it, idle.
+        const project = activeProject;
+        void spawnTabFor(project).then((spawned) => {
+          const lab = __ARKADIA_LAB__ ? labResumeRef.current : null;
+          if (spawned && lab)
+            lab.start(spawned.paneId, { cwd: project.path, asleep: true });
+        });
       }
     } else if (!activeTabIdByProject[activeProject.id]) {
       const first = tabs.find((t) => t.projectId === activeProject.id);

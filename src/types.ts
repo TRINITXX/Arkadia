@@ -160,6 +160,10 @@ export interface PaneChat {
   resume?: string;
   /** Start on the folder's latest session (the toolbar's `ccdr`). */
   continue?: boolean;
+  /** Opened asleep (a project opened from the sidebar): its sessions to
+   *  resume shown, no Claude Code until a letter is typed in its input or
+   *  a session picked. Gone once it has a session. */
+  asleep?: boolean;
 }
 
 export type SplitDirection = "horizontal" | "vertical";

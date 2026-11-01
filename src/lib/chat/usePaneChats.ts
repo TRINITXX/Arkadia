@@ -60,7 +60,12 @@ export function chatForCommand(command: string, cwd: string): PaneChat | null {
 export function restoredChat(saved: PaneChat): PaneChat {
   return saved.resume
     ? { cwd: saved.cwd, resume: saved.resume }
-    : { cwd: saved.cwd, ...(saved.continue ? { continue: true } : {}) };
+    : {
+        cwd: saved.cwd,
+        ...(saved.continue ? { continue: true } : {}),
+        // Never typed in: it opens asleep again, no Claude Code started.
+        ...(saved.asleep ? { asleep: true } : {}),
+      };
 }
 
 /**
@@ -210,7 +215,13 @@ export function usePaneChats({
         pane.chat && pane.chat.resume !== sessionId
           ? {
               ...pane,
-              chat: { ...pane.chat, resume: sessionId, continue: undefined },
+              chat: {
+                ...pane.chat,
+                resume: sessionId,
+                continue: undefined,
+                // Woken: a restore goes on with its session, awake.
+                asleep: undefined,
+              },
             }
           : pane,
       ),

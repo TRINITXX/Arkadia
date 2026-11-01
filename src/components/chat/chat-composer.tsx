@@ -15,7 +15,20 @@ import { usePastedPaths } from "@/lib/chat/usePastedPaths";
 import type { ActionButton } from "@/types";
 import { ChatCommandsMenu } from "@/components/chat/chat-commands-menu";
 import { ChatRailActions } from "@/components/chat/chat-rail-actions";
+import { ChatPasteTags } from "@/components/chat/chat-paste-tags";
 import { ChatSlashMenu } from "@/components/chat/chat-slash-menu";
+import {
+  brokenPastes,
+  dropTag,
+  editPaste,
+  expandPastes,
+  pasteInto,
+  pasteSpans,
+  rememberPastes,
+  tagAt,
+  unfoldPaste,
+  type PastedText,
+} from "@/lib/chat/chatPastes";
 import { useSlashMenu, type ChatSlash } from "@/lib/chat/useSlashMenu";
 import { useChatLayers } from "@/lib/chat/useChatLayers";
 import type { ChatImage } from "@/lib/chat/useChatSession";
@@ -58,6 +71,7 @@ const VOICE_TITLES: Record<VoiceStatus, string> = {
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const NO_FILES: DraftFile[] = [];
+const NO_PASTES: PastedText[] = [];
 
 function readImage(file: File): Promise<Attachment> {
   return new Promise((resolve, reject) => {
@@ -154,9 +168,8 @@ export function ChatComposer({
 }) {
   const { text, images } = draft;
   const files = draft.files ?? NO_FILES;
+  const pastes = draft.pastes ?? NO_PASTES;
   const setText = (value: string) => onDraft((d) => ({ ...d, text: value }));
-  const setImages = (update: (prev: Attachment[]) => Attachment[]) =>
-    onDraft((d) => ({ ...d, images: update(d.images) }));
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const layers = useChatLayers();
   // Asleep, the input's only words are the sleep's (its first key wakes it).
@@ -222,10 +235,34 @@ export function ChatComposer({
     area.style.height = `${Math.min(area.scrollHeight + 2, max)}px`;
   }, [text]);
 
-  const addFiles = async (files: Iterable<File>) => {
+  // Each image numbered; pasted, its tag « [Image #n] » goes where the
+  // caret was, so Claude knows which one the text means (the user's ask of
+  // 01/11/2026, as Claude Code does).
+  const addFiles = async (
+    files: Iterable<File>,
+    caret?: { start: number; end: number },
+  ) => {
     const picked = [...files].filter((f) => IMAGE_TYPES.includes(f.type));
     const read = await Promise.all(picked.map(readImage));
-    setImages((prev) => [...prev, ...read]);
+    onDraft((d) => {
+      // After every number in use, the cards' and the text's: never two
+      // « [Image #2] ».
+      let last = Math.max(
+        0,
+        ...d.images.map((img) => img.n ?? 0),
+        ...[...d.text.matchAll(/\[Image #(\d+)\]/g)].map((m) => Number(m[1])),
+      );
+      const added = read.map((img) => ({ ...img, n: ++last }));
+      if (!caret) return { ...d, images: [...d.images, ...added] };
+      const tags = added.map((img) => `[Image #${img.n}]`).join(" ");
+      const at = Math.min(caret.start, d.text.length);
+      const to = Math.min(Math.max(caret.end, at), d.text.length);
+      return {
+        ...d,
+        text: d.text.slice(0, at) + tags + d.text.slice(to),
+        images: [...d.images, ...added],
+      };
+    });
   };
 
   const pastePaths = usePastedPaths(onDraft);
@@ -236,22 +273,36 @@ export function ChatComposer({
         kind: "pasted" as const,
         key: img.id,
         url: img.url,
-        name: `Image collée ${n + 1}`,
+        name: `Image collée ${img.n ?? n + 1}`,
       })),
       ...files.map((f) => ({ kind: "path" as const, key: f.id, path: f.path })),
     ],
     [images, files],
   );
   const removeCard = (key: string) =>
-    onDraft((d) => ({
-      ...d,
-      images: d.images.filter((x) => x.id !== key),
-      files: d.files?.filter((x) => x.id !== key),
-    }));
+    onDraft((d) => {
+      // An image's tag goes with it: no « [Image #2] » for nothing.
+      const n = d.images.find((x) => x.id === key)?.n;
+      return {
+        ...d,
+        text: n ? d.text.split(`[Image #${n}]`).join("") : d.text,
+        images: d.images.filter((x) => x.id !== key),
+        files: d.files?.filter((x) => x.id !== key),
+      };
+    });
 
   const queued = useMemo(() => hasQueued(items), [items]);
   const send = (now: boolean) => {
-    const body = text.trim();
+    // A tag typed over would send its words, not its text: said first.
+    if (brokenPastes(text, pastes).length > 0) {
+      onToast?.(
+        "info",
+        "Une étiquette de texte collé est abîmée : efface-la et recolle le texte",
+      );
+      return;
+    }
+    // The pasted texts' tags back as the texts themselves (`chatPastes`).
+    const body = expandPastes(text, pastes).trim();
     if (!body && images.length === 0 && files.length === 0) {
       // Ctrl+Enter on an empty input: the messages waiting go now.
       if (now && queued) onInterrupt();
@@ -266,13 +317,19 @@ export function ChatComposer({
     }
     // /resume, /rewind, a terminal-only command: the page answers.
     if (files.length === 0 && slashMenu.intercept(body)) return;
+    // The user's frame shows them as tags again.
+    rememberPastes(pasteSpans(text, pastes).map((s) => s.paste.text));
     // The attached files as Claude Code reads them: their quoted paths.
     onSend(
       withAttachedPaths(
         body,
         files.map((f) => f.path),
       ),
-      images.map(({ mediaType, data }) => ({ mediaType, data })),
+      images.map(({ mediaType, data, n }) => ({
+        mediaType,
+        data,
+        ...(n ? { label: `Image #${n}` } : {}),
+      })),
       now,
     );
     onDraft(EMPTY_DRAFT);
@@ -329,6 +386,31 @@ export function ChatComposer({
     e.key === " " && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // A pasted text's tag goes whole: Backspace just after it, Delete just
+    // before it (`chatPastes.tagAt`).
+    if (
+      (e.key === "Backspace" || e.key === "Delete") &&
+      !e.ctrlKey &&
+      !e.altKey
+    ) {
+      const area = e.currentTarget;
+      const span =
+        area.selectionStart === area.selectionEnd &&
+        tagAt(
+          text,
+          pastes,
+          area.selectionStart,
+          e.key === "Backspace" ? "after" : "before",
+        );
+      if (span) {
+        e.preventDefault();
+        onDraft((d) => ({ ...d, ...dropTag(d.text, d.pastes ?? [], span) }));
+        requestAnimationFrame(() => {
+          if (area.isConnected) area.setSelectionRange(span.start, span.start);
+        });
+        return;
+      }
+    }
     if (e.key === " " && e.ctrlKey) {
       e.preventDefault();
       // Held down, the key repeats: only its first press toggles.
@@ -457,6 +539,14 @@ export function ChatComposer({
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
         onKeyUp={onKeyUp}
+        // A caret put inside a tag (a click, an arrow) goes to its end:
+        // nothing is typed, dictated or inserted into it.
+        onSelect={(e) => {
+          const area = e.currentTarget;
+          if (area.selectionStart !== area.selectionEnd) return;
+          const span = tagAt(text, pastes, area.selectionStart, "inside");
+          if (span) area.setSelectionRange(span.end, span.end);
+        }}
         // Space released elsewhere: the dictation still stops.
         onBlur={() => {
           if (
@@ -471,12 +561,54 @@ export function ChatComposer({
           const pasted = [...e.clipboardData.files];
           if (pasted.some((f) => IMAGE_TYPES.includes(f.type))) {
             e.preventDefault();
-            void addFiles(pasted);
+            const area = e.currentTarget;
+            // A `!` command takes no « [Image #n] » in its words.
+            void addFiles(
+              pasted,
+              bashMode
+                ? undefined
+                : { start: area.selectionStart, end: area.selectionEnd },
+            );
             return;
           }
           // Paths alone: cards, once they exist on disk.
-          pastePaths(e);
+          if (pastePaths(e)) return;
+          // A long text: a tag at the caret, or the tag back as its text
+          // when pasted again (the user's ask of 01/11/2026). Never for a
+          // `!` command, typed as is.
+          if (bashMode) return;
+          const area = e.currentTarget;
+          const clip = e.clipboardData
+            .getData("text/plain")
+            .replace(/\r\n/g, "\n");
+          const r = pasteInto(
+            text,
+            area.selectionStart,
+            area.selectionEnd,
+            clip,
+            pastes,
+          );
+          if (!r) return;
+          e.preventDefault();
+          onDraft((d) => ({ ...d, text: r.text, pastes: r.pastes }));
+          requestAnimationFrame(() => {
+            if (area.isConnected) area.setSelectionRange(r.caret, r.caret);
+          });
         }}
+      />
+      <ChatPasteTags
+        areaRef={areaRef}
+        text={text}
+        pastes={pastes}
+        onEdit={(id, next) =>
+          onDraft((d) => ({
+            ...d,
+            ...editPaste(d.text, d.pastes ?? [], id, next),
+          }))
+        }
+        onUnfold={(id) =>
+          onDraft((d) => ({ ...d, ...unfoldPaste(d.text, d.pastes ?? [], id) }))
+        }
       />
       {voice.interim && (
         <div className="chat-voice-live" title="Dictée en cours">

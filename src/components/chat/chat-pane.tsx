@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatView } from "@/components/chat/chat-view";
 import {
@@ -33,6 +33,7 @@ export function ChatPane({
   liveSessions,
   onToast,
   shown = true,
+  onUserInput,
 }: {
   pane: PaneState;
   chat: PaneChat;
@@ -47,6 +48,9 @@ export function ChatPane({
   /** Sessions running in the other panes: /resume can't take them. */
   liveSessions: (exceptPaneId: string) => Promise<Set<string>>;
   onToast?: ToastFn;
+  /** The user started on it (typed, or a conversation came): its project
+   *  goes to « Actifs », as typing in a terminal does. */
+  onUserInput?: () => void;
 }) {
   const session = useChatSession(pane.id, pane.accountId, chat, shown);
   const shellOutputs = useShellOutputs(pane.id);
@@ -54,6 +58,27 @@ export function ChatPane({
   // Never for an ended chat: a command would start its server for nothing.
   useBranchRefresh(pane.id, pane.accountId, shown && !state.closed);
   const [draft, setDraft] = usePaneDraft(pane.id);
+  // The user started on it, after it showed: a letter typed, or a chat
+  // opened asleep that got its session (a conversation picked, a message
+  // sent). Its project goes to « Actifs » once, as a terminal's typing does;
+  // never for a chat restored with its past.
+  const [openedAsleep] = useState(() => !!chat.asleep);
+  // The server said this chat sleeps: it knows it, its list may be asked.
+  const [knownAsleep, setKnownAsleep] = useState(false);
+  useEffect(() => {
+    if (state.asleep) setKnownAsleep(true);
+  }, [state.asleep]);
+  const engaged =
+    draft.text.trim() !== "" || (openedAsleep && !!state.sessionId);
+  const engagedRef = useRef(engaged);
+  const onUserInputRef = useRef(onUserInput);
+  useEffect(() => {
+    onUserInputRef.current = onUserInput;
+  });
+  useEffect(() => {
+    if (engaged && !engagedRef.current) onUserInputRef.current?.();
+    engagedRef.current = engaged;
+  }, [engaged]);
   const [messagesOnly, setMessagesOnly] = usePaneMessagesOnly(pane.id);
   // A dictation still lands in this pane's draft if the pane unmounted
   // meanwhile (another project on screen).
@@ -134,7 +159,14 @@ export function ChatPane({
       onToast={onToast}
       slashActions={slashActions}
       memoryKey={pane.id}
-      startup={startupPhase(state, !!(chat.resume || chat.continue))}
+      startup={startupPhase(
+        state,
+        !!(chat.resume || chat.continue),
+        // Asleep till its first session: the welcome stays while it wakes,
+        // once the server said it sleeps (its list asked before that would
+        // reach a chat it doesn't know yet).
+        state.asleep || (!!chat.asleep && knownAsleep),
+      )}
       onLoadOlder={session.loadOlder}
       onBackground={session.background}
       onStopTask={session.stopTask}

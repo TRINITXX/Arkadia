@@ -323,7 +323,7 @@ export type ChatCommand =
       type: "send";
       chatId: string;
       text: string;
-      images?: { mediaType: string; data: string }[];
+      images?: { mediaType: string; data: string; label?: string }[];
       /** « Envoyer maintenant »: Claude Code ends the turn under way for it. */
       priority?: "now";
       /**

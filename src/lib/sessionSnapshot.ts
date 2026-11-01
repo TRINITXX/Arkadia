@@ -131,6 +131,8 @@ function normalizeChat(raw: unknown): { chat: PaneChat } | null {
       cwd: c.cwd,
       ...(typeof c.resume === "string" ? { resume: c.resume } : {}),
       ...(c.continue === true ? { continue: true } : {}),
+      // Never typed in: asleep again after a restart (`PaneChat.asleep`).
+      ...(c.asleep === true ? { asleep: true } : {}),
     },
   };
 }

@@ -1,5 +1,6 @@
 import { draftFile } from "@/lib/chat/chatAttachments";
 import type { ChatDraft } from "@/lib/chat/chatDrafts";
+import { expandPastes } from "@/lib/chat/chatPastes";
 
 /**
  * Chat drafts written to the webview's storage, so a page reload (the
@@ -22,6 +23,8 @@ export const DRAFT_TTL_MS = 7 * 24 * 3_600_000;
 interface StoredImage {
   mediaType: string;
   data: string;
+  /** Its « [Image #n] » in the text. */
+  n?: number;
 }
 interface StoredDraft {
   text: string;
@@ -50,12 +53,18 @@ export function serializeDrafts(
     for (const img of [...draft.images].reverse()) {
       if (images.length >= KEPT_IMAGES || img.data.length > budget) continue;
       budget -= img.data.length;
-      images.unshift({ mediaType: img.mediaType, data: img.data });
+      images.unshift({
+        mediaType: img.mediaType,
+        data: img.data,
+        ...(img.n ? { n: img.n } : {}),
+      });
     }
     const files = (draft.files ?? []).slice(0, KEPT_FILES).map((f) => f.path);
     if (!draft.text && images.length === 0 && files.length === 0) continue;
     out[paneId] = {
-      text: draft.text,
+      // A pasted text's tag stored as the text itself: back after a reload,
+      // never a tag that stands for nothing (`chatPastes`).
+      text: expandPastes(draft.text, draft.pastes),
       images,
       ...(files.length > 0 && { files }),
       savedAt: savedAt.get(paneId) ?? now,

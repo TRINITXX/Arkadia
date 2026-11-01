@@ -85,6 +85,7 @@ export function PaneTreeView({
             liveSessions={chat.liveSessions}
             onToast={onToast}
             shown={shown}
+            onUserInput={onUserInput}
           />
         </div>
       );

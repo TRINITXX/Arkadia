@@ -91,6 +91,17 @@ describe("sessionSnapshot", () => {
     });
   });
 
+  it("keeps a chat asleep through save and reload, never typed in", () => {
+    const t = tab({ kind: "leaf", paneId: "a" }, ["a"]);
+    t.panes.a.chat = { cwd: "C:/w", asleep: true };
+    const snap = buildSessionSnapshot([t], new Set(), 1);
+    const reloaded = normalizeSessionSnapshot(JSON.parse(JSON.stringify(snap)));
+    expect(reloaded?.tabs[0].panes[0].chat).toEqual({
+      cwd: "C:/w",
+      asleep: true,
+    });
+  });
+
   it("keeps each pane's Claude account through save and reload", () => {
     const t = tab({ kind: "leaf", paneId: "a" }, ["a"]);
     t.panes.a.accountId = "b2c3";

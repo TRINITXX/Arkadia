@@ -25,9 +25,14 @@ export interface ChatStart {
   resume?: string;
   /** The folder's latest session (the toolbar's `ccdr`). */
   continue?: boolean;
+  /** No Claude Code until woken (`PaneChat.asleep`). */
+  asleep?: boolean;
 }
 
 export interface ChatImage {
+  /** « Image #2 »: said just before the image to Claude, the tag in the
+   *  text where it was pasted names it (as Claude Code does). */
+  label?: string;
   mediaType: string;
   /** Base64, no `data:` prefix. */
   data: string;

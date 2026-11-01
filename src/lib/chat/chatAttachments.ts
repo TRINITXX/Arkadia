@@ -189,7 +189,14 @@ function draftImage(url: string, n: number): DraftImage | null {
   const m = /^data:([^;,]+);base64,(.*)$/s.exec(url);
   if (!m) return null;
   nextId += 1;
-  return { id: `back:${nextId}:${n}`, url, mediaType: m[1], data: m[2] };
+  // Numbered as sent: its « [Image #n] » in the text names it again.
+  return {
+    id: `back:${nextId}:${n}`,
+    url,
+    mediaType: m[1],
+    data: m[2],
+    n: n + 1,
+  };
 }
 
 /**
@@ -212,7 +219,13 @@ export function mergeDrafts(back: ChatDraft, now: ChatDraft): ChatDraft {
   const text =
     back.text && now.text ? `${back.text}\n${now.text}` : back.text || now.text;
   return attachPaths(
-    { text, images: [...back.images, ...now.images], files: back.files },
+    {
+      text,
+      images: [...back.images, ...now.images],
+      files: back.files,
+      // The input's pasted texts: their tags stay in its text.
+      ...(now.pastes ? { pastes: now.pastes } : {}),
+    },
     (now.files ?? []).map((f) => f.path),
   );
 }

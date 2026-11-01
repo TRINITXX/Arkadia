@@ -37,6 +37,25 @@ describe("chat drafts kept across a reload", () => {
     expect(p1.images.map((i) => i.data[0])).toEqual(["2", "3", "4", "5"]);
     expect(p1.images).toHaveLength(KEPT_IMAGES);
     expect(p1.images[0].url).toBe(`data:image/png;base64,${"2".repeat(10)}`);
+    // A pasted text's tag comes back as the text: never a tag for nothing.
+    const tagged = parseDrafts(
+      serializeDrafts(
+        new Map<string, ChatDraft>([
+          [
+            "p3",
+            {
+              text: "Vois [Texte collé #1 · 2 mots]",
+              images: [],
+              pastes: [{ id: 1, text: "deux mots" }],
+            },
+          ],
+        ]),
+        new Map(),
+        NOW,
+      ),
+      NOW,
+    );
+    expect(tagged.get("p3")!.draft.text).toBe("Vois deux mots");
     const textOnly = parseDrafts(
       serializeDrafts(drafts, new Map(), NOW, false),
       NOW,

@@ -261,5 +261,15 @@ describe("restoredChat", () => {
     });
     // After /clear: no session of its own, a fresh chat.
     expect(restoredChat({ cwd: "C:/p" })).toEqual({ cwd: "C:/p" });
+    // Opened asleep and never typed in: asleep again, nothing started.
+    expect(restoredChat({ cwd: "C:/p", asleep: true })).toEqual({
+      cwd: "C:/p",
+      asleep: true,
+    });
+    // Woken, it has a session: it goes on with it.
+    expect(restoredChat({ cwd: "C:/p", resume, asleep: true })).toEqual({
+      cwd: "C:/p",
+      resume,
+    });
   });
 });
