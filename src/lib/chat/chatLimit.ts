@@ -29,6 +29,37 @@ export type ChatLimitPlan =
   | { kind: "switch"; accountId: string }
   | { kind: "none" };
 
+const fullUntil = (w: UsageWindow | null | undefined): number =>
+  w && w.pct >= 100 && w.resetsAt ? w.resetsAt * 1000 : 0;
+
+/** When an account is free again (ms): no limit hit blocks it, no window full. */
+function freeAt(a: Account, blocked: BlockedUntil): number {
+  return Math.max(
+    blocked[a.id] ?? 0,
+    fullUntil(a.usage?.fiveHour),
+    fullUntil(a.usage?.sevenDay),
+  );
+}
+
+/**
+ * No account free now: when the first other signed-in one is (ms), for the
+ * chat to move then rather than stay stopped (the user's report of
+ * 01/11/2026: the first account came back at 07:20, the chat never moved).
+ * Null: none to wait for.
+ */
+export function nextFreeAccountAt(
+  accounts: readonly Account[],
+  blocked: BlockedUntil,
+  from: string,
+  now: number,
+): number | null {
+  const times = accounts
+    .filter((a) => a.loggedIn && a.id !== from)
+    .map((a) => freeAt(a, blocked))
+    .filter((t) => t > now);
+  return times.length > 0 ? Math.min(...times) : null;
+}
+
 /**
  * The user's rule for a chat: another signed-in account free right now, the
  * one whose 5-hour window resets soonest (its quota comes back anyway); an
@@ -41,17 +72,8 @@ export function planChatLimitSwitch(
   from: string,
   now: number,
 ): ChatLimitPlan {
-  const fullUntil = (w: UsageWindow | null | undefined): number =>
-    w && w.pct >= 100 && w.resetsAt ? w.resetsAt * 1000 : 0;
   const free = accounts.filter(
-    (a) =>
-      a.loggedIn &&
-      a.id !== from &&
-      Math.max(
-        blocked[a.id] ?? 0,
-        fullUntil(a.usage?.fiveHour),
-        fullUntil(a.usage?.sevenDay),
-      ) <= now,
+    (a) => a.loggedIn && a.id !== from && freeAt(a, blocked) <= now,
   );
   if (free.length === 0) return { kind: "none" };
   const reset = (a: Account) => {

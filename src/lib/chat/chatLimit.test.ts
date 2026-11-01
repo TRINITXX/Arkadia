@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Account } from "@/lib/accounts";
-import { chatLimitHit, planChatLimitSwitch } from "@/lib/chat/chatLimit";
+import {
+  chatLimitHit,
+  nextFreeAccountAt,
+  planChatLimitSwitch,
+} from "@/lib/chat/chatLimit";
 
 const NOW = 1_800_000_000_000;
 const account = (
@@ -81,5 +85,26 @@ describe("a chat at its usage limit", () => {
         NOW,
       ),
     ).toEqual({ kind: "none" });
+  });
+
+  it("with none free, waits for the first other account back", () => {
+    // The report of 01/11/2026: the chat's account and one other blocked,
+    // the third back at 07:20, the chat never moved.
+    const accounts = [
+      account("main", 100, 60),
+      account("b", 100, 16),
+      account("c", 100, 216),
+      account("d", 0, null, false),
+    ];
+    const blocked = { b: NOW + 16 * 60_000, c: NOW + 216 * 60_000 };
+    expect(nextFreeAccountAt(accounts, blocked, "main", NOW)).toBe(
+      NOW + 16 * 60_000,
+    );
+    expect(
+      nextFreeAccountAt(accounts, blocked, "main", NOW + 20 * 60_000),
+    ).toBe(NOW + 216 * 60_000);
+    expect(nextFreeAccountAt([account("main", 100, 60)], {}, "main", NOW)).toBe(
+      null,
+    );
   });
 });

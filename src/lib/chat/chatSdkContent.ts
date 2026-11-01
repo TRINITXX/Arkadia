@@ -236,7 +236,7 @@ export function addSdkContent(
     case "prompt_suggestion":
       return { ...state, suggestion: str(m.suggestion)?.trim() || null };
     case "rate_limit_event": {
-      const fresh = quotaAlerts(obj(m.rate_limit_info), now).filter(
+      const fresh = quotaAlerts(obj(m.rate_limit_info)).filter(
         (a) => !state.quotaSeen.includes(a.key),
       );
       return fresh.reduce(

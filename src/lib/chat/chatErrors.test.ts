@@ -42,15 +42,13 @@ describe("resultNotice", () => {
         ctx,
       )?.text,
     ).toMatch(/\/compact/);
-    const reset = Math.round(new Date(2026, 9, 31, 21, 0).getTime() / 1000);
+    // The limit: Claude's red reply says it, no notice under it.
     expect(
       resultNotice(
         { subtype: "success", is_error: true, terminal_reason: "api_error" },
-        { apiError: "rate_limit", resetsAt: reset, now: NOW },
-      )?.text,
-    ).toBe(
-      "Tour arrêté par la limite d'usage : attends le reset à 21:00, ou passe sur un autre compte",
-    );
+        { apiError: "rate_limit", now: NOW },
+      ),
+    ).toBeNull();
     expect(
       resultNotice(
         { subtype: "success", is_error: true, api_error_status: 401 },

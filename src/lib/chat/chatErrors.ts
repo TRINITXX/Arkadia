@@ -1,5 +1,4 @@
 import type { JsonObject } from "@/lib/chat/chatProtocol";
-import { resetClock } from "@/lib/chat/chatQuota";
 
 /**
  * Why a turn stopped, in words with the next step: the result's
@@ -19,8 +18,6 @@ export interface ErrorNotice {
 export interface ResultContext {
   /** The `error` code of the turn's API error reply, if any. */
   apiError: string | null;
-  /** The reset of the window that blocks (epoch seconds), if known. */
-  resetsAt?: number;
   now: number;
   /** The turn carries Claude Code's « [Request interrupted by user] ». */
   interrupted?: boolean;
@@ -132,14 +129,7 @@ const STARTUP: Record<string, string> = {
 function apiErrorText(
   code: string | undefined,
   status: number | undefined,
-  ctx: ResultContext,
 ): string {
-  if (code === "rate_limit" || status === 429) {
-    // The quota alert said which window: here, the turn and what to do.
-    const when =
-      ctx.resetsAt === undefined ? "" : ` ${resetClock(ctx.resetsAt, ctx.now)}`;
-    return `Tour arrêté par la limite d'usage : attends le reset${when}, ou passe sur un autre compte`;
-  }
   if (code && API_ERRORS[code]) return API_ERRORS[code];
   if (status === 401 || status === 403) return RECONNECT;
   if (status === 529) return API_ERRORS.overloaded;
@@ -200,11 +190,14 @@ export function resultNotice(
   if (ok) return null;
   const apiCode = str(m.api_error) ?? ctx.apiError ?? undefined;
   const status = num(m.api_error_status);
+  // The limit: Claude's red reply says it, with its reset (the user's ask
+  // of 01/11/2026), and the account switch takes it from there.
+  if (apiCode === "rate_limit" || status === 429) return null;
   if (reason === "api_error" || ctx.apiError || apiCode || status) {
     // The reply already shows Claude Code's words: only the cause and the
     // next step here.
     return {
-      text: apiErrorText(apiCode, status, ctx),
+      text: apiErrorText(apiCode, status),
       tone: "error",
       detail: ctx.apiError ? undefined : str(m.result),
     };

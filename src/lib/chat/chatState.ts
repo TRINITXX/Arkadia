@@ -1129,13 +1129,6 @@ function markInterrupt(state: ChatState, m: JsonObject): ChatState {
   return isInterruptNote(m) ? { ...state, interrupted: true } : state;
 }
 
-/** The reset of the window that blocks: the used-up one, else the session's. */
-function blockingReset(state: ChatState): number | undefined {
-  const { fiveHour, sevenDay } = state.limits;
-  if (sevenDay && sevenDay.utilization >= 1) return sevenDay.resetsAt;
-  return fiveHour?.resetsAt;
-}
-
 function addSdk(state: ChatState, m: JsonObject, now: number): ChatState {
   state = trackLive(state, m, now);
   // A tool's running time, a subagent's retries (`chatTasks`).
@@ -1178,7 +1171,6 @@ function addSdk(state: ChatState, m: JsonObject, now: number): ChatState {
       // Why it stopped, in words: only a real interrupt is « Tour interrompu ».
       const notice = resultNotice(m, {
         apiError: state.apiError,
-        resetsAt: blockingReset(state),
         now,
         interrupted: state.interrupted,
       });
@@ -1468,7 +1460,10 @@ export function reduceChat(
         ...state,
         visuals: {
           ...state.visuals,
-          [event.toolUseId]: { html: event.html, checking: known?.checking ?? false },
+          [event.toolUseId]: {
+            html: event.html,
+            checking: known?.checking ?? false,
+          },
         },
       };
     }

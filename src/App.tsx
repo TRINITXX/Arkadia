@@ -1924,16 +1924,23 @@ export function App() {
   // reload keeps them; keyed by session, as a restart gives new pane ids.
   // Waits already overdue at load are dropped: the app was closed when they
   // came due, and a "continue" hours later would come as a surprise.
-  const limitState = useRef<LimitState>({ waits: {}, blocked: {} });
+  const limitState = useRef<LimitState>({
+    waits: {},
+    blocked: {},
+    chatWaits: {},
+  });
   // Saves wait for the load, which would otherwise read back their write.
   const limitStateLoaded = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     limitStateLoaded.current = loadLimitState()
       .then((saved) => {
-        const { waits, blocked } = limitState.current;
+        const { waits, blocked, chatWaits } = limitState.current;
         const stale = Date.now() - 5 * 60_000;
         for (const [sid, at] of Object.entries(saved.waits)) {
           if (at > stale && !(sid in waits)) waits[sid] = at;
+        }
+        for (const [sid, at] of Object.entries(saved.chatWaits)) {
+          if (at > stale && !(sid in chatWaits)) chatWaits[sid] = at;
         }
         for (const [id, until] of Object.entries(saved.blocked)) {
           blocked[id] = Math.max(blocked[id] ?? 0, until);
@@ -2168,6 +2175,16 @@ export function App() {
       const blocked = limitState.current.blocked;
       blocked[accountId] = Math.max(blocked[accountId] ?? 0, until);
       persistLimitState();
+    },
+    chatWaits: {
+      loaded: () => limitStateLoaded.current,
+      list: () => limitState.current.chatWaits,
+      set: (sid, at) => {
+        const waits = limitState.current.chatWaits;
+        if (at === null) delete waits[sid];
+        else waits[sid] = at;
+        persistLimitState();
+      },
     },
     relaunch: relaunchChatOnAccount,
     onSwitched: (accountId) => void accounts.setCurrent(accountId),

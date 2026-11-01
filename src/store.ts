@@ -572,6 +572,11 @@ export interface LimitState {
   waits: Record<string, number>;
   /** Account id → Unix ms until which it is at its limit. */
   blocked: Record<string, number>;
+  /**
+   * A chat's Claude session id → Unix ms of its next look for a free
+   * account (`useChatLimitSwitch`): a restart picks the wait up again.
+   */
+  chatWaits: Record<string, number>;
 }
 
 function numberRecord(raw: unknown): Record<string, number> {
@@ -585,12 +590,15 @@ function numberRecord(raw: unknown): Record<string, number> {
 
 export async function loadLimitState(): Promise<LimitState> {
   const store = await getStore();
-  const raw = await store.get<{ waits?: unknown; blocked?: unknown }>(
-    KEY_LIMIT_STATE,
-  );
+  const raw = await store.get<{
+    waits?: unknown;
+    blocked?: unknown;
+    chatWaits?: unknown;
+  }>(KEY_LIMIT_STATE);
   return {
     waits: numberRecord(raw?.waits),
     blocked: numberRecord(raw?.blocked),
+    chatWaits: numberRecord(raw?.chatWaits),
   };
 }
 

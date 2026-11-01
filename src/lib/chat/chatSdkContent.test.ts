@@ -41,11 +41,9 @@ const warning = (threshold: number) =>
   });
 
 describe("Claude Code's notices in the column", () => {
-  it("says a quota threshold once, however many events repeat it", () => {
-    const state = run([warning(0.9), warning(0.9), warning(0.9)]);
-    expect(notices(state).map((n) => n.text)).toEqual([
-      expect.stringMatching(/^90 % de la session utilisés, reset /),
-    ]);
+  it("says nothing of a quota threshold: the rings show it", () => {
+    const state = run([warning(0.9), warning(0.9)]);
+    expect(notices(state)).toEqual([]);
   });
 
   it("explains a refusal of the current mode: which action, why", () => {
