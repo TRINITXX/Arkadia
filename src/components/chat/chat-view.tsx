@@ -747,6 +747,7 @@ function ChatViewBody({
               paneKey={memoryKey}
               items={state.items}
               voice={voice}
+              active={isActive && shown}
               onDictating={setSheetDictates}
               onSend={(text) => {
                 stuckRef.current = true;

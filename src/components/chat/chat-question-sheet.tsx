@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   CircleHelp,
@@ -24,6 +24,7 @@ import {
 } from "@/lib/chat/chatSheetAnswers";
 import type { ChatItem } from "@/lib/chat/chatState";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
+import { useTypeToInput } from "@/lib/chat/useTypeToInput";
 
 /**
  * A sheet above the input when Claude's last reply asks a round of questions
@@ -43,11 +44,14 @@ export function ChatQuestionSheet({
   paneKey,
   items,
   voice,
+  active,
   onSend,
   onDictating,
 }: {
   /** The pane: answers and « closed » outlive its unmounts. */
   paneKey: string;
+  /** Its pane is the active one, on screen: the typing may come here. */
+  active: boolean;
   items: ChatItem[];
   voice: ChatVoice;
   onSend: (text: string) => void;
@@ -96,13 +100,39 @@ export function ChatQuestionSheet({
     };
   }, [open, replyId, paneKey]);
 
+  // The question shown: a new round starts on its first.
+  const step = round
+    ? Math.min(
+        view.replyId === replyId ? view.step : 0,
+        round.questions.length - 1,
+      )
+    : 0;
+  const shownKey = round?.questions[step]?.key;
+  // Unfolded, it takes the typing as the input does: a key typed anywhere in
+  // the pane, the focus on no field, lands in the shown question's field
+  // (the user's ask of 01/11/2026).
+  const areaRef = useRef<HTMLTextAreaElement>(null);
+  const typeKey = useCallback(
+    (key: string) => {
+      if (!shownKey) return;
+      updateSheet(paneKey, replyId, (s) => ({
+        ...s,
+        answers: {
+          ...s.answers,
+          [shownKey]: {
+            ...s.answers[shownKey],
+            text: (s.answers[shownKey]?.text ?? "") + key,
+          },
+        },
+      }));
+    },
+    [paneKey, replyId, shownKey],
+  );
+  useTypeToInput(areaRef, typeKey, active && open && !folded);
+
   if (!round || sheet.closed) return null;
   const { questions } = round;
   const isAnswered = (q: RoundQuestion) => !!roundReply([q], sheet.answers);
-  const step = Math.min(
-    view.replyId === replyId ? view.step : 0,
-    questions.length - 1,
-  );
   const more = view.replyId === replyId && view.more;
   const goTo = (i: number) => setView({ replyId, step: i, more: false });
   const q = questions[step];
@@ -305,6 +335,7 @@ export function ChatQuestionSheet({
               </button>
               <div className="box">
                 <textarea
+                  ref={areaRef}
                   rows={1}
                   value={a.text ?? ""}
                   aria-label={`Ta réponse à ${q.id}`}
