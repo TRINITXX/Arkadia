@@ -184,7 +184,7 @@ export const VISUAL_BOOTSTRAP = visualBootstrap("");
 const bootstrapTag = (token: string) =>
   `<script>${visualBootstrap(token).replace(/<\/script/gi, "<\\/script")}</script>`;
 
-const head = (token: string, fit?: number) =>
+const head = (token: string, fit?: number, card = false) =>
   '<meta charset="utf-8">' +
   `<meta http-equiv="Content-Security-Policy" content="${VISUAL_PAGE_CSP}">` +
   // No DNS lookups ahead of links: a name looked up can carry data out.
@@ -193,6 +193,11 @@ const head = (token: string, fit?: number) =>
   `<style id="arkadia-theme">${VISUAL_THEME_CSS}</style>` +
   // The room the card has at first; the bootstrap takes its changes.
   (usableRoom(fit) ? `<style id="arkadia-fit">:root{--ark-fit-h:${usableRoom(fit)}px}</style>` : "") +
+  // In the column's card, never a sideways scroll (the user's ask of
+  // 01/11/2026): a page a few pixels too wide (a 100vw beside a
+  // scrollbar) is cut at its margin. The probe still measures the real
+  // width and tells Claude; « Agrandir » shows the page as written.
+  (card ? '<style id="arkadia-card">html{overflow-x:hidden}</style>' : "") +
   bootstrapTag(token);
 
 /**
@@ -217,14 +222,19 @@ export function inertFrames(html: string): string {
  * mode). The parser opens the head for them, the page's own `<html>` and
  * `<head>` merge in, so nothing of the page runs or styles before them.
  */
-export function visualDocument(html: string, token = "", fit?: number): string {
+export function visualDocument(
+  html: string,
+  token = "",
+  fit?: number,
+  card = false,
+): string {
   const page = inertFrames(html);
   const doctype = /^\uFEFF?\s*<!doctype[^>]*>/i.exec(page);
   if (doctype) {
     const at = doctype[0].length;
-    return `${page.slice(0, at)}${head(token, fit)}${page.slice(at)}`;
+    return `${page.slice(0, at)}${head(token, fit, card)}${page.slice(at)}`;
   }
-  return `<!doctype html>${head(token, fit)}${page}`;
+  return `<!doctype html>${head(token, fit, card)}${page}`;
 }
 
 /**

@@ -250,6 +250,7 @@ export function ChatVisualFrame({
           handlers.current.onLink?.(m.url);
       },
       fill ? undefined : (roomRef.current ?? undefined),
+      !fill,
     );
     setFitRef.current = setFit;
     return () => {

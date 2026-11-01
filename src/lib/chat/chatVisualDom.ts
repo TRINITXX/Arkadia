@@ -36,13 +36,15 @@ export function loadVisualFrame(
   onMessage: (message: FrameMessage) => void,
   /** The room the card has (`--ark-fit-h`); none: the page as written. */
   fit?: number,
+  /** In the column's card (not « Agrandir »): no sideways scroll. */
+  card = false,
 ): { stop: () => void; setFit: (height: number) => void } {
   iframe.setAttribute("sandbox", "allow-scripts");
   iframe.setAttribute("referrerpolicy", "no-referrer");
   visualFrames.add(iframe);
   // Only this frame's bootstrap knows it: its messages are its own.
   const token = crypto.randomUUID();
-  const doc = visualDocument(html, token, fit);
+  const doc = visualDocument(html, token, fit, card);
   let posted = false;
   /** A room given before the page is in: sent once it is (the shell drops it). */
   let pendingFit: number | null = null;

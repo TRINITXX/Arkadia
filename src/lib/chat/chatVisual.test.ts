@@ -65,6 +65,9 @@ describe("visualDocument", () => {
 
   it("gives a page without a doctype one, so it never renders in quirks mode", () => {
     expect(visualDocument("<p>x</p>")).toMatch(/^<!doctype html><meta charset/);
+    // In the column's card, never a sideways scroll; « Agrandir » as written.
+    expect(visualDocument("<p>x</p>", "t", 400, true)).toContain("html{overflow-x:hidden}");
+    expect(visualDocument("<p>x</p>", "t", 400)).not.toContain("overflow-x:hidden");
   });
 
   it("closes what the CSP can't: DNS prefetch, WebRTC, frames in a closed shadow root", () => {
