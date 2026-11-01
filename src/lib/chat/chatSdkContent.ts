@@ -37,7 +37,9 @@ function addNotice(
 
 /** « 180 k » for 180 000 tokens. */
 function kTokens(n: number): string {
-  return n < 1000 ? String(n) : `${Math.round(n / 1000)} k`;
+  if (n < 1000) return String(n);
+  if (n < 999_500) return `${Math.round(n / 1000)} k`;
+  return `${(n / 1_000_000).toFixed(1).replace(/.0$/, "").replace(".", ",")} M`;
 }
 
 /** « Compacté automatiquement · 180 k → 32 k tokens » (`compact_boundary`). */

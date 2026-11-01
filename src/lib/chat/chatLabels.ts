@@ -61,7 +61,10 @@ export function elapsedLabel(ms: number): string {
 
 /** "4,2 k" past a thousand. */
 export function tokensLabel(n: number): string {
-  return n < 1000 ? String(n) : `${(n / 1000).toFixed(1).replace(".", ",")} k`;
+  if (n < 1000) return String(n);
+  // « 1 M », never « 1000,0 k » (the user's ask of 01/11/2026).
+  if (n < 999_950) return `${(n / 1000).toFixed(1).replace(".", ",")} k`;
+  return `${(n / 1_000_000).toFixed(1).replace(/.0$/, "").replace(".", ",")} M`;
 }
 
 /**
