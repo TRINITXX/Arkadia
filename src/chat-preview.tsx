@@ -270,6 +270,30 @@ const SCENARIOS: Record<string, () => ChatState> = {
     return { ...s, items };
   },
   live: () => replay(parse(tools), firstTextDelta),
+  // Claude at work on a task list (TodoWrite): its steps in the live line.
+  tasks: () => {
+    const s = replay(parse(tools), firstTextDelta);
+    const todos = [
+      ["Lire le site vtc-planner.fr", "completed"],
+      ["Caler les 30 questions", "completed"],
+      ["Écrire le script du relevé", "in_progress"],
+      ["Lancer le relevé sur Claude et GPT", "pending"],
+      ["Comparer et écrire le rapport", "pending"],
+    ].map(([content, status]) => ({ content, status, activeForm: content }));
+    return {
+      ...s,
+      items: [
+        ...s.items,
+        {
+          kind: "tool",
+          id: "preview-todos",
+          name: "TodoWrite",
+          input: { todos },
+          result: { text: "ok", isError: false },
+        },
+      ],
+    };
+  },
   // Two questions: the terminal's tabs.
   questions: () =>
     withRequest(replay(parse(tools)), {

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Circle, CircleCheck, CircleDot, ListChecks } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Circle, CircleCheck, CircleDot } from "lucide-react";
 import { ChatAgentsMenu } from "@/components/chat/chat-agents-menu";
 import { retryLabel, type RetryInfo } from "@/lib/chat/chatErrors";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
@@ -13,8 +13,10 @@ import { useChatShown } from "@/lib/chat/useChatShown";
  * that says it: the spinner, the step it is on (« lit chatState.ts »,
  * `liveStep`), one time (the running call's, else the turn's: `liveElapsed`)
  * and the turn's tokens (thinking's estimate included); the subagents just
- * finished (a menu on hover) and the task list, one click away (running
- * ones have their cards).
+ * finished (a menu on hover). With a task list, the step is its task in
+ * progress: a green dot per task done before it, the next one in grey, the
+ * whole list on hover; never « 3 sur 7 », the list changes on the way (the
+ * user's pick B of 01/11/2026).
  */
 export function ChatLiveLine({
   working,
@@ -51,6 +53,19 @@ export function ChatLiveLine({
 }) {
   const [now, setNow] = useState(() => Date.now());
   const [tasksOpen, setTasksOpen] = useState(false);
+  // The list opens after the pointer rests a moment, as a pill's detail.
+  const openTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(openTimer.current), []);
+  const hoverTasks = {
+    onMouseEnter: () => {
+      window.clearTimeout(openTimer.current);
+      openTimer.current = window.setTimeout(() => setTasksOpen(true), 500);
+    },
+    onMouseLeave: () => {
+      window.clearTimeout(openTimer.current);
+      setTasksOpen(false);
+    },
+  };
   // Its clock stops while the tab is hidden, and is right again on return.
   const shown = useChatShown();
   useEffect(() => {
@@ -62,6 +77,8 @@ export function ChatLiveLine({
 
   const done = tasks.filter((t) => t.status === "completed").length;
   const openTasks = tasks.length > 0 && done < tasks.length;
+  const current = tasks.find((t) => t.status === "in_progress");
+  const next = tasks.find((t) => t.status === "pending");
   const quiet = !working && !hook && subagents.length === 0 && !openTasks;
   // Esc closes the tasks shown, never Claude's turn (`chatLayers`).
   useChatLayer(tasksOpen && tasks.length > 0 && !quiet, () =>
@@ -85,9 +102,58 @@ export function ChatLiveLine({
       : hook
         ? `hook ${hook} en cours`
         : step;
+  // The task list: its dots (done, then the one under way), the list on hover.
+  const taskList = (
+    <span className="chat-anchor" {...hoverTasks}>
+      <span className="chat-task-dots" title="Les étapes de Claude">
+        {tasks
+          .filter((t) => t.status === "completed")
+          .map((t) => (
+            <i key={t.id} />
+          ))}
+        {current && <i className="cur" />}
+      </span>
+      {tasksOpen && (
+        <div className="chat-tasks">
+          {tasks.map((t) => (
+            <div
+              key={t.id}
+              className={`t${t.status === "completed" ? " done" : t.status === "in_progress" ? " doing" : ""}`}
+            >
+              {t.status === "completed" ? (
+                <CircleCheck />
+              ) : t.status === "in_progress" ? (
+                <CircleDot />
+              ) : (
+                <Circle />
+              )}
+              <span>{t.subject}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+  // Claude works on a task of its list: that task is the line, the call
+  // under way on hover. A retry, a compaction or a hook still say theirs.
+  const onTask = working && current && !compacting && !retry && !hook;
   return (
     <div className="chat-live">
-      {(working || hook) && (
+      {onTask && (
+        <span className="chat-live-now">
+          <span className="spin" />
+          {taskList}
+          <span className="what" title={step}>
+            {current.subject}
+          </span>
+          {next && <span className="then">· ensuite : {next.subject}</span>}
+          <span className="figures">
+            {elapsed && ` · ${elapsedLabel(elapsed.ms)}`}
+            {turnTokens > 0 && ` · ↓ ${tokensLabel(turnTokens)} tokens`}
+          </span>
+        </span>
+      )}
+      {!onTask && (working || hook) && (
         <span className={`chat-live-now${retry ? " retry" : ""}`}>
           <span className="spin" />
           <span className="what" title={doing}>
@@ -107,33 +173,12 @@ export function ChatLiveLine({
       {subagents.length > 0 && (
         <ChatAgentsMenu agents={subagents} onOpen={onOpenAgent} />
       )}
-      {tasks.length > 0 && (
-        <span className="chat-anchor">
-          <span className="chat-chip" onClick={() => setTasksOpen((o) => !o)}>
-            <ListChecks /> Tâches {done}/{tasks.length}
-          </span>
-          {tasksOpen && (
-            <div
-              className="chat-tasks"
-              onMouseLeave={() => setTasksOpen(false)}
-            >
-              {tasks.map((t) => (
-                <div
-                  key={t.id}
-                  className={`t${t.status === "completed" ? " done" : t.status === "in_progress" ? " doing" : ""}`}
-                >
-                  {t.status === "completed" ? (
-                    <CircleCheck />
-                  ) : t.status === "in_progress" ? (
-                    <CircleDot />
-                  ) : (
-                    <Circle />
-                  )}
-                  <span>{t.subject}</span>
-                </div>
-              ))}
-            </div>
-          )}
+      {/* Tasks left with no task under way (paused, or between two):
+          the dots and what comes next, never a total. */}
+      {!onTask && openTasks && (
+        <span className="chat-live-now">
+          {taskList}
+          {next && <span className="then">ensuite : {next.subject}</span>}
         </span>
       )}
     </div>

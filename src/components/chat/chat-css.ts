@@ -315,6 +315,11 @@ export const CHAT_CSS = `
 .chat-live-now .spin { flex-shrink: 0; }
 .chat-live-now .what { color: var(--chat-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .chat-live-now .figures { flex-shrink: 0; white-space: pre; }
+/* Claude's task list in the live line: a green dot per task done, the one under way in orange, what comes next in grey; the list on hover (the user's pick B of 01/11/2026). */
+.chat-task-dots { display: inline-flex; align-items: center; gap: 4px; cursor: default; padding: 4px 0; }
+.chat-task-dots i { display: block; width: 7px; height: 7px; border-radius: 50%; background: #3f8f5f; }
+.chat-task-dots i.cur { width: 9px; height: 9px; background: var(--chat-accent); }
+.chat-live-now .then { color: var(--chat-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 /* « ✻ Terminé en … » after a long turn. */
 .chat-done { color: var(--chat-mute); font-size: 12.5px; padding: 0 2px; }
 /* A plan waiting for the user: in full, the accent edge of the requests. */
