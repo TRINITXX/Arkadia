@@ -48,6 +48,20 @@ export const CHAT_CSS = `
 .chat-line .chev.open { transform: rotate(90deg); }
 .chat-line .spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid #464a51; border-top-color: var(--chat-accent); animation: chat-spin .8s linear infinite; flex-shrink: 0; }
 @keyframes chat-spin { to { transform: rotate(360deg); } }
+/* Claude's work between two messages on one line: an icon and a number per kind (ChatActivityLine). */
+.chat-counts { display: inline-flex; align-items: center; gap: 10px; }
+.chat-counts .n { display: inline-flex; align-items: center; gap: 3px; color: var(--chat-dim); font-variant-numeric: tabular-nums; }
+.chat-line .chat-counts .lucide { width: 14px; height: 14px; }
+.chat-line .ko { color: #f87171; }
+/* Claude's thinking between two messages, whole, in indigo italics: never read as the grey work line (ChatThoughts). */
+.chat-thoughts { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.55; color: #8b93c9; font-style: italic; }
+.chat-thoughts .ic { width: 15px; height: 15px; flex-shrink: 0; margin-top: 2px; color: #a5b4fc; }
+.chat-thoughts .tx { min-width: 0; display: flex; flex-direction: column; gap: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-thoughts p { margin: 0; }
+.chat-thoughts b { color: #a5b4fc; font-style: normal; font-weight: 600; }
+.chat-activity-detail { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 0 7px; padding-left: 14px; border-left: 1px solid var(--chat-line); }
+/* The question sheet unfolded: the input hides, the sheet takes the bottom (the user's ask of 01/11/2026); folded, the input comes back. */
+.chat-bottom.sheet-open .chat-col > .chat-box:not(.ask) { display: none; }
 .chat-tools { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 0 7px; padding-left: 14px; border-left: 1px solid var(--chat-line); }
 .chat-tool .row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--chat-dim); cursor: pointer; padding: 2px 4px; border-radius: 6px; min-width: 0; }
 .chat-tool .row:hover { background: #202327; }
@@ -215,10 +229,11 @@ export const CHAT_CSS = `
 
 /* Conversation: messages, images, tools, live line, plan, search. */
 /* Messages in the terminal's frames (the display mod outils-discrets): green for the user, violet for Claude, blue for another session or a subagent, red edge on an error. Over the old bubble (.chat-user). */
-.chat-root .chat-frame { align-self: stretch; max-width: none; width: 100%; border: 1px solid; border-radius: 10px; padding: 9px 14px 6px; white-space: normal; color: var(--chat-ink); }
-.chat-frame.user { border-color: #1f9f50; background: linear-gradient(rgb(25,36,40), rgb(21,31,34)); }
-.chat-frame.claude { border-color: #8648c5; background: linear-gradient(rgb(33,33,48), rgb(26,25,38)); }
-.chat-frame.peer { border-color: #2f74b5; background: linear-gradient(rgb(22,31,43), rgb(19,26,36)); }
+.chat-root .chat-frame { position: relative; align-self: stretch; max-width: none; width: 100%; border: 1px solid; border-radius: 10px; padding: 9px 14px; white-space: normal; color: var(--chat-ink); }
+/* --frame-end: the frame's bottom colour, under its time and buttons. */
+.chat-frame.user { --frame-end: rgb(21,31,34); border-color: #1f9f50; background: linear-gradient(rgb(25,36,40), var(--frame-end)); }
+.chat-frame.claude { --frame-end: rgb(26,25,38); border-color: #8648c5; background: linear-gradient(rgb(33,33,48), var(--frame-end)); }
+.chat-frame.peer { --frame-end: rgb(19,26,36); border-color: #2f74b5; background: linear-gradient(rgb(22,31,43), var(--frame-end)); }
 .chat-frame.error { border-color: #d9534f; }
 .chat-frame-head { display: flex; align-items: center; gap: 7px; height: 24px; font-size: 12.5px; margin-bottom: 2px; user-select: none; }
 .chat-frame-head .lucide { width: 14px; height: 14px; flex-shrink: 0; }
@@ -227,13 +242,13 @@ export const CHAT_CSS = `
 .chat-frame.peer .chat-frame-head { color: #60a5fa; }
 .chat-frame.error .chat-frame-head { color: #f08a87; }
 .chat-frame-head b { font-weight: 600; }
-/* The foot (the user's pick of 01/11/2026): the time at the left, « Modifier » and « Copier » at the right; no copy while Claude writes. */
-.chat-frame-foot { display: flex; align-items: center; gap: 7px; height: 22px; margin: 4px -8px 0 0; font-size: 11.5px; user-select: none; }
+/* The time, « Modifier » and « Copier » in the frame's bottom-right corner, on hover only, over the text on the frame's own colour: no row kept for them (the user's picks of 01/11/2026). No copy while Claude writes. */
+.chat-frame-foot { position: absolute; right: 6px; bottom: 7px; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 2px 0 6px; border-radius: 8px; background: var(--frame-end); box-shadow: -12px 0 10px -4px var(--frame-end); font-size: 11.5px; user-select: none; opacity: 0; pointer-events: none; transition: opacity .12s; }
+.chat-frame:hover .chat-frame-foot, .chat-frame-foot:focus-within { opacity: 1; pointer-events: auto; }
+/* A frame ending on a row of its own (« coupé », a queued message's « Envoyer maintenant » and ×): the foot goes top-right, never over those. */
+.chat-frame:has(> .chat-cut-row, > .chat-queued-mark) .chat-frame-foot { bottom: auto; top: 6px; }
 .chat-frame-foot time { color: var(--chat-mute); font-variant-numeric: tabular-nums; }
-.chat-frame-foot .tools { margin-left: auto; display: flex; gap: 2px; }
-/* The time and the buttons show on hover only (the user's pick of 01/11/2026). */
-.chat-frame-foot time, .chat-frame-foot .tools { opacity: 0; transition: opacity .12s; }
-.chat-frame:hover .chat-frame-foot time, .chat-frame:hover .chat-frame-foot .tools, .chat-frame-foot .tools:focus-within { opacity: 1; }
+.chat-frame-foot .tools { display: flex; gap: 2px; }
 .chat-frame-foot .copy { width: 26px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #77708c; cursor: pointer; transition: color .12s, background .12s; }
 .chat-frame-foot .copy:hover { color: var(--chat-ink); background: rgba(255,255,255,.08); }
 .chat-frame-foot .lucide { width: 14px; height: 14px; }
@@ -482,7 +497,8 @@ export const CHAT_CSS = `
 .chat-notice-block.warning .text { color: #e7c27a; }
 .chat-notice-block.error { border-color: rgba(248,113,113,.3); }
 .chat-notice-block.error .text { color: #fca5a5; }
-.chat-frame-foot .chat-cut { font-size: 11px; line-height: 1.5; padding: 0 7px; border-radius: 999px; border: 1px solid #4a3f2c; color: #e7c27a; }
+.chat-frame .chat-cut-row { display: flex; justify-content: flex-end; margin-top: 4px; user-select: none; }
+.chat-frame .chat-cut { font-size: 11px; line-height: 1.5; padding: 0 7px; border-radius: 999px; border: 1px solid #4a3f2c; color: #e7c27a; }
 .chat-live-now.retry .what { color: #e7c27a; }
 
 /* SDK settings: effort, models, context breakdown, MCP, hooks, permissions. */
@@ -595,7 +611,7 @@ export const CHAT_CSS = `
 .chat-sheet-q .hd .x .lucide { width: 15px; height: 15px; }
 .chat-sheet-q .hd .chev { transition: transform .14s ease-out; }
 .chat-sheet-q.folded .hd .chev { transform: rotate(-90deg); }
-.chat-sheet-q .qs { overflow-y: auto; padding: 10px 14px 4px; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
+.chat-sheet-q .qs { overflow-y: auto; padding: 10px 14px 12px; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
 .chat-sheet-q .q { display: flex; flex-direction: column; gap: 8px; }
 .chat-sheet-q .qt { font-size: 14.5px; color: #f4f4f5; font-weight: 600; }
 .chat-sheet-q .qb { font-size: 13px; color: var(--chat-dim); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
@@ -626,16 +642,14 @@ export const CHAT_CSS = `
 @media (prefers-reduced-motion: reduce) { .chat-sheet-q .free .caret { animation: none; } }
 .chat-sheet-q .chat-voice-live { padding: 0 16px 4px; font-size: 13px; }
 .chat-sheet-q .q .chat-voice-live { padding: 0 2px; }
-.chat-sheet-q .ft { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px 10px 14px; flex-shrink: 0; }
-.chat-sheet-q .ft .chat-btn { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; font-size: 12.5px; }
-.chat-sheet-q .ft .chat-btn .lucide { width: 13px; height: 13px; }
-.chat-sheet-q .ft .ghost { border-color: transparent; color: var(--chat-dim); }
-.chat-sheet-q .ft .send { margin-left: auto; }
-.chat-sheet-q .ft .count { font-weight: 700; opacity: .75; }
+/* The round's one send, an icon at the free field's end (no footer: the bars above step between questions). */
+.chat-sheet-q .free .send { width: 32px; height: 32px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 9px; background: var(--chat-accent); color: var(--chat-accent-ink); cursor: pointer; transition: opacity .12s; }
+.chat-sheet-q .free .send:disabled { opacity: .4; cursor: default; }
+.chat-sheet-q .free .send .lucide { width: 15px; height: 15px; }
 /* A narrow pane (under ~500 px): the switch and the input's chips as icons, the switch above the column, not over it. */
 .chat-root { container-type: inline-size; }
 @container (max-width: 500px) {
-  .chat-sheet-q:not(.folded) .hd .fold b, .chat-sheet-q .ft .lbl { display: none; }
+  .chat-sheet-q:not(.folded) .hd .fold b { display: none; }
   .chat-sheet-q:not(.folded) .hd .fold { flex-shrink: 0; }
   .chat-col { width: calc(100% - 24px); }
   .chat-scroll-inner { padding-top: 46px; }

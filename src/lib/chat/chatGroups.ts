@@ -9,12 +9,25 @@ import { isVisualTool } from "@/lib/chat/chatVisual";
 
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
+export type ThinkingItem = Extract<ChatItem, { kind: "thinking" }>;
+
+/** Claude's work between two messages, folded into one line (`foldActivity`). */
+export type FoldedUnit =
+  | { kind: "work"; id: string; tools: ToolItem[] }
+  | { kind: "edit"; item: ToolItem }
+  | { kind: "agent"; item: ToolItem };
+
 export type ChatUnit =
+  | FoldedUnit
+  | { kind: "thinking"; item: ThinkingItem }
+  /** Claude's work between two messages: its counts on one line. */
+  | { kind: "activity"; id: string; units: FoldedUnit[] }
+  /** Claude's thinking between two messages, whole, above its work. */
+  | { kind: "thoughts"; id: string; items: ThinkingItem[] }
   | { kind: "user"; item: Extract<ChatItem, { kind: "user" }> }
   /** Another session's or a subagent's message (`chatPeer`). */
   | { kind: "peer"; item: Extract<ChatItem, { kind: "peer" }> }
   | { kind: "text"; item: Extract<ChatItem, { kind: "text" }> }
-  | { kind: "thinking"; item: Extract<ChatItem, { kind: "thinking" }> }
   | { kind: "notice"; item: Extract<ChatItem, { kind: "notice" }> }
   /** A slash command and its answer (`chatCommands`). */
   | { kind: "command"; item: Extract<ChatItem, { kind: "command" }> }
@@ -22,9 +35,6 @@ export type ChatUnit =
   | { kind: "bash"; item: Extract<ChatItem, { kind: "bash" }> }
   /** « Terminé en », shown for a long turn only (`turnDoneLine`). */
   | { kind: "turn"; item: Extract<ChatItem, { kind: "turn" }> }
-  | { kind: "work"; id: string; tools: ToolItem[] }
-  | { kind: "edit"; item: ToolItem }
-  | { kind: "agent"; item: ToolItem }
   | { kind: "question"; item: ToolItem }
   | { kind: "plan"; item: ToolItem }
   /** Claude's HTML page (`show_visual`), as a card where it was called. */
@@ -116,13 +126,44 @@ export function messagesOnly(
   );
 }
 
-const CATEGORIES: [RegExp, string, string][] = [
-  [/^(Bash|PowerShell|BashOutput|KillShell|Monitor)$/, "commande", "commandes"],
-  [/^(Read|NotebookRead)$/, "fichier lu", "fichiers lus"],
-  [/^(Grep|Glob|LS|ToolSearch)$/, "recherche", "recherches"],
-  [/^(WebFetch|WebSearch)$/, "page web", "pages web"],
-  [/^Skill$/, "skill", "skills"],
+/** What Claude's work counts, in the order an activity line shows it. */
+export type ActivityKind =
+  | "command"
+  | "read"
+  | "search"
+  | "web"
+  | "skill"
+  | "tool"
+  | "edit"
+  | "agent";
+
+const ACTIVITY_LABELS: Record<ActivityKind, [string, string]> = {
+  command: ["commande", "commandes"],
+  read: ["fichier lu", "fichiers lus"],
+  search: ["recherche", "recherches"],
+  web: ["page web", "pages web"],
+  skill: ["skill", "skills"],
+  tool: ["outil", "outils"],
+  edit: ["fichier modifié", "fichiers modifiés"],
+  agent: ["sous-agent", "sous-agents"],
+};
+const KIND_ORDER = Object.keys(ACTIVITY_LABELS) as ActivityKind[];
+
+const CATEGORIES: [RegExp, ActivityKind][] = [
+  [/^(Bash|PowerShell|BashOutput|KillShell|Monitor)$/, "command"],
+  [/^(Read|NotebookRead)$/, "read"],
+  [/^(Grep|Glob|LS|ToolSearch)$/, "search"],
+  // Exa's search and fetch: the web too.
+  [/^(WebFetch|WebSearch|mcp__exa__.+)$/, "web"],
+  [/^Skill$/, "skill"],
 ];
+
+const toolKind = (name: string): ActivityKind =>
+  CATEGORIES.find(([re]) => re.test(name))?.[1] ?? "tool";
+
+/** « 4 commandes », « 1 fichier modifié ». */
+const countLabel = (kind: ActivityKind, n: number) =>
+  `${n} ${ACTIVITY_LABELS[kind][n > 1 ? 1 : 0]}`;
 
 /** A call without its result still runs, unless read from the past (`stale`). */
 export function toolRunning(tool: ToolItem): boolean {
@@ -131,20 +172,97 @@ export function toolRunning(tool: ToolItem): boolean {
 
 /** "4 commandes, 3 fichiers lus" for a run of tool calls, in first-seen order. */
 export function workSummary(tools: ToolItem[]): string {
-  const counts = new Map<string, [number, string, string]>();
+  const counts = new Map<ActivityKind, number>();
   for (const tool of tools) {
-    const [, one, many] = CATEGORIES.find(([re]) => re.test(tool.name)) ?? [
-      null,
-      "outil",
-      "outils",
-    ];
-    const entry = counts.get(one) ?? [0, one, many];
-    entry[0] += 1;
-    counts.set(one, entry);
+    const kind = toolKind(tool.name);
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
   }
-  return [...counts.values()]
-    .map(([n, one, many]) => `${n} ${n > 1 ? many : one}`)
-    .join(", ");
+  return [...counts].map(([kind, n]) => countLabel(kind, n)).join(", ");
+}
+
+const folds = (u: ChatUnit): u is FoldedUnit =>
+  u.kind === "work" || u.kind === "edit" || u.kind === "agent";
+
+const foldedId = (u: FoldedUnit) => (u.kind === "work" ? u.id : u.item.id);
+
+/**
+ * Claude's work between two messages (tool lines, file changes, subagents)
+ * as one line each time (the user's ask of 01/11/2026: « condensé en un truc
+ * à chaque fois »); a click unfolds it as it was. Its thinking there, whole
+ * and apart, just above (the user's pick C, unfolded, of 01/11/2026).
+ * Messages, visuals, questions, plans, notices and commands stay as they are.
+ */
+export function foldActivity(units: ChatUnit[]): ChatUnit[] {
+  const out: ChatUnit[] = [];
+  let thoughts: ThinkingItem[] = [];
+  let run: FoldedUnit[] = [];
+  const flush = () => {
+    if (thoughts.length > 0)
+      out.push({
+        kind: "thoughts",
+        id: `thoughts:${thoughts[0].id}`,
+        items: thoughts,
+      });
+    if (run.length > 0)
+      out.push({
+        kind: "activity",
+        id: `activity:${foldedId(run[0])}`,
+        units: run,
+      });
+    thoughts = [];
+    run = [];
+  };
+  for (const unit of units) {
+    if (unit.kind === "thinking") thoughts.push(unit.item);
+    else if (folds(unit)) run.push(unit);
+    else {
+      flush();
+      out.push(unit);
+    }
+  }
+  flush();
+  return out;
+}
+
+/** The tool calls of an activity line, in order. */
+export function activityTools(units: FoldedUnit[]): ToolItem[] {
+  return units.flatMap((u) => (u.kind === "work" ? u.tools : [u.item]));
+}
+
+export interface ActivityCount {
+  kind: ActivityKind;
+  n: number;
+  /** « 4 commandes », for its tooltip. */
+  label: string;
+}
+
+/**
+ * An activity line's counts by kind, always in the same order (the user's
+ * pick B of 01/11/2026: an icon and a number each); a file changed several
+ * times counts once.
+ */
+export function activityCounts(units: FoldedUnit[]): ActivityCount[] {
+  const counts = new Map<ActivityKind, number>();
+  const add = (kind: ActivityKind) =>
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  const edited = new Set<string>();
+  for (const unit of units) {
+    if (unit.kind === "agent") add("agent");
+    else if (unit.kind === "edit") {
+      const path = unit.item.input.file_path ?? unit.item.input.notebook_path;
+      const key =
+        typeof path === "string"
+          ? path.replace(/\\/g, "/").toLowerCase()
+          : unit.item.id;
+      if (edited.has(key)) continue;
+      edited.add(key);
+      add("edit");
+    } else for (const tool of unit.tools) add(toolKind(tool.name));
+  }
+  return KIND_ORDER.flatMap((kind) => {
+    const n = counts.get(kind);
+    return n ? [{ kind, n, label: countLabel(kind, n) }] : [];
+  });
 }
 
 const basename = (p: string) => p.split(/[\\/]/).pop() ?? p;

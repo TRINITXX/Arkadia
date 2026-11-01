@@ -2,9 +2,8 @@ import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { ChatReadThumbs } from "@/components/chat/chat-read-thumbs";
 import { ChatToolRow } from "@/components/chat/chat-tool-row";
-import { readImagePath } from "@/lib/chat/chatImages";
 import { workSummary, type ToolItem } from "@/lib/chat/chatGroups";
-import { lastStep } from "@/lib/chat/chatSteps";
+import { workTail } from "@/lib/chat/chatSteps";
 
 /**
  * A run of tool calls folded into one quiet line, its last call in words
@@ -20,11 +19,7 @@ export function ChatWorkGroup({
   cwd: string | null;
 }) {
   const [open, setOpen] = useState(false);
-  const failed = tools.filter((t) => t.result?.isError).length;
-  // The last call an image read: its thumbnail stands for its path.
-  const lastTool = tools[tools.length - 1];
-  const step = lastStep(tools, cwd);
-  const last = step && lastTool && readImagePath(lastTool) ? "lit" : step;
+  const { last, failed } = workTail(tools, cwd);
   return (
     <div className="chat-unit">
       <div className="chat-line" onClick={() => setOpen((o) => !o)}>

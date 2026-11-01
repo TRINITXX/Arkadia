@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  activityCounts,
+  foldActivity,
   groupChatItems,
   messagesOnly,
   questionAnswers,
@@ -125,5 +127,49 @@ describe("tool wording", () => {
       },
     };
     expect(questionAnswers(asked)).toEqual([["Couleur ?", "Bleu"]]);
+  });
+});
+
+describe("foldActivity", () => {
+  it("folds Claude's work between two messages into one line, its thinking whole above", () => {
+    const thinking = (id: string, t: string): ChatItem => ({
+      kind: "thinking",
+      id,
+      text: t,
+      streaming: false,
+    });
+    const units = foldActivity(
+      groupChatItems([
+        text("Je regarde."),
+        tool("Bash", { command: "ls" }, "b1"),
+        thinking("th1", "Hmm"),
+        tool("Edit", { file_path: "C:\\a.ts" }, "e1"),
+        tool("Read", { file_path: "C:/b.ts" }, "r1"),
+        thinking("th2", "Puis"),
+        tool("Edit", { file_path: "C:/A.ts" }, "e2"),
+        tool("Agent", { description: "d" }, "a1"),
+        tool("Bash", { command: "git status" }, "b2"),
+        text("Fini."),
+      ]),
+    );
+    expect(units.map((u) => u.kind)).toEqual([
+      "text",
+      "thoughts",
+      "activity",
+      "text",
+    ]);
+    const [, thoughts, line] = units;
+    if (thoughts.kind !== "thoughts" || line.kind !== "activity")
+      throw new Error("no thoughts or activity line");
+    // All the thinking between the two messages, gathered: the work stays one line.
+    expect(thoughts.items.map((i) => i.text)).toEqual(["Hmm", "Puis"]);
+    expect(line.id).toBe("activity:b1");
+    // Always the same order; one file changed twice counts once.
+    expect(activityCounts(line.units).map((c) => c.label)).toEqual([
+      "2 commandes",
+      "1 fichier lu",
+      "1 fichier modifié",
+      "1 sous-agent",
+    ]);
   });
 });

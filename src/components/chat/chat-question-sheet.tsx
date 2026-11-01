@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft,
-  ArrowRight,
   ChevronDown,
   CircleHelp,
   Mic,
@@ -156,7 +154,6 @@ export function ChatQuestionSheet({
   const recording = dictating !== null && voice.status !== "idle";
   const listening = recording && dictating === q.key;
 
-  const last = questions.length - 1;
   // An option it names carries its reason; else the recommendation is a
   // choice of its own.
   const named = q.options.find((o) => o.key === q.recommendedKey);
@@ -329,6 +326,22 @@ export function ChatQuestionSheet({
                 {/* No words in it: a caret says it takes some. */}
                 {!a.text && <span className="caret" aria-hidden="true" />}
               </div>
+              {/* One send for the round, at the field's end; the bars above
+                  step between questions (the user's ask of 01/11/2026). */}
+              <button
+                type="button"
+                className="send"
+                disabled={!reply}
+                title={
+                  reply
+                    ? `Envoyer ${answered} réponse${answered > 1 ? "s" : ""} sur ${questions.length}`
+                    : "Choisis ou écris au moins une réponse"
+                }
+                aria-label="Envoyer les réponses"
+                onClick={send}
+              >
+                <Send />
+              </button>
             </div>
             {listening && voice.interim && (
               <div className="chat-voice-live">{voice.interim}</div>
@@ -340,42 +353,6 @@ export function ChatQuestionSheet({
       {recording && (folded || !listening) && voice.interim && (
         <div className="chat-voice-live">
           {questions.find((x) => x.key === dictating)?.id} : {voice.interim}
-        </div>
-      )}
-      {!folded && (
-        <div className="ft">
-          <button
-            type="button"
-            className="chat-btn ghost"
-            disabled={step === 0}
-            onClick={() => goTo(step - 1)}
-          >
-            <ArrowLeft /> <span className="lbl">Précédente</span>
-          </button>
-          <button
-            type="button"
-            className="chat-btn"
-            disabled={step === last}
-            onClick={() => goTo(step + 1)}
-          >
-            <span className="lbl">Suivante</span> <ArrowRight />
-          </button>
-          <button
-            type="button"
-            className="chat-btn primary send"
-            disabled={!reply}
-            title={
-              reply
-                ? `Envoyer ${answered} réponse${answered > 1 ? "s" : ""} sur ${questions.length}`
-                : "Choisis ou écris au moins une réponse"
-            }
-            onClick={send}
-          >
-            <Send /> Envoyer{" "}
-            <span className="count">
-              {answered}/{questions.length}
-            </span>
-          </button>
         </div>
       )}
     </div>

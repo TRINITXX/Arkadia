@@ -243,6 +243,19 @@ const withRequest = (
 
 const SCENARIOS: Record<string, () => ChatState> = {
   tools: () => replay(parse(tools)),
+  // Claude's thinking before its work (the recording has none).
+  thoughts: () => {
+    const s = replay(parse(tools));
+    const at = s.items.findIndex((i) => i.kind === "tool");
+    const items = [...s.items];
+    items.splice(at, 0, {
+      kind: "thinking",
+      id: "preview-thinking",
+      text: "**Lire avant d'écrire**\n\nJe lis note.txt d'abord : le résumé doit reprendre ses mots, pas les miens. Puis une seule phrase dans resume.txt.",
+      streaming: false,
+    });
+    return { ...s, items };
+  },
   live: () => replay(parse(tools), firstTextDelta),
   // Two questions: the terminal's tabs.
   questions: () =>

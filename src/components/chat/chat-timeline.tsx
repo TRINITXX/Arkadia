@@ -21,10 +21,14 @@ import { ChatReplyText } from "@/components/chat/chat-reply-text";
 import { ChatUserBody } from "@/components/chat/chat-user-body";
 import { ChatVisualCard } from "@/components/chat/chat-visual-card";
 import { ChatWorkGroup } from "@/components/chat/chat-work-group";
+import { ChatActivityLine } from "@/components/chat/chat-activity-line";
+import { ChatThoughts } from "@/components/chat/chat-thoughts";
 import {
+  foldActivity,
   groupChatItems,
   messagesOnly as onlyMessages,
   questionAnswers,
+  type ChatUnit,
 } from "@/lib/chat/chatGroups";
 import { withDayBreaks } from "@/lib/chat/chatDays";
 import { chatGallery } from "@/lib/chat/chatImages";
@@ -84,6 +88,16 @@ interface ChatTimelineProps {
   onStopBash?: (id: string) => void;
 }
 
+/** A unit's time for the day breaks; a gathered one's, its first known. */
+const unitAt = (u: ChatUnit): number | undefined =>
+  u.kind === "activity"
+    ? u.units.map(unitAt).find((at) => at !== undefined)
+    : u.kind === "thoughts"
+      ? u.items.find((i) => i.at !== undefined)?.at
+      : "item" in u
+        ? u.item.at
+        : u.tools.find((t) => t.at !== undefined)?.at;
+
 /** The uuid the chat server sent a message under (`sent:<uuid>`). */
 const sentUuid = (id: string) =>
   id.startsWith("sent:") ? id.slice("sent:".length) : null;
@@ -117,11 +131,11 @@ export const ChatTimeline = memo(function ChatTimeline({
   };
   const units = useMemo(() => {
     const all = groupChatItems(items);
-    const shown = messagesOnly ? onlyMessages(all, pendingToolIds) : all;
-    // « Aujourd'hui », « Hier », « lun. 27 oct. » where the day changes.
-    return withDayBreaks(shown, (u) =>
-      "item" in u ? u.item.at : u.kind === "work" ? u.tools[0]?.at : undefined,
+    const shown = foldActivity(
+      messagesOnly ? onlyMessages(all, pendingToolIds) : all,
     );
+    // « Aujourd'hui », « Hier », « lun. 27 oct. » where the day changes.
+    return withDayBreaks(shown, unitAt);
   }, [items, messagesOnly, pendingToolIds]);
   const [whole, setWhole] = useState(!tailFirst);
   useEffect(() => {
@@ -137,230 +151,233 @@ export const ChatTimeline = memo(function ChatTimeline({
     }),
     [onToast],
   );
-  return (
-    <ChatProseContexts codeCopy={codeCopy} onOpen={onOpen}>
-      {drawn.map((unit) => {
-        switch (unit.kind) {
-          case "day":
-            return (
-              <div key={unit.id} className="chat-day" role="separator">
-                <span>{unit.label}</span>
-              </div>
-            );
-          case "user":
-            return (
-              <ChatMessageFrame
-                key={unit.item.id}
-                role="user"
-                at={unit.item.at}
-                text={unit.item.text}
-                className={`chat-user${unit.item.queued ? " queued" : ""}`}
-                onToast={onToast}
-                onEdit={
-                  onEditMessage && !unit.item.queued && !unit.item.dropped
-                    ? () => onEditMessage(unit.item)
-                    : undefined
-                }
-                editBlocked={editBlocked}
-              >
-                <ChatUserBody
-                  item={unit.item}
-                  cwd={cwd}
-                  refs={gallery.byItem.get(unit.item.id) ?? NO_IMAGES}
-                  onOpen={onOpen}
-                  onToast={onToast}
-                />
-                {(unit.item.queued || unit.item.dropped) && (
-                  <ChatQueuedMark
-                    dropped={unit.item.dropped}
-                    onSendNow={onSendNow}
-                    onRemove={remover(unit.item)}
-                  />
-                )}
-              </ChatMessageFrame>
-            );
-          case "peer":
-            return (
-              <ChatMessageFrame
-                key={unit.item.id}
-                role="peer"
-                label={peerLabel(unit.item, subagents)}
-                at={unit.item.at}
-                text={unit.item.text}
-                className="chat-peer"
-                onToast={onToast}
-              >
-                <div className="reading-md" data-chat-prose="">
-                  <MarkdownContent
-                    text={unit.item.text || " "}
-                    baseDir={cwd}
-                    onOpen={onOpen}
-                    onToast={onToast}
-                    inlineImages={false}
-                  />
-                </div>
-              </ChatMessageFrame>
-            );
-          case "text":
-            return (
-              <ChatMessageFrame
-                key={unit.item.id}
-                role="claude"
-                at={unit.item.at}
-                text={unit.item.text}
-                error={unit.item.error}
-                cut={unit.item.aborted}
-                className={`chat-text${unit.item.streaming ? " streaming" : ""}`}
-                onToast={onToast}
-              >
-                <ChatReplyText
-                  text={unit.item.text}
-                  bare={bareReplyIds.includes(unit.item.id)}
-                  cwd={cwd}
-                  onOpen={onOpen}
-                  onToast={onToast}
-                />
-                <ChatGallery
-                  refs={gallery.byItem.get(unit.item.id) ?? NO_IMAGES}
-                  onOpen={onOpen}
-                />
-              </ChatMessageFrame>
-            );
-          case "turn": {
-            const line = turnDoneLine(
-              {
-                durationMs: unit.item.durationMs,
-                endedAt: unit.item.at ?? 0,
-                tools: unit.item.tools,
-                files: unit.item.files,
-              },
-              messagesOnly,
-            );
-            return line ? (
-              <div key={unit.item.id} className="chat-unit chat-done">
-                {line}
-              </div>
-            ) : null;
-          }
-          case "thinking":
-            return (
-              <div key={unit.item.id} className="chat-unit chat-text">
-                <div
-                  className="reading-md"
-                  style={{ color: "var(--chat-mute)", fontStyle: "italic" }}
-                >
-                  {unit.item.text}
-                </div>
-              </div>
-            );
-          case "notice":
-            return unit.item.action === "reload_plugins" ? (
-              <ChatPluginErrors
-                key={unit.item.id}
-                item={unit.item}
-                onReload={onReloadPlugins}
-              />
-            ) : (
-              <ChatNoticeRow key={unit.item.id} item={unit.item} />
-            );
-          case "command":
-            return (
-              <ChatCommandCard
-                key={unit.item.id}
-                item={unit.item}
-                cwd={cwd}
-                onOpen={onOpen}
-                onToast={onToast}
+  const renderUnit = (unit: (typeof drawn)[number]): React.ReactNode => {
+    switch (unit.kind) {
+      case "day":
+        return (
+          <div key={unit.id} className="chat-day" role="separator">
+            <span>{unit.label}</span>
+          </div>
+        );
+      case "user":
+        return (
+          <ChatMessageFrame
+            key={unit.item.id}
+            role="user"
+            at={unit.item.at}
+            text={unit.item.text}
+            className={`chat-user${unit.item.queued ? " queued" : ""}`}
+            onToast={onToast}
+            onEdit={
+              onEditMessage && !unit.item.queued && !unit.item.dropped
+                ? () => onEditMessage(unit.item)
+                : undefined
+            }
+            editBlocked={editBlocked}
+          >
+            <ChatUserBody
+              item={unit.item}
+              cwd={cwd}
+              refs={gallery.byItem.get(unit.item.id) ?? NO_IMAGES}
+              onOpen={onOpen}
+              onToast={onToast}
+            />
+            {(unit.item.queued || unit.item.dropped) && (
+              <ChatQueuedMark
+                dropped={unit.item.dropped}
                 onSendNow={onSendNow}
                 onRemove={remover(unit.item)}
               />
-            );
-          case "bash":
-            return (
-              <ChatBashCard
-                key={unit.item.id}
-                item={unit.item}
-                onStop={
-                  onStopBash && unit.item.id.startsWith("bash:")
-                    ? () => onStopBash(unit.item.id.slice("bash:".length))
-                    : undefined
-                }
-              />
-            );
-          case "work":
-            return <ChatWorkGroup key={unit.id} tools={unit.tools} cwd={cwd} />;
-          case "edit":
-            return (
-              <ChatEditCard
-                key={unit.item.id}
-                tool={unit.item}
-                cwd={cwd}
-                onToast={onToast}
-              />
-            );
-          case "agent":
-            return (
-              <ChatAgentRow
-                key={unit.item.id}
-                tool={unit.item}
-                agent={subagents.find((s) => s.toolUseId === unit.item.id)}
-                onOpen={onOpenAgents}
-              />
-            );
-          case "question": {
-            const answers = questionAnswers(unit.item);
-            if (pendingToolIds.has(unit.item.id) || answers.length === 0) {
-              return (
-                <div key={unit.item.id} className="chat-unit chat-line static">
-                  <CircleHelp />
-                  <b>Question</b>
-                  <span>
-                    ·{" "}
-                    {pendingToolIds.has(unit.item.id)
-                      ? "en attente de ta réponse"
-                      : "sans réponse"}
-                  </span>
-                </div>
-              );
-            }
-            return (
-              <div key={unit.item.id} className="chat-unit chat-qa">
-                {answers.map(([q, a]) => (
-                  <div key={q}>
-                    <div className="q">{q}</div>
-                    <div className="a">→ {a}</div>
-                  </div>
-                ))}
-              </div>
-            );
-          }
-          case "visual":
-            return (
-              <ChatVisualCard
-                key={unit.item.id}
-                tool={unit.item}
-                entry={visuals[unit.item.id]}
-                onNeedHtml={onVisualHtml}
-                onChoose={onChoose}
-                onOpenInBrowser={onOpenVisual}
-              />
-            );
-          case "plan": {
-            const at = items.findIndex((i) => i.id === unit.item.id);
-            return (
-              <ChatPlanCard
-                key={unit.item.id}
-                tool={unit.item}
-                plan={latestPlan(items.slice(0, at + 1))}
-                pending={pendingToolIds.has(unit.item.id)}
-                cwd={cwd}
+            )}
+          </ChatMessageFrame>
+        );
+      case "peer":
+        return (
+          <ChatMessageFrame
+            key={unit.item.id}
+            role="peer"
+            label={peerLabel(unit.item, subagents)}
+            at={unit.item.at}
+            text={unit.item.text}
+            className="chat-peer"
+            onToast={onToast}
+          >
+            <div className="reading-md" data-chat-prose="">
+              <MarkdownContent
+                text={unit.item.text || " "}
+                baseDir={cwd}
                 onOpen={onOpen}
                 onToast={onToast}
+                inlineImages={false}
               />
-            );
-          }
+            </div>
+          </ChatMessageFrame>
+        );
+      case "text":
+        return (
+          <ChatMessageFrame
+            key={unit.item.id}
+            role="claude"
+            at={unit.item.at}
+            text={unit.item.text}
+            error={unit.item.error}
+            cut={unit.item.aborted}
+            className={`chat-text${unit.item.streaming ? " streaming" : ""}`}
+            onToast={onToast}
+          >
+            <ChatReplyText
+              text={unit.item.text}
+              bare={bareReplyIds.includes(unit.item.id)}
+              cwd={cwd}
+              onOpen={onOpen}
+              onToast={onToast}
+            />
+            <ChatGallery
+              refs={gallery.byItem.get(unit.item.id) ?? NO_IMAGES}
+              onOpen={onOpen}
+            />
+          </ChatMessageFrame>
+        );
+      case "turn": {
+        const line = turnDoneLine(
+          {
+            durationMs: unit.item.durationMs,
+            endedAt: unit.item.at ?? 0,
+            tools: unit.item.tools,
+            files: unit.item.files,
+          },
+          messagesOnly,
+        );
+        return line ? (
+          <div key={unit.item.id} className="chat-unit chat-done">
+            {line}
+          </div>
+        ) : null;
+      }
+      case "thinking":
+        return <ChatThoughts key={unit.item.id} items={[unit.item]} />;
+      case "thoughts":
+        return <ChatThoughts key={unit.id} items={unit.items} />;
+      case "notice":
+        return unit.item.action === "reload_plugins" ? (
+          <ChatPluginErrors
+            key={unit.item.id}
+            item={unit.item}
+            onReload={onReloadPlugins}
+          />
+        ) : (
+          <ChatNoticeRow key={unit.item.id} item={unit.item} />
+        );
+      case "command":
+        return (
+          <ChatCommandCard
+            key={unit.item.id}
+            item={unit.item}
+            cwd={cwd}
+            onOpen={onOpen}
+            onToast={onToast}
+            onSendNow={onSendNow}
+            onRemove={remover(unit.item)}
+          />
+        );
+      case "bash":
+        return (
+          <ChatBashCard
+            key={unit.item.id}
+            item={unit.item}
+            onStop={
+              onStopBash && unit.item.id.startsWith("bash:")
+                ? () => onStopBash(unit.item.id.slice("bash:".length))
+                : undefined
+            }
+          />
+        );
+      case "work":
+        return <ChatWorkGroup key={unit.id} tools={unit.tools} cwd={cwd} />;
+      case "edit":
+        return (
+          <ChatEditCard
+            key={unit.item.id}
+            tool={unit.item}
+            cwd={cwd}
+            onToast={onToast}
+          />
+        );
+      case "agent":
+        return (
+          <ChatAgentRow
+            key={unit.item.id}
+            tool={unit.item}
+            agent={subagents.find((s) => s.toolUseId === unit.item.id)}
+            onOpen={onOpenAgents}
+          />
+        );
+      case "question": {
+        const answers = questionAnswers(unit.item);
+        if (pendingToolIds.has(unit.item.id) || answers.length === 0) {
+          return (
+            <div key={unit.item.id} className="chat-unit chat-line static">
+              <CircleHelp />
+              <b>Question</b>
+              <span>
+                ·{" "}
+                {pendingToolIds.has(unit.item.id)
+                  ? "en attente de ta réponse"
+                  : "sans réponse"}
+              </span>
+            </div>
+          );
         }
-      })}
+        return (
+          <div key={unit.item.id} className="chat-unit chat-qa">
+            {answers.map(([q, a]) => (
+              <div key={q}>
+                <div className="q">{q}</div>
+                <div className="a">→ {a}</div>
+              </div>
+            ))}
+          </div>
+        );
+      }
+      case "visual":
+        return (
+          <ChatVisualCard
+            key={unit.item.id}
+            tool={unit.item}
+            entry={visuals[unit.item.id]}
+            onNeedHtml={onVisualHtml}
+            onChoose={onChoose}
+            onOpenInBrowser={onOpenVisual}
+          />
+        );
+      case "plan": {
+        const at = items.findIndex((i) => i.id === unit.item.id);
+        return (
+          <ChatPlanCard
+            key={unit.item.id}
+            tool={unit.item}
+            plan={latestPlan(items.slice(0, at + 1))}
+            pending={pendingToolIds.has(unit.item.id)}
+            cwd={cwd}
+            onOpen={onOpen}
+            onToast={onToast}
+          />
+        );
+      }
+      case "activity":
+        return (
+          <ChatActivityLine
+            key={unit.id}
+            units={unit.units}
+            cwd={cwd}
+            render={renderUnit}
+          />
+        );
+    }
+  };
+  return (
+    <ChatProseContexts codeCopy={codeCopy} onOpen={onOpen}>
+      {drawn.map(renderUnit)}
     </ChatProseContexts>
   );
 });

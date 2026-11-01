@@ -42,7 +42,8 @@ import type { StartupPhase } from "@/lib/chat/chatStartup";
 import { recallColumn } from "@/lib/chat/chatLive";
 import { useColumnMemory } from "@/lib/chat/useColumnMemory";
 import { useMessageEdit } from "@/lib/chat/useMessageEdit";
-import { useSheetReply } from "@/lib/chat/chatSheetAnswers";
+import { updateSheet, useSheetReply } from "@/lib/chat/chatSheetAnswers";
+import { focusIsFree, focusOf } from "@/lib/chat/chatFocus";
 import { ChatElicitationPanel } from "@/components/chat/chat-elicitation-panel";
 import { ChatPermissionPanel } from "@/components/chat/chat-permission-panel";
 import type { ChatSdkActions } from "@/lib/chat/useChatSdkActions";
@@ -287,8 +288,50 @@ function ChatViewBody({
   // The question sheet up and open: Claude's message drops its questions.
   const sheetUp = !state.closed && !request && !state.working;
   const sheetReply = useSheetReply(memoryKey, state.items, sheetUp);
+  // The question sheet unfolded takes the input's place (`sheet-open`).
+  const sheetOpen = sheetReply.length > 0;
   // A field of the sheet takes the dictation: its words show there, not here.
   const [sheetDictates, setSheetDictates] = useState(false);
+  // The input hidden under the sheet listens no more: its dictation stops,
+  // its words land in the draft (anything that hides it stops the mic).
+  const voiceRef = useRef(voice);
+  useEffect(() => {
+    voiceRef.current = voice;
+  });
+  useEffect(() => {
+    const v = voiceRef.current;
+    if (
+      sheetOpen &&
+      !sheetDictates &&
+      (v.status === "starting" || v.status === "listening")
+    )
+      void v.stop();
+  }, [sheetOpen, sheetDictates]);
+  // Something written to the hidden input (a visual's choice, files
+  // dropped): the sheet folds, the input shows it.
+  const foldSheet = useCallback(() => {
+    if (memoryKey && sheetReply.length > 0)
+      updateSheet(memoryKey, sheetReply[0], (s) => ({ ...s, folded: true }));
+  }, [memoryKey, sheetReply]);
+  const attached = draft.images.length + (draft.files?.length ?? 0);
+  const attachedRef = useRef(attached);
+  useEffect(() => {
+    if (attached > attachedRef.current && sheetOpen) foldSheet();
+    attachedRef.current = attached;
+  }, [attached, sheetOpen, foldSheet]);
+  // The sheet folded or closed by the user: the input takes the focus
+  // back, unless it sits elsewhere (search, a visual, another field).
+  const [refocus, setRefocus] = useState(0);
+  const wasOpenRef = useRef(sheetOpen);
+  useEffect(() => {
+    if (
+      wasOpenRef.current &&
+      !sheetOpen &&
+      focusIsFree(focusOf(rootRef.current))
+    )
+      setRefocus((n) => n + 1);
+    wasOpenRef.current = sheetOpen;
+  }, [sheetOpen]);
   // What is open in the pane: Esc closes the latest before it reaches
   // Claude (`chatLayers`). Menus and lists register themselves inside.
   const [layers] = useState(createChatLayers);
@@ -407,6 +450,8 @@ function ChatViewBody({
       const previous = lastChoice.current;
       lastChoice.current = text;
       onDraft((d) => ({ ...d, text: withChoice(d.text, text, previous) }));
+      // The input hidden under the sheet: shown with the choice in it.
+      foldSheet();
       // A click in a frame doesn't reach the pane: it becomes the active one here.
       activateRef.current();
       requestAnimationFrame(() =>
@@ -415,7 +460,7 @@ function ChatViewBody({
           ?.focus(),
       );
     },
-    [onDraft],
+    [onDraft, foldSheet],
   );
 
   // The session's button, its rings and its shells: in the input's bottom
@@ -524,8 +569,11 @@ function ChatViewBody({
         draft={draft}
         onDraft={onDraft}
         voice={sheetDictates ? { ...voice, interim: undefined } : voice}
-        focusKey={isActive}
-        active={isActive && shown}
+        // Focused when the pane activates, and when the user folds the
+        // sheet that hid it (`refocus`, only with the focus free).
+        focusKey={isActive ? `focus:${refocus}` : false}
+        // Hidden under the unfolded sheet: no typing sent to it.
+        active={isActive && shown && !sheetOpen}
         onSend={(text, images, now) => {
           stuckRef.current = true;
           onSend(text, images, now);
@@ -641,7 +689,7 @@ function ChatViewBody({
         </div>
       </div>
       <div
-        className="chat-bottom"
+        className={`chat-bottom${sheetOpen ? " sheet-open" : ""}`}
         // The scrollbar's width on the right: the same column as above.
         style={gutter > 0 ? { paddingRight: gutter } : undefined}
       >

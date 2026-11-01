@@ -1,5 +1,6 @@
 import type { JsonObject } from "@/lib/chat/chatProtocol";
 import { toolLabel, toolRunning, type ToolItem } from "@/lib/chat/chatGroups";
+import { readImagePath } from "@/lib/chat/chatImages";
 import { isVisualTool } from "@/lib/chat/chatVisual";
 import type { LivePhase, LiveTool } from "@/lib/chat/chatState";
 
@@ -152,6 +153,23 @@ export function lastStep(tools: ToolItem[], cwd: string | null): string {
   const last = tools[tools.length - 1];
   if (!last || tools.some(toolRunning)) return "";
   return toolStep(last.name, last.input, cwd);
+}
+
+/**
+ * A folded run's closing words: its last call in words once done (« lit »
+ * when it read an image, its thumbnail beside saying which), and how many
+ * calls failed (`ChatWorkGroup`, `ChatActivityLine`).
+ */
+export function workTail(
+  tools: ToolItem[],
+  cwd: string | null,
+): { last: string; failed: number } {
+  const step = lastStep(tools, cwd);
+  const lastTool = tools[tools.length - 1];
+  return {
+    last: step && lastTool && readImagePath(lastTool) ? "lit" : step,
+    failed: tools.filter((t) => t.result?.isError).length,
+  };
 }
 
 /** The running call's time replaces the turn's once it lasts this long: a

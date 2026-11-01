@@ -12,9 +12,10 @@ const COPIED_MS = 1200;
 /**
  * A message in the terminal's frames (the display mod `outils-discrets`): the
  * user's in green, Claude's in violet, red-edged when the reply is an error,
- * another session's in blue, under a head naming it (`label`). Its foot has
- * the time at the left, « Modifier » and « Copier le message » at the right,
- * discreet (the user's pick of 01/11/2026: no « Toi » nor « Claude »).
+ * another session's in blue, under a head naming it (`label`). Its time,
+ * « Modifier » and « Copier le message » show on hover in its bottom-right
+ * corner, over the text (the user's picks of 01/11/2026: no « Toi » nor
+ * « Claude », no row kept empty for them).
  */
 export function ChatMessageFrame({
   role,
@@ -91,16 +92,19 @@ export function ChatMessageFrame({
         </div>
       )}
       {children}
+      {/* Always seen, so in the frame's flow: the foot shows on hover only. */}
+      {cut && (
+        <div className="chat-cut-row">
+          <span className="chat-cut" title="Réponse coupée par Échap">
+            coupé
+          </span>
+        </div>
+      )}
       <div className="chat-frame-foot">
         {iso && (
           <time dateTime={iso} title={messageTimeFull(iso) ?? undefined}>
             {messageTime(iso)}
           </time>
-        )}
-        {cut && (
-          <span className="chat-cut" title="Réponse coupée par Échap">
-            coupé
-          </span>
         )}
         <span className="tools">
           {role === "user" && onEdit && (
