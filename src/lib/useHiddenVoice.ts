@@ -126,7 +126,16 @@ let settling: Promise<void> = Promise.resolve();
  * dictation, instantly when the field shows: a pane stuck on anything else is
  * closed, and the next dictation gets a fresh one.
  */
-async function hiddenPane(): Promise<string> {
+function hiddenPane(): Promise<string> {
+  // One at a time: a warm-up and a dictation never both answer its dialogs.
+  pendingPane ??= readyPane().finally(() => {
+    pendingPane = null;
+  });
+  return pendingPane;
+}
+let pendingPane: Promise<string> | null = null;
+
+async function readyPane(): Promise<string> {
   const paneId = await invoke<string>("voice_pane", { cols: COLS, rows: ROWS });
   if (paneId !== readyId) {
     if (readyId) releaseAdoptedPane(readyId);
@@ -147,6 +156,17 @@ async function hiddenPane(): Promise<string> {
     release();
   }
   return paneId;
+}
+
+/**
+ * Starts the hidden Claude Code ahead of the first dictation, so the mic's
+ * first click listens at once instead of after its few seconds of start
+ * (the user's ask of 01/11/2026). It stays up afterwards, as after a
+ * dictation; a failure is silent, the first dictation tries again.
+ */
+export function warmHiddenVoice(): void {
+  if (readyId || busy) return;
+  void hiddenPane().catch(() => {});
 }
 
 /**

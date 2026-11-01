@@ -32,6 +32,10 @@ import { useAnyOverlayOpen } from "@/lib/overlays";
 import { CHAT_CSS } from "@/components/chat/chat-css";
 import { ChatLiveLine } from "@/components/chat/chat-live-line";
 import { useScrollbarGutter } from "@/lib/chat/useScrollbarGutter";
+import { warmHiddenVoice } from "@/lib/useHiddenVoice";
+
+/** After a chat shows, the dictation's Claude Code starts (`warmHiddenVoice`). */
+const VOICE_WARM_MS = 5_000;
 import { glideBy, scrollsItself, wheelPixels } from "@/lib/chat/glideScroll";
 import { ChatEditConfirm } from "@/components/chat/chat-edit-confirm";
 import { ChatOlderButton } from "@/components/chat/chat-older-button";
@@ -198,6 +202,12 @@ function ChatViewBody({
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const gutter = useScrollbarGutter(scrollRef);
+  // The dictation's hidden Claude Code starts a few seconds after a chat
+  // shows: the mic's first click then listens at once.
+  useEffect(() => {
+    const id = window.setTimeout(warmHiddenVoice, VOICE_WARM_MS);
+    return () => window.clearTimeout(id);
+  }, []);
   const innerRef = useRef<HTMLDivElement>(null);
   const stuckRef = useRef(true);
   /** `scrollTop` at the last scroll event or stick, for `followsAfterScroll`. */
