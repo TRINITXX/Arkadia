@@ -571,6 +571,8 @@ class Chat {
   private past: Promise<void>;
   /** No Claude Code runs: what needs one wakes it (`awake`), the column stays. */
   private asleep = false;
+  /** A compaction since the last turn's end: the ring counts again then. */
+  private compacted = false;
   /** What keeps it awake (`SleepFacts`), from its messages and the page's commands. */
   private turn = false;
   private tasks: readonly string[] = [];
@@ -1148,6 +1150,12 @@ class Chat {
         if (message.type === "system" && message.subtype === "commands_changed") {
           this.commands = message.commands;
         }
+        // A compaction: the last response's usage predates it, the ring
+        // must count again at the turn's end (seen 01/11/2026: 95 % shown
+        // for 83 k of 1 M).
+        if (message.type === "system" && message.subtype === "compact_boundary") {
+          this.compacted = true;
+        }
         if (message.type === "result") {
           this.clearCut();
           // A finished turn's text lives in its assistant messages: its
@@ -1157,7 +1165,8 @@ class Chat {
           );
           // Nor the turn's hooks that ran well: only failures stay.
           this.log = this.log.filter((e) => e.type !== "sdk" || !isSettledHook(e.message));
-          void this.reportContext(q);
+          void this.reportContext(q, this.compacted ? "full" : "summary");
+          this.compacted = false;
           void this.reportUsage(q);
           void this.reportInfo();
           void this.reportBranch();
@@ -1247,6 +1256,15 @@ class Chat {
     }
     try {
       const u = await (await this.ready).getContextUsage({ detail: "full" });
+      // Counted afresh: the ring takes it too, never left behind the detail.
+      this.out({
+        type: "context",
+        chatId: this.chatId,
+        percentage: u.percentage,
+        totalTokens: u.totalTokens,
+        maxTokens: u.rawMaxTokens,
+        model: u.model,
+      });
       emit({
         type: "context_detail",
         chatId: this.chatId,
@@ -1369,10 +1387,16 @@ class Chat {
     resolve(result);
   }
 
-  /** 'summary': from the last response's usage, without token-count calls. */
-  private async reportContext(q: Query): Promise<void> {
+  /**
+   * 'summary': from the last response's usage, without token-count calls;
+   * 'full' counts again (after a compaction, the last response is older).
+   */
+  private async reportContext(
+    q: Query,
+    detail: "summary" | "full" = "summary",
+  ): Promise<void> {
     try {
-      const usage = await q.getContextUsage({ detail: "summary" });
+      const usage = await q.getContextUsage({ detail });
       this.model = usage.model;
       this.out({
         type: "context",

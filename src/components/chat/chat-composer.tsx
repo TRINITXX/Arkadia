@@ -172,6 +172,18 @@ export function ChatComposer({
   asleep?: boolean;
 }) {
   const { text, images } = draft;
+  // Space held: the dictation lands mid-text (its words show in the wave's
+  // line) or at the end (in grey after the text, in place). Kept until the
+  // dictation is over: its words still come while it transcribes.
+  const [pushTalk, setPushTalk] = useState<{ mid: boolean } | null>(null);
+  useEffect(() => {
+    if (voice.status === "idle") setPushTalk(null);
+  }, [voice.status]);
+  // The words as they come, in grey right after the text, in place.
+  const inPlaceWords =
+    voice.interim && !voice.elsewhere && !pushTalk?.mid ? voice.interim : "";
+  // A hidden twin of the input: how tall the text and those words are.
+  const measureRef = useRef<HTMLTextAreaElement>(null);
   const files = draft.files ?? NO_FILES;
   const pastes = draft.pastes ?? NO_PASTES;
   const setText = (value: string) => onDraft((d) => ({ ...d, text: value }));
@@ -235,10 +247,20 @@ export function ChatComposer({
     if (!area) return;
     area.style.height = "auto";
     const max = parseFloat(window.getComputedStyle(area).maxHeight) || Infinity;
+    // The dictated words shown in place take their lines too.
+    let content = area.scrollHeight;
+    const twin = measureRef.current;
+    if (inPlaceWords && twin) {
+      twin.style.width = `${area.offsetWidth}px`;
+      twin.value = text + (text && !/\s$/.test(text) ? " " : "") + inPlaceWords;
+      content = Math.max(content, twin.scrollHeight);
+    }
     // A scrollbar only once the text outgrows the card.
-    area.style.overflowY = area.scrollHeight > max ? "auto" : "hidden";
-    area.style.height = `${Math.min(area.scrollHeight + 2, max)}px`;
-  }, [text]);
+    area.style.overflowY = content > max ? "auto" : "hidden";
+    area.style.height = `${Math.min(content + 2, max)}px`;
+    // The newest words in view when they outgrow it.
+    if (inPlaceWords) area.scrollTop = area.scrollHeight;
+  }, [text, inPlaceWords]);
 
   // Each image numbered; pasted, its tag « [Image #n] » goes where the
   // caret was, so Claude knows which one the text means (the user's ask of
@@ -387,9 +409,6 @@ export function ChatComposer({
   // key's repeat takes that space back and dictates, the text landing where
   // the caret was; the release stops it.
   const talkRef = useRef<{ talking: boolean; at: number } | null>(null);
-  // Space held: the dictation lands mid-text (its words show in the wave's
-  // line) or at the end (in grey after the text, in place).
-  const [pushTalk, setPushTalk] = useState<{ mid: boolean } | null>(null);
   // Where the caret was: a move into a tag goes over it, its way.
   const caretRef = useRef<number | null>(null);
   const plainSpace = (e: React.KeyboardEvent) =>
@@ -519,18 +538,23 @@ export function ChatComposer({
     if (e.key !== " " || !talkRef.current) return;
     const { talking } = talkRef.current;
     talkRef.current = null;
-    setPushTalk(null);
     if (talking && voice.status !== "idle" && voice.status !== "transcribing")
       void voice.stop();
   };
 
   const empty = !text.trim() && images.length === 0 && files.length === 0;
-  // The words as they come, in grey after the text when they land at its
-  // end; mid-text, in the wave's line.
-  const interimInPlace = !!voice.interim && !voice.elsewhere && !pushTalk?.mid;
   const bashMode = !!onBash && text.trimStart().startsWith("!");
   return (
     <div className="chat-box">
+      <textarea
+        ref={measureRef}
+        className="chat-measure"
+        aria-hidden
+        tabIndex={-1}
+        readOnly
+        rows={1}
+        defaultValue=""
+      />
       <ChatSlashMenu menu={slashMenu} />
       <ChatAttachments
         sources={cards}
@@ -578,7 +602,6 @@ export function ChatComposer({
           )
             void voice.stop();
           talkRef.current = null;
-          setPushTalk(null);
         }}
         onPaste={(e) => {
           const pasted = [...e.clipboardData.files];
@@ -623,7 +646,7 @@ export function ChatComposer({
         areaRef={areaRef}
         text={text}
         pastes={pastes}
-        trailing={interimInPlace ? voice.interim : undefined}
+        trailing={inPlaceWords || undefined}
         onEdit={(id, next) =>
           onDraft((d) => ({
             ...d,
@@ -647,7 +670,7 @@ export function ChatComposer({
               <i key={i} style={{ animationDelay: `${d}ms` }} />
             ))}
           </span>
-          {voice.interim && !interimInPlace && (
+          {voice.interim && !inPlaceWords && (
             <span className="words">{voice.interim}</span>
           )}
           <span className="hint">

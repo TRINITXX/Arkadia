@@ -55,16 +55,17 @@ export function rememberArtifactTitle(url: string, title: string): void {
   for (const cb of listeners) cb();
 }
 
+const subscribe = (cb: () => void) => {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+};
+
 /** The title known for this link, or null. */
 export function useArtifactTitle(url: string): string | null {
-  return useSyncExternalStore(
-    (cb) => {
-      listeners.add(cb);
-      return () => listeners.delete(cb);
-    },
-    () => {
-      const id = artifactId(url);
-      return id ? (all().get(id) ?? null) : null;
-    },
-  );
+  return useSyncExternalStore(subscribe, () => {
+    const id = artifactId(url);
+    return id ? (all().get(id) ?? null) : null;
+  });
 }

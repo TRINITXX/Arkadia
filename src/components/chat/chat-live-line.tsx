@@ -84,6 +84,13 @@ export function ChatLiveLine({
   useChatLayer(tasksOpen && tasks.length > 0 && !quiet, () =>
     setTasksOpen(false),
   );
+  // The dots move (task under way or not) or go: the list closes with
+  // them, never left open under no pointer (no mouseleave then).
+  const onTaskNow = !!(working && current && !compacting && !retry && !hook);
+  useEffect(() => {
+    window.clearTimeout(openTimer.current);
+    setTasksOpen(false);
+  }, [onTaskNow, quiet]);
   // Nothing to say: no line at all, no empty band above the input (the
   // user's ask of 31/10/2026).
   if (quiet) return null;
@@ -105,7 +112,7 @@ export function ChatLiveLine({
   // The task list: its dots (done, then the one under way), the list on hover.
   const taskList = (
     <span className="chat-anchor" {...hoverTasks}>
-      <span className="chat-task-dots" title="Les étapes de Claude">
+      <span className="chat-task-dots">
         {tasks
           .filter((t) => t.status === "completed")
           .map((t) => (
@@ -150,6 +157,9 @@ export function ChatLiveLine({
           <span className="figures">
             {elapsed && ` · ${elapsedLabel(elapsed.ms)}`}
             {turnTokens > 0 && ` · ↓ ${tokensLabel(turnTokens)} tokens`}
+            {elapsed?.call && backgroundHint && (
+              <span className="bg-hint"> · Ctrl+B : en arrière-plan</span>
+            )}
           </span>
         </span>
       )}

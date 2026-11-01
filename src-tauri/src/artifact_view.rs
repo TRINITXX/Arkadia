@@ -71,6 +71,9 @@ pub struct Bounds {
 struct TitleChanged {
     key: String,
     title: String,
+    /// The page the title belongs to: the panel may have gone elsewhere
+    /// on claude.ai (a link, a sign-in), whose title is not the artifact's.
+    url: String,
 }
 
 /// Whether a webview may call app commands: the windows of
@@ -336,13 +339,15 @@ pub async fn artifact_view_show(
             }
         })
         // The tab of the panel shows the page's own title.
-        .on_document_title_changed(move |_window, title| {
+        .on_document_title_changed(move |window, title| {
+            let url = window.url().map(|u| u.to_string()).unwrap_or_default();
             let _ = title_app.emit_to(
                 "main",
                 "artifact-title",
                 TitleChanged {
                     key: title_key.clone(),
                     title,
+                    url,
                 },
             );
         })

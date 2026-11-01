@@ -94,7 +94,7 @@ export function ChatMessageFrame({
       className={`chat-unit chat-frame ${role}${error ? " error" : ""}${className ? ` ${className}` : ""}`}
       // A tick of the column's map (`ChatMinimap`).
       data-mark={frameMark(role, error, text)}
-      data-preview={text.slice(0, 140)}
+      data-preview={text.replace(/[*_`#>]+/g, "").slice(0, 140)}
     >
       {role === "peer" && (
         <div className="chat-frame-head">

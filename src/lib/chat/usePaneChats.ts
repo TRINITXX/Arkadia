@@ -235,6 +235,10 @@ export function usePaneChats({
                 // Woken: a restore goes on with its session, awake.
                 asleep: undefined,
               },
+              // Woken, its title gets its status glyph back at once.
+              ...(pane.chat.asleep
+                ? { title: chatTitle(chatActivity(paneId), pane.title) }
+                : {}),
             }
           : pane,
       ),

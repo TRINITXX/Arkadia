@@ -625,7 +625,12 @@ function ChatViewBody({
     if (!scroller || e.ctrlKey || e.deltaY === 0) return;
     const target = e.target as Element;
     // The column scrolls natively; a sheet or a lightbox keeps its wheel.
-    if (target !== e.currentTarget && !target.closest(".chat-bottom")) return;
+    // The map on the column's edge too: no dead band where the pointer rests.
+    if (
+      target !== e.currentTarget &&
+      !target.closest(".chat-bottom, .chat-minimap")
+    )
+      return;
     if (scrollsItself(target, e.currentTarget, e.deltaY)) return;
     glideBy(
       scroller,
@@ -661,7 +666,8 @@ function ChatViewBody({
       <ChatMinimap
         scrollRef={scrollRef}
         innerRef={innerRef}
-        version={state.items}
+        version={state.items.length}
+        onLeave={leaveBottom}
       />
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-col chat-scroll-inner" ref={innerRef}>

@@ -128,6 +128,10 @@ export const CHAT_CSS = `
 .chat-box textarea::placeholder { color: #6b6f76; }
 /* A long paste's tag: a twin of the input lies behind its transparent text and draws the tag as a chip; hovered, its text, editable (ChatPasteTags). */
 .chat-box > textarea { position: relative; z-index: 1; }
+/* The input's hidden twin that measures the text and the words dictated in place. */
+.chat-box > textarea.chat-measure { position: absolute; left: 0; top: 0; z-index: -1; height: 0; min-height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
+/* The task list open: the gap up to it belongs to its dots. */
+.chat-live .chat-anchor:has(> .chat-tasks)::before { content: ""; position: absolute; left: -6px; right: -6px; bottom: 100%; height: 10px; }
 .chat-paste-twin { position: absolute; z-index: 0; box-sizing: border-box; border-style: solid; border-color: transparent; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; color: transparent; pointer-events: none; }
 .chat-paste-twin mark { color: transparent; background: #3a2519; border-radius: 5px; box-shadow: 0 0 0 1px #5a3a2c; }
 .chat-paste-hover { position: absolute; z-index: 7; width: min(440px, calc(100% - 16px)); background: #202327; border: 1px solid #31353b; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.45); padding: 8px; }

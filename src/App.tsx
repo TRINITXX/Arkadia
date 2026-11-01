@@ -50,7 +50,7 @@ import {
   type OpenSource,
   type ArtifactsByTab,
 } from "@/lib/artifactTabs";
-import { rememberArtifactTitle } from "@/lib/artifactTitles";
+import { artifactId, rememberArtifactTitle } from "@/lib/artifactTitles";
 import { snipTarget } from "@/lib/artifactSnip";
 import { SessionsOverlay } from "@/components/SessionsOverlay";
 import { Toaster, useToasts } from "@/components/Toaster";
@@ -145,7 +145,7 @@ import {
   chatBusyReason,
   chatForCommand,
   chatLabelOf,
-  chatTitle,
+  paneChatTitle,
   restoredChat,
   usePaneChats,
 } from "@/lib/chat/usePaneChats";
@@ -736,20 +736,25 @@ export function App() {
     void listen<string>("artifact-sent", (e) =>
       changeArtifacts((state) => closeArtifactByKey(state, e.payload)),
     ).then(keep);
-    void listen<{ key: string; title: string }>("artifact-title", (e) =>
-      changeArtifacts((state) => {
-        // Kept by link too: the chat's card names the artifact with it.
-        for (const current of Object.values(state)) {
-          const item = [...current.items, current.parked].find(
-            (i) => i?.key === e.payload.key,
-          );
-          if (item) rememberArtifactTitle(item.url, e.payload.title);
-        }
-        return {
-          state: setArtifactTitle(state, e.payload.key, e.payload.title),
-          closed: [],
-        };
-      }),
+    void listen<{ key: string; title: string; url?: string }>(
+      "artifact-title",
+      (e) =>
+        changeArtifacts((state) => {
+          // Kept by link too: the chat's card names the artifact with it;
+          // only while the panel shows that artifact's own page.
+          for (const current of Object.values(state)) {
+            const item = [...current.items, current.parked].find(
+              (i) => i?.key === e.payload.key,
+            );
+            const id = item && artifactId(item.url);
+            if (item && id && e.payload.url && artifactId(e.payload.url) === id)
+              rememberArtifactTitle(item.url, e.payload.title);
+          }
+          return {
+            state: setArtifactTitle(state, e.payload.key, e.payload.title),
+            closed: [],
+          };
+        }),
     ).then(keep);
     return () => {
       cancelled = true;
@@ -1229,9 +1234,12 @@ export function App() {
           id,
           // A restored chat is at rest until it says otherwise.
           title: chats[i]
-            ? chatTitle(
+            ? paneChatTitle(
+                chats[i],
                 IDLE_CHAT,
-                chatLabelOf(st.panes[i].title) || project.name,
+                chatLabelOf(st.panes[i].title) ||
+                  st.panes[i].title ||
+                  project.name,
               )
             : st.panes[i].title || project.name,
           cwd: null,
@@ -1757,7 +1765,11 @@ export function App() {
           delete panes[old.id];
           panes[newId] = {
             id: newId,
-            title: chatTitle(IDLE_CHAT, chatLabelOf(old.title) || chat.cwd),
+            title: paneChatTitle(
+              next,
+              IDLE_CHAT,
+              chatLabelOf(old.title) || old.title || chat.cwd,
+            ),
             cwd: null,
             accountId: paneAccount,
             chat: next,
