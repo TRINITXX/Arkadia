@@ -80,6 +80,19 @@ export function chatTitle(activity: ChatActivity, label: string): string {
   return `${waiting ? WAITING_TITLE_CHAR : BUSY_TITLE_CHAR} ${label}`;
 }
 
+/**
+ * A chat pane's title: its status glyph, or none while it was never
+ * started (opened asleep from the sidebar): no Claude runs there, so no
+ * « Claude attend » badge (the user's ask of 01/11/2026).
+ */
+export function paneChatTitle(
+  chat: PaneChat,
+  activity: ChatActivity,
+  label: string,
+): string {
+  return chat.asleep ? label : chatTitle(activity, label);
+}
+
 /** The label of a title `chatTitle` made, or null for any other title. */
 export function chatLabelOf(title: string): string | null {
   const t = title.trimStart();
@@ -186,7 +199,7 @@ export function usePaneChats({
           labelsRef.current.get(paneId) ||
           chatLabelOf(pane.title) ||
           folderOf(pane.chat.cwd);
-        const title = chatTitle(chatActivity(paneId), label);
+        const title = paneChatTitle(pane.chat, chatActivity(paneId), label);
         return pane.title === title ? pane : { ...pane, title };
       }),
     [patchPane],
@@ -204,7 +217,7 @@ export function usePaneChats({
       patchPane(paneId, (pane) => ({
         ...pane,
         chat,
-        title: chatTitle(chatActivity(paneId), folderOf(chat.cwd)),
+        title: paneChatTitle(chat, chatActivity(paneId), folderOf(chat.cwd)),
       })),
     [patchPane],
   );

@@ -6,6 +6,7 @@ import {
   chatForCommand,
   chatLabelOf,
   chatTitle,
+  paneChatTitle,
   restoredChat,
   terminalBusyReason,
 } from "@/lib/chat/usePaneChats";
@@ -271,5 +272,16 @@ describe("restoredChat", () => {
       cwd: "C:/p",
       resume,
     });
+  });
+});
+
+describe("a chat pane's title", () => {
+  it("has no badge while the chat was never started", () => {
+    expect(paneChatTitle({ cwd: "C:/p", asleep: true }, IDLE_CHAT, "p")).toBe(
+      "p",
+    );
+    expect(paneChatTitle({ cwd: "C:/p" }, IDLE_CHAT, "p")).toBe(
+      chatTitle(IDLE_CHAT, "p"),
+    );
   });
 });
