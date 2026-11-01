@@ -2,9 +2,12 @@
 //! try new views without closing it. Built with `ARKADIA_LAB_BUILD=1` and the
 //! `tauri.lab.conf.json` overlay, whose own identifier gives it its own
 //! single-instance lock, store and WebView2 profile (see `Rebuild Arkadia
-//! Lab.bat`). It leaves the phone, the gate, artifact routing and the usage
-//! poller to the daily instance, notifies from its own signal folder
-//! (`popup::signal_dir`), and starts from its projects without its tabs.
+//! Lab.bat`). It leaves the phone, the gate and artifact routing to the daily
+//! instance, runs the usage poller and its quota hellos only while the daily
+//! one is closed (`gate::arkadia_running`), notifies from its own signal
+//! folder (`popup::signal_dir`), and starts from its projects without its
+//! tabs. Serving the phone from the Lab would blind that check: the Lab would
+//! see itself and never send a hello.
 
 use std::path::Path;
 

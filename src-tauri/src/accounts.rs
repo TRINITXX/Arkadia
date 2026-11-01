@@ -936,13 +936,19 @@ fn read_back_window(id: &str) -> bool {
 /// Background loop: every account whose usage is older than 30 min (no live
 /// session reporting it) gets one poll, at most once per 30 min per account.
 /// Then every signed-in account with no 5-hour window running gets a hello.
-pub fn spawn_usage_poller() {
-    std::thread::spawn(|| {
+/// `should_run` is asked each minute: Arkadia Lab stands in only while the
+/// daily Arkadia is closed, else the hellos would go out twice.
+pub fn spawn_usage_poller(should_run: fn() -> bool) {
+    std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(15));
         let mut last_attempt: HashMap<String, i64> = HashMap::new();
         // Per account: time of the last missed hello, misses in a row.
         let mut hello_misses: HashMap<String, (i64, u32)> = HashMap::new();
         loop {
+            if !should_run() {
+                std::thread::sleep(Duration::from_secs(60));
+                continue;
+            }
             let ids: Vec<String> = {
                 let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
                 load_registry().accounts.into_iter().map(|a| a.id).collect()
@@ -972,6 +978,11 @@ pub fn spawn_usage_poller() {
                 let waiting = misses.is_some_and(|(at, n)| now - at < hello_pause_ms(n));
                 if waiting || !logged_in(id) {
                     continue;
+                }
+                // A round can last minutes: the daily Arkadia opened since
+                // takes over now, not after a second hello.
+                if !should_run() {
+                    break;
                 }
                 let opened = send_hello(id) && read_back_window(id);
                 if opened {

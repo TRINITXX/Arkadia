@@ -215,10 +215,14 @@ pub fn run() {
                 // Nothing inside a wedged webview can repair it, so the
                 // watchdog lives out here (see `uiwatch`).
                 uiwatch::spawn_watchdog(app.handle().clone());
-                // Usage of the accounts no running session reports (see `accounts`).
-                // Its quota hellos would go out twice from Arkadia Lab.
-                if !lab::LAB {
-                    accounts::spawn_usage_poller();
+                // Usage of the accounts no running session reports, and the
+                // quota hellos (see `accounts`). Arkadia Lab sends them only
+                // while the daily Arkadia is closed: never twice, and still
+                // there once the Lab replaces it (the user's ask of 01/11/2026).
+                if lab::LAB {
+                    accounts::spawn_usage_poller(|| !gate::arkadia_running());
+                } else {
+                    accounts::spawn_usage_poller(|| true);
                 }
                 // Transcript-image cache housekeeping, off the setup path.
                 std::thread::spawn(|| conversation::prune_imgcache(30));

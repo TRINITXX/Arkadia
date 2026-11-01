@@ -46,8 +46,10 @@ pub fn is_gate_mode() -> bool {
     std::env::args().any(|a| a == GATE_ARG)
 }
 
-/// True when Arkadia's phone server answers (so Arkadia runs).
-fn arkadia_running() -> bool {
+/// True when Arkadia's phone server answers (so Arkadia runs). The daily
+/// Arkadia always serves it, Arkadia Lab never does: from the Lab, it says
+/// whether the daily one is open.
+pub(crate) fn arkadia_running() -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], crate::remote::PORT));
     TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
 }
