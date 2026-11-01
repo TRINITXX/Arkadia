@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { chatGallery, stripRefs, userMessageView } from "@/lib/chat/chatImages";
+import {
+  chatGallery,
+  drawnImageKeys,
+  stripRefs,
+  userMessageView,
+} from "@/lib/chat/chatImages";
 import type { ChatItem } from "@/lib/chat/chatState";
 
 const CWD = "C:\\proj";
@@ -61,10 +66,27 @@ describe("chatGallery", () => {
     ]);
   });
 
-  it("leaves the strip the videos only: images are minis in the text", () => {
+  it("leaves the strip the images its prose doesn't draw, and the videos", () => {
+    const text = [
+      "Captures : C:\\proj\\a.png et `C:\\proj\\b.png`",
+      "`cp C:\\proj\\c.png x` puis [lien](C:\\proj\\d.png)",
+      "```",
+      "C:\\proj\\e.png",
+      "```",
+      "Vidéo : C:\\proj\\demo.mp4",
+    ].join("\n");
+    const paths = ["a.png", "b.png", "c.png", "d.png", "e.png", "demo.mp4"];
     expect(
-      stripRefs([{ path: "C:\\proj\\a.png" }, { path: "C:\\proj\\demo.mp4" }]),
-    ).toEqual([{ path: "C:\\proj\\demo.mp4" }]);
+      stripRefs(
+        paths.map((p) => ({ path: `C:\\proj\\${p}` })),
+        drawnImageKeys(text, CWD),
+      ).map((r) => r.path),
+    ).toEqual([
+      "C:\\proj\\c.png",
+      "C:\\proj\\d.png",
+      "C:\\proj\\e.png",
+      "C:\\proj\\demo.mp4",
+    ]);
   });
 
   it("walks every image once, in reading order, for the lightbox", () => {

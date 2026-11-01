@@ -9,8 +9,8 @@ import { ChatPasteChip } from "@/components/chat/chat-paste-chip";
 import { pastesIn, wordCount } from "@/lib/chat/chatPastes";
 import { LinkCardsContext, type LinkCards } from "@/lib/linkCards";
 import type { AttachmentSource } from "@/components/chat/chat-attachment-card";
-import { userMessageView } from "@/lib/chat/chatImages";
-import { isVideoPath } from "@/lib/imagePaths";
+import { drawnImageKeys, userMessageView } from "@/lib/chat/chatImages";
+import { imagePathKey, isVideoPath } from "@/lib/imagePaths";
 import type { ChatItem } from "@/lib/chat/chatState";
 import type { ImageRef } from "@/lib/imageGallery";
 
@@ -44,6 +44,22 @@ export function ChatUserBody({
   onToast?: ToastFn;
 }) {
   const view = userMessageView(item, cwd);
+  // The texts it sent from tags (`chatPastes`): tags again, their text on
+  // hover (the user's pick 1 of 01/11/2026), as links the markdown draws
+  // through the cards it already knows (`LinkCardsContext`).
+  const pasted = useMemo(() => pastesIn(view.text), [view.text]);
+  const shown = useMemo(
+    () =>
+      pasted.reduce(
+        (t, paste, i) =>
+          t
+            .split(paste)
+            .join(`[Texte collé · ${wordsLabel(paste)}](${PASTE_HREF}${i})`),
+        view.text,
+      ),
+    [pasted, view.text],
+  );
+  const drawn = useMemo(() => drawnImageKeys(shown, cwd), [shown, cwd]);
   const sources = useMemo<AttachmentSource[]>(
     () => [
       ...refs.flatMap((ref) =>
@@ -60,31 +76,19 @@ export function ChatUserBody({
           : [],
       ),
       ...view.paths.map((path) => ({ kind: "path" as const, key: path, path })),
-      // A video named in a sentence: its still once found. An image shows
-      // as a mini in the sentence itself.
-      ...view.named.filter(isVideoPath).map((path) => ({
-        kind: "path" as const,
-        key: path,
-        path,
-        quiet: true,
-      })),
+      // Named in a sentence: an image shows as a mini there; a video, or
+      // an image its shown text doesn't draw (in a code, in a pasted
+      // text's tag), gets its card once found, else nothing more.
+      ...view.named
+        .filter((path) => isVideoPath(path) || !drawn.has(imagePathKey(path)))
+        .map((path) => ({
+          kind: "path" as const,
+          key: path,
+          path,
+          quiet: true,
+        })),
     ],
-    [refs, view.paths, view.named],
-  );
-  // The texts it sent from tags (`chatPastes`): tags again, their text on
-  // hover (the user's pick 1 of 01/11/2026), as links the markdown draws
-  // through the cards it already knows (`LinkCardsContext`).
-  const pasted = useMemo(() => pastesIn(view.text), [view.text]);
-  const shown = useMemo(
-    () =>
-      pasted.reduce(
-        (t, paste, i) =>
-          t
-            .split(paste)
-            .join(`[Texte collé · ${wordsLabel(paste)}](${PASTE_HREF}${i})`),
-        view.text,
-      ),
-    [pasted, view.text],
+    [refs, view.paths, view.named, drawn],
   );
   const outer = useContext(LinkCardsContext);
   const cards = useMemo<LinkCards | null>(() => {

@@ -8,9 +8,10 @@ import type { ImageRef } from "@/lib/imageGallery";
 import { isVideoPath } from "@/lib/imagePaths";
 
 /**
- * The strip under a message: its pasted images, then the image and video
- * files it names. A click opens the lightbox, whose ←/→ walk every image of
- * the conversation. `dropped` pasted images are no longer in memory (the
+ * The strip under a message: its pasted images, then the image files its
+ * words name but don't show as minis (`stripRefs`) and its videos. A click
+ * opens the lightbox, whose ←/→ walk every image of the conversation.
+ * `dropped` pasted images are no longer in memory (the
  * newest are kept, `keepPasted`): a chip counts them.
  */
 export function ChatGallery({

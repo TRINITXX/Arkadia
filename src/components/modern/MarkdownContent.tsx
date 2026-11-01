@@ -35,7 +35,6 @@ import {
 import { fetchImageUrl } from "@/lib/imageUrlCache";
 import { LinkCardsContext } from "@/lib/linkCards";
 import { usePathHover } from "@/lib/pathHover";
-import { fileName } from "@/lib/chat/chatAttachments";
 import { usePathImage } from "@/lib/chat/usePathImage";
 
 export type ToastFn = (level: "info" | "error", message: string) => void;
@@ -84,7 +83,11 @@ function ImagePathLink({
   const Tag = code ? "code" : "span";
   const hover = usePathHover();
   const ref = useRef<HTMLSpanElement>(null);
-  const { url: mini } = usePathImage(ref, isVideoPath(path) ? null : path);
+  const { url } = usePathImage(ref, isVideoPath(path) ? null : path);
+  // Bytes that don't draw (an empty or half-written file, a URL revoked by
+  // the cache meanwhile): the path again, never a broken picture.
+  const [broken, setBroken] = useState<string | null>(null);
+  const mini = url && url !== broken ? url : null;
   // Hovered when it goes (the message redrawn without it) or changes path:
   // no mouseleave will come, its card goes now.
   const hovered = useRef(false);
@@ -127,7 +130,21 @@ function ImagePathLink({
         });
       }}
     >
-      {mini ? <img src={mini} alt={fileName(path)} draggable={false} /> : label}
+      {mini ? (
+        <>
+          <img
+            src={mini}
+            alt=""
+            draggable={false}
+            onError={() => setBroken(mini)}
+          />
+          {/* The path still in the text, unseen: the chat's search finds
+              it, a copied sentence keeps it. */}
+          <span className="label">{label}</span>
+        </>
+      ) : (
+        label
+      )}
     </Tag>
   );
 }
@@ -333,8 +350,9 @@ interface MarkdownContentProps {
   baseDir?: string | null;
   onOpen: (content: LightboxContent) => void;
   onToast?: ToastFn;
-  /** Off: an image path stays text that opens it on click, the image itself
-   *  shown elsewhere (the chat's strip under the message). On by default. */
+  /** Off (the chat): an image path shows as a mini the height of a line,
+   *  its path while it loads; a click opens it. On by default: the image
+   *  itself, full width. */
   inlineImages?: boolean;
 }
 

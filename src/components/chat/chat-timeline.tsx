@@ -10,7 +10,6 @@ import { ChatAgentRow } from "@/components/chat/chat-agent-row";
 import { ChatBashCard } from "@/components/chat/chat-bash-card";
 import { ChatCommandCard } from "@/components/chat/chat-command-card";
 import { ChatEditCard } from "@/components/chat/chat-edit-card";
-import { ChatGallery } from "@/components/chat/chat-gallery";
 import { ChatMessageFrame } from "@/components/chat/chat-message-frame";
 import { ChatNoticeRow } from "@/components/chat/chat-notice-row";
 import { ChatPlanCard } from "@/components/chat/chat-plan-card";
@@ -32,7 +31,7 @@ import {
   type ChatUnit,
 } from "@/lib/chat/chatGroups";
 import { withDayBreaks } from "@/lib/chat/chatDays";
-import { chatGallery, stripRefs } from "@/lib/chat/chatImages";
+import { chatGallery } from "@/lib/chat/chatImages";
 import { peerLabel } from "@/lib/chat/chatPeer";
 import { latestPlan, type ChatItem, type Subagent } from "@/lib/chat/chatState";
 import type { VisualEntry } from "@/lib/chat/chatVisual";
@@ -231,6 +230,7 @@ export const ChatTimeline = memo(function ChatTimeline({
                 text={unit.item.text}
                 bare={bareReplyIds.includes(unit.item.id)}
                 cwd={cwd}
+                refs={NO_IMAGES}
                 onOpen={onOpen}
                 onToast={onToast}
               />
@@ -251,12 +251,9 @@ export const ChatTimeline = memo(function ChatTimeline({
               text={unit.item.text}
               bare={bareReplyIds.includes(unit.item.id)}
               cwd={cwd}
+              refs={gallery.byItem.get(unit.item.id) ?? NO_IMAGES}
               onOpen={onOpen}
               onToast={onToast}
-            />
-            <ChatGallery
-              refs={stripRefs(gallery.byItem.get(unit.item.id) ?? NO_IMAGES)}
-              onOpen={onOpen}
             />
           </ChatMessageFrame>
         );

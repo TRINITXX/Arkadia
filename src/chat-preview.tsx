@@ -221,7 +221,7 @@ function imageEvents(): ChatEvent[] {
           content: [
             {
               type: "text",
-              text: `Corrigé : la barre prend la version nette. Les deux tailles servies :\n\n- ${icons}\\Square310x310Logo.png\n- ${icons}\\Square150x150Logo.png\n\nCaptures : ${icons}\\icon.png ${icons}\\Square44x44Logo.png ${icons}\\128x128.png`,
+              text: `Corrigé : la barre prend la version nette. Les deux tailles servies :\n\n- ${icons}\\Square310x310Logo.png\n- ${icons}\\Square150x150Logo.png\n\nCaptures : ${icons}\\icon.png ${icons}\\Square44x44Logo.png ${icons}\\128x128.png\n\n\`\`\`\ncopy ${icons}\\32x32.png\n\`\`\``,
             },
           ],
         },

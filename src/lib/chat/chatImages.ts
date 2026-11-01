@@ -86,13 +86,55 @@ export function userMessageView(
   return view;
 }
 
+/** A fenced code block, to its closing fence or the text's end. */
+const FENCE_RE =
+  /^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ {0,3}\1[^\n]*$|(?![\s\S]))/gm;
+/** Inline code on one line. */
+const INLINE_CODE_RE = /`([^`\n]+)`/g;
+/** A link's or an image's target: `](…)`, `](<…>)`. */
+const LINK_TARGET_RE = /\]\((?:<[^>\n]*>|[^)\n]*)\)/g;
+
 /**
- * A message's strip once its text is drawn: the videos it names. The images
- * show as minis in its sentences, in place of their paths (the user's ask of
- * 01/11/2026); the lightbox still walks them all.
+ * The images (by `imagePathKey`) the chat's markdown draws as minis in
+ * place of their paths (`MarkdownContent`, `inlineImages` off): those of its
+ * prose, and an inline code that is a path alone. A path in a code block, in
+ * a code among other words or in a link's target stays text: the strip
+ * shows it.
  */
-export function stripRefs(refs: ImageRef[]): ImageRef[] {
-  return refs.filter((ref) => isVideoPath(ref.path));
+export function drawnImageKeys(
+  markdown: string,
+  cwd: string | null,
+): Set<string> {
+  const keys = new Set<string>();
+  const add = (text: string, alone = false) => {
+    const segments = splitImagePaths(text, cwd);
+    if (alone && !(segments.length === 1 && segments[0].path)) return;
+    for (const { path } of segments) {
+      if (path && !isVideoPath(path)) keys.add(imagePathKey(path));
+    }
+  };
+  add(
+    markdown
+      .replace(FENCE_RE, "\n")
+      .replace(INLINE_CODE_RE, (_, code: string) => {
+        add(code, true);
+        return " ";
+      })
+      .replace(LINK_TARGET_RE, "]"),
+  );
+  return keys;
+}
+
+/**
+ * A message's strip once its text is drawn: its videos, and the images its
+ * sentences don't show as minis (`drawnImageKeys`, the user's ask of
+ * 01/11/2026). The lightbox still walks them all.
+ */
+export function stripRefs(refs: ImageRef[], drawn: Set<string>): ImageRef[] {
+  return refs.filter(
+    (ref) =>
+      !!ref.url || isVideoPath(ref.path) || !drawn.has(imagePathKey(ref.path)),
+  );
 }
 
 /** The image a `Read` call reads, if it is one. */

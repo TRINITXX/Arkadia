@@ -54,9 +54,9 @@ export const CHAT_CSS = `
 .chat-line .chat-counts .lucide { width: 14px; height: 14px; }
 /* Claude's thinking between two messages: its text alone, in indigo italics, never read as the grey work line (ChatThoughts). */
 .chat-thoughts { display: flex; flex-direction: column; gap: 6px; padding: 0 4px; font-size: 13px; line-height: 1.55; color: #8b93c9; font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Two lines at most; when cut, a click reads it all (the user's pick of 01/11/2026). */
 .chat-thoughts p { margin: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-/* Two lines at most; a click reads it all (the user's pick of 01/11/2026). */
-.chat-thoughts { cursor: pointer; }
+.chat-thoughts.cut { cursor: pointer; }
 .chat-thoughts.open p { display: block; }
 .chat-activity-detail { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 0 7px; padding-left: 14px; border-left: 1px solid var(--chat-line); }
 /* The question sheet unfolded: the input hides, the sheet takes the bottom (the user's ask of 01/11/2026); folded, the input comes back. */
@@ -294,13 +294,14 @@ export const CHAT_CSS = `
 .chat-root .modern-path { cursor: pointer; }
 .chat-root .modern-path:hover { color: #9ec5f8; }
 .chat-root .modern-path .ext-ico { display: inline-flex; margin-left: 3px; vertical-align: -1px; opacity: .7; }
-/* An image path left as text: the picture is in the strip, a click opens it. */
+/* An image path as text (loading, missing, a video): a click opens it. */
 .chat-root .modern-imgpath { color: #9ec5f8; cursor: zoom-in; text-decoration: underline dotted; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .chat-root .modern-imgpath:hover { color: #cfe2fb; }
 /* An image path found: a mini the height of a line in its place (the user's ask of 01/11/2026), as an image Claude reads. */
-.chat-root .modern-imgpath.mini { display: inline-block; vertical-align: middle; line-height: 0; text-decoration: none; background: none; padding: 0; border: 0; }
+.chat-root .modern-imgpath.mini { position: relative; display: inline-block; vertical-align: middle; line-height: 0; text-decoration: none; background: none; padding: 0; border: 0; }
 .chat-root .modern-imgpath.mini img { display: block; height: 20px; width: auto; max-width: 40px; object-fit: contain; background: #111215; border-radius: 4px; border: 1px solid rgba(255,255,255,.14); }
 .chat-root .modern-imgpath.mini:hover img { border-color: rgba(255,255,255,.4); }
+.chat-root .modern-imgpath.mini .label { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* The strip under a message: pasted images, then the files it names. */
 .chat-gallery { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .chat-gallery .modern-thumb { display: block; height: 92px; width: auto; max-width: 220px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(255,255,255,.12); cursor: zoom-in; }
