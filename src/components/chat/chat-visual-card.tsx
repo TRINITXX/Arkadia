@@ -130,7 +130,12 @@ export function ChatVisualCard({
   };
   const link = (url: string) => void openUrl(url).catch(() => {});
   return (
-    <div className={`chat-visual${wide ? " wide" : ""}`} ref={cardRef}>
+    <div
+      className={`chat-visual${wide ? " wide" : ""}`}
+      ref={cardRef}
+      data-mark="visual"
+      data-preview={title}
+    >
       <div className="chat-visual-head">
         <Shapes />
         <span className="t">{title}</span>

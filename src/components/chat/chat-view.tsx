@@ -31,6 +31,7 @@ import { followsAfterScroll } from "@/lib/followBottom";
 import { useAnyOverlayOpen } from "@/lib/overlays";
 import { CHAT_CSS } from "@/components/chat/chat-css";
 import { ChatLiveLine } from "@/components/chat/chat-live-line";
+import { ChatMinimap } from "@/components/chat/chat-minimap";
 import { useScrollbarGutter } from "@/lib/chat/useScrollbarGutter";
 import { warmHiddenVoice } from "@/lib/useHiddenVoice";
 import { glideBy, scrollsItself, wheelPixels } from "@/lib/chat/glideScroll";
@@ -581,7 +582,11 @@ function ChatViewBody({
         }}
         draft={draft}
         onDraft={onDraft}
-        voice={sheetDictates ? { ...voice, interim: undefined } : voice}
+        voice={
+          sheetDictates
+            ? { ...voice, interim: undefined, elsewhere: true }
+            : voice
+        }
         // Focused when the pane activates, and when the user folds the
         // sheet that hid it (`refocus`, only with the focus free).
         focusKey={isActive ? `focus:${refocus}` : false}
@@ -652,6 +657,12 @@ function ChatViewBody({
           onClose={search.close}
         />
       )}
+      {/* A map of the conversation on its right edge (the user's pick 12). */}
+      <ChatMinimap
+        scrollRef={scrollRef}
+        innerRef={innerRef}
+        version={state.items}
+      />
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-col chat-scroll-inner" ref={innerRef}>
           <div className="chat-title">{state.title ?? folderOf(cwd)}</div>

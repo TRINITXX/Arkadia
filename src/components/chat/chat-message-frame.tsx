@@ -6,6 +6,14 @@ import { messageTime, messageTimeFull } from "@/lib/messageTime";
 /** Another session's frame names its sender; the user's and Claude's need no name. */
 const PEER_LABEL = "Message d'une autre session";
 
+/** A frame's tick on the map: the user's, Claude's answer, question or error. */
+function frameMark(role: string, error: boolean, text: string) {
+  if (role === "user") return "user";
+  if (role !== "claude") return undefined;
+  if (error) return "error";
+  return /❓|Question \d+ sur \d+/.test(text) ? "question" : "claude";
+}
+
 /** How long a copy button holds its ✓ (the code blocks' too). */
 const COPIED_MS = 1200;
 
@@ -84,6 +92,9 @@ export function ChatMessageFrame({
   return (
     <div
       className={`chat-unit chat-frame ${role}${error ? " error" : ""}${className ? ` ${className}` : ""}`}
+      // A tick of the column's map (`ChatMinimap`).
+      data-mark={frameMark(role, error, text)}
+      data-preview={text.slice(0, 140)}
     >
       {role === "peer" && (
         <div className="chat-frame-head">

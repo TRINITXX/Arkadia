@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import { ArrowUp, Mic, Square } from "lucide-react";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
@@ -60,6 +61,8 @@ export interface ChatVoice {
   stop: (options?: { quiet?: () => boolean }) => Promise<DictationEnd>;
   /** The words so far, dim under the text until the dictation lands. */
   interim?: string;
+  /** Another field takes this dictation (the question sheet's): no wave here. */
+  elsewhere?: boolean;
 }
 
 const VOICE_TITLES: Record<VoiceStatus, string> = {
@@ -72,6 +75,8 @@ const VOICE_TITLES: Record<VoiceStatus, string> = {
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const NO_FILES: DraftFile[] = [];
 const NO_PASTES: PastedText[] = [];
+/** The wave's bars, each its own beat. */
+const WAVE_DELAYS = [0, 180, 90, 320, 140, 260, 40, 210, 120, 300, 70, 240];
 
 function readImage(file: File): Promise<Attachment> {
   return new Promise((resolve, reject) => {
@@ -382,6 +387,9 @@ export function ChatComposer({
   // key's repeat takes that space back and dictates, the text landing where
   // the caret was; the release stops it.
   const talkRef = useRef<{ talking: boolean; at: number } | null>(null);
+  // Space held: the dictation lands mid-text (its words show in the wave's
+  // line) or at the end (in grey after the text, in place).
+  const [pushTalk, setPushTalk] = useState<{ mid: boolean } | null>(null);
   // Where the caret was: a move into a tag goes over it, its way.
   const caretRef = useRef<number | null>(null);
   const plainSpace = (e: React.KeyboardEvent) =>
@@ -434,6 +442,7 @@ export function ChatComposer({
         e.preventDefault();
         if (!talk.talking && voice.status === "idle") {
           talk.talking = true;
+          setPushTalk({ mid: talk.at < text.trimEnd().length });
           // The tap's space, typed a moment ago, goes.
           const base =
             text[talk.at] === " "
@@ -510,11 +519,15 @@ export function ChatComposer({
     if (e.key !== " " || !talkRef.current) return;
     const { talking } = talkRef.current;
     talkRef.current = null;
+    setPushTalk(null);
     if (talking && voice.status !== "idle" && voice.status !== "transcribing")
       void voice.stop();
   };
 
   const empty = !text.trim() && images.length === 0 && files.length === 0;
+  // The words as they come, in grey after the text when they land at its
+  // end; mid-text, in the wave's line.
+  const interimInPlace = !!voice.interim && !voice.elsewhere && !pushTalk?.mid;
   const bashMode = !!onBash && text.trimStart().startsWith("!");
   return (
     <div className="chat-box">
@@ -565,6 +578,7 @@ export function ChatComposer({
           )
             void voice.stop();
           talkRef.current = null;
+          setPushTalk(null);
         }}
         onPaste={(e) => {
           const pasted = [...e.clipboardData.files];
@@ -609,6 +623,7 @@ export function ChatComposer({
         areaRef={areaRef}
         text={text}
         pastes={pastes}
+        trailing={interimInPlace ? voice.interim : undefined}
         onEdit={(id, next) =>
           onDraft((d) => ({
             ...d,
@@ -619,9 +634,29 @@ export function ChatComposer({
           onDraft((d) => ({ ...d, ...unfoldPaste(d.text, d.pastes ?? [], id) }))
         }
       />
-      {voice.interim && (
-        <div className="chat-voice-live" title="Dictée en cours">
-          {voice.interim}
+      {/* While dictating: a live wave, the words as they come (in place
+          after the text, or here when they go mid-text), how to finish
+          (the user's pick 16 of 01/11/2026). */}
+      {voice.status !== "idle" && !voice.elsewhere && (
+        <div
+          className={`chat-voice-wave${voice.status === "transcribing" ? " still" : ""}`}
+          title="Dictée en cours"
+        >
+          <span className="wave" aria-hidden>
+            {WAVE_DELAYS.map((d, i) => (
+              <i key={i} style={{ animationDelay: `${d}ms` }} />
+            ))}
+          </span>
+          {voice.interim && !interimInPlace && (
+            <span className="words">{voice.interim}</span>
+          )}
+          <span className="hint">
+            {voice.status === "transcribing"
+              ? "transcription…"
+              : pushTalk
+                ? "Espace maintenu · relâche pour finir"
+                : "clique sur le micro pour finir"}
+          </span>
         </div>
       )}
       <div className="chat-tools-row">

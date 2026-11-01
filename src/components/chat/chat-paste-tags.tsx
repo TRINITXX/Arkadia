@@ -40,12 +40,15 @@ export function ChatPasteTags({
   pastes,
   onEdit,
   onUnfold,
+  trailing,
 }: {
   areaRef: React.RefObject<HTMLTextAreaElement | null>;
   text: string;
   pastes: readonly PastedText[];
   onEdit: (id: number, next: string) => void;
   onUnfold: (id: number) => void;
+  /** Dictated words not landed yet, in grey after the text, in place. */
+  trailing?: string;
 }) {
   const twinRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{
@@ -61,7 +64,7 @@ export function ChatPasteTags({
   // Esc closes it, never Claude's turn (`chatLayers`).
   useChatLayer(hover !== null, () => setHover(null));
   const spans = pasteSpans(text, pastes);
-  const on = spans.length > 0;
+  const on = spans.length > 0 || !!trailing;
 
   // The twin on the input's box, its styles and its scroll.
   useLayoutEffect(() => {
@@ -147,8 +150,16 @@ export function ChatPasteTags({
     );
     at = s.end;
   }
+  parts.push(text.slice(at));
+  if (trailing)
+    parts.push(
+      <span key="interim" className="interim">
+        {text && !/\s$/.test(text) ? " " : ""}
+        {trailing}
+      </span>,
+    );
   // A last line break still takes a line, as in the input.
-  parts.push(`${text.slice(at)}${ZERO_WIDTH}`);
+  parts.push(ZERO_WIDTH);
   return (
     <>
       <div className="chat-paste-twin" ref={twinRef} aria-hidden>

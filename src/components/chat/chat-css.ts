@@ -686,7 +686,34 @@ export const CHAT_CSS = `
 .chat-sheet-q .free .send:disabled { opacity: .4; cursor: default; }
 .chat-sheet-q .free .send .lucide { width: 15px; height: 15px; }
 /* A narrow pane (under ~500 px): the switch and the input's chips as icons, the switch above the column, not over it. */
+/* The conversation's map on its right edge: a tick per message, the part on screen framed (ChatMinimap, the user's pick 12 of 01/11/2026). */
+.chat-minimap { position: absolute; right: 14px; width: 12px; z-index: 2; }
+.chat-minimap > i { position: absolute; left: 0; right: 0; height: 3px; border-radius: 2px; background: #6b4a99; cursor: pointer; transform: translateY(-1px); transition: height .1s, transform .1s; }
+.chat-minimap > i:hover { height: 6px; transform: translateY(-3px); }
+.chat-minimap > i.user { background: #1f9f50; }
+.chat-minimap > i.question { background: var(--chat-accent); }
+.chat-minimap > i.visual { background: #3b82f6; }
+.chat-minimap > i.error { background: #d9534f; }
+.chat-minimap .view { position: absolute; left: -3px; right: -3px; min-height: 6px; border: 1px solid #4a4e55; border-radius: 4px; background: rgba(255,255,255,.03); pointer-events: none; }
+.chat-minimap .peek { position: absolute; right: 22px; transform: translateY(-50%); width: 270px; display: flex; flex-direction: column; gap: 2px; background: #202327; border: 1px solid #31353b; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.45); padding: 7px 10px; font-size: 12px; line-height: 1.45; color: #d4d4d8; pointer-events: none; }
+.chat-minimap .peek b { font-size: 11px; font-weight: 600; color: #b58af7; }
+.chat-minimap .peek b.user { color: #22c55e; }
+.chat-minimap .peek b.question { color: var(--chat-accent); }
+.chat-minimap .peek b.visual { color: #60a5fa; }
+.chat-minimap .peek b.error { color: #f08a87; }
+.chat-minimap .peek span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+/* Dictation under way: a live wave, the words as they come, how to finish (the user's pick 16 of 01/11/2026). */
+.chat-voice-wave { display: flex; align-items: center; gap: 10px; padding: 4px 6px 2px; font-size: 12.5px; color: var(--chat-mute); }
+.chat-voice-wave .wave { display: inline-flex; align-items: center; gap: 2px; height: 18px; flex-shrink: 0; }
+.chat-voice-wave .wave i { display: block; width: 3px; height: 18px; border-radius: 2px; background: var(--chat-accent); transform: scaleY(.3); animation: chat-wave .9s ease-in-out infinite; }
+.chat-voice-wave.still .wave i { animation: none; transform: scaleY(.25); opacity: .6; }
+@keyframes chat-wave { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }
+@media (prefers-reduced-motion: reduce) { .chat-voice-wave .wave i { animation: none; transform: scaleY(.5); } }
+.chat-voice-wave .words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--chat-dim); font-style: italic; }
+.chat-voice-wave .hint { margin-left: auto; flex-shrink: 0; }
+.chat-paste-twin .interim { color: #8b8f97; font-style: italic; }
 .chat-root { container-type: inline-size; }
+@container (max-width: 640px) { .chat-minimap { display: none; } }
 @container (max-width: 500px) {
   .chat-sheet-q:not(.folded) .hd .fold b { display: none; }
   .chat-sheet-q:not(.folded) .hd .fold { flex-shrink: 0; }
