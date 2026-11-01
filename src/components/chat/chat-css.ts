@@ -373,24 +373,33 @@ export const CHAT_CSS = `
 .chat-bash .note { border-top: 1px solid #26292e; padding: 5px 12px 6px; font-size: 11.5px; color: #e7c27a; }
 .chat-box textarea.bash { font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace; font-size: 13px; color: #f0b48f; }
 
-/* Live activity: agent cards, workflow card, shells chip. */
-.chat-agent-cards { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; max-height: 32vh; overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
-.chat-agent-card { border: 1px solid #2b2e33; border-radius: 12px; background: #1d2024; padding: 7px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; min-width: 0; flex-shrink: 0; transition: border-color .15s; }
-.chat-agent-card:hover { border-color: #464a51; }
-.chat-agent-card .r1 { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; color: #e4e4e7; }
-.chat-agent-card .r1 .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.chat-agent-card .r1 .type { flex-shrink: 0; font-size: 11px; color: var(--chat-mute); border: 1px solid #31353b; border-radius: 999px; padding: 0 7px; }
-.chat-agent-card .r1 .figs, .chat-wf .figs { margin-left: auto; flex-shrink: 0; font-size: 12px; color: var(--chat-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.chat-agent-card .r2 { display: flex; align-items: baseline; gap: 12px; min-width: 0; padding-left: 22px; font-size: 12px; color: var(--chat-dim); }
-.chat-agent-card .r2 .sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-agent-card .r2 .act { margin-left: auto; min-width: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--chat-mute); font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; }
-.chat-agent-card .r2 .retry { color: #fcd34d; }
-.chat-agent-card .spin, .chat-wf .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #464a51; border-top-color: var(--chat-accent); animation: chat-spin .8s linear infinite; flex-shrink: 0; }
-.chat-agent-card .lucide, .chat-wf .agent .lucide, .chat-wf .line > .lucide { width: 14px; height: 14px; flex-shrink: 0; }
-.chat-agent-card .ok, .chat-wf .ok { color: #4ade80; }
-.chat-agent-card .ko, .chat-wf .ko { color: #f87171; }
+/* Live activity: agent pills, workflow card, shells chip. */
+/* The running subagents, one pill each (the user's pick C+ of 01/11/2026): titles shorten, then « +N »; the detail and the stop on hover. */
+.chat-agent-pills { position: relative; display: flex; align-items: center; gap: 6px; margin: 0 0 8px; min-width: 0; }
+.chat-agent-pills .measure { position: absolute; visibility: hidden; pointer-events: none; display: flex; gap: 6px; left: 0; top: 0; white-space: nowrap; }
+.chat-agent-pill { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px; border-radius: 999px; border: 1px solid #31353b; background: #1d2024; font-size: 12.5px; color: #e4e4e7; cursor: pointer; white-space: nowrap; max-width: 260px; min-width: 0; }
+.chat-agent-pill:hover, .chat-agent-pill.on { border-color: #464a51; background: #25282c; }
+.chat-agent-pill .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chat-agent-pill .t { flex-shrink: 0; color: var(--chat-mute); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.chat-agent-pill.more { cursor: default; color: var(--chat-dim); }
+.chat-agent-detail { width: min(440px, 80vw); padding: 10px 14px; font-size: 13px; cursor: default; }
+.chat-agent-detail .h, .chat-agent-more .h { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.chat-agent-detail .h b, .chat-agent-more .h b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-agent-detail .s { color: var(--chat-dim); font-size: 12.5px; margin: 5px 0 0 23px; }
+.chat-agent-detail .s.retry { color: #fcd34d; }
+.chat-agent-detail .a { color: var(--chat-mute); font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; margin: 3px 0 0 23px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-agent-detail .stop { display: flex; align-items: center; gap: 8px; margin: 10px 0 0 23px; font-size: 12.5px; }
+.chat-agent-detail .stop .lucide { width: 13px; height: 13px; }
+.chat-agent-more { width: min(420px, 80vw); }
+.chat-agent-more button { flex-direction: column; align-items: stretch; gap: 2px; padding: 7px 10px; text-align: left; }
+.chat-agent-more .m { margin-left: 23px; font-size: 11.5px; color: var(--chat-mute); }
+.chat-wf .figs { margin-left: auto; flex-shrink: 0; font-size: 12px; color: var(--chat-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chat-agent-pill .spin, .chat-agent-detail .spin, .chat-agent-more .spin, .chat-wf .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #464a51; border-top-color: var(--chat-accent); animation: chat-spin .8s linear infinite; flex-shrink: 0; }
+.chat-agent-pills .lucide, .chat-wf .agent .lucide, .chat-wf .line > .lucide { width: 14px; height: 14px; flex-shrink: 0; }
+.chat-agent-pills .ok, .chat-wf .ok { color: #4ade80; }
+.chat-agent-pills .ko, .chat-wf .ko { color: #f87171; }
 /* An ended card: ✓ a moment, then it fades as it leaves (CARD_LINGER_MS). */
-.chat-agent-card.ended, .chat-wf.ended { animation: chat-card-out 2.5s ease-in forwards; }
+.chat-agent-pill.ended, .chat-wf.ended { animation: chat-card-out 2.5s ease-in forwards; }
 @keyframes chat-card-out { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
 .chat-wf { border: 1px solid #2b2e33; border-radius: 12px; background: #1d2024; margin: 0 0 8px; overflow: hidden; flex-shrink: 0; }
 .chat-wf .line { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; font-size: 13px; color: #e4e4e7; min-width: 0; user-select: none; }
