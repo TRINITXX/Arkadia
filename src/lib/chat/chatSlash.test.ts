@@ -152,6 +152,17 @@ describe("the /resume and /rewind panels", () => {
       ["c", "ouverte ailleurs"],
       ["a", undefined],
     ]);
+    // The new chat's list leaves the branch out.
+    const onMain = {
+      sessionId: "m",
+      title: "M",
+      lastModified: now,
+      gitBranch: "main",
+    };
+    expect(sessionRows([onMain], "", null, now)[0].meta).toContain("main");
+    expect(
+      sessionRows([onMain], "", null, now, { branch: false })[0].meta,
+    ).not.toContain("main");
     expect(
       sessionRows(
         rows.map((r) => ({ sessionId: r.id, title: r.title, lastModified: 0 })),

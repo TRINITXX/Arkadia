@@ -26,11 +26,11 @@ export function ChatWelcome({
     actions.sessions().then(
       (sessions) => {
         if (!alive) return;
+        // No branch here: the user always works on main (01/11/2026).
         setRows(
-          sessionRows(sessions, "", null, Date.now()).slice(
-            0,
-            WELCOME_SESSIONS,
-          ),
+          sessionRows(sessions, "", null, Date.now(), {
+            branch: false,
+          }).slice(0, WELCOME_SESSIONS),
         );
       },
       // No list (a folder never used): the welcome stays empty.
