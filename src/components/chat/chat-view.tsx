@@ -42,7 +42,11 @@ import type { StartupPhase } from "@/lib/chat/chatStartup";
 import { recallColumn } from "@/lib/chat/chatLive";
 import { useColumnMemory } from "@/lib/chat/useColumnMemory";
 import { useMessageEdit } from "@/lib/chat/useMessageEdit";
-import { updateSheet, useSheetReply } from "@/lib/chat/chatSheetAnswers";
+import {
+  foldNextSheet,
+  updateSheet,
+  useSheetReply,
+} from "@/lib/chat/chatSheetAnswers";
 import { focusIsFree, focusOf } from "@/lib/chat/chatFocus";
 import { ChatElicitationPanel } from "@/components/chat/chat-elicitation-panel";
 import { ChatPermissionPanel } from "@/components/chat/chat-permission-panel";
@@ -276,13 +280,22 @@ function ChatViewBody({
     () => !memoryKey || recallColumn(memoryKey)?.stuck !== false,
   );
   // The pencil on the user's messages (/rewind, conversation only).
+  // The pencil's message back in the input: the round the rewind shows
+  // again opens folded, the input shown with it (`foldNextSheet`).
+  const editDraft = useCallback<typeof onDraft>(
+    (update) => {
+      if (memoryKey) foldNextSheet(memoryKey);
+      onDraft(update);
+    },
+    [memoryKey, onDraft],
+  );
   const edit = useMessageEdit({
     items: state.items,
     actions: slashActions,
     working: state.working,
     request: !!request,
     closed: state.closed,
-    onDraft,
+    onDraft: editDraft,
     onToast,
   });
   // The question sheet up and open: Claude's message drops its questions.

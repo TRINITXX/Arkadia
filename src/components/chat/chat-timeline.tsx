@@ -254,6 +254,8 @@ export const ChatTimeline = memo(function ChatTimeline({
           </div>
         ) : null;
       }
+      // Never at the top since `foldActivity` gathers it into `thoughts`;
+      // kept for the switch to stay whole.
       case "thinking":
         return <ChatThoughts key={unit.item.id} items={[unit.item]} />;
       case "thoughts":

@@ -29,9 +29,32 @@ const EMPTY = (replyId: string): SheetAnswers => ({
   closed: false,
 });
 
+/** A pencil's rewind brings its round back within this, if it does. */
+const BORN_FOLDED_MS = 30_000;
+/** Panes whose next round opens folded, and since when (`foldNextSheet`). */
+const bornFolded = new Map<string, number>();
+
+/** A new round's sheet: folded when the pane asked so a moment ago. */
+function fresh(paneId: string, replyId: string): SheetAnswers {
+  const at = bornFolded.get(paneId);
+  bornFolded.delete(paneId);
+  return at !== undefined && Date.now() - at < BORN_FOLDED_MS
+    ? { ...EMPTY(replyId), folded: true }
+    : EMPTY(replyId);
+}
+
+/**
+ * A message brought back to the input by its pencil: the round the rewind
+ * shows again opens folded, so the input under it shows the message (the
+ * unfolded sheet hides it).
+ */
+export function foldNextSheet(paneId: string): void {
+  bornFolded.set(paneId, Date.now());
+}
+
 function read(paneId: string, replyId: string): SheetAnswers {
   const sheet = sheets.get(paneId);
-  return sheet?.replyId === replyId ? sheet : EMPTY(replyId);
+  return sheet?.replyId === replyId ? sheet : fresh(paneId, replyId);
 }
 
 export function updateSheet(
@@ -108,7 +131,7 @@ export function useSheetAnswers(paneId: string, replyId: string): SheetAnswers {
     if (!replyId) return NO_SHEET;
     const sheet = sheets.get(paneId);
     if (sheet?.replyId === replyId) return sheet;
-    const empty = EMPTY(replyId);
+    const empty = fresh(paneId, replyId);
     sheets.set(paneId, empty);
     return empty;
   };

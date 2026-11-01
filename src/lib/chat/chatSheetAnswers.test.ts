@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  foldNextSheet,
   openRoundSheet,
   updateSheet,
   type SheetAnswers,
@@ -32,5 +33,16 @@ describe("a click on the chat's notification", () => {
     updateSheet("p2", "r1", (s) => ({ ...s, closed: true }));
     openRoundSheet("p2", ROUND);
     expect(sheetOf("p2").closed).toBe(true);
+  });
+});
+
+describe("a message brought back by its pencil", () => {
+  it("opens the round the rewind shows again folded, the input seen", () => {
+    foldNextSheet("p3");
+    expect(sheetOf("p3").folded).toBe(true);
+    // Once: the round after it opens unfolded again.
+    let next: SheetAnswers | null = null;
+    updateSheet("p3", "r2", (s) => (next = s));
+    expect(next!.folded).toBeUndefined();
   });
 });

@@ -6,8 +6,12 @@ import { toolStep } from "@/lib/chat/chatSteps";
 import { fitAbove } from "@/lib/chat/fitAbove";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 
-/** The pointer crosses the gap to a pill's detail within this. */
-const CLOSE_AFTER_MS = 180;
+/**
+ * A pill's detail opens after the pointer rests this long: one crossed by
+ * chance opens nothing (the user's ask of 01/11/2026). It closes at once
+ * on leaving; the gap up to it is bridged in the CSS.
+ */
+const OPEN_AFTER_MS = 500;
 /** A stop sent and the agent still running this long: the button again. */
 const STOP_RETRY_MS = 10_000;
 /** Between two pills, and the « +N » pill's room, as the CSS draws them. */
@@ -125,11 +129,13 @@ export function ChatAgentCards({
   if (agents.length === 0) return null;
   const show = (key: string) => {
     window.clearTimeout(timer.current);
-    setHover(key);
+    // From one open detail to the next pill: no wait again.
+    if (hover !== null) setHover(key);
+    else timer.current = window.setTimeout(() => setHover(key), OPEN_AFTER_MS);
   };
   const hide = () => {
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setHover(null), CLOSE_AFTER_MS);
+    setHover(null);
   };
   // A detail or the « +N » list kept inside the row: shifted, never cut.
   const keepInRow = (el: HTMLElement | null) => {

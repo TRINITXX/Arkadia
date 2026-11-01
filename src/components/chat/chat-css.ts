@@ -243,7 +243,7 @@ export const CHAT_CSS = `
 .chat-frame.error .chat-frame-head { color: #f08a87; }
 .chat-frame-head b { font-weight: 600; }
 /* The time, « Modifier » and « Copier » in the frame's bottom-right corner, on hover only, over the text on the frame's own colour: no row kept for them (the user's picks of 01/11/2026). No copy while Claude writes. */
-.chat-frame-foot { position: absolute; right: 6px; bottom: 7px; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 2px 0 6px; border-radius: 8px; background: var(--frame-end); box-shadow: -12px 0 10px -4px var(--frame-end); font-size: 11.5px; user-select: none; opacity: 0; pointer-events: none; transition: opacity .12s; }
+.chat-frame-foot { position: absolute; z-index: 1; right: 6px; bottom: 7px; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 2px 0 6px; border-radius: 8px; background: var(--frame-end); box-shadow: -12px 0 10px -4px var(--frame-end); font-size: 11.5px; user-select: none; opacity: 0; pointer-events: none; transition: opacity .12s; }
 .chat-frame:hover .chat-frame-foot, .chat-frame-foot:focus-within { opacity: 1; pointer-events: auto; }
 /* A frame ending on a row of its own (« coupé », a queued message's « Envoyer maintenant » and ×): the foot goes top-right, never over those. */
 .chat-frame:has(> .chat-cut-row, > .chat-queued-mark) .chat-frame-foot { bottom: auto; top: 6px; }
@@ -261,7 +261,7 @@ export const CHAT_CSS = `
 .chat-root .reading-md > .modern-codeblock:last-child { margin-bottom: 2px; }
 .chat-root .modern-codeblock pre { margin: 0; background: #0f1114; border: 1px solid #2e3238; border-radius: 9px; padding: 10px 44px 10px 14px; overflow-x: auto; scrollbar-width: thin; scrollbar-color: #3a3e45 transparent; font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace; font-size: 12.5px; line-height: 1.6; }
 .chat-root .reading-md pre code { font-family: inherit; font-size: inherit; line-height: inherit; white-space: pre; color: #d4d4d8; }
-.chat-root .modern-code-copy { position: absolute; right: 6px; bottom: 6px; width: 26px; height: 24px; display: grid; place-items: center; padding: 0; border-radius: 6px; border: 1px solid #2e3238; background: rgba(15,17,20,.92); color: #6f727a; cursor: pointer; transition: color .12s, border-color .12s; }
+.chat-root .modern-code-copy { position: absolute; z-index: 2; right: 6px; bottom: 6px; width: 26px; height: 24px; display: grid; place-items: center; padding: 0; border-radius: 6px; border: 1px solid #2e3238; background: rgba(15,17,20,.92); color: #6f727a; cursor: pointer; transition: color .12s, border-color .12s; }
 .chat-root .modern-code-copy:hover { color: var(--chat-ink); border-color: #4a4f57; }
 .chat-root .modern-code-copy.copied { color: #86efac; border-color: rgba(134,239,172,.4); }
 .chat-root .modern-path { cursor: pointer; }
@@ -398,6 +398,8 @@ export const CHAT_CSS = `
 .chat-agent-pill .t { flex-shrink: 0; color: var(--chat-mute); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .chat-agent-pill.more { cursor: default; color: var(--chat-dim); }
 /* Hover popovers as wide as their words, up to a cap: no empty band. */
+/* A pill's detail open: the gap up to it belongs to the pill, so crossing it closes nothing (no close delay). */
+.chat-agent-pills .chat-anchor:has(> .chat-menu)::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 10px; }
 .chat-agent-detail { width: max-content; max-width: min(380px, 80vw); padding: 8px 10px; font-size: 13px; cursor: default; }
 .chat-agent-detail .h, .chat-agent-more .h { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .chat-agent-detail .h b, .chat-agent-more .h b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -611,7 +613,7 @@ export const CHAT_CSS = `
 .chat-sheet-q .hd .x .lucide { width: 15px; height: 15px; }
 .chat-sheet-q .hd .chev { transition: transform .14s ease-out; }
 .chat-sheet-q.folded .hd .chev { transform: rotate(-90deg); }
-.chat-sheet-q .qs { overflow-y: auto; padding: 10px 14px 12px; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
+.chat-sheet-q .qs { overflow-y: auto; padding: 10px 14px 0; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
 .chat-sheet-q .q { display: flex; flex-direction: column; gap: 8px; }
 .chat-sheet-q .qt { font-size: 14.5px; color: #f4f4f5; font-weight: 600; }
 .chat-sheet-q .qb { font-size: 13px; color: var(--chat-dim); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
@@ -627,7 +629,8 @@ export const CHAT_CSS = `
 .chat-sheet-q .opt .why { display: flex; align-items: center; gap: 8px; min-width: 0; color: #d6b9a8; font-size: 12.5px; }
 .chat-sheet-q .reco { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 11px; font-weight: 700; line-height: 1.7; color: var(--chat-accent-ink); background: var(--chat-accent); border-radius: 999px; padding: 0 7px; }
 .chat-sheet-q .reco .lucide { width: 11px; height: 11px; }
-.chat-sheet-q .free { display: flex; align-items: flex-end; gap: 8px; }
+/* The field and its send stay in view at the list's bottom, however long the question. */
+.chat-sheet-q .free { display: flex; align-items: flex-end; gap: 8px; position: sticky; bottom: 0; padding: 4px 0 12px; background: #1d2024; }
 .chat-sheet-q .free .mic { width: 32px; height: 32px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 9px; background: #2a2d32; color: var(--chat-ink); cursor: pointer; }
 .chat-sheet-q .free .mic:hover:not(:disabled) { background: #33363c; }
 .chat-sheet-q .free .mic:disabled { opacity: .45; cursor: default; }
