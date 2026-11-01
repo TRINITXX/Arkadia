@@ -1,8 +1,6 @@
 import type { JsonObject } from "@/lib/chat/chatProtocol";
 import { retryOf } from "@/lib/chat/chatErrors";
-import { modeLabel } from "@/lib/chat/chatLabels";
 import { quotaAlerts } from "@/lib/chat/chatQuota";
-import { toolStep } from "@/lib/chat/chatSteps";
 import type { ChatItem, ChatState } from "@/lib/chat/chatState";
 
 /**
@@ -124,64 +122,6 @@ function addNotification(
   );
 }
 
-/** Who refused a tool call on its own (`decision_reason_type`). */
-const DECIDERS: Record<string, string> = {
-  classifier: "le mode auto",
-  rule: "une règle de refus",
-  hook: "un hook",
-  asyncAgent: "un agent en fond, qui ne peut pas demander",
-};
-
-/** What a refused call would have done: a command itself, not its description. */
-function refusedStep(name: string, input: JsonObject): string {
-  const command = str(input.command)?.split("\n")[0]?.trim();
-  if (command && (name === "Bash" || name === "PowerShell"))
-    return `lance ${command}`;
-  return toolStep(name, input, null);
-}
-
-/**
- * A tool call refused without a question (`permission_denied`): which
- * action, why, and which subagent asked when it isn't the main loop.
- */
-export function deniedNotice(
-  state: ChatState,
-  m: JsonObject,
-): Omit<Notice, "kind" | "at"> {
-  const id = str(m.tool_use_id) ?? "";
-  const name = str(m.tool_name) ?? "?";
-  const call =
-    state.liveTools.find((t) => t.id === id) ??
-    state.items.find(
-      (x): x is Extract<ChatItem, { kind: "tool" }> =>
-        x.kind === "tool" && x.id === id,
-    );
-  const what = refusedStep(name, call?.input ?? {});
-  const type = str(m.decision_reason_type) ?? "";
-  const by =
-    type === "mode"
-      ? `le mode « ${modeLabel(state.mode)} »`
-      : (DECIDERS[type] ?? "Claude Code");
-  const agentId = str(m.agent_id);
-  const agent = agentId
-    ? state.subagents.find((s) => s.taskId === agentId)
-    : undefined;
-  const why = str(m.decision_reason) ?? str(m.message)?.split(/\.\s/)[0];
-  const detail = [
-    why && `Raison : ${why}`,
-    agentId &&
-      `Demandé par le sous-agent ${agent?.description ? `« ${agent.description} »` : agentId}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
-  return {
-    id: `denied:${id}`,
-    text: `Refusé par ${by} : ${what}`,
-    tone: "warning",
-    detail: detail || undefined,
-  };
-}
-
 /** How Claude Code words a Stop hook's denial it hands back to Claude. */
 const STOP_FEEDBACK = "Stop hook feedback:";
 
@@ -273,8 +213,11 @@ export function addSdkContent(
     }
     case "notification":
       return addNotification(state, m, now);
+    // A call refused without a question: no line in the chat (the user's
+    // ask of 01/11/2026: they took whole screens). Its tool still counts
+    // « en erreur » in the work line.
     case "permission_denied":
-      return addNotice(state, deniedNotice(state, m), now);
+      return state;
     case "status":
       if (m.compact_result !== "failed") return state;
       return addNotice(

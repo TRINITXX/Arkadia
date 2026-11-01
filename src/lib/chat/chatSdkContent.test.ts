@@ -46,7 +46,7 @@ describe("Claude Code's notices in the column", () => {
     expect(notices(state)).toEqual([]);
   });
 
-  it("explains a refusal of the current mode: which action, why", () => {
+  it("says nothing of a refused call: its tool counts in error", () => {
     const state = run([
       sdk({
         type: "assistant",
@@ -76,14 +76,7 @@ describe("Claude Code's notices in the column", () => {
           "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: …",
       }),
     ]);
-    const [notice] = notices(state);
-    expect(notice.text).toBe(
-      "Refusé par le mode « … » : lance mkdir sous-dossier",
-    );
-    expect(notice.detail).toMatch(
-      /^Raison : Permission to use Bash has been denied/,
-    );
-    expect(notice.tone).toBe("warning");
+    expect(notices(state)).toEqual([]);
   });
 
   it("says a hook blocked the message, with its reason", () => {
