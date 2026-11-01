@@ -302,6 +302,12 @@ export const CHAT_CSS = `
 .chat-root .modern-imgpath.mini img { display: block; height: 20px; width: auto; max-width: 40px; object-fit: contain; background: #111215; border-radius: 4px; border: 1px solid rgba(255,255,255,.14); }
 .chat-root .modern-imgpath.mini:hover img { border-color: rgba(255,255,255,.4); }
 .chat-root .modern-imgpath.mini .label { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* A file's path found on disk: a tag with its name, its folder in the text but unseen (search, copy); a click opens it (FilePathTag, the user's ask of 01/11/2026). */
+.chat-root .modern-filetag { display: inline-block; max-width: 100%; box-sizing: border-box; padding: 0 7px; margin: 0 1px; border-radius: 6px; background: #2c2f36; border: 1px solid #3d414a; color: #d4d4d8; font-size: 12.5px; line-height: 18px; font-style: normal; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.chat-root .modern-filetag:hover { border-color: #5a5f69; color: #f4f4f5; }
+.chat-root .modern-filetag .lucide { display: inline; width: 13px; height: 13px; margin-right: 4px; vertical-align: -2px; color: #9ec5f8; }
+/* Inline, never out of the flow: a copied sentence keeps the path in one piece. */
+.chat-root .modern-filetag .dir { font-size: 0; line-height: 0; }
 /* The strip under a message: pasted images, then the files it names. */
 .chat-gallery { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .chat-gallery .modern-thumb { display: block; height: 92px; width: auto; max-width: 220px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(255,255,255,.12); cursor: zoom-in; }

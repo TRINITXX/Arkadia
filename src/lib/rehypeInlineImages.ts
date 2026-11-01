@@ -2,7 +2,7 @@
 // markdown pipeline: it marks the image paths a message mentions so they can
 // be rendered as the images themselves.
 
-import { splitImagePaths } from "@/lib/imagePaths";
+import { splitFilePaths, splitImagePaths } from "@/lib/imagePaths";
 
 /** The bits of a hast node this file needs; the tree is walked by hand. */
 export interface HastNode {
@@ -17,6 +17,16 @@ export interface HastNode {
 /** Marks a text node's image path mentions, read off the original markdown. */
 export const IMAGE_PATH_PROP = "dataArkadiaImagePath";
 export const IMAGE_LABEL_PROP = "dataArkadiaImageLabel";
+/** Marks any other file's path (`files` on): the chat draws it as a tag. */
+export const FILE_PATH_PROP = "dataArkadiaFilePath";
+
+/** The empty element a path mention becomes, its path and words on it. */
+const marker = (prop: string, path: string, label: string): HastNode => ({
+  type: "element",
+  tagName: "span",
+  properties: { [prop]: path, [IMAGE_LABEL_PROP]: label },
+  children: [],
+});
 
 /**
  * Turns every image path mentioned in prose into a marker element, which the
@@ -33,6 +43,8 @@ export function rehypeInlineImages(options: {
   baseDir?: string | null;
   /** False: marks the paths only, no gallery (they stay text). */
   group?: boolean;
+  /** True: marks the paths of other files too (`splitFilePaths`). */
+  files?: boolean;
 }) {
   const walk = (node: HastNode): void => {
     if (!node.children || node.tagName === "code" || node.tagName === "pre") {
@@ -48,23 +60,18 @@ export function rehypeInlineImages(options: {
           options.source.slice(start, end),
           options.baseDir,
         );
-        if (segments.some((seg) => seg.path)) {
+        const nodes = segments.flatMap((seg): HastNode[] => {
+          if (seg.path) return [marker(IMAGE_PATH_PROP, seg.path, seg.text)];
+          if (!options.files) return [{ type: "text", value: seg.text }];
+          return splitFilePaths(seg.text).map((part) =>
+            part.path
+              ? marker(FILE_PATH_PROP, part.path, part.text)
+              : { type: "text", value: part.text },
+          );
+        });
+        if (nodes.some((n) => n.type === "element")) {
           changed = true;
-          for (const seg of segments) {
-            out.push(
-              seg.path
-                ? {
-                    type: "element",
-                    tagName: "span",
-                    properties: {
-                      [IMAGE_PATH_PROP]: seg.path,
-                      [IMAGE_LABEL_PROP]: seg.text,
-                    },
-                    children: [],
-                  }
-                : { type: "text", value: seg.text },
-            );
-          }
+          out.push(...nodes);
           continue;
         }
       }

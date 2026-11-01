@@ -30,6 +30,43 @@ const IMG_PATH_RE = new RegExp(
   "giu",
 );
 
+/**
+ * Absolute Windows paths to any file: lazy from the drive letter to the first
+ * extension that ends a name, never a folder's (`v1.2\`), both slash styles.
+ * Spaces are allowed, as in `IMG_PATH_RE`: a prose false positive
+ * (`C:\proj holds app.ts`) fails its probe (`path_exists`) and stays text.
+ */
+const FILE_PATH_RE = new RegExp(
+  String.raw`(?<![A-Za-z])[A-Za-z]:[\\/]${NAME_CHAR}*?\.[A-Za-z0-9]{1,8}(?![\w\\/])(?![.-]\w)`,
+  "gu",
+);
+
+/**
+ * `text` cut around the absolute paths of files other than images and videos
+ * (those are `splitImagePaths`'), so the chat can draw each as a tag with its
+ * name. Segments cover the whole input, in order.
+ */
+export function splitFilePaths(text: string): PathSegment[] {
+  const out: PathSegment[] = [];
+  let cursor = 0;
+  for (const m of text.matchAll(FILE_PATH_RE)) {
+    if (isImagePath(m[0]) || isVideoPath(m[0])) continue;
+    if (m.index > cursor) out.push({ text: text.slice(cursor, m.index) });
+    out.push({ text: m[0], path: m[0] });
+    cursor = m.index + m[0].length;
+  }
+  if (cursor < text.length || out.length === 0) {
+    out.push({ text: text.slice(cursor) });
+  }
+  return out;
+}
+
+/** `text` when it is one file's absolute path alone (`splitFilePaths`). */
+export function filePathAlone(text: string): string | null {
+  const segments = splitFilePaths(text.trim());
+  return segments.length === 1 ? (segments[0].path ?? null) : null;
+}
+
 /** A whole absolute path, a `:line:col` suffix aside (`clickablePath`). */
 const CLICKABLE_PATH_RE = new RegExp(
   String.raw`^([A-Za-z]:[\\/]${NAME_CHAR}+?)(?::\d+(?::\d+)?)?$`,

@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import { backendInvoke, openUrl } from "@/lib/bridge";
-import { Check, Copy, SquareArrowOutUpRight } from "lucide-react";
+import { Check, Copy, FileText, SquareArrowOutUpRight } from "lucide-react";
 import Markdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -19,6 +19,7 @@ import {
   type LightboxContent,
 } from "@/components/modern/ImageThumb";
 import {
+  FILE_PATH_PROP,
   IMAGE_LABEL_PROP,
   IMAGE_PATH_PROP,
   rehypeInlineImages,
@@ -28,6 +29,7 @@ import { imageCaptions } from "@/lib/imageCaption";
 import { InlineVideo } from "@/components/modern/VideoThumb";
 import {
   clickablePath,
+  filePathAlone,
   imagePathKey,
   isVideoPath,
   splitImagePaths,
@@ -35,6 +37,7 @@ import {
 import { fetchImageUrl } from "@/lib/imageUrlCache";
 import { LinkCardsContext } from "@/lib/linkCards";
 import { usePathHover } from "@/lib/pathHover";
+import { usePathExists } from "@/lib/chat/usePathExists";
 import { usePathImage } from "@/lib/chat/usePathImage";
 
 export type ToastFn = (level: "info" | "error", message: string) => void;
@@ -146,6 +149,45 @@ function ImagePathLink({
         label
       )}
     </Tag>
+  );
+}
+
+/**
+ * A file's path in the chat (`files` on): once found on disk, a tag with
+ * its name alone, the whole path on hover and a click that opens it with the
+ * PC's own app (the user's ask of 01/11/2026: the paths took whole lines).
+ * Its folder stays in the text, unseen: the search finds it, a copied
+ * sentence keeps it. Not found (yet, or a prose false positive): `fallback`,
+ * the words as written.
+ */
+function FilePathTag({
+  path,
+  label,
+  fallback,
+  onToast,
+}: {
+  path: string;
+  label: string;
+  fallback: React.ReactNode;
+  onToast?: ToastFn;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const found = usePathExists(ref, path);
+  if (!found) return <span ref={ref}>{fallback}</span>;
+  const name = label.split(/[\\/]/).pop() ?? label;
+  return (
+    <span
+      className="modern-filetag"
+      title={`Ouvrir ${path}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        openPath(path, onToast);
+      }}
+    >
+      <FileText />
+      <span className="dir">{label.slice(0, label.length - name.length)}</span>
+      <span className="name">{name}</span>
+    </span>
   );
 }
 
@@ -278,6 +320,19 @@ function buildComponents(
           />
         );
       }
+      const file = props?.[FILE_PATH_PROP];
+      if (typeof file === "string") {
+        const label = props?.[IMAGE_LABEL_PROP];
+        const text = typeof label === "string" ? label : file;
+        return (
+          <FilePathTag
+            path={file}
+            label={text}
+            fallback={text}
+            onToast={onToast}
+          />
+        );
+      }
       return <span {...rest}>{children}</span>;
     },
     a: ({ href, children }) => (
@@ -322,7 +377,7 @@ function buildComponents(
         }
         const path = clickablePath(children);
         if (path) {
-          return (
+          const link = (
             <code
               className="modern-path"
               title={`Ouvrir ${path}`}
@@ -336,6 +391,18 @@ function buildComponents(
                 <SquareArrowOutUpRight size={10} />
               </span>
             </code>
+          );
+          // The chat: a file's path alone is a tag, as in its prose.
+          const file = inlineImages ? null : filePathAlone(children);
+          return file ? (
+            <FilePathTag
+              path={file}
+              label={children.trim()}
+              fallback={link}
+              onToast={onToast}
+            />
+          ) : (
+            link
           );
         }
       }
@@ -351,8 +418,9 @@ interface MarkdownContentProps {
   onOpen: (content: LightboxContent) => void;
   onToast?: ToastFn;
   /** Off (the chat): an image path shows as a mini the height of a line,
-   *  its path while it loads; a click opens it. On by default: the image
-   *  itself, full width. */
+   *  its path while it loads, another file's path as a tag with its name
+   *  (`FilePathTag`); a click opens them. On by default: the image itself,
+   *  full width, other paths as text. */
   inlineImages?: boolean;
 }
 
@@ -377,7 +445,15 @@ export const MarkdownContent = memo(function MarkdownContent({
     () =>
       [
         [rehypeHighlight, { detect: false }],
-        [rehypeInlineImages, { source: text, baseDir, group: inlineImages }],
+        [
+          rehypeInlineImages,
+          {
+            source: text,
+            baseDir,
+            group: inlineImages,
+            files: !inlineImages,
+          },
+        ],
       ] as never[],
     [text, baseDir, inlineImages],
   );

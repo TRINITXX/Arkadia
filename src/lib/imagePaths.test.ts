@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   clickablePath,
+  filePathAlone,
   findImagePaths,
   isImagePath,
   isVideoPath,
+  splitFilePaths,
   splitImagePaths,
 } from "./imagePaths";
 
@@ -29,6 +31,39 @@ describe("splitImagePaths", () => {
     const segments = splitImagePaths(text);
     expect(segments.map((s) => s.text).join("")).toBe(text);
     expect(segments[0].path).toBe("C:\\a\\x.png");
+  });
+});
+
+describe("splitFilePaths", () => {
+  it("finds each file's path, spaces in its folders, two on a line", () => {
+    const a = "C:\\Users\\me\\Claude Desktop\\aeo\\CHANGELOG.md";
+    const b = "C:\\x\\v1.2\\notes.tar.gz";
+    const text = `Journal : ${a}, archive ${b}.`;
+    expect(
+      splitFilePaths(text)
+        .filter((s) => s.path)
+        .map((s) => s.path),
+    ).toEqual([a, b]);
+    expect(
+      splitFilePaths(text)
+        .map((s) => s.text)
+        .join(""),
+    ).toBe(text);
+  });
+
+  it("leaves images, videos and folders to others", () => {
+    expect(splitFilePaths("C:\\a\\x.png puis C:\\a\\y.mp4")).toEqual([
+      { text: "C:\\a\\x.png puis C:\\a\\y.mp4" },
+    ]);
+    expect(splitFilePaths("dans C:\\proj\\src ici")).toEqual([
+      { text: "dans C:\\proj\\src ici" },
+    ]);
+  });
+
+  it("says when a code is one file's path alone", () => {
+    expect(filePathAlone("C:\\a\\b.ts")).toBe("C:\\a\\b.ts");
+    expect(filePathAlone("cp C:\\a\\b.ts x")).toBeNull();
+    expect(filePathAlone("C:\\a\\x.png")).toBeNull();
   });
 });
 
