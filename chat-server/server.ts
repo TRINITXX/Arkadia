@@ -796,7 +796,11 @@ class Chat {
         // The CLI echoes each user message: the only way another session's
         // message (SendMessage) reaches the page live, seen on 31/10/2026.
         // The others are dropped in `pump` (`isEcho`).
-        extraArgs: { "replay-user-messages": null },
+        //
+        // Claude in Chrome: the terminal turns it on from the account's
+        // setting, an SDK session only with `--chrome` (checked 01/11/2026:
+        // without it, no claude-in-chrome among its MCP servers).
+        extraArgs: { "replay-user-messages": null, chrome: null },
         // Another session's message always comes in, whatever the sender's
         // mode: the user's choice (31/10/2026), and the chat has no accept
         // button for a held one. Session only, never written to a file.
