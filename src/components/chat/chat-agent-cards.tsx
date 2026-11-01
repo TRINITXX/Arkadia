@@ -276,41 +276,48 @@ function AgentDetail({
         <div className="s">{summary || action || "démarre…"}</div>
       )}
       {summary && action && <div className="a">↳ {action}</div>}
-      <div className="s">{figures(agent, now)}</div>
-      {running && onStop && !stopping && (
-        <div className="stop">
-          {asking ? (
-            <>
-              <span>Arrêter ce sous-agent ?</span>
-              <button
-                type="button"
-                className="chat-btn danger"
-                onClick={() => {
-                  onStopState({ step: "sent", at: now, run: agent.startedAt });
-                  onStop();
-                }}
-              >
-                Oui, arrêter
-              </button>
+      {/* Figures and stop share a line: no row left empty. */}
+      <div className="f">
+        <span>{figures(agent, now)}</span>
+        {running && onStop && !stopping && (
+          <span className="stop">
+            {asking ? (
+              <>
+                <span>Arrêter ?</span>
+                <button
+                  type="button"
+                  className="chat-btn danger"
+                  onClick={() => {
+                    onStopState({
+                      step: "sent",
+                      at: now,
+                      run: agent.startedAt,
+                    });
+                    onStop();
+                  }}
+                >
+                  Oui, arrêter
+                </button>
+                <button
+                  type="button"
+                  className="chat-btn"
+                  onClick={() => onStopState(null)}
+                >
+                  Annuler
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
                 className="chat-btn"
-                onClick={() => onStopState(null)}
+                onClick={() => onStopState({ step: "ask" })}
               >
-                Annuler
+                <OctagonX /> Arrêter
               </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="chat-btn"
-              onClick={() => onStopState({ step: "ask" })}
-            >
-              <OctagonX /> Arrêter
-            </button>
-          )}
-        </div>
-      )}
+            )}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

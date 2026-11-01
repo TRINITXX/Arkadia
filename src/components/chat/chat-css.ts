@@ -382,15 +382,18 @@ export const CHAT_CSS = `
 .chat-agent-pill .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chat-agent-pill .t { flex-shrink: 0; color: var(--chat-mute); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .chat-agent-pill.more { cursor: default; color: var(--chat-dim); }
-.chat-agent-detail { width: min(440px, 80vw); padding: 10px 14px; font-size: 13px; cursor: default; }
+/* Hover popovers as wide as their words, up to a cap: no empty band. */
+.chat-agent-detail { width: max-content; max-width: min(380px, 80vw); padding: 8px 10px; font-size: 13px; cursor: default; }
 .chat-agent-detail .h, .chat-agent-more .h { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .chat-agent-detail .h b, .chat-agent-more .h b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-agent-detail .s { color: var(--chat-dim); font-size: 12.5px; margin: 5px 0 0 23px; }
+.chat-agent-detail .s { color: var(--chat-dim); font-size: 12.5px; margin: 3px 0 0 23px; }
 .chat-agent-detail .s.retry { color: #fcd34d; }
 .chat-agent-detail .a { color: var(--chat-mute); font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; margin: 3px 0 0 23px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-agent-detail .stop { display: flex; align-items: center; gap: 8px; margin: 10px 0 0 23px; font-size: 12.5px; }
+.chat-agent-detail .f { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin: 3px 0 0 23px; font-size: 12px; color: var(--chat-mute); font-variant-numeric: tabular-nums; }
+.chat-agent-detail .stop { display: flex; align-items: center; gap: 6px; margin-left: auto; color: var(--chat-dim); }
+.chat-agent-detail .stop button { width: auto; padding: 2px 8px; font-size: 12px; border-radius: 6px; gap: 5px; }
 .chat-agent-detail .stop .lucide { width: 13px; height: 13px; }
-.chat-agent-more { width: min(420px, 80vw); }
+.chat-agent-more { width: max-content; max-width: min(360px, 80vw); }
 .chat-agent-more button { flex-direction: column; align-items: stretch; gap: 2px; padding: 7px 10px; text-align: left; }
 .chat-agent-more .m { margin-left: 23px; font-size: 11.5px; color: var(--chat-mute); }
 .chat-wf .figs { margin-left: auto; flex-shrink: 0; font-size: 12px; color: var(--chat-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
