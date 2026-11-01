@@ -52,12 +52,9 @@ export const CHAT_CSS = `
 .chat-counts { display: inline-flex; align-items: center; gap: 10px; }
 .chat-counts .n { display: inline-flex; align-items: center; gap: 3px; color: var(--chat-dim); font-variant-numeric: tabular-nums; }
 .chat-line .chat-counts .lucide { width: 14px; height: 14px; }
-/* Claude's thinking between two messages, whole, in indigo italics: never read as the grey work line (ChatThoughts). */
-.chat-thoughts { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.55; color: #8b93c9; font-style: italic; }
-.chat-thoughts .ic { width: 15px; height: 15px; flex-shrink: 0; margin-top: 2px; color: #a5b4fc; }
-/* One line: the summary's title (the user's ask of 01/11/2026). */
-.chat-thoughts .tx { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat-thoughts b { color: #a5b4fc; font-style: normal; font-weight: 600; }
+/* Claude's thinking between two messages: its text alone, in indigo italics, never read as the grey work line (ChatThoughts). */
+.chat-thoughts { display: flex; flex-direction: column; gap: 6px; padding: 0 4px; font-size: 13px; line-height: 1.55; color: #8b93c9; font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-thoughts p { margin: 0; }
 .chat-activity-detail { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 0 7px; padding-left: 14px; border-left: 1px solid var(--chat-line); }
 /* The question sheet unfolded: the input hides, the sheet takes the bottom (the user's ask of 01/11/2026); folded, the input comes back. */
 .chat-bottom.sheet-open .chat-col > .chat-box:not(.ask) { display: none; }
