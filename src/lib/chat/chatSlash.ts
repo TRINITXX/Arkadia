@@ -1,8 +1,10 @@
 import type {
+  McpServerInfo,
   RewindPoint,
   SessionChoice,
   SlashCommandInfo,
 } from "@/lib/chat/chatProtocol";
+import { mcpName } from "@/lib/chat/chatSdkSettings";
 
 /**
  * The chat's `/` commands: Claude Code's own list (`supportedCommands`), the
@@ -22,7 +24,7 @@ export const SLASH_GROUP_LABELS: Record<SlashGroup, string> = {
 };
 
 /** The page's own commands: each opens its panel above the input. */
-export type PagePanel = "resume" | "rewind";
+export type PagePanel = "resume" | "rewind" | "mcp";
 
 export interface PageCommand extends SlashCommandInfo {
   panel: PagePanel;
@@ -42,6 +44,13 @@ export const PAGE_COMMANDS: PageCommand[] = [
     argumentHint: "[recherche]",
     builtin: true,
     panel: "rewind",
+  },
+  {
+    name: "mcp",
+    description: "Connecter, reconnecter ou couper tes serveurs MCP",
+    argumentHint: "[recherche]",
+    builtin: true,
+    panel: "mcp",
   },
 ];
 
@@ -323,4 +332,93 @@ export function rewindRows(
       meta: p.timestamp ? whenLabel(Date.parse(p.timestamp), now) : "",
     }))
     .reverse();
+}
+
+/** What a click or Enter does on an MCP server's row. */
+export type McpAction = "connect" | "reconnect" | "enable" | "disable";
+
+/** A row of /mcp: a server, its group, its action. */
+export interface McpRow extends PickerRow {
+  status: string;
+  /** Where it is set: « perso », « projet », « plugin », « claude.ai »… */
+  source: string;
+  /** Its section's title, on its first row only. */
+  head?: string;
+  /** Enter's action; Ctrl+Enter's is `toggle`. */
+  action: McpAction | null;
+  toggle: McpAction | null;
+  error?: string;
+}
+
+/** /mcp's sections, in order: what needs the user first (the user's pick A of 01/11/2026). */
+const MCP_GROUPS: [string, (s: McpServerInfo) => boolean][] = [
+  ["En échec", (s) => s.status === "failed"],
+  ["À connecter", (s) => s.status === "needs-auth"],
+  ["Connexion en cours", (s) => s.status === "pending"],
+  ["Connectés", (s) => s.status === "connected"],
+  ["Coupés", (s) => s.status === "disabled"],
+];
+
+const MCP_SOURCES: Record<string, string> = {
+  user: "perso",
+  project: "projet",
+  local: "ce dossier",
+  plugin: "plugin",
+  claudeai: "claude.ai",
+  dynamic: "Arkadia",
+  managed: "géré",
+  enterprise: "géré",
+};
+
+/** « Gmail » for `claude.ai Gmail`: its source says where it comes from. */
+const shortName = (s: McpServerInfo) =>
+  s.source === "claudeai"
+    ? s.name.replace(/^claude\.ai /, "")
+    : mcpName(s.name);
+
+/**
+ * /mcp: the servers by section (failed, to connect, connecting, connected,
+ * cut off), the user's own before claude.ai's connectors in each, then by
+ * name. Enter connects, reconnects or switches back on; Ctrl+Enter cuts off
+ * or switches on. The servers of the Lab itself (`sdk`) aren't listed.
+ */
+export function mcpRows(servers: McpServerInfo[], query: string): McpRow[] {
+  const rows: McpRow[] = [];
+  const shown = servers.filter(
+    (s) =>
+      s.source !== "sdk" &&
+      matches(query, shortName(s), s.name, MCP_SOURCES[s.source ?? ""]),
+  );
+  const order = (a: McpServerInfo, b: McpServerInfo) =>
+    Number(a.source === "claudeai") - Number(b.source === "claudeai") ||
+    shortName(a).localeCompare(shortName(b));
+  for (const [head, inGroup] of MCP_GROUPS) {
+    const group = shown.filter(inGroup).sort(order);
+    group.forEach((s, i) =>
+      rows.push({
+        id: s.name,
+        title: shortName(s),
+        meta: "",
+        status: s.status,
+        source: MCP_SOURCES[s.source ?? ""] ?? s.source ?? "",
+        head: i === 0 ? `${head} · ${group.length}` : undefined,
+        action:
+          s.status === "needs-auth"
+            ? "connect"
+            : s.status === "failed"
+              ? "reconnect"
+              : s.status === "disabled"
+                ? "enable"
+                : null,
+        toggle:
+          s.status === "disabled"
+            ? "enable"
+            : s.status === "pending"
+              ? null
+              : "disable",
+        error: s.error,
+      }),
+    );
+  }
+  return rows;
 }

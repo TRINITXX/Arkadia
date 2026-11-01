@@ -47,6 +47,8 @@ const MCP = [
     source: "plugin",
   },
   { name: "cloudflare", status: "needs-auth", source: "user" },
+  { name: "claude.ai Notion", status: "needs-auth", source: "claudeai" },
+  { name: "sentry", status: "disabled", source: "user" },
   { name: "exa", status: "connected", source: "user" },
   { name: "playwright", status: "pending", source: "user" },
   { name: "claude.ai Gmail", status: "connected", source: "claudeai" },
@@ -215,6 +217,9 @@ export const PREVIEW_SDK: ChatSdkActions = {
   removeQueued: () => {},
   answerElicitation: () => {},
   refreshMcp: () => {},
+  // A sign-in in the preview: connected at once, no browser.
+  mcpAction: () =>
+    new Promise((resolve) => setTimeout(() => resolve(undefined), 600)),
   reloadPlugins: () => {},
   contextDetail: () =>
     new Promise((resolve) =>

@@ -1,12 +1,33 @@
 import { Fragment, useLayoutEffect, useRef } from "react";
-import { History, Undo2 } from "lucide-react";
-import { slashHead, type PickerRow } from "@/lib/chat/chatSlash";
+import { History, Plug, Undo2 } from "lucide-react";
+import {
+  slashHead,
+  type McpAction,
+  type McpRow,
+  type PickerRow,
+} from "@/lib/chat/chatSlash";
 import type { RewindMode } from "@/lib/chat/useSlashActions";
 import type { SlashMenu } from "@/lib/chat/useSlashMenu";
 
 const PANEL_TITLES = {
   resume: "Reprendre une conversation",
   rewind: "Revenir avant un message",
+  mcp: "Serveurs MCP",
+};
+
+const PANEL_ICONS = { resume: History, rewind: Undo2, mcp: Plug };
+
+const PANEL_KEYS = {
+  resume: "Entrée : reprendre · Échap : fermer",
+  rewind:
+    "Entrée : revenir ici · Ctrl+Entrée : avec le code · Alt+Entrée : le code seul · Échap : fermer",
+  mcp: "Entrée : se connecter ou reconnecter · Ctrl+Entrée : couper ou rallumer · Échap : fermer",
+};
+
+/** /mcp's buttons: Enter's action on a server's row. */
+const MCP_BUTTONS: Partial<Record<McpAction, string>> = {
+  connect: "Se connecter",
+  reconnect: "Reconnecter",
 };
 
 /** /rewind's other choices on the selected row, besides Enter's. */
@@ -22,6 +43,7 @@ const REWIND_CHOICES: [RewindMode, string, string][] = [
 const PANEL_EMPTY = {
   resume: "Aucune autre conversation dans ce dossier",
   rewind: "Aucun message à reprendre",
+  mcp: "Aucun serveur MCP",
 };
 
 /**
@@ -85,10 +107,84 @@ export function ChatSlashMenu({ menu }: { menu: SlashMenu }) {
   }
 
   const { panel, rows } = view;
+  const rowRef = (i: number) =>
+    i === view.index
+      ? (el: HTMLElement | null) => void (onRef.current = el)
+      : undefined;
+  /**
+   * /mcp (the user's pick A of 01/11/2026): its section's title, a dot of
+   * its state, its name and where it is set; « Se connecter » or
+   * « Reconnecter », a switch on a server connected or cut off; while its
+   * sign-in is open in the browser, a line says so.
+   */
+  const mcpRow = (r: McpRow, i: number) => {
+    const p = view.pending?.[r.id];
+    const busy = p && "state" in p ? p.state : null;
+    const error = p && "error" in p ? p.error : r.error;
+    const button = r.action && MCP_BUTTONS[r.action];
+    const on = r.status === "connected";
+    return (
+      <Fragment key={r.id}>
+        {r.head && <div className="chat-slash-group">{r.head}</div>}
+        <div
+          ref={rowRef(i)}
+          className={`chat-pick chat-mcp-row ${r.status}${i === view.index ? " on" : ""}`}
+          onMouseMove={() => i !== view.index && menu.select(i)}
+          onClick={() => menu.mcpPick(r, false)}
+        >
+          <span className={`dot${busy ? " wait" : ""}`} />
+          <span className="t" title={r.id}>
+            {r.title}
+            {r.source && <small>{r.source}</small>}
+          </span>
+          {busy ? (
+            <span className="m">
+              {busy === "signin" ? "ouvert dans le navigateur…" : "…"}
+            </span>
+          ) : (
+            <>
+              {r.status === "pending" && (
+                <span className="m">connexion en cours</span>
+              )}
+              {button && (
+                <button
+                  type="button"
+                  className="code main"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    menu.mcpPick(r, false);
+                  }}
+                >
+                  {button}
+                </button>
+              )}
+              {(on || r.status === "disabled") && (
+                <button
+                  type="button"
+                  className={`chat-mcp-switch${on ? " on" : ""}`}
+                  title={
+                    on
+                      ? "Couper ce serveur (Ctrl+Entrée)"
+                      : "Rallumer ce serveur (Ctrl+Entrée)"
+                  }
+                  aria-label={on ? "Couper" : "Rallumer"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    menu.mcpPick(r, true);
+                  }}
+                />
+              )}
+            </>
+          )}
+        </div>
+        {error && <div className="chat-mcp-err">{error}</div>}
+      </Fragment>
+    );
+  };
   const row = (r: PickerRow, i: number) => (
     <div
       key={r.id}
-      ref={i === view.index ? (el) => void (onRef.current = el) : undefined}
+      ref={rowRef(i)}
       className={`chat-pick${i === view.index ? " on" : ""}${r.disabled ? " off" : ""}`}
       onMouseMove={() => i !== view.index && menu.select(i)}
       onClick={() => menu.pick(r)}
@@ -117,10 +213,11 @@ export function ChatSlashMenu({ menu }: { menu: SlashMenu }) {
       <span className="m">{r.meta}</span>
     </div>
   );
+  const Icon = PANEL_ICONS[panel];
   return (
     <div className="chat-slash panel" onMouseDown={keep}>
       <div className="chat-slash-title">
-        {panel === "resume" ? <History /> : <Undo2 />}
+        <Icon />
         {PANEL_TITLES[panel]}
         <small>tape pour filtrer</small>
       </div>
@@ -131,13 +228,11 @@ export function ChatSlashMenu({ menu }: { menu: SlashMenu }) {
       ) : rows.length === 0 ? (
         <div className="chat-slash-hint">{PANEL_EMPTY[panel]}</div>
       ) : (
-        <div className="chat-slash-rows">{rows.map(row)}</div>
+        <div className="chat-slash-rows">
+          {panel === "mcp" ? (rows as McpRow[]).map(mcpRow) : rows.map(row)}
+        </div>
       )}
-      <div className="chat-slash-keys">
-        {panel === "resume"
-          ? "Entrée : reprendre · Échap : fermer"
-          : "Entrée : revenir ici · Ctrl+Entrée : avec le code · Alt+Entrée : le code seul · Échap : fermer"}
-      </div>
+      <div className="chat-slash-keys">{PANEL_KEYS[panel]}</div>
     </div>
   );
 }

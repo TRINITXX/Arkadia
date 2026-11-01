@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SlashCommandInfo } from "@/lib/chat/chatProtocol";
 import {
   markLive,
+  mcpRows,
   menuCommands,
   needsArgs,
   OPEN_ELSEWHERE,
@@ -35,6 +36,7 @@ describe("the / menu", () => {
   it("lists built-ins, then the user's commands, then plugins, internals left out", () => {
     const entries = slashEntries(all, "");
     expect(entries.map((e) => e.group)).toEqual([
+      "builtin",
       "builtin",
       "builtin",
       "builtin",
@@ -95,7 +97,7 @@ describe("the / menu", () => {
 
   it("falls back on the init's names before the full list", () => {
     const names = menuCommands([], ["context"]).map((c) => c.name);
-    expect(names).toEqual(["resume", "rewind", "context"]);
+    expect(names).toEqual(["resume", "rewind", "mcp", "context"]);
   });
 
   it("runs a command on Enter unless it needs arguments", () => {
@@ -267,5 +269,39 @@ describe("the name typed in full", () => {
       "builtin",
       "plugin",
     ]);
+  });
+});
+
+describe("the /mcp panel", () => {
+  const servers = [
+    { name: "exa", status: "connected", source: "user" },
+    { name: "claude.ai Gmail", status: "needs-auth", source: "claudeai" },
+    { name: "cloudflare", status: "needs-auth", source: "user" },
+    {
+      name: "posthog",
+      status: "failed",
+      source: "user",
+      error: "Connection closed",
+    },
+    { name: "arkadia-visual", status: "connected", source: "sdk" },
+    { name: "sentry", status: "disabled", source: "user" },
+  ];
+
+  it("puts what needs the user first, the user's own before claude.ai's", () => {
+    const rows = mcpRows(servers, "");
+    expect(
+      rows.map((r) => [r.title, r.head ?? "", r.action, r.toggle]),
+    ).toEqual([
+      ["posthog", "En échec · 1", "reconnect", "disable"],
+      ["cloudflare", "À connecter · 2", "connect", "disable"],
+      ["Gmail", "", "connect", "disable"],
+      ["exa", "Connectés · 1", null, "disable"],
+      ["sentry", "Coupés · 1", "enable", "enable"],
+    ]);
+    expect(rows[2].source).toBe("claude.ai");
+  });
+
+  it("filters on the name or where it is set", () => {
+    expect(mcpRows(servers, "claude").map((r) => r.title)).toEqual(["Gmail"]);
   });
 });

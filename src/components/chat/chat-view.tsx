@@ -579,6 +579,11 @@ function ChatViewBody({
           names: state.slashCommands,
           sessionId: state.sessionId,
           actions: slashActions,
+          mcp: sdkActions && {
+            servers: state.sdk.mcpServers,
+            act: sdkActions.mcpAction,
+            refresh: sdkActions.refreshMcp,
+          },
         }}
         draft={draft}
         onDraft={onDraft}

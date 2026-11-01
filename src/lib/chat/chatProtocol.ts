@@ -129,6 +129,15 @@ export type ChatEvent =
   | { type: "elicitation_resolved"; chatId: string; requestId: string }
   /** A message the user withdrew before Claude took it (`cancel_queued`). */
   | { type: "queued_removed"; chatId: string; uuid: string }
+  /** The answer to `mcp_action`: a sign-in's page, or why it failed. */
+  | {
+      type: "mcp_action_done";
+      chatId: string;
+      requestId: string;
+      /** The page to sign in on, for the browser; none once connected. */
+      authUrl?: string;
+      error?: string;
+    }
   /** The answer to `context_detail` (not kept for a replay). */
   | {
       type: "context_detail";
@@ -402,6 +411,14 @@ export type ChatCommand =
   | { type: "context_detail"; chatId: string; requestId: string }
   /** The MCP servers' state again (their list opened). */
   | { type: "mcp_status"; chatId: string }
+  /** /mcp's buttons: a sign-in, a reconnection, a server on or off. */
+  | {
+      type: "mcp_action";
+      chatId: string;
+      requestId: string;
+      server: string;
+      action: "connect" | "reconnect" | "enable" | "disable";
+    }
   /** Plugins and skills read again from disk (plugin errors' « Recharger »). */
   | { type: "reload_plugins"; chatId: string }
   /** What the page's offscreen render of a visual found (`chatVisualProbe`). */

@@ -401,6 +401,20 @@ export const CHAT_CSS = `
 .chat-pick .tag { flex-shrink: 0; font-size: 11px; color: var(--chat-accent); border: 1px solid #5a3a2c; border-radius: 999px; padding: 0 8px; white-space: nowrap; }
 .chat-pick.off { cursor: default; }
 .chat-pick.off .t { color: var(--chat-mute); }
+/* /mcp (the user's pick A of 01/11/2026): a server per row, the dot of its state, its action; a switch on one connected or cut off. */
+.chat-mcp-row .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: #6b6f76; }
+.chat-mcp-row.connected .dot { background: #4ade80; }
+.chat-mcp-row.failed .dot { background: #f87171; }
+.chat-mcp-row.needs-auth .dot, .chat-mcp-row.pending .dot, .chat-mcp-row .dot.wait { background: #fcd34d; }
+.chat-mcp-row .dot.wait { animation: chat-blink 1s steps(2) infinite; }
+.chat-mcp-row .t small { margin-left: 7px; color: var(--chat-mute); font-size: 11.5px; }
+.chat-mcp-row.disabled .t { color: var(--chat-mute); }
+.chat-slash .chat-mcp-row .code.main { border-color: #5a3a2c; background: #2b2623; }
+.chat-mcp-switch { position: relative; flex-shrink: 0; width: 26px; height: 14px; padding: 0; border: 0; border-radius: 999px; background: #3a3e45; cursor: pointer; }
+.chat-mcp-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: #a1a1aa; transition: left .12s; }
+.chat-mcp-switch.on { background: rgba(74,222,128,.35); }
+.chat-mcp-switch.on::after { left: 14px; background: #4ade80; }
+.chat-mcp-err { padding: 0 10px 6px 27px; margin-top: -4px; color: var(--chat-mute); font-size: 11.5px; overflow-wrap: anywhere; }
 .chat-slash .chat-pick .code { display: inline-flex; flex-shrink: 0; padding: 1px 9px; border-radius: 999px; border: 1px solid #464a51; background: #26292e; color: #e4e4e7; font: inherit; font-size: 11.5px; cursor: pointer; }
 .chat-slash .chat-pick .code:hover { border-color: var(--chat-accent); background: #2b2623; }
 .chat-slash-keys { margin-top: 4px; padding: 7px 10px 2px; border-top: 1px solid #2b2e33; font-size: 11.5px; color: var(--chat-mute); }

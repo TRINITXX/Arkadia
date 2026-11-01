@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  McpServerInfo,
   RewindPoint,
   SessionChoice,
   SlashCommandInfo,
 } from "@/lib/chat/chatProtocol";
+import { openUrl } from "@/lib/bridge";
 import {
   commandText,
   isListed,
+  mcpRows,
   menuCommands,
   needsArgs,
   pageCommand,
@@ -16,6 +19,8 @@ import {
   slashEntries,
   TERMINAL_ONLY,
   terminalOnlyNotice,
+  type McpAction,
+  type McpRow,
   type PagePanel,
   type PickerRow,
   type SlashEntry,
@@ -31,7 +36,16 @@ export interface ChatSlash {
   sessionId: string | null;
   /** The page's commands' work; absent, their panels stay empty (preview). */
   actions?: SlashActions;
+  /** /mcp: the servers as last told, and what its buttons ask. */
+  mcp?: {
+    servers: McpServerInfo[];
+    act: (server: string, action: McpAction) => Promise<string | undefined>;
+    refresh: () => void;
+  };
 }
+
+/** A /mcp row's action under way: asked, its sign-in open, or why it failed. */
+export type McpPending = { state: "asking" | "signin" } | { error: string };
 
 /** What the popup above the input shows. */
 export type SlashView =
@@ -43,6 +57,8 @@ export type SlashView =
       rows: PickerRow[] | null;
       error?: string;
       index: number;
+      /** /mcp: its actions under way, by server. */
+      pending?: Record<string, McpPending>;
     }
   | { kind: "hint"; text: string };
 
@@ -81,6 +97,7 @@ export function useSlashMenu({
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [hint, setHint] = useState<{ text: string; for: string } | null>(null);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [mcpPending, setMcpPending] = useState<Record<string, McpPending>>({});
   /** A /resume or /rewind choice under way (`pick`). */
   const picking = useRef(false);
 
@@ -99,8 +116,13 @@ export function useSlashMenu({
 
   // A panel loads its list each time it opens.
   const { actions } = slash;
+  // /mcp's list is the chat's own, told as it changes: asked again on open.
+  const mcpRefresh = slash.mcp?.refresh;
   useEffect(() => {
-    if (!panel || !actions) return;
+    if (panel === "mcp") mcpRefresh?.();
+  }, [panel, mcpRefresh]);
+  useEffect(() => {
+    if (!panel || panel === "mcp" || !actions) return;
     let alive = true;
     const load: Promise<Omit<Loaded, "at">> =
       panel === "resume"
@@ -122,7 +144,9 @@ export function useSlashMenu({
     };
   }, [panel, actions]);
 
-  const rows = useMemo(() => {
+  const mcpServers = slash.mcp?.servers;
+  const rows = useMemo((): PickerRow[] | null => {
+    if (panel === "mcp") return mcpRows(mcpServers ?? [], filter);
     if (!panel || loaded?.panel !== panel) return null;
     if (panel === "resume") {
       return sessionRows(
@@ -133,7 +157,7 @@ export function useSlashMenu({
       );
     }
     return rewindRows(loaded.points ?? [], filter, loaded.at);
-  }, [panel, loaded, filter, slash.sessionId]);
+  }, [panel, loaded, filter, slash.sessionId, mcpServers]);
 
   const at = (count: number, first = 0) =>
     selected.text === text
@@ -146,7 +170,8 @@ export function useSlashMenu({
       kind: "panel",
       panel,
       rows,
-      error: loaded?.error,
+      error: panel === "mcp" ? undefined : loaded?.error,
+      pending: mcpPending,
       // The current session can't be taken: start on the next one.
       index: at(
         rows?.length ?? 0,
@@ -195,7 +220,57 @@ export function useSlashMenu({
     if (!intercept(message)) send(message, now);
   };
 
+  /** /mcp: Enter's action on a row, or Ctrl+Enter's (`toggle`). */
+  const mcpPick = (row: McpRow, toggle: boolean) => {
+    const action = toggle ? row.toggle : row.action;
+    const mcp = slash.mcp;
+    const now = mcpPending[row.id];
+    if (!action || !mcp || (now && "state" in now)) return;
+    const server = row.id;
+    const set = (p: McpPending | null) =>
+      setMcpPending((all) => {
+        const next = { ...all };
+        if (p) next[server] = p;
+        else delete next[server];
+        return next;
+      });
+    set({ state: "asking" });
+    mcp.act(server, action).then(
+      (authUrl) => {
+        if (!authUrl) return set(null);
+        // Signed in in the browser: the row turns green once the chat sees it.
+        set({ state: "signin" });
+        openUrl(authUrl).catch((e: unknown) => set({ error: String(e) }));
+      },
+      (e: unknown) =>
+        set({ error: e instanceof Error ? e.message : String(e) }),
+    );
+  };
+
+  // A server connected or cut off since: its sign-in is over.
+  useEffect(() => {
+    setMcpPending((all) => {
+      const over = Object.keys(all).filter((name) => {
+        const p = all[name];
+        const s = mcpServers?.find((x) => x.name === name);
+        return (
+          "state" in p &&
+          p.state === "signin" &&
+          (s?.status === "connected" || s?.status === "disabled")
+        );
+      });
+      if (over.length === 0) return all;
+      const next = { ...all };
+      for (const name of over) delete next[name];
+      return next;
+    });
+  }, [mcpServers]);
+
   const pick = (row: PickerRow, mode: RewindMode = "conversation") => {
+    if (panel === "mcp") {
+      mcpPick(row as McpRow, mode !== "conversation");
+      return;
+    }
     // One choice at a time: a second relaunch would stop the Claude Code the
     // first one just started (a double click, Enter held).
     if (!panel || row.disabled || !actions || picking.current) return;
@@ -284,7 +359,7 @@ export function useSlashMenu({
     return false;
   };
 
-  return { view, onKeyDown, takes, intercept, select, choose, pick };
+  return { view, onKeyDown, takes, intercept, select, choose, pick, mcpPick };
 }
 
 export type SlashMenu = ReturnType<typeof useSlashMenu>;

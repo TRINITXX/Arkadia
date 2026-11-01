@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { chatCommand, subscribeChat } from "@/lib/chat/chatEvents";
+import type { McpAction } from "@/lib/chat/chatSlash";
 import type {
   ContextDetail,
   EffortLevel,
@@ -19,6 +20,8 @@ export interface ChatSdkActions {
   answerElicitation: (requestId: string, result: ElicitationAnswer) => void;
   contextDetail: () => Promise<ContextDetail>;
   refreshMcp: () => void;
+  /** /mcp's buttons: resolves with the page to sign in on, if one is left. */
+  mcpAction: (server: string, action: McpAction) => Promise<string | undefined>;
   reloadPlugins: () => void;
   /** A past visual's page with its images in (`visual_html` into the state). */
   visualHtml?: (toolUseId: string) => void;
@@ -34,6 +37,9 @@ const detailCache = new Map<
   string,
   { at: number; detail: Promise<ContextDetail> }
 >();
+
+/** A sign-in's page asked: a reconnection first, a few seconds. */
+const MCP_ACTION_TIMEOUT_MS = 30_000;
 
 /** `getContextUsage` full counts tokens: a few seconds at most. */
 const DETAIL_TIMEOUT_MS = 20_000;
@@ -93,8 +99,41 @@ export function useChatSdkActions(
         return detail;
       },
       refreshMcp: () => run({ type: "mcp_status", chatId }),
+      mcpAction: (server, action) =>
+        new Promise<string | undefined>((resolve, reject) => {
+          const requestId = `mcp:${Date.now()}:${Math.random()}`;
+          const done = () => {
+            window.clearTimeout(timer);
+            off();
+          };
+          const timer = window.setTimeout(() => {
+            done();
+            reject(new Error("Le chat ne répond pas"));
+          }, MCP_ACTION_TIMEOUT_MS);
+          const off = subscribeChat(chatId, (event) => {
+            if (
+              event.type !== "mcp_action_done" ||
+              event.requestId !== requestId
+            )
+              return;
+            done();
+            if (event.error) reject(new Error(event.error));
+            else resolve(event.authUrl);
+          });
+          chatCommand(accountId, {
+            type: "mcp_action",
+            chatId,
+            requestId,
+            server,
+            action,
+          }).catch((e: unknown) => {
+            done();
+            reject(e instanceof Error ? e : new Error(String(e)));
+          });
+        }),
       reloadPlugins: () => run({ type: "reload_plugins", chatId }),
-      visualHtml: (toolUseId) => run({ type: "visual_html", chatId, toolUseId }),
+      visualHtml: (toolUseId) =>
+        run({ type: "visual_html", chatId, toolUseId }),
       openVisual: (html, title) =>
         run({ type: "visual_open", chatId, html, title }),
     };

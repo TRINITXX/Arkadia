@@ -183,6 +183,14 @@ export type Command =
   | { type: "context_detail"; chatId: string; requestId: string }
   /** The MCP servers' state again (their list opened). */
   | { type: "mcp_status"; chatId: string }
+  /** /mcp's buttons: a sign-in, a reconnection, a server on or off. */
+  | {
+      type: "mcp_action";
+      chatId: string;
+      requestId: string;
+      server: string;
+      action: "connect" | "reconnect" | "enable" | "disable";
+    }
   /** Plugins and skills read again from disk. */
   | { type: "reload_plugins"; chatId: string }
   /** The page rendered a visual (`visual_check`): what broke, for the tool's result. */
@@ -231,6 +239,18 @@ const extras = (q: Query) => q as Query & QueryExtras;
 /** Polls the MCP servers' state while some still connect, this many times. */
 const MCP_POLL_MS = 5_000;
 const MCP_POLLS = 12;
+/** A sign-in opened in the browser is looked at this often, this many times (3 min). */
+const MCP_SIGNIN_MS = 5_000;
+const MCP_SIGNIN_LOOKS = 36;
+
+/**
+ * Not in the SDK's types (0.3.314), but there: `mcp_authenticate` gives the
+ * page to sign in on (probe of 01/11/2026: an MCP of the user's with a
+ * localhost callback, a claude.ai connector with none).
+ */
+interface McpSignIn {
+  mcpAuthenticate(server: string): Promise<{ authUrl?: string; callbackExpected?: boolean } | undefined>;
+}
 
 /** How long a visual waits for the page's report before it is « not verified ». */
 const VISUAL_CHECK_MS = 8_000;
@@ -310,6 +330,15 @@ export type ServerEvent =
   | { type: "elicitation_resolved"; chatId: string; requestId: string }
   /** A message the user withdrew before Claude took it. */
   | { type: "queued_removed"; chatId: string; uuid: string }
+  /** The answer to `mcp_action`: a sign-in's page, or why it failed. */
+  | {
+      type: "mcp_action_done";
+      chatId: string;
+      requestId: string;
+      /** The page to sign in on, for the browser; none once connected. */
+      authUrl?: string;
+      error?: string;
+    }
   /** The answer to `context_detail` (not kept for a replay). */
   | {
       type: "context_detail";
@@ -644,6 +673,8 @@ class Chat {
   private effortSent: string | undefined;
   private mcpSent: string | undefined;
   private mcpTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Sign-ins the user opened in the browser, looked at until connected. */
+  private signIns = new Map<string, ReturnType<typeof setTimeout>>();
   /** Background shells' output files, by task id (`noteOutputFiles`). */
   private outputFiles = new Map<string, string>();
   /** Visuals waiting for the page's report, by check id (`checkVisual`). */
@@ -916,6 +947,8 @@ class Chat {
     this.query = null;
     this.ready = asleepReady();
     clearTimeout(this.mcpTimer);
+    for (const timer of this.signIns.values()) clearTimeout(timer);
+    this.signIns.clear();
     this.input.end();
     q.close();
     this.out({ type: "asleep", chatId: this.chatId });
@@ -1238,6 +1271,74 @@ class Chat {
     } catch {
       // The chat closed meanwhile.
     }
+  }
+
+  /**
+   * /mcp's buttons. « Se connecter » reconnects first: a claude.ai connector
+   * listed « needs-auth » is often signed in already (probe of 01/11/2026:
+   * Gmail connected in 0.5 s); still not, it asks for the page to sign in on
+   * (`authUrl`, the page opens it) and looks at the server until connected.
+   */
+  async mcpAction(
+    requestId: string,
+    server: string,
+    action: "connect" | "reconnect" | "enable" | "disable",
+  ): Promise<void> {
+    const done = (extra: { authUrl?: string; error?: string }) =>
+      emit({ type: "mcp_action_done", chatId: this.chatId, requestId, ...extra });
+    let q: Query;
+    try {
+      q = await this.ready;
+    } catch (e) {
+      done({ error: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    try {
+      if (action === "connect") {
+        await q.reconnectMcpServer(server).catch(() => {});
+        const now = (await q.mcpServerStatus()).find((s) => s.name === server);
+        if (now?.status === "connected") {
+          done({});
+        } else {
+          const auth = await (q as unknown as McpSignIn).mcpAuthenticate(server);
+          done({ authUrl: auth?.authUrl });
+          this.awaitSignIn(q, server, auth?.callbackExpected !== false, MCP_SIGNIN_LOOKS);
+        }
+      } else {
+        if (action === "reconnect") await q.reconnectMcpServer(server);
+        else await q.toggleMcpServer(server, action === "enable");
+        done({});
+      }
+    } catch (e) {
+      done({ error: e instanceof Error ? e.message : String(e) });
+    }
+    void this.reportMcp(q, MCP_POLLS);
+  }
+
+  /**
+   * A sign-in opened: the server looked at every 5 s until connected (3 min
+   * at most). One with no callback (a claude.ai connector, signed in on
+   * claude.ai) is reconnected at each look: nothing else tells it.
+   */
+  private awaitSignIn(q: Query, server: string, calledBack: boolean, looks: number): void {
+    clearTimeout(this.signIns.get(server));
+    this.signIns.delete(server);
+    if (looks <= 0) return;
+    this.signIns.set(
+      server,
+      setTimeout(async () => {
+        this.signIns.delete(server);
+        try {
+          if (!calledBack) await q.reconnectMcpServer(server).catch(() => {});
+          const now = (await q.mcpServerStatus()).find((s) => s.name === server);
+          await this.reportMcp(q);
+          if (!now || now.status === "connected" || now.status === "disabled") return;
+        } catch {
+          return; // The chat closed meanwhile.
+        }
+        this.awaitSignIn(q, server, calledBack, looks - 1);
+      }, MCP_SIGNIN_MS),
+    );
   }
 
   /** The page opened the MCP list: their state now, and while some connect. */
@@ -1907,6 +2008,8 @@ class Chat {
     for (const done of [...this.visualChecks.values()]) done(null);
     this.visualPages.clear();
     clearTimeout(this.mcpTimer);
+    for (const timer of this.signIns.values()) clearTimeout(timer);
+    this.signIns.clear();
     this.input.end();
     this.query?.close();
     // Still booting: close the query as soon as it exists.
@@ -2201,6 +2304,8 @@ async function handle(cmd: Command): Promise<void> {
       return chat.contextDetail(cmd.requestId);
     case "mcp_status":
       return chat.refreshMcp();
+    case "mcp_action":
+      return chat.mcpAction(cmd.requestId, cmd.server, cmd.action);
     case "reload_plugins":
       return chat.reloadPlugins();
     case "wake":
