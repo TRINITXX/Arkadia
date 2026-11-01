@@ -255,9 +255,6 @@ interface McpSignIn {
 /** How long a visual waits for the page's report before it is « not verified ». */
 const VISUAL_CHECK_MS = 8_000;
 
-/** Set by Arkadia Lab on its chats (`chat.rs`): only they get the visuals' rule. */
-const LAB_MARKER = "ARKADIA_LAB";
-
 /**
  * The account this server runs for (`chat.rs`): a visual's check names it,
  * so a page reloaded meanwhile sends its report here. Not passed on to
@@ -851,13 +848,9 @@ class Chat {
         mcpServers: { [VISUAL_SERVER]: visualServer((v) => this.checkVisual(v)) },
         allowedTools: [VISUAL_TOOL_NAME],
         // Claude Code's own prompt, as in the terminal (the user's pick of
-        // 31/10/2026): left out, the SDK runs a near-empty one. The Lab adds
-        // its rule of a visual against an artifact.
-        systemPrompt: {
-          type: "preset",
-          preset: "claude_code",
-          ...(start.env?.[LAB_MARKER] === "1" ? { append: VISUAL_RULE } : {}),
-        },
+        // 31/10/2026): left out, the SDK runs a near-empty one. Plus the rule
+        // of a visual against an artifact.
+        systemPrompt: { type: "preset", preset: "claude_code", append: VISUAL_RULE },
         stderr: (data) => process.stderr.write(`[${this.chatId}] ${data}`),
       },
     });

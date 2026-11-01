@@ -208,8 +208,8 @@ pub fn run() {
                     });
                 }
                 // Twitch PiP window placed beside Arkadia while it is in front.
-                // The Lab only: two instances would fight over its rect.
-                if lab::LAB {
+                // One instance only: two would fight over its rect.
+                if pip_follow::ENABLED {
                     pip_follow::spawn();
                 }
                 // Nothing inside a wedged webview can repair it, so the
@@ -375,7 +375,7 @@ pub fn run() {
             tauri::RunEvent::Exit => {
                 messages_only::forget_all();
                 // The Twitch PiP goes back where it was before Arkadia came in front.
-                if lab::LAB {
+                if pip_follow::ENABLED {
                     pip_follow::restore_on_exit();
                 }
                 popup::log_line("[run] exiting");

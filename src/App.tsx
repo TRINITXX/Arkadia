@@ -146,7 +146,7 @@ import {
   chatForCommand,
   chatLabelOf,
   paneChatTitle,
-  restoredChat,
+  restoredLaunch,
   usePaneChats,
 } from "@/lib/chat/usePaneChats";
 import {
@@ -540,7 +540,7 @@ export function App() {
     if (!activeTabId) return null;
     return tabs.find((t) => t.id === activeTabId)?.activePaneId ?? null;
   }, [tabs, activeTabId]);
-  // The pane the toolbar's Chat / Terminal switches (the Lab).
+  // The pane the toolbar's Chat / Terminal switches.
   const activeModePane = useMemo(() => {
     if (!activePaneIdOfActiveTab) return null;
     const tab = tabs.find((t) => t.id === activeTabId);
@@ -1193,6 +1193,7 @@ export function App() {
     if (!snap) return;
     setLastSession(null);
     let restored = 0;
+    const taken = new Set<string>();
     for (const st of snap.tabs) {
       const project = projects.find((p) => p.id === st.projectId);
       if (!project) continue;
@@ -1202,17 +1203,14 @@ export function App() {
         let init: string | undefined;
         let chat: PaneChat | undefined;
         if (p.wasClaude) {
-          const sid = await invoke<string | null>("pane_session_id", {
-            paneId: p.paneId,
-          }).catch(() => null);
-          // A chat pane reopens as a chat, on its own session (Arkadia Lab).
-          if (__ARKADIA_LAB__ && p.chat) chat = restoredChat(p.chat);
-          // `ccd` is the user's pwsh alias for Claude (skip-permissions +
-          // effort), and it forwards @args — so --resume passes straight
-          // through. Plain `claude` would drop those flags. Without a session
-          // id (pane map lost/pruned), start a fresh Claude rather than an
-          // empty shell.
-          if (!chat) init = sid ? `ccd --resume ${sid}` : "ccd";
+          // A chat pane reopens as a chat, on its own session: its pane
+          // map names its old terminal's.
+          const sid = p.chat
+            ? null
+            : await invoke<string | null>("pane_session_id", {
+                paneId: p.paneId,
+              }).catch(() => null);
+          ({ chat, init } = restoredLaunch(p.chat, sid, taken));
         }
         const paneId = await spawnPane(
           p.cwd ?? project.path,
@@ -1321,10 +1319,10 @@ export function App() {
   }, [sessionsOpen, tabs]);
 
   /**
-   * Arkadia Lab: what resuming a past conversation as a chat needs from
-   * further down (the chat panes' hook, `revealPane`), set once they exist.
+   * What resuming a past conversation as a chat needs from further down (the
+   * chat panes' hook, `revealPane`), set once they exist.
    */
-  const labResumeRef = useRef<{
+  const chatResumeRef = useRef<{
     holding: (sessionId: string) => Promise<string | null>;
     reveal: (paneId: string) => void;
     start: (paneId: string, chat: PaneChat) => void;
@@ -1340,18 +1338,19 @@ export function App() {
       /** False from the phone: the desktop view stays where it is. */
       activate = true,
     ) => {
-      // Arkadia Lab: as a chat, unless a pane runs it already: never two
-      // Claude Code on one session (/resume's rule, `paneHolding`).
-      const lab = __ARKADIA_LAB__ ? labResumeRef.current : null;
-      if (lab) {
-        const held = await lab.holding(session.id);
+      // Never two Claude Code on one session (/resume's rule, `paneHolding`).
+      const chats = chatResumeRef.current;
+      if (chats) {
+        const held = await chats.holding(session.id);
         const heldTab = held ? paneToTab.current.get(held) : undefined;
         if (held && heldTab) {
-          if (activate) lab.reveal(held);
+          if (activate) chats.reveal(held);
           pushToast("info", "Conversation déjà ouverte : voici son onglet");
           return { tabId: heldTab, paneId: held };
         }
       }
+      // As a chat, except from the phone: it reads terminals only.
+      const asChat = activate ? chats : null;
       const target = resolveProjectTarget(projects, session.cwd);
       let project: Project | undefined;
       if (target.kind === "existing") {
@@ -1373,15 +1372,15 @@ export function App() {
       // and forwards its args, so --resume passes straight through.
       const spawned = await spawnTabFor(
         project,
-        lab ? undefined : `ccd --resume ${session.id}`,
+        asChat ? undefined : `ccd --resume ${session.id}`,
         session.cwd,
         undefined,
         activate,
       );
       if (!spawned) return null;
       // The pane's shell stays under the chat, for a later switch.
-      if (lab)
-        lab.start(spawned.paneId, { cwd: session.cwd, resume: session.id });
+      if (asChat)
+        asChat.start(spawned.paneId, { cwd: session.cwd, resume: session.id });
       if (activate) setActiveProjectId(project.id);
       // The project is where the user is about to work: surface it in the
       // sidebar's "Active" list now, not on the first keystroke.
@@ -1655,7 +1654,7 @@ export function App() {
     tabsRef.current = tabs;
   }, [tabs]);
 
-  // Chat panes (Arkadia Lab): Claude without its terminal (`usePaneChats`).
+  // Chat panes: Claude without its terminal (`usePaneChats`).
   const projectPathOf = useCallback(
     (paneId: string) => {
       const tab = tabsRef.current.find((t) => t.panes[paneId]);
@@ -2408,9 +2407,9 @@ export function App() {
     });
   }, []);
 
-  // Arkadia Lab: « Reprendre » opens the conversation as a chat.
+  // « Reprendre » opens the conversation as a chat.
   useEffect(() => {
-    labResumeRef.current = {
+    chatResumeRef.current = {
       holding: paneHolding,
       reveal: revealPane,
       start: startChat,
@@ -2460,14 +2459,14 @@ export function App() {
         projectChanged &&
         !autoRestoringProjectIds.current.has(activeProject.id)
       ) {
-        // Arkadia Lab: a chat asleep, its sessions to resume in the middle;
-        // Claude Code starts at the first letter typed (the user's ask of
-        // 01/11/2026). The pane's shell stays under it, idle.
+        // A chat asleep, its sessions to resume in the middle; Claude Code
+        // starts at the first letter typed (the user's ask of 01/11/2026).
+        // The pane's shell stays under it, idle.
         const project = activeProject;
         void spawnTabFor(project).then((spawned) => {
-          const lab = __ARKADIA_LAB__ ? labResumeRef.current : null;
-          if (spawned && lab)
-            lab.start(spawned.paneId, { cwd: project.path, asleep: true });
+          const chats = chatResumeRef.current;
+          if (spawned && chats)
+            chats.start(spawned.paneId, { cwd: project.path, asleep: true });
         });
       }
     } else if (!activeTabIdByProject[activeProject.id]) {
@@ -2906,11 +2905,12 @@ export function App() {
       const project = remote?.project ?? activeProject;
       if (!project) return null;
       const sendCommand = async (paneId: string) => {
-        // Arkadia Lab opens Claude as a chat rather than in the terminal.
+        // Claude opens as a chat rather than in the terminal, except from
+        // the phone: it reads terminals only.
         const pane = tabsRef.current.map((t) => t.panes[paneId]).find(Boolean);
-        const chat = __ARKADIA_LAB__
-          ? chatForCommand(button.command, pane?.cwd ?? project.path)
-          : null;
+        const chat = remote
+          ? null
+          : chatForCommand(button.command, pane?.cwd ?? project.path);
         if (chat) {
           startChat(paneId, chat);
           return;
@@ -3043,10 +3043,17 @@ export function App() {
           return {};
         }
         case "resume": {
+          // Open as a chat on the PC: the phone reads terminals only.
+          const held = await chatResumeRef.current?.holding(action.session.id);
+          if (held && tabsRef.current.some((t) => t.panes[held]?.chat))
+            return { error: "conversation ouverte en chat sur le PC" };
           // Already running in a tab: show that one, never a second Claude
-          // on the same transcript (the desktop overlay does the same).
+          // on the same transcript (the desktop overlay does the same). A
+          // chat's pane map names its old terminal's session, not its own.
           const panes = tabs.flatMap((t) =>
-            Object.keys(t.panes).map((paneId) => ({ tabId: t.id, paneId })),
+            Object.values(t.panes)
+              .filter((p) => !p.chat)
+              .map((p) => ({ tabId: t.id, paneId: p.id })),
           );
           const owners = await Promise.all(
             panes.map(({ paneId }) =>
@@ -3150,7 +3157,6 @@ export function App() {
               : null
           }
           onOpenSessions={() => setSessionsOpen(true)}
-          onOpenSession={setSessionPreview}
           onActivateTab={(projectId, tabId) => {
             setSessionPreview(null);
             onActivateProjectTab(projectId, tabId);
@@ -3216,7 +3222,7 @@ export function App() {
             ) : null
           }
           paneMode={
-            __ARKADIA_LAB__ && activeModePane ? (
+            activeModePane ? (
               <ChatModeToggle
                 mode={activeModePane.chat ? "chat" : "terminal"}
                 busy={chatHandlers.switching.has(activeModePane.id)}

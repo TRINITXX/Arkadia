@@ -37,30 +37,30 @@ export interface PreparedVisual {
 
 /**
  * When a visual rather than an artifact (decided with Alexis on 31/10/2026).
- * In the tool's description as well as the Lab's prompt: a recorded system
+ * In the tool's description as well as the chat's prompt: a recorded system
  * prompt (`snapshot`) keeps a resumed session on the prompt it began with,
  * while the tools' descriptions are read anew at each launch.
  */
 const VISUAL_WHEN =
-  "Use it for what helps now, in this conversation: explaining a mechanism, a plan or a diagnosis; comparing figures or 2 to 4 options; a quick choice (mockups or options the user picks, with a comment). Publish a claude.ai artifact instead only for a big page (a report, an audit, many mockup screens), something to share or reopen later (a link), something to fill over several days (a test checklist), or anything meant for outside the Lab (the daily Arkadia, the phone). Mermaid code fences keep rendering in the chat as before.";
+  "Use it for what helps now, in this conversation: explaining a mechanism, a plan or a diagnosis; comparing figures or 2 to 4 options; a quick choice (mockups or options the user picks, with a comment). Publish a claude.ai artifact instead only for a big page (a report, an audit, many mockup screens), something to share or reopen later (a link), something to fill over several days (a test checklist), or anything meant for outside Arkadia (the phone, someone else). Mermaid code fences keep rendering in the chat as before.";
 
 /** What the tool's description tells Claude: when, how, and the theme. */
 export const VISUAL_TOOL_DESCRIPTION = [
-  "Show a finished, self-contained HTML page inline in this chat, above your final reply, where this call sits: a chart, a diagram or schema, a table, a comparison, steps, mockups, an image collage, or a choice with buttons. The user sees it in the Lab's chat column; do not describe or restate it in your reply.",
+  "Show a finished, self-contained HTML page inline in this chat, above your final reply, where this call sits: a chart, a diagram or schema, a table, a comparison, steps, mockups, an image collage, or a choice with buttons. The user sees it in Arkadia's chat column; do not describe or restate it in your reply.",
   `When: ${VISUAL_WHEN}`,
   "html: a complete document (<!doctype html>…), inline <style> and <script>. Scripts may load only from https://cdn.jsdelivr.net, https://cdnjs.cloudflare.com or https://unpkg.com (Chart.js, d3, mermaid…). No fetch, XHR, WebSocket, iframe, worker or Trusted Types policy of its own (a library that makes one, like lit, fails): everything the page shows is in it. Remote images other than those CDNs are blocked; local images by absolute path (C:\\…\\shot.png in src, srcset or CSS url()) are inlined for you: name each once.",
   "Theme: use these CSS variables, never fixed colours: --bg (page background), --text, --muted, --faint, --card and --card-2 (a box), --border, --border-strong, --accent (#e2865f, the one accent) with --accent-text (text on it) and --accent-soft, --ok, --warn, --bad, --info, --chart-1 … --chart-6 (series, in order), --radius and --radius-sm, --font-sans, --font-serif, --font-mono. They are set on :root before your styles, with a base sheet (background, text colour, font, 16px gutter).",
-  "Layout: leave html and body with no background, outer card, border, banner title or side padding: the Lab frames the page in a card with your title. A box of its own gets var(--card), var(--radius) and 12-16px padding. Let the content set the height: no vh units, no height:100% on html or body. Give charts a fixed pixel height. Use fluid widths (the frame is about 740px wide, or the pane's full width with wide).",
+  "Layout: leave html and body with no background, outer card, border, banner title or side padding: Arkadia frames the page in a card with your title. A box of its own gets var(--card), var(--radius) and 12-16px padding. Let the content set the height: no vh units, no height:100% on html or body. Give charts a fixed pixel height. Use fluid widths (the frame is about 740px wide, or the pane's full width with wide).",
   `Height: the whole visual should fit the chat pane without scrolling, about ${VISUAL_FIT_HEIGHT}px. Prefer compact layouts (side by side rather than stacked, short captions). Images and videos you leave unsized get max-height: var(--ark-fit-media) (the room left for one, a caption under it); one with a width, height or style attribute is left as you sized it, so size it to the space too. A taller page is scaled down a little to fit, and no further than readable.`,
   "wide: true when the content needs the pane's full width (mockups side by side, a table of many columns, a dense chart); otherwise leave it out.",
   "A choice: buttons calling window.arkadia.choose(text) put that text into the user's message box (not sent), so they can add a comment. Links open in the user's browser.",
-  "The Lab renders the page and checks it (script errors, console.error, blocked resources, empty or clipped page) before the user sees it. If the result lists problems, fix them and call show_visual again with the whole corrected page.",
+  "Arkadia renders the page and checks it (script errors, console.error, blocked resources, empty or clipped page) before the user sees it. If the result lists problems, fix them and call show_visual again with the whole corrected page.",
 ].join("\n\n");
 
-/** The Lab chat's rule of when to show a visual (`systemPrompt`, Lab only). */
+/** Every chat's rule of when to show a visual (`systemPrompt`). */
 export const VISUAL_RULE = [
   "# Visuals in the chat",
-  `This chat runs in Arkadia Lab, which can show an HTML page right in the conversation: the show_visual tool. ${VISUAL_WHEN}`,
+  `This chat runs in Arkadia, which can show an HTML page right in the conversation: the show_visual tool. ${VISUAL_WHEN}`,
 ].join("\n");
 
 /** Where a page's inlined copy is kept: a resumed chat shows it again. */
@@ -140,7 +140,7 @@ export async function inlineImages(
 }
 
 /**
- * The chat's MCP server: `check` hands the page to the Lab and resolves with
+ * The chat's MCP server: `check` hands the page to Arkadia and resolves with
  * its report, or null when none came in time.
  */
 export function visualServer(check: (visual: PreparedVisual) => Promise<VisualReport | null>) {

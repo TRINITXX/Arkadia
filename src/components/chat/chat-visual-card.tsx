@@ -41,7 +41,7 @@ const folded = new Set<string>();
  * Claude's visual (`show_visual`) where it was called: a band (title,
  * « Agrandir », « Ouvrir dans le navigateur », « Replier ») over the page,
  * « Replier » again at its foot (the user's ask of 01/11/2026). It shows
- * once the Lab checked it; one found broken stays folded (Claude sends a
+ * once Arkadia checked it; one found broken stays folded (Claude sends a
  * fixed one), « Voir quand même » opens it.
  */
 export function ChatVisualCard({
@@ -175,7 +175,7 @@ export function ChatVisualCard({
       ) : (
         <div className="chat-visual-wait">
           {phase === "checking"
-            ? "Le Lab vérifie le visuel…"
+            ? "Arkadia vérifie le visuel…"
             : "Chargement du visuel…"}
         </div>
       )}

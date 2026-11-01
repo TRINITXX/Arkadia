@@ -138,10 +138,11 @@ fn compact_for(style: u8, chat: bool) -> bool {
     chat || style == STYLE_COMPACT
 }
 
-/// Whether the toast is kept built for the style: compact, and in the Lab
-/// any style but `off` (its chat panes always use it).
-fn toast_wanted(style: u8, lab: bool) -> bool {
-    style == STYLE_COMPACT || (lab && style != STYLE_OFF)
+/// Whether the toast is kept built for the style: any but `off`, since chat
+/// panes use it whatever the style (`compact_for`). Built on demand, its
+/// first notification would freeze the main thread (REVIEW.md).
+fn toast_wanted(style: u8) -> bool {
+    style != STYLE_OFF
 }
 
 /// One waiting pane shown (or queued) in the popup. `pane_id` is the Arkadia
@@ -929,7 +930,7 @@ fn prebuild_notif_window(app: AppHandle) {
             Err(e) => log_line(&format!("compact notification window build failed: {e}")),
         }
         // The style changed during the build: the toast has no use left.
-        if !toast_wanted(queue.style.load(Ordering::Acquire), crate::lab::LAB) {
+        if !toast_wanted(queue.style.load(Ordering::Acquire)) {
             if let Some(w) = app.get_webview_window(NOTIF_LABEL) {
                 let _ = w.destroy();
             }
@@ -1182,13 +1183,13 @@ pub fn popup_log_ui(msg: String) {
 /// On an actual change we clear the queue and close any open windows, so we
 /// never leave a stale window of the previous style around (the toast only
 /// hides while the new style still wants it). The frontend sends the saved
-/// style at startup, which builds the compact toast ahead of time; in the Lab
-/// whatever the style but `off`, for its chat panes (`toast_wanted`).
+/// style at startup, which builds the compact toast ahead of time whatever
+/// the style but `off`, for the chat panes (`toast_wanted`).
 #[tauri::command]
 pub fn popup_set_style(style: String, app: AppHandle, queue: State<'_, PopupQueue>) {
     let next = style_from_str(&style);
     let prev = queue.style.swap(next, Ordering::Release);
-    let wanted = toast_wanted(next, crate::lab::LAB);
+    let wanted = toast_wanted(next);
     if prev != next {
         queue.items.lock().clear();
         close_all_popups(&app, wanted);
@@ -1350,7 +1351,7 @@ mod tests {
     use std::collections::HashSet;
     use std::time::Duration;
 
-    /// The Lab shows a chat's toast and a terminal's mirror popup at once,
+    /// Arkadia shows a chat's toast and a terminal's mirror popup at once,
     /// both bottom-right: the mirror cascade rises above the toast.
     #[test]
     fn a_mirror_popup_never_covers_the_toast() {
@@ -1402,12 +1403,10 @@ mod tests {
         assert!(compact_for(STYLE_MIRROR, true));
         assert!(!compact_for(STYLE_MIRROR, false));
         assert!(compact_for(STYLE_COMPACT, false));
-        // So the Lab keeps the toast built in mirror style, not when off; the
-        // daily instance only in compact style.
-        assert!(toast_wanted(STYLE_MIRROR, true));
-        assert!(!toast_wanted(STYLE_OFF, true));
-        assert!(!toast_wanted(STYLE_MIRROR, false));
-        assert!(toast_wanted(STYLE_COMPACT, false));
+        // So the toast stays built in mirror style too, never when off.
+        assert!(toast_wanted(STYLE_MIRROR));
+        assert!(toast_wanted(STYLE_COMPACT));
+        assert!(!toast_wanted(STYLE_OFF));
     }
 
     #[test]

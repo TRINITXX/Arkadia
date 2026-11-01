@@ -8,7 +8,7 @@ const NOTES: Record<Exclude<PipFollowNote, null>, string> = {
   failed: "Échec, réessaie.",
 };
 
-/** Settings section of the Twitch PiP window that follows Arkadia (Lab only). */
+/** Settings section of the Twitch PiP window that follows Arkadia (daily only). */
 export function PipFollowSettings() {
   const { enabled, target, note, save, clear } = usePipFollow();
   if (!enabled) return null;

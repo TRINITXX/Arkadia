@@ -10,7 +10,7 @@ export interface PipRect {
 }
 
 interface PipFollowStatus {
-  /** Only Arkadia Lab moves the Twitch PiP window. */
+  /** Only the daily Arkadia moves the Twitch PiP window, never the Lab. */
   enabled: boolean;
   target: PipRect | null;
 }

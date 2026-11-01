@@ -30,7 +30,7 @@ interface PaneTreeViewProps {
   onUserInput?: () => void;
   onContextMenu: (paneId: string, x: number, y: number) => void;
   onSetRatio: (path: number[], ratio: number) => void;
-  /** Chat panes (Arkadia Lab): see `ChatPane`. */
+  /** Chat panes: see `ChatPane`. */
   chat: PaneChatHandlers;
   /** Its tab is the one on screen: a hidden tab's chat panes rest. */
   shown?: boolean;

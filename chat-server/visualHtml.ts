@@ -19,7 +19,7 @@ export const VISUAL_TOOL_NAME = `mcp__${VISUAL_SERVER}__${VISUAL_TOOL}`;
 export const VISUAL_FIT_HEIGHT = 700;
 export const VISUAL_FIT_FLOOR = 0.75;
 
-/** How the result of a page the Lab checked clean opens (`visualVerified`). */
+/** How the result of a page Arkadia checked clean opens (`visualVerified`). */
 export const VISUAL_CHECKED_CLEAN = "Shown in the chat (checked: no error";
 
 /** The page Claude writes, before its images go in. */
@@ -373,7 +373,7 @@ export function visualResult(
   const notes = skipped.map((s) => `Note: local image not inlined: ${s.path}: ${s.reason}`);
   if (!report) {
     return {
-      text: ["Shown in the chat, not verified: the Lab did not report on the page in time.", ...notes].join("\n"),
+      text: ["Shown in the chat, not verified: Arkadia did not report on the page in time.", ...notes].join("\n"),
       isError: false,
     };
   }
@@ -395,7 +395,7 @@ export function visualResult(
   }
   return {
     text: [
-      "The Lab rendered the page and found problems. The user sees it folded until you fix it: call show_visual again with the corrected page.",
+      "Arkadia rendered the page and found problems. The user sees it folded until you fix it: call show_visual again with the corrected page.",
       ...problems.map((p) => `- ${p}`),
       ...notes,
     ].join("\n"),

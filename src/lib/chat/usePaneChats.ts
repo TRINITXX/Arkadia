@@ -36,7 +36,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const bytes = (text: string) => Array.from(new TextEncoder().encode(text));
 
 /**
- * A toolbar command that starts Claude: the Lab opens it as a chat instead.
+ * A toolbar command that starts Claude: Arkadia opens it as a chat instead.
  * `ccd` (and `cc`, `claude`) starts a new session, `ccdr` / `--continue`
  * the folder's latest, `--resume <id>` that one.
  */
@@ -66,6 +66,34 @@ export function restoredChat(saved: PaneChat): PaneChat {
         // Never typed in: it opens asleep again, no Claude Code started.
         ...(saved.asleep ? { asleep: true } : {}),
       };
+}
+
+/**
+ * What a pane that ran Claude reopens at a restore: its chat
+ * (`restoredChat`), or in the terminal `ccd --resume` on its pane map's
+ * session (a fresh `ccd` without one). A session an earlier pane of the same
+ * restore took is never started twice (two snapshots merged, or a terminal
+ * that ran it before a chat took it over): a chat reopens asleep without it,
+ * its draft kept, a terminal as a bare shell. `taken` collects the sessions
+ * as they go.
+ */
+export function restoredLaunch(
+  saved: PaneChat | undefined,
+  mapSession: string | null,
+  taken: Set<string>,
+): { chat?: PaneChat; init?: string } {
+  const chat = saved ? restoredChat(saved) : undefined;
+  const session = chat ? chat.resume : mapSession;
+  if (session) {
+    if (taken.has(session))
+      return chat ? { chat: { cwd: chat.cwd, asleep: true } } : {};
+    taken.add(session);
+  }
+  if (chat) return { chat };
+  // `ccd` is the user's pwsh alias for Claude (skip-permissions + effort),
+  // and it forwards @args — so --resume passes straight through. Plain
+  // `claude` would drop those flags.
+  return { init: session ? `ccd --resume ${session}` : "ccd" };
 }
 
 /**
@@ -147,7 +175,7 @@ function findPane(tabs: Tab[], paneId: string): PaneState | undefined {
 }
 
 /**
- * Chat panes (Arkadia Lab): starting one, keeping its session and title, and
+ * Chat panes: starting one, keeping its session and title, and
  * switching a pane between chat and terminal on the same conversation. Never
  * two Claude Code on one session: the side being left is closed first, and
  * only while Claude rests (a switch mid-turn would cut its work).

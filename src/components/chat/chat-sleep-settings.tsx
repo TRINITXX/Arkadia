@@ -2,7 +2,7 @@ import { SLEEP_CHOICES } from "@chat-server/sleep";
 import { sleepChoiceLabel, useSleepAfter } from "@/lib/chat/chatSleep";
 
 /**
- * Settings section of the chats' sleep (Lab): after how long without
+ * Settings section of the chats' sleep: after how long without
  * anything done in it a chat stops its Claude Code, and its MCP servers
  * with it. The conversation stays on screen; a key typed wakes it.
  */

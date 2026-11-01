@@ -10,7 +10,7 @@
 //!   place and save it.
 //! - The place to go back to (`origin`) belongs to no window handle: Chrome
 //!   reopens a closed PiP at its last place (the target), and the new window
-//!   must still go back. It is never the target itself, and it survives a Lab
+//!   must still go back. It is never the target itself, and it survives a
 //!   restart or crash in a file; a normal exit puts the PiP back.
 //! - Going back waits `RESTORE_DELAY_MS`: the taskbar and the Alt+Tab
 //!   switcher take the foreground for an instant between two Arkadia windows.
@@ -18,10 +18,14 @@
 //!   an out-of-context WinEvent hook is re-entered during any SendMessage, and
 //!   an inner event would finish before the outer move and lose to it.
 //!
-//! Only the Lab runs it (`lib.rs`): two instances would each save the rect the
-//! other already moved.
+//! Only the daily release build runs it (`ENABLED`), never Arkadia Lab nor
+//! `tauri dev`: two instances would each save the rect the other already
+//! moved, both being `arkadia.exe` to each other.
 
 use serde::Serialize;
+
+/// Whether this instance moves the PiP: see the module's last paragraph.
+pub const ENABLED: bool = cfg!(windows) && !crate::lab::LAB && !cfg!(debug_assertions);
 
 const RESTORE_DELAY_MS: u32 = 250;
 
@@ -115,7 +119,7 @@ pub struct PipFollowStatus {
 #[tauri::command]
 pub async fn pip_follow_status() -> PipFollowStatus {
     PipFollowStatus {
-        enabled: cfg!(windows) && crate::lab::LAB,
+        enabled: ENABLED,
         target: imp::target(),
     }
 }
@@ -225,8 +229,8 @@ mod imp {
             .join("Arkadia")
             .join(name)
     }
-    const ORIGIN_FILE: &str = "pip-follow-origin-lab.txt";
-    const TARGET_FILE: &str = "pip-follow-target-lab.txt";
+    const ORIGIN_FILE: &str = "pip-follow-origin.txt";
+    const TARGET_FILE: &str = "pip-follow-target.txt";
 
     fn read_rect(name: &str) -> Option<Rect> {
         std::fs::read_to_string(file(name))
@@ -280,7 +284,7 @@ mod imp {
     }
 
     pub fn run() {
-        // A Lab killed while Arkadia was in front left the PiP at the target.
+        // An Arkadia killed while in front left the PiP at the target.
         let origin = read_rect(ORIGIN_FILE);
         let target = read_rect(TARGET_FILE);
         state(|s| {

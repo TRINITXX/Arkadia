@@ -19,7 +19,7 @@ interface ToolbarProps {
   onToggleSidepanel: () => void;
   /** Shown only while the sidepanel (and its accounts block) is hidden. */
   accountChip: React.ReactNode;
-  /** Chat / Terminal for the active pane, before the settings (the Lab). */
+  /** Chat / Terminal for the active pane, before the settings. */
   paneMode?: React.ReactNode;
 }
 

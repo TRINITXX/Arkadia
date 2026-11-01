@@ -8,6 +8,7 @@ import {
   chatTitle,
   paneChatTitle,
   restoredChat,
+  restoredLaunch,
   terminalBusyReason,
 } from "@/lib/chat/usePaneChats";
 
@@ -271,6 +272,32 @@ describe("restoredChat", () => {
     expect(restoredChat({ cwd: "C:/p", resume, asleep: true })).toEqual({
       cwd: "C:/p",
       resume,
+    });
+  });
+});
+
+describe("restoredLaunch", () => {
+  it("never reopens one session twice in a restore", () => {
+    const x = "0f3a2b1c-1111-2222-3333-444455556666";
+    const taken = new Set<string>();
+    // A terminal on X, then a chat on X (two snapshots merged): the chat
+    // reopens asleep, off X, with its draft.
+    expect(restoredLaunch(undefined, x, taken)).toEqual({
+      init: `ccd --resume ${x}`,
+    });
+    expect(restoredLaunch({ cwd: "C:/p", resume: x }, null, taken)).toEqual({
+      chat: { cwd: "C:/p", asleep: true },
+    });
+    // And a chat first leaves the terminal a bare shell.
+    const first = new Set<string>();
+    expect(restoredLaunch({ cwd: "C:/p", resume: x }, null, first)).toEqual({
+      chat: { cwd: "C:/p", resume: x },
+    });
+    expect(restoredLaunch(undefined, x, first)).toEqual({});
+    // Without a session, nothing to collide on: a fresh Claude each time.
+    expect(restoredLaunch(undefined, null, first)).toEqual({ init: "ccd" });
+    expect(restoredLaunch({ cwd: "C:/p" }, null, first)).toEqual({
+      chat: { cwd: "C:/p" },
     });
   });
 });

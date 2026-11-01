@@ -206,7 +206,7 @@ describe("fitting the pane's height", () => {
       followsFrame: false,
     };
     expect(visualVerified(shown(visualResult(clean, []).text))).toBe(true);
-    expect(visualVerified(shown("Shown in the chat, not verified: the Lab did not report"))).toBe(false);
+    expect(visualVerified(shown("Shown in the chat, not verified: Arkadia did not report"))).toBe(false);
     expect(visualVerified(shown("- Script error", true))).toBe(false);
     expect(visualVerified(tool({ stale: true }))).toBe(false);
   });
