@@ -14,7 +14,6 @@ import type { LightboxContent } from "@/components/modern/ImageThumb";
 import { Lightbox } from "@/components/modern/Lightbox";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatAgentSheet } from "@/components/chat/chat-agent-sheet";
-import { ChatAgentsDrawer } from "@/components/chat/chat-agents-drawer";
 import { ChatAgentCards } from "@/components/chat/chat-agent-cards";
 import { ChatShellsChip } from "@/components/chat/chat-shells-chip";
 import { ChatWorkflowCard } from "@/components/chat/chat-workflow-card";
@@ -179,7 +178,6 @@ function ChatViewBody({
   const hook = useRunningHook(state.sdk.hooks);
   const elicitation = state.sdk.elicitations[0];
   const [lightbox, setLightbox] = useState<LightboxContent | null>(null);
-  const [drawer, setDrawer] = useState(false);
   // Off while its tab is hidden (the pane sized to nothing), or said hidden:
   // its clocks stop, here and in its children (`ChatShownContext`).
   const [sized, setSized] = useState(true);
@@ -221,12 +219,13 @@ function ChatViewBody({
     (content: LightboxContent) => setLightbox(content),
     [],
   );
-  // A subagent's row opens its conversation, else the finished ones. Two
-  // handlers: one given as `onClick` would get the click event as « agent ».
+  // A subagent's row opens its conversation (none known: nothing; the
+  // panel listing them is gone, the live line's menu lists them).
   const { openSheet } = agentSheet;
-  const openFinished = useCallback(() => setDrawer(true), []);
   const openAgentRow = useCallback(
-    (agent?: Subagent) => (agent ? openSheet(agent) : setDrawer(true)),
+    (agent?: Subagent) => {
+      if (agent) openSheet(agent);
+    },
     [openSheet],
   );
   // Every image of the conversation, for the lightbox's ←/→.
@@ -290,7 +289,6 @@ function ChatViewBody({
   // What is open in the pane: Esc closes the latest before it reaches
   // Claude (`chatLayers`). Menus and lists register themselves inside.
   const [layers] = useState(createChatLayers);
-  useLayer(layers, drawer, () => setDrawer(false));
   useLayer(layers, !!agentSheet.sheet, agentSheet.close);
   useLayer(layers, search.open, search.close);
   useLayer(layers, !state.closed && !request && !!edit.pending, edit.cancel);
@@ -671,7 +669,7 @@ function ChatViewBody({
             turnTokens={state.turnTokens + state.thinkingTokens}
             subagents={doneLink ? finishedAgents : NO_AGENTS}
             tasks={tasks}
-            onOpenAgents={openFinished}
+            onOpenAgent={openSheet}
             retry={state.retry}
             hook={hook}
           />
@@ -715,16 +713,6 @@ function ChatViewBody({
           {!inInput && <div className="chat-status-row">{sessionItems}</div>}
         </div>
       </div>
-      {drawer && (
-        <ChatAgentsDrawer
-          subagents={finishedAgents}
-          onOpenConversation={(agent) => {
-            agentSheet.openSheet(agent);
-            setDrawer(false);
-          }}
-          onClose={() => setDrawer(false)}
-        />
-      )}
       {agentSheet.sheet && (
         <ChatAgentSheet
           agent={agentSheet.sheet}

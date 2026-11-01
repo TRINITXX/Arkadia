@@ -431,6 +431,16 @@ export const CHAT_CSS = `
 .chat-agents-done { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--chat-mute); cursor: pointer; white-space: nowrap; text-decoration: underline; text-decoration-color: #464a51; text-underline-offset: 3px; }
 .chat-agents-done:hover { color: var(--chat-dim); }
 .chat-agents-done .lucide { width: 13px; height: 13px; }
+/* The finished agents' menu on hover (the user's pick B of 01/11/2026): title, a line of summary, time and tokens. */
+.chat-agents-menu { width: min(520px, 90vw); max-height: min(420px, 60vh); overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
+.chat-agents-menu button { flex-direction: column; align-items: stretch; gap: 2px; padding: 8px 10px; text-align: left; }
+.chat-agents-menu .h { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.chat-agents-menu .h b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-agents-menu .h .lucide { width: 14px; height: 14px; flex-shrink: 0; }
+.chat-agents-menu .h .ok { color: #22c55e; }
+.chat-agents-menu .h .ko { color: #f08a87; }
+.chat-agents-menu .s { margin-left: 23px; font-size: 12px; color: var(--chat-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-agents-menu .m { margin-left: 23px; font-size: 11px; color: var(--chat-mute); }
 
 /* SDK content and errors: diffs, suggestions, notices, retries, quota alerts. */
 .chat-diff.numbered > div:not(.gap):not(.more) { display: grid; grid-template-columns: calc(var(--chat-diff-no, 3ch) + 10px) calc(var(--chat-diff-no, 3ch) + 10px) 16px minmax(0, 1fr); padding: 0 12px 0 0; }

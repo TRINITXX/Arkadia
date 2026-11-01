@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Bot, Circle, CircleCheck, CircleDot, ListChecks } from "lucide-react";
+import { Circle, CircleCheck, CircleDot, ListChecks } from "lucide-react";
+import { ChatAgentsMenu } from "@/components/chat/chat-agents-menu";
 import { retryLabel, type RetryInfo } from "@/lib/chat/chatErrors";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import type { Subagent, TaskItem } from "@/lib/chat/chatState";
@@ -12,7 +13,8 @@ import { useChatShown } from "@/lib/chat/useChatShown";
  * that says it: the spinner, the step it is on (« lit chatState.ts »,
  * `liveStep`), one time (the running call's, else the turn's: `liveElapsed`)
  * and the turn's tokens (thinking's estimate included); the subagents just
- * finished and the task list, one click away (running ones have their cards).
+ * finished (a menu on hover) and the task list, one click away (running
+ * ones have their cards).
  */
 export function ChatLiveLine({
   working,
@@ -22,7 +24,7 @@ export function ChatLiveLine({
   turnTokens,
   subagents,
   tasks,
-  onOpenAgents,
+  onOpenAgent,
   retry = null,
   stepSince = null,
   backgroundHint = false,
@@ -44,7 +46,8 @@ export function ChatLiveLine({
   /** « Agents terminés (N) », empty once it's due to go (`useDoneAgentsLink`). */
   subagents: Subagent[];
   tasks: TaskItem[];
-  onOpenAgents: () => void;
+  /** A finished agent picked in its menu: its conversation. */
+  onOpenAgent: (agent: Subagent) => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
   const [tasksOpen, setTasksOpen] = useState(false);
@@ -102,9 +105,7 @@ export function ChatLiveLine({
         </span>
       )}
       {subagents.length > 0 && (
-        <span className="chat-agents-done" onClick={() => onOpenAgents()}>
-          <Bot /> Agents terminés ({subagents.length})
-        </span>
+        <ChatAgentsMenu agents={subagents} onOpen={onOpenAgent} />
       )}
       {tasks.length > 0 && (
         <span className="chat-anchor">
