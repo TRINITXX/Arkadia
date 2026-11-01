@@ -86,6 +86,15 @@ export function userMessageView(
   return view;
 }
 
+/**
+ * A message's strip once its text is drawn: the videos it names. The images
+ * show as minis in its sentences, in place of their paths (the user's ask of
+ * 01/11/2026); the lightbox still walks them all.
+ */
+export function stripRefs(refs: ImageRef[]): ImageRef[] {
+  return refs.filter((ref) => isVideoPath(ref.path));
+}
+
 /** The image a `Read` call reads, if it is one. */
 export function readImagePath(item: ChatItem): string | null {
   if (item.kind !== "tool" || item.name !== "Read") return null;

@@ -35,6 +35,8 @@ import {
 import { fetchImageUrl } from "@/lib/imageUrlCache";
 import { LinkCardsContext } from "@/lib/linkCards";
 import { usePathHover } from "@/lib/pathHover";
+import { fileName } from "@/lib/chat/chatAttachments";
+import { usePathImage } from "@/lib/chat/usePathImage";
 
 export type ToastFn = (level: "info" | "error", message: string) => void;
 
@@ -57,11 +59,14 @@ function MentionImage(
 }
 
 /**
- * An image or video path left as written (`inlineImages` off: the chat shows
- * it in the message's strip): a click opens it in the lightbox, or with the
- * PC's own app when it doesn't load. Inline-level, inside a `<p>`/`<li>`.
- * Hovered, it shows its image in a card where the view asks for it
- * (`PathHoverContext`), as the terminal does.
+ * An image or video path in the chat (`inlineImages` off). An image found
+ * shows as a mini the height of a line in place of its path (the user's ask
+ * of 01/11/2026: the paths took whole lines, a strip below repeated them);
+ * a video, or an image still loading or missing, keeps its path as written.
+ * A click opens it in the lightbox, or with the PC's own app when it doesn't
+ * load. Inline-level, inside a `<p>`/`<li>`. Hovered, it shows its image in
+ * a card where the view asks for it (`PathHoverContext`), as the terminal
+ * does.
  */
 function ImagePathLink({
   path,
@@ -78,6 +83,8 @@ function ImagePathLink({
 }) {
   const Tag = code ? "code" : "span";
   const hover = usePathHover();
+  const ref = useRef<HTMLSpanElement>(null);
+  const { url: mini } = usePathImage(ref, isVideoPath(path) ? null : path);
   // Hovered when it goes (the message redrawn without it) or changes path:
   // no mouseleave will come, its card goes now.
   const hovered = useRef(false);
@@ -94,7 +101,8 @@ function ImagePathLink({
   };
   return (
     <Tag
-      className="modern-imgpath"
+      ref={ref}
+      className={mini ? "modern-imgpath mini" : "modern-imgpath"}
       title={hover ? undefined : `Voir ${path}`}
       onMouseEnter={(e) => {
         const box = e.currentTarget.getBoundingClientRect();
@@ -119,7 +127,7 @@ function ImagePathLink({
         });
       }}
     >
-      {label}
+      {mini ? <img src={mini} alt={fileName(path)} draggable={false} /> : label}
     </Tag>
   );
 }

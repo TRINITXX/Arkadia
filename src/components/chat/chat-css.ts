@@ -297,6 +297,10 @@ export const CHAT_CSS = `
 /* An image path left as text: the picture is in the strip, a click opens it. */
 .chat-root .modern-imgpath { color: #9ec5f8; cursor: zoom-in; text-decoration: underline dotted; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .chat-root .modern-imgpath:hover { color: #cfe2fb; }
+/* An image path found: a mini the height of a line in its place (the user's ask of 01/11/2026), as an image Claude reads. */
+.chat-root .modern-imgpath.mini { display: inline-block; vertical-align: middle; line-height: 0; text-decoration: none; background: none; padding: 0; border: 0; }
+.chat-root .modern-imgpath.mini img { display: block; height: 20px; width: auto; max-width: 40px; object-fit: contain; background: #111215; border-radius: 4px; border: 1px solid rgba(255,255,255,.14); }
+.chat-root .modern-imgpath.mini:hover img { border-color: rgba(255,255,255,.4); }
 /* The strip under a message: pasted images, then the files it names. */
 .chat-gallery { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .chat-gallery .modern-thumb { display: block; height: 92px; width: auto; max-width: 220px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(255,255,255,.12); cursor: zoom-in; }

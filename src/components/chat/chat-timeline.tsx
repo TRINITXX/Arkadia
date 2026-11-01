@@ -32,7 +32,7 @@ import {
   type ChatUnit,
 } from "@/lib/chat/chatGroups";
 import { withDayBreaks } from "@/lib/chat/chatDays";
-import { chatGallery } from "@/lib/chat/chatImages";
+import { chatGallery, stripRefs } from "@/lib/chat/chatImages";
 import { peerLabel } from "@/lib/chat/chatPeer";
 import { latestPlan, type ChatItem, type Subagent } from "@/lib/chat/chatState";
 import type { VisualEntry } from "@/lib/chat/chatVisual";
@@ -255,7 +255,7 @@ export const ChatTimeline = memo(function ChatTimeline({
               onToast={onToast}
             />
             <ChatGallery
-              refs={gallery.byItem.get(unit.item.id) ?? NO_IMAGES}
+              refs={stripRefs(gallery.byItem.get(unit.item.id) ?? NO_IMAGES)}
               onOpen={onOpen}
             />
           </ChatMessageFrame>

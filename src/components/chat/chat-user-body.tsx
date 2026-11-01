@@ -10,6 +10,7 @@ import { pastesIn, wordCount } from "@/lib/chat/chatPastes";
 import { LinkCardsContext, type LinkCards } from "@/lib/linkCards";
 import type { AttachmentSource } from "@/components/chat/chat-attachment-card";
 import { userMessageView } from "@/lib/chat/chatImages";
+import { isVideoPath } from "@/lib/imagePaths";
 import type { ChatItem } from "@/lib/chat/chatState";
 import type { ImageRef } from "@/lib/imageGallery";
 
@@ -25,7 +26,7 @@ const PASTE_HREF = "#arkadia-paste-";
 /**
  * What the user's frame holds: the text, then its pasted images and the
  * files it attaches as cards (`userMessageView`), never their paths as text.
- * The images its sentences name get a thumbnail once found, nothing else.
+ * The images its sentences name show as minis there (`MarkdownContent`).
  */
 export function ChatUserBody({
   item,
@@ -59,8 +60,9 @@ export function ChatUserBody({
           : [],
       ),
       ...view.paths.map((path) => ({ kind: "path" as const, key: path, path })),
-      // Named in a sentence: a thumbnail once found, else nothing more.
-      ...view.named.map((path) => ({
+      // A video named in a sentence: its still once found. An image shows
+      // as a mini in the sentence itself.
+      ...view.named.filter(isVideoPath).map((path) => ({
         kind: "path" as const,
         key: path,
         path,

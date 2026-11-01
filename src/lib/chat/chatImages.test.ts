@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatGallery, userMessageView } from "@/lib/chat/chatImages";
+import { chatGallery, stripRefs, userMessageView } from "@/lib/chat/chatImages";
 import type { ChatItem } from "@/lib/chat/chatState";
 
 const CWD = "C:\\proj";
@@ -59,6 +59,12 @@ describe("chatGallery", () => {
     expect(byItem.get("t")).toEqual([
       { path: `${root}\\.screenshots\\vue.png` },
     ]);
+  });
+
+  it("leaves the strip the videos only: images are minis in the text", () => {
+    expect(
+      stripRefs([{ path: "C:\\proj\\a.png" }, { path: "C:\\proj\\demo.mp4" }]),
+    ).toEqual([{ path: "C:\\proj\\demo.mp4" }]);
   });
 
   it("walks every image once, in reading order, for the lightbox", () => {
