@@ -248,12 +248,23 @@ const SCENARIOS: Record<string, () => ChatState> = {
     const s = replay(parse(tools));
     const at = s.items.findIndex((i) => i.kind === "tool");
     const items = [...s.items];
-    items.splice(at, 0, {
-      kind: "thinking",
-      id: "preview-thinking",
-      text: "**Lire avant d'écrire**\n\nJe lis note.txt d'abord : le résumé doit reprendre ses mots, pas les miens. Puis une seule phrase dans resume.txt.",
-      streaming: false,
-    });
+    // Two blocks: the first hidden, the last cut to two lines.
+    items.splice(
+      at,
+      0,
+      {
+        kind: "thinking",
+        id: "preview-thinking-0",
+        text: "**Comprendre la demande**\n\nIl veut un résumé d'une phrase.",
+        streaming: false,
+      },
+      {
+        kind: "thinking",
+        id: "preview-thinking",
+        text: "**Lire avant d'écrire**\n\nJe lis note.txt d'abord : le résumé doit reprendre ses mots, pas les miens. Puis une seule phrase dans resume.txt, sans reformuler ce qu'il a déjà dit.\n\nSi la note parle de plusieurs sujets, je garde celui du titre et je laisse les autres de côté : une phrase ne tient pas trois idées, et il relira vite. Je vérifie ensuite que le fichier existe bien avant de l'écraser.",
+        streaming: false,
+      },
+    );
     return { ...s, items };
   },
   // A reply that only says what comes next, before Claude's work: a step.

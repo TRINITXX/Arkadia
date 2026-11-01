@@ -54,7 +54,10 @@ export const CHAT_CSS = `
 .chat-line .chat-counts .lucide { width: 14px; height: 14px; }
 /* Claude's thinking between two messages: its text alone, in indigo italics, never read as the grey work line (ChatThoughts). */
 .chat-thoughts { display: flex; flex-direction: column; gap: 6px; padding: 0 4px; font-size: 13px; line-height: 1.55; color: #8b93c9; font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
-.chat-thoughts p { margin: 0; }
+.chat-thoughts p { margin: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* Two lines at most; a click reads it all (the user's pick of 01/11/2026). */
+.chat-thoughts { cursor: pointer; }
+.chat-thoughts.open p { display: block; }
 .chat-activity-detail { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 0 7px; padding-left: 14px; border-left: 1px solid var(--chat-line); }
 /* The question sheet unfolded: the input hides, the sheet takes the bottom (the user's ask of 01/11/2026); folded, the input comes back. */
 .chat-bottom.sheet-open .chat-col > .chat-box:not(.ask) { display: none; }
