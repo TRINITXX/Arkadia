@@ -3,9 +3,9 @@ import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import { router, useGlobalSearchParams, useSegments } from "expo-router";
 import type { RemoteSnapshot } from "@/lib/remoteSnapshot";
+import { recordCrash } from "~/errors/crash-store";
+import { LAST_TAB_KEY, takeOpeningMark } from "~/errors/opening-mark";
 import { findTab } from "~/remote/snapshot";
-
-const LAST_TAB_KEY = "arkadia-last-tab";
 
 /**
  * At launch, reopens the terminal tab Alexis left the app on, even when iOS
@@ -26,9 +26,21 @@ export function useReopenLastTab(snapshot: RemoteSnapshot | null) {
   const startPlace = useRef<string | null>(null);
 
   useEffect(() => {
-    void SecureStore.getItemAsync(LAST_TAB_KEY)
-      .catch(() => null)
-      .then(setLastTab);
+    void Promise.all([
+      SecureStore.getItemAsync(LAST_TAB_KEY).catch(() => null),
+      takeOpeningMark(),
+    ]).then(([last, died]) => {
+      // The app died opening it last time: reopening would kill it again.
+      if (last && died === last) {
+        recordCrash(
+          "L’app s’est fermée pendant l’ouverture de cet onglet, la dernière fois : il n’a pas été rouvert.",
+          "native",
+        );
+        setLastTab(null);
+        return;
+      }
+      setLastTab(last);
+    });
   }, []);
 
   useEffect(() => {

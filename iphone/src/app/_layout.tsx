@@ -4,6 +4,8 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useLiveActivity } from "~/activity/use-live-activity";
 import { LockScreen } from "~/lock/lock-screen";
+import { CrashOverlay } from "~/errors/crash-screen";
+import { installCrashHandler } from "~/errors/crash-store";
 import { useAppLock } from "~/lock/use-app-lock";
 import { useReopenLastTab } from "~/navigation/use-reopen-last-tab";
 import { usePushNotifications } from "~/notifications/use-push-notifications";
@@ -11,6 +13,12 @@ import { startRemote, useRemoteView } from "~/remote/connection";
 import { useReach } from "~/remote/reach";
 import { ReachScreen } from "~/reach/reach-screen";
 import { NoticeBanner } from "~/ui/notice-banner";
+
+// Before anything runs: an uncaught error shows, the app stays up.
+installCrashHandler();
+
+// The layout itself throwing: its error, not a closed app (Expo Router).
+export { CrashScreen as ErrorBoundary } from "~/errors/crash-screen";
 
 // Expo Router needs the layout as the module's default export.
 export default function RootLayout() {
@@ -57,6 +65,7 @@ export default function RootLayout() {
           <ReachScreen reach={reach} wake={wake} />
         </View>
       )}
+      <CrashOverlay />
       <NoticeBanner />
       {lock.locked && <LockScreen onUnlock={() => void lock.unlock()} />}
     </View>

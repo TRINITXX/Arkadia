@@ -2,9 +2,13 @@ import { useEffect } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import { ChatScreen } from "~/chat/chat-screen";
+import { useOpeningMark } from "~/errors/opening-mark";
 import { useRemoteView } from "~/remote/connection";
 import { findTab } from "~/remote/snapshot";
 import { TerminalScreen } from "~/terminal/terminal-screen";
+
+// A screen that throws shows its error, the app stays up.
+export { CrashScreen as ErrorBoundary } from "~/errors/crash-screen";
 
 /**
  * One tab of the desktop, live: its chat, or its terminal. The pane shown is
@@ -31,6 +35,8 @@ export default function TabRoute() {
   useEffect(() => {
     if (shownId && shownId !== pane) navigation.setParams({ pane: shownId });
   }, [shownId, pane, navigation]);
+  // The app dying while it opens: not reopened at the next launch.
+  useOpeningMark(found ? id : null);
 
   if (!snapshot) return <Centered text="Connexion à Arkadia…" />;
   if (!found || !shown) return <Centered text="Cet onglet est fermé." />;
