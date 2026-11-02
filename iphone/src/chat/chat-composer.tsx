@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionSheetIOS,
   Alert,
+  Keyboard,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -20,6 +20,7 @@ import {
   modelLabel,
 } from "@/lib/chat/chatLabels";
 import type { PermissionMode } from "@/lib/chat/chatProtocol";
+import type { PagePanel, SlashEntry } from "@/lib/chat/chatSlash";
 import {
   currentChoice,
   effortChoices,
@@ -29,24 +30,26 @@ import {
 import type { ChatState } from "@/lib/chat/chatState";
 import { withChoice } from "@/lib/chat/chatVisual";
 import { lastCodeBlock } from "@/lib/chat/phoneCode";
+import { phoneSlashMenu, slashIntent, slashPick } from "@/lib/chat/phoneSlash";
 import type { RemoteButton } from "@/lib/remoteSnapshot";
 import { C, T } from "~/chat/chat-theme";
+import { foldNextRound } from "~/chat/asks/round-store";
 import { onComposerInsert } from "~/chat/composer-inbox";
+import { SlashMenu } from "~/chat/slash/slash-menu";
+import { SlashPanels, type OpenPanel } from "~/chat/slash/slash-panels";
 import type { ChatActions } from "~/chat/use-chat";
 import { DictationBubble } from "~/dictation/dictation-bubble";
 import { useDictation } from "~/dictation/use-dictation";
 import { act } from "~/remote/connection";
 import { showNotice } from "~/ui/notice";
 
-/** How many slash commands the suggestions show at once. */
-const SLASH_ROWS = 6;
-
 /**
  * The chat's input, as the desktop's (`chat-composer.tsx`): the field, then
  * one row with the model, the effort, the context, and the buttons (+,
  * dictation, send, stop). « !commande » runs in the tab's folder, « / » lists
- * Claude Code's commands. A message sent while Claude works waits its turn;
- * a long press on send sends it now.
+ * the desktop's commands; /resume, /rewind and /mcp open their sheet instead
+ * of being sent. A message sent while Claude works waits its turn; a long
+ * press on send sends it now.
  */
 export function ChatComposer({
   chatId,
@@ -76,6 +79,8 @@ export function ChatComposer({
   // button to stop it (REVIEW.md « Micro du chat »).
   useEffect(() => {
     if (covered && phase !== "idle") cancel();
+    // Hidden but mounted: its field must not keep the keyboard up.
+    if (covered) Keyboard.dismiss();
   }, [covered, phase, cancel]);
 
   // A photo picked, a visual's choice: into the field, never sent. A second
@@ -90,6 +95,12 @@ export function ChatComposer({
           setText((t) => withChoice(t, insert, previous));
           return;
         }
+        // A message taken back (the pencil, /rewind): before what the input
+        // holds, as the desktop's `mergeDrafts`.
+        if (kind === "message") {
+          setText((t) => (t.trim() ? `${insert}\n${t}` : insert));
+          return;
+        }
         setText((t) => (t && !/\s$/.test(t) ? `${t} ${insert}` : t + insert));
       }),
     [chatId],
@@ -101,17 +112,45 @@ export function ChatComposer({
     setText(next);
   };
 
+  // A page command's sheet (/resume, /rewind, /mcp), and a notice in the
+  // menu's place kept while its text stays (a terminal-only command).
+  const [slashSheet, setSlashSheet] = useState<OpenPanel | null>(null);
+  const [hint, setHint] = useState<{ text: string; for: string } | null>(null);
+  const openPanel = useCallback((panel: PagePanel, query: string) => {
+    // Its words moved to the sheet's filter: the command is not sent.
+    setText("");
+    Keyboard.dismiss();
+    setSlashSheet({ panel, query, open: true });
+  }, []);
+  const pickSlash = (entry: SlashEntry) => {
+    const pick = slashPick(entry);
+    if (pick.kind === "panel") openPanel(pick.panel, "");
+    else setText(pick.text);
+  };
+
   const submit = useCallback(
     (now: boolean) => {
       const message = text.trim();
       if (!message) return;
+      const intent = slashIntent(message, state.commands, state.slashCommands);
+      if (intent?.kind === "panel")
+        return openPanel(intent.panel, intent.query);
+      if (intent?.kind === "notice")
+        return setHint({ text: intent.text, for: text });
       const command = bashCommand(message);
       if (command) void actions.bash(command);
       else void actions.send(message, now && state.working);
       setText("");
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     },
-    [text, actions, state.working],
+    [
+      text,
+      actions,
+      state.working,
+      state.commands,
+      state.slashCommands,
+      openPanel,
+    ],
   );
 
   const writeDictation = useCallback(async () => {
@@ -123,7 +162,10 @@ export function ChatComposer({
     else if (phase === "idle") void dictation.start();
   };
 
-  const slash = useMemo(() => slashRows(text, state), [text, state]);
+  const slash = useMemo(
+    () => phoneSlashMenu(text, state.commands, state.slashCommands),
+    [text, state.commands, state.slashCommands],
+  );
 
   const model = currentChoice(state.sdk.models, state.model);
   const efforts = effortChoices({
@@ -176,6 +218,15 @@ export function ChatComposer({
       });
       // Typed, not sent: the button's text comes back for the field.
       if (result.text) setText((t) => (t ? `${t} ${result.text}` : result.text!));
+      // /resume, /rewind, /mcp: their sheet, never over a draft (desktop).
+      const panel = result.panel;
+      if (panel) {
+        if (text.trim())
+          showNotice(
+            `Saisie en cours : envoie-la ou vide-la avant /${panel.name}`,
+          );
+        else openPanel(panel.name, panel.query);
+      }
     } catch (e) {
       showNotice(e instanceof Error ? e.message : String(e));
     }
@@ -226,22 +277,20 @@ export function ChatComposer({
           onWrite={() => void writeDictation()}
         />
       )}
-      {slash.length > 0 && (
-        <ScrollView style={styles.slash} keyboardShouldPersistTaps="always">
-          {slash.map((c) => (
-            <Pressable
-              key={c.name}
-              style={styles.slashRow}
-              onPress={() => setText(`/${c.name} `)}
-            >
-              <Text style={styles.slashName}>/{c.name}</Text>
-              <Text style={styles.slashDesc} numberOfLines={1}>
-                {c.description}
-              </Text>
-            </Pressable>
-          ))}
-        </ScrollView>
-      )}
+      <SlashMenu
+        rows={slash}
+        hint={hint?.for === text ? hint.text : null}
+        onPick={pickSlash}
+      />
+      <SlashPanels
+        sheet={slashSheet}
+        state={state}
+        actions={actions}
+        onQuery={(query) => setSlashSheet((s) => s && { ...s, query })}
+        onClose={() => setSlashSheet((s) => s && { ...s, open: false })}
+        onText={setText}
+        onRewinding={() => foldNextRound(chatId, state)}
+      />
       <View style={styles.card}>
         <TextInput
           value={text}
@@ -371,37 +420,8 @@ function flatButtons(buttons: RemoteButton[] | null): RemoteButton[] {
   );
 }
 
-/** « /co » → Claude Code's commands starting so, until a space is typed. */
-function slashRows(text: string, state: ChatState) {
-  const m = /^\/(\S*)$/.exec(text);
-  if (!m) return [];
-  const typed = m[1].toLowerCase();
-  return state.commands
-    .filter(
-      (c) =>
-        c.name.toLowerCase().startsWith(typed) ||
-        c.aliases?.some((a) => a.toLowerCase().startsWith(typed)),
-    )
-    .slice(0, SLASH_ROWS);
-}
-
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: 10, paddingTop: 4, gap: 6 },
-  slash: {
-    maxHeight: 220,
-    backgroundColor: C.raised,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: C.lineStrong,
-  },
-  slashRow: {
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.line,
-  },
-  slashName: { color: C.ink, fontSize: T.small, fontWeight: "600" },
-  slashDesc: { color: C.mute, fontSize: T.tiny, marginTop: 1 },
   card: {
     backgroundColor: C.raised,
     borderRadius: 18,

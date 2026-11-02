@@ -1,14 +1,19 @@
 import type { ReactNode } from "react";
-import type { Subagent } from "@/lib/chat/chatState";
+import type { ChatItem, Subagent } from "@/lib/chat/chatState";
+import type { FeedRow } from "@/lib/chat/phoneFeed";
 import type { ChatActions } from "~/chat/use-chat";
 
-/** What a row opens over the feed: its whole content in a sheet. */
+/** What a row opens over the feed: its whole content in a sheet. A reply's
+ *  bulb opens `thoughts`, its wrench `activity` (« Récit »). */
 export type FeedSheetKind = "activity" | "thoughts" | "plan" | "command" | "bash";
 
 export interface FeedSheetRef {
   kind: FeedSheetKind;
   /** The row's key: the sheet follows the row as the chat goes on. */
   key: string;
+  /** The row as it opened: shown while it's gone from the feed (a live
+   *  thought gone behind its reply's bulb), until the sheet closes. */
+  row: FeedRow;
 }
 
 /**
@@ -22,6 +27,8 @@ export interface FeedEnv {
   /** The chat's own feed: its marks and stops act; a subagent's only reads. */
   acts: boolean;
   open: (sheet: FeedSheetRef) => void;
+  /** The pencil on the user's messages; absent: none. */
+  edit?: (item: Extract<ChatItem, { kind: "user" }>) => void;
 }
 
 /**

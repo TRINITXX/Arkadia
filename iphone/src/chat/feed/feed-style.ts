@@ -37,6 +37,19 @@ export const F = {
   lineNo: "#5d6168",
   stepInk: "#6f727a",
   pillLine: "#3a3e45",
+  /** A step reply's dot while its exchange runs (`.chat-step-reply`). */
+  stepDotLive: "#9d6ef0",
+  /** A frame's foot: its time, pencil and icons (`.chat-frame-foot`). */
+  footInk: "#77708c",
+  /** « Récit »: the bulb and wrench, gold when touched (`.chat-peek`). */
+  peekOn: "#e2c26b",
+  /** The thought shown live, its bulb and its rule (`.chat-live-thought`). */
+  liveInk: "#a9adbd",
+  liveBulb: "#c9a85a",
+  liveRule: "#3a3d44",
+  /** An image's frame while it loads (`.chat-read-thumb img`). */
+  thumbBg: "#111215",
+  thumbLine: "rgba(255,255,255,0.14)",
 } as const;
 
 /** Claude's markdown in the column's colours. */

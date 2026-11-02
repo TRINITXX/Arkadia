@@ -1,5 +1,17 @@
-import type { ReactNode } from "react";
-import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
+import { SymbolView } from "expo-symbols";
+import { copiedCodeMessage } from "@/lib/codeCopy";
+import { showNotice } from "~/ui/notice";
 
 type Block =
   | { kind: "code"; text: string }
@@ -165,6 +177,62 @@ function Inline({
   );
 }
 
+/** How long a code block's copy button holds its ✓ (the desktop's). */
+const COPIED_MS = 1200;
+
+/**
+ * A fenced code block, scrolled sideways, its copy button in its corner (the
+ * desktop's): a light tap of the phone and « Copié (n lignes) · … »
+ * (`copiedCodeMessage`), the button a ✓ for a moment.
+ */
+function CodeBlock({ code, tone }: { code: string; tone: MarkdownTone }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const copy = () => {
+    Clipboard.setStringAsync(code).then(
+      () => {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        showNotice(copiedCodeMessage(code));
+        setCopied(true);
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => setCopied(false), COPIED_MS);
+      },
+      (e: unknown) => showNotice(`Copie impossible : ${String(e)}`),
+    );
+  };
+  return (
+    <View>
+      <ScrollView
+        horizontal
+        style={[styles.codeBox, { backgroundColor: tone.codeBg }]}
+        contentContainerStyle={[styles.codePad, styles.codeRoom]}
+      >
+        <Text style={[styles.code, { color: tone.codeInk }]} selectable>
+          {code}
+        </Text>
+      </ScrollView>
+      <Pressable
+        onPress={copy}
+        hitSlop={6}
+        accessibilityRole="button"
+        accessibilityLabel="Copier le code"
+        style={({ pressed }) => [
+          styles.copy,
+          { backgroundColor: tone.codeBg },
+          pressed && styles.copyPressed,
+        ]}
+      >
+        <SymbolView
+          name={copied ? "checkmark" : "doc.on.doc"}
+          size={13}
+          tintColor={copied ? "#30d158" : tone.dim}
+        />
+      </Pressable>
+    </View>
+  );
+}
+
 /** A table as aligned columns of a monospaced block, scrolled sideways. */
 function Table({ rows, tone }: { rows: string[][]; tone: MarkdownTone }) {
   const plain = rows.map((r) => r.map((c) => c.replace(/\*\*|`/g, "")));
@@ -220,18 +288,7 @@ export function MarkdownText({
     <View style={styles.wrap}>
       {blocks.map((b, i) => {
         if (b.kind === "code")
-          return (
-            <ScrollView
-              key={i}
-              horizontal
-              style={[styles.codeBox, { backgroundColor: tone.codeBg }]}
-              contentContainerStyle={styles.codePad}
-            >
-              <Text style={[styles.code, { color: tone.codeInk }]} selectable>
-                {b.text}
-              </Text>
-            </ScrollView>
-          );
+          return <CodeBlock key={i} code={b.text} tone={tone} />;
         if (b.kind === "table") return <Table key={i} rows={b.rows} tone={tone} />;
         if (b.kind === "rule")
           return (
@@ -313,5 +370,18 @@ const styles = StyleSheet.create({
   inlineCode: { fontFamily: "Menlo", fontSize: 13 },
   codeBox: { borderRadius: 12 },
   codePad: { padding: 12 },
+  // The copy button's room at the end of the first line.
+  codeRoom: { paddingRight: 44 },
   code: { fontFamily: "Menlo", fontSize: 12.5 },
+  copy: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 30,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 8,
+  },
+  copyPressed: { opacity: 0.6 },
 });

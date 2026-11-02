@@ -11,11 +11,12 @@ import { CommandCard } from "~/chat/feed/command-card";
 import type { FeedEnv } from "~/chat/feed/feed-env";
 import { CHAT_TONE } from "~/chat/feed/feed-style";
 import { MessageFrame } from "~/chat/feed/message-frame";
+import { LiveThought } from "~/chat/feed/live-thought";
 import { NoticeRow } from "~/chat/feed/notice-row";
+import { PeekAlone, PeekIcon } from "~/chat/feed/peek-icon";
 import { PlanCard } from "~/chat/feed/plan-card";
 import { QuestionRow } from "~/chat/feed/question-row";
 import { ReplyMessage } from "~/chat/feed/reply-message";
-import { ThoughtsRow } from "~/chat/feed/thoughts-row";
 import { UserMessage } from "~/chat/feed/user-message";
 import { MarkdownText } from "~/messages/markdown-text";
 
@@ -34,6 +35,8 @@ export interface FeedRowProps {
   label?: string;
   /** A visual's page and check (`ChatState.visuals`): its row's own part. */
   visual?: VisualEntry;
+  /** The user's message: its pencil can't act now (dim). */
+  editBlocked: boolean;
   /** The chat, for a visual's card; not compared: a visual re-renders for
    *  its own call and entry, never per streamed token. */
   state: ChatState;
@@ -47,12 +50,14 @@ const same = (a: FeedRowProps, b: FeedRowProps) =>
   a.pending === b.pending &&
   a.bare === b.bare &&
   a.label === b.label &&
-  a.visual === b.visual;
+  a.visual === b.visual &&
+  a.editBlocked === b.editBlocked;
 
 /**
  * One row of the feed, as the column draws its unit (`chat-timeline.tsx`).
  * Memoised on the row's own items: a reply streaming at the bottom leaves
- * the rows above alone.
+ * the rows above alone. « Récit » (`placeWork`): Claude's thinking and past
+ * tools behind small icons, a tap opening them in a sheet.
  */
 export const FeedRowView = memo(function FeedRowView({
   row,
@@ -63,10 +68,11 @@ export const FeedRowView = memo(function FeedRowView({
   bare,
   label,
   state,
+  editBlocked,
 }: FeedRowProps) {
   const { unit } = row;
   const open = (kind: Parameters<FeedEnv["open"]>[0]["kind"]) => () =>
-    env.open({ kind, key: row.key });
+    env.open({ kind, key: row.key, row });
   switch (unit.kind) {
     case "day":
       return (
@@ -83,9 +89,23 @@ export const FeedRowView = memo(function FeedRowView({
         unit.item.queued && sendNow ? () => void env.actions.interrupt() : undefined;
       const onRemove =
         uuid && withdraw ? () => void env.actions.cancelQueued(uuid) : undefined;
-      return unit.kind === "user" ? (
-        <UserMessage item={unit.item} onSendNow={onSendNow} onRemove={onRemove} />
-      ) : (
+      if (unit.kind === "user") {
+        const { item } = unit;
+        const { edit } = env;
+        // Not on a message Claude hasn't taken, as the desktop.
+        const onEdit =
+          edit && !item.queued && !item.dropped ? () => edit(item) : undefined;
+        return (
+          <UserMessage
+            item={item}
+            onSendNow={onSendNow}
+            onRemove={onRemove}
+            onEdit={onEdit}
+            editBlocked={editBlocked}
+          />
+        );
+      }
+      return (
         <CommandCard
           item={unit.item}
           onOpen={open("command")}
@@ -96,7 +116,12 @@ export const FeedRowView = memo(function FeedRowView({
     }
     case "peer":
       return (
-        <MessageFrame role="peer" label={label} text={unit.item.text}>
+        <MessageFrame
+          role="peer"
+          label={label}
+          text={unit.item.text}
+          at={unit.item.at}
+        >
           <MarkdownText
             markdown={unit.item.text}
             tone={CHAT_TONE}
@@ -104,14 +129,40 @@ export const FeedRowView = memo(function FeedRowView({
           />
         </MessageFrame>
       );
-    case "text":
-      return <ReplyMessage item={unit.item} step={row.step} bare={bare} />;
+    case "text": {
+      const { thoughts, tools } = row;
+      return (
+        <ReplyMessage
+          item={unit.item}
+          step={row.step}
+          past={row.past}
+          bare={bare}
+          peeks={
+            thoughts || tools ? (
+              <>
+                {thoughts && (
+                  <PeekIcon kind="thoughts" onPress={open("thoughts")} />
+                )}
+                {tools && <PeekIcon kind="tools" onPress={open("activity")} />}
+              </>
+            ) : null
+          }
+        />
+      );
+    }
     case "turn":
       return <Text style={styles.done}>{row.turn}</Text>;
+    // Gathered into `thoughts` by `foldActivity`, left out by `feedRows`.
     case "thinking":
-      return <ThoughtsRow items={[unit.item]} onOpen={open("thoughts")} />;
+      return null;
+    // The latest thought in full while Claude works; one with no reply in
+    // its exchange behind a bulb of its own (the others are a reply's).
     case "thoughts":
-      return <ThoughtsRow items={unit.items} onOpen={open("thoughts")} />;
+      return row.alone ? (
+        <PeekAlone kind="thoughts" onPress={open("thoughts")} />
+      ) : (
+        <LiveThought items={unit.items} onOpen={open("thoughts")} />
+      );
     case "notice":
       return <NoticeRow item={unit.item} />;
     case "bash": {
@@ -124,8 +175,14 @@ export const FeedRowView = memo(function FeedRowView({
         />
       );
     }
+    // The exchange under way's tool lines; a past one's are behind the
+    // wrench of the reply that announced them, or a wrench of their own.
     case "activity":
-      return <ActivityLine units={unit.units} onOpen={open("activity")} />;
+      return row.alone ? (
+        <PeekAlone kind="tools" onPress={open("activity")} />
+      ) : (
+        <ActivityLine units={unit.units} onOpen={open("activity")} />
+      );
     // Gathered into `activity` by `foldActivity`; kept for the switch.
     case "work":
     case "edit":

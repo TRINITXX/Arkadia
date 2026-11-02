@@ -5,7 +5,7 @@ import type { Subagent } from "@/lib/chat/chatState";
 import { outputTail } from "@/lib/chat/chatTasks";
 import { bashCutNote } from "@/lib/chat/chatBash";
 import { thoughtBody } from "@/lib/chat/chatThoughts";
-import type { FeedUnit } from "@/lib/chat/phoneFeed";
+import type { FeedRow } from "@/lib/chat/phoneFeed";
 import { C, MONO, T } from "~/chat/chat-theme";
 import { ActivityDetail } from "~/chat/feed/activity-detail";
 import { bashEnd } from "~/chat/feed/bash-card";
@@ -19,30 +19,41 @@ const OUTPUT_CAP = 30_000;
 const tail = (text: string) =>
   text.length > OUTPUT_CAP ? `…\n${text.slice(-OUTPUT_CAP)}` : text;
 
-/** The units an activity sheet unfolds. */
-const foldedOf = (unit: FeedUnit): FoldedUnit[] =>
-  unit.kind === "activity"
+/** The units an activity sheet unfolds: a reply's wrench, or the row's own. */
+const foldedOf = ({ unit, tools }: FeedRow): FoldedUnit[] =>
+  tools ??
+  (unit.kind === "activity"
     ? unit.units
     : unit.kind === "work" || unit.kind === "edit" || unit.kind === "agent"
       ? [unit]
-      : [];
+      : []);
+
+/** The thoughts a sheet reads: a reply's bulb, or the row's own. */
+const thoughtsOf = ({ unit, thoughts }: FeedRow) =>
+  thoughts ??
+  (unit.kind === "thoughts"
+    ? unit.items
+    : unit.kind === "thinking"
+      ? [unit.item]
+      : []);
 
 /** A sheet's title and icon, from the row it opens. */
 export function sheetHead(
   kind: FeedSheetKind,
-  unit: FeedUnit,
+  row: FeedRow,
 ): { title: string; icon: SFSymbol } {
+  const { unit } = row;
   switch (kind) {
     case "activity":
       return {
         title:
-          activityCounts(foldedOf(unit))
+          activityCounts(foldedOf(row))
             .map((c) => c.label)
-            .join(", ") || "Travail",
+            .join(", ") || "Ses outils",
         icon: "wrench.and.screwdriver",
       };
     case "thoughts":
-      return { title: "Réflexion", icon: "lightbulb" };
+      return { title: "Sa réflexion", icon: "lightbulb" };
     case "plan":
       return { title: "Plan", icon: "list.clipboard" };
     case "command":
@@ -59,46 +70,45 @@ export function sheetHead(
 }
 
 /**
- * What a row's sheet holds: an activity line unfolded, the thinking of its
- * stretch, a plan, a command's answer or a `!` command's output, whole.
- * Drawn from the row as it is now: a command still running goes on there.
+ * What a row's sheet holds: an activity line unfolded (or a reply's
+ * wrench), the thinking of its stretch (or a reply's bulb), a plan, a
+ * command's answer or a `!` command's output, whole. Drawn from the row as
+ * it is now: a command still running goes on there.
  */
 export function FeedSheetContent({
   kind,
-  unit,
-  plan,
+  row,
   subagents,
   agentSheet,
 }: {
   kind: FeedSheetKind;
-  unit: FeedUnit;
-  plan: string | null;
+  row: FeedRow;
   subagents: readonly Subagent[];
   agentSheet?: AgentSheetRender;
 }) {
+  const { unit, plan } = row;
   switch (kind) {
     case "activity":
       return (
         <ActivityDetail
-          units={foldedOf(unit)}
+          units={foldedOf(row)}
           subagents={subagents}
           agentSheet={agentSheet}
         />
       );
     case "thoughts": {
-      const items =
-        unit.kind === "thoughts"
-          ? unit.items
-          : unit.kind === "thinking"
-            ? [unit.item]
-            : [];
+      const items = thoughtsOf(row);
       return (
         <View style={styles.stack}>
           {items
             .map((i) => thoughtBody(i.text))
             .filter(Boolean)
             .map((body, i) => (
-              <Text key={i} style={styles.thought} selectable>
+              <Text
+                key={i}
+                style={[styles.thought, i > 0 && styles.next]}
+                selectable
+              >
                 {body}
               </Text>
             ))}
@@ -146,11 +156,12 @@ export function FeedSheetContent({
 
 const styles = StyleSheet.create({
   stack: { gap: 12 },
-  thought: {
-    color: F.thought,
-    fontStyle: "italic",
-    fontSize: 14,
-    lineHeight: 21,
+  // Plain, a rule between two (`.chat-peek-thoughts`).
+  thought: { color: "#c4c4cb", fontSize: 14, lineHeight: 21 },
+  next: {
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: C.line,
   },
   mono: { color: C.dim, fontFamily: MONO, fontSize: 11.5, lineHeight: 17 },
   err: { color: F.bad },

@@ -5,7 +5,11 @@ import type {
   ElicitationAnswer,
   PermissionMode,
   PermissionResult,
+  RewindPoint,
+  SessionChoice,
 } from "@/lib/chat/chatProtocol";
+import type { McpAction } from "@/lib/chat/chatSlash";
+import type { RewindMode } from "@/lib/chat/useSlashActions";
 import { reduceChat } from "@/lib/chat/chatState";
 import { sendNowPlan, stopTurnPlan } from "@/lib/chat/chatTasks";
 import { phoneDrives } from "@/lib/chat/phoneChat";
@@ -23,6 +27,8 @@ import { acquireChat, act } from "~/remote/connection";
 const OLDER_PAGE = 200;
 /** A subagent's sheet: its latest messages. */
 const AGENT_PAGE = 400;
+/** The PC waits a minute on an MCP action (`MCP_ACTION_TIMEOUT_MS`): longer. */
+const MCP_WAIT_MS = 75_000;
 
 /**
  * Runs a chat command on the PC. What the user does (`phoneDrives`) names the
@@ -139,6 +145,28 @@ export function useChat(chatId: string) {
         ),
       /** Chat ⇄ terminal, as the desktop toolbar's switch. */
       toggle: () => act({ kind: "chatToggle", paneId: chatId }),
+      /**
+       * /resume, /rewind and /mcp, run by the desktop with its own rules
+       * (Claude at rest, a session open elsewhere): each throws why not.
+       */
+      sessions: async (): Promise<SessionChoice[]> =>
+        (await act({ kind: "chatSessions", chatId })).sessions ?? [],
+      resume: (sessionId: string) =>
+        act({ kind: "chatResume", chatId, paneId: chatId, sessionId }),
+      rewindPoints: async (): Promise<RewindPoint[]> =>
+        (await act({ kind: "chatRewindPoints", chatId })).points ?? [],
+      rewind: (before: string, mode: RewindMode) =>
+        act({ kind: "chatRewind", chatId, paneId: chatId, before, mode }),
+      /** Resolves with the sign-in's page, opened in the PC's browser. */
+      mcp: async (server: string, action: McpAction) =>
+        (
+          await act(
+            { kind: "chatMcp", chatId, paneId: chatId, server, action },
+            MCP_WAIT_MS,
+          )
+        ).authUrl,
+      /** The MCP servers' state asked again (their list opened). */
+      refreshMcp: () => run({ type: "mcp_status" }),
     };
   }, [chatId]);
 }

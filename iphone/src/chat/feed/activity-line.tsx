@@ -8,8 +8,10 @@ import {
   type FoldedUnit,
 } from "@/lib/chat/chatGroups";
 import { workTail } from "@/lib/chat/chatSteps";
+import { readImages } from "@/lib/chat/phoneImages";
 import { C, T } from "~/chat/chat-theme";
 import { F } from "~/chat/feed/feed-style";
+import { ReadThumbs } from "~/chat/feed/image-thumb";
 
 /** The desktop's Lucide icons per kind of work, as SF Symbols. */
 export const ACTIVITY_ICONS: Record<ActivityKind, SFSymbol> = {
@@ -26,7 +28,8 @@ export const ACTIVITY_ICONS: Record<ActivityKind, SFSymbol> = {
 /**
  * Claude's work between two messages on one quiet line
  * (`chat-activity-line.tsx`): an icon and a number per kind, how many calls
- * failed, then its last call in words once done. While it runs, the counts
+ * failed, then its last call in words once done, and the images Claude
+ * read, small (a tap on one opens it full size). While it runs, the counts
  * alone: the live line above the input says the step. A tap opens it whole
  * in a sheet (tool lines, file changes, subagents).
  */
@@ -38,10 +41,9 @@ export function ActivityLine({
   onOpen: () => void;
 }) {
   const counts = useMemo(() => activityCounts(units), [units]);
-  const { last, failed } = useMemo(
-    () => workTail(activityTools(units), null),
-    [units],
-  );
+  const tools = useMemo(() => activityTools(units), [units]);
+  const { last, failed } = useMemo(() => workTail(tools, null), [tools]);
+  const reads = useMemo(() => readImages(tools), [tools]);
   return (
     <Pressable
       onPress={onOpen}
@@ -65,6 +67,7 @@ export function ActivityLine({
           · {last}
         </Text>
       ) : null}
+      <ReadThumbs paths={reads} />
     </Pressable>
   );
 }

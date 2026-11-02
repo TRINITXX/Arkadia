@@ -2,7 +2,9 @@ import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { ChatState } from "@/lib/chat/chatState";
 import {
   phoneAsk,
+  roundSheetBorn,
   roundSheetFor,
+  type BornFolded,
   withDictatedText,
   type RoundSheet,
 } from "@/lib/chat/phoneAsks";
@@ -31,6 +33,26 @@ export function updateRound(
 ): void {
   sheets.set(chatId, update(roundSheetFor(sheets.get(chatId), replyId)));
   for (const cb of listeners.get(chatId) ?? []) cb();
+}
+
+/** Chats whose next round opens folded (`foldNextRound`, `roundSheetBorn`). */
+const bornFolded = new Map<string, BornFolded>();
+
+/**
+ * A message brought back to the input (the pencil, /rewind): the round the
+ * rewind shows again opens folded, so the composer under it shows the
+ * message (the unfolded sheet hides it). The desktop's `foldNextSheet`. The
+ * round shown now keeps its sheet: it is read again before the rewind lands.
+ */
+export function foldNextRound(
+  chatId: string,
+  state: Pick<ChatState, "closed" | "requests" | "sdk" | "working" | "items">,
+): void {
+  const ask = phoneAsk(state);
+  bornFolded.set(chatId, {
+    at: Date.now(),
+    except: ask?.kind === "round" ? ask.round.id : null,
+  });
 }
 
 /**
@@ -69,9 +91,16 @@ export function useRoundSheet(chatId: string, replyId: string): RoundSheet {
     if (!replyId) return NO_SHEET;
     const kept = sheets.get(chatId);
     if (kept?.replyId === replyId) return kept;
-    const fresh = roundSheetFor(undefined, replyId);
-    sheets.set(chatId, fresh);
-    return fresh;
+    // Folded when a rewind just brought it back (`foldNextRound`).
+    const { sheet, consumed } = roundSheetBorn(
+      kept,
+      bornFolded.get(chatId),
+      replyId,
+      Date.now(),
+    );
+    if (consumed) bornFolded.delete(chatId);
+    sheets.set(chatId, sheet);
+    return sheet;
   };
   return useSyncExternalStore(subscribe, snapshot);
 }

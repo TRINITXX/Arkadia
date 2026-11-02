@@ -30,7 +30,10 @@ export function useRemoteActions(
       subscribeStable<RelayedAction>(listen, "remote-action", (relayed) => {
         void handleRef
           .current(relayed.action, relayed.client)
-          .catch((e: unknown) => ({ error: String(e) }))
+          // The bare message, as the desktop shows it, never « Error: … ».
+          .catch((e: unknown) => ({
+            error: e instanceof Error ? e.message : String(e),
+          }))
           .then((result) =>
             invoke("remote_reply", {
               client: relayed.client,

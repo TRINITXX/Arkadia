@@ -119,6 +119,37 @@ export function roundSheetFor(
     : { replyId, answers: {}, closed: false, folded: false };
 }
 
+/** A pencil's rewind brings its round back within this, if it does. */
+export const BORN_FOLDED_MS = 30_000;
+
+/**
+ * A round to open folded (`foldNextRound`): the one a rewind brings back,
+ * never `except`, the round shown when it was asked (it keeps its sheet).
+ */
+export interface BornFolded {
+  at: number;
+  except: string | null;
+}
+
+/**
+ * The sheet `replyId`'s round shows: the one kept for it, else a new one,
+ * folded when a rewind just asked so. `consumed`: that ask is spent. The
+ * round shown at the ask, read again before the rewind lands, neither
+ * takes nor spends it.
+ */
+export function roundSheetBorn(
+  kept: RoundSheet | undefined,
+  born: BornFolded | undefined,
+  replyId: string,
+  now: number,
+): { sheet: RoundSheet; consumed: boolean } {
+  if (kept?.replyId === replyId) return { sheet: kept, consumed: false };
+  const fresh = roundSheetFor(undefined, replyId);
+  if (!born || born.except === replyId) return { sheet: fresh, consumed: false };
+  const folded = now - born.at < BORN_FOLDED_MS;
+  return { sheet: folded ? { ...fresh, folded } : fresh, consumed: true };
+}
+
 /** A question's answer changed: an option, the reco, its own words. */
 export function withRoundAnswer(
   sheet: RoundSheet,

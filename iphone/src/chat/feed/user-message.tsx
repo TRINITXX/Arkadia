@@ -1,11 +1,12 @@
 import { StyleSheet, Text, View } from "react-native";
-import { Image } from "expo-image";
 import { SymbolView } from "expo-symbols";
 import { fileName } from "@/lib/chat/chatAttachments";
-import { userMessageView } from "@/lib/chat/chatImages";
+import { pastedName, userMessageView } from "@/lib/chat/chatImages";
 import type { ChatItem } from "@/lib/chat/chatState";
+import { itemImagePaths } from "@/lib/chat/phoneImages";
 import { C, T } from "~/chat/chat-theme";
-import { CHAT_TONE, F, QUEUED_TONE } from "~/chat/feed/feed-style";
+import { CHAT_TONE, QUEUED_TONE } from "~/chat/feed/feed-style";
+import { ImageThumb } from "~/chat/feed/image-thumb";
 import { MessageFrame } from "~/chat/feed/message-frame";
 import { QueuedMark } from "~/chat/feed/queued-mark";
 import { MarkdownText } from "~/messages/markdown-text";
@@ -14,25 +15,39 @@ type UserItem = Extract<ChatItem, { kind: "user" }>;
 
 /**
  * The user's words in their green bubble (`ChatUserBody`): the text, its
- * pasted images as thumbnails (data URLs the chat keeps), the files it
- * attaches as chips, never their paths as text; then, while Claude hasn't
- * taken it, its queued mark.
+ * pasted images (data URLs the chat keeps) and the image files it attaches
+ * or names as thumbnails a tap opens full size, its other files as chips,
+ * never their paths as text; then, while Claude hasn't taken it, its
+ * queued mark. Its foot: the pencil (`onEdit`) and the time it was said.
  */
 export function UserMessage({
   item,
   onSendNow,
   onRemove,
+  onEdit,
+  editBlocked,
 }: {
   item: UserItem;
   onSendNow?: () => void;
   onRemove?: () => void;
+  /** Absent on a message Claude hasn't taken (as the desktop). */
+  onEdit?: () => void;
+  editBlocked: boolean;
 }) {
   const view = userMessageView(item, null);
   const pasted = item.pasted ?? [];
+  const images = itemImagePaths(item);
+  const files = view.paths.filter((path) => !images.includes(path));
   // Pasted earlier than the chat keeps: counted, no longer shown.
   const gone = item.images - pasted.length;
   return (
-    <MessageFrame role="user" text={item.text}>
+    <MessageFrame
+      role="user"
+      text={item.text}
+      at={item.at}
+      onEdit={onEdit}
+      editBlocked={editBlocked}
+    >
       {view.text ? (
         <MarkdownText
           markdown={view.text}
@@ -40,22 +55,24 @@ export function UserMessage({
           size={T.body}
         />
       ) : null}
-      {pasted.length > 0 && (
+      {pasted.length + images.length > 0 && (
         <View style={styles.images}>
           {pasted.map((url, i) => (
-            <Image
-              key={i}
-              source={{ uri: url }}
-              style={styles.thumb}
-              contentFit="cover"
-              accessibilityLabel={`Image collée ${i + 1}`}
+            <ImageThumb key={i} path={pastedName(gone + i + 1)} url={url} />
+          ))}
+          {images.map((path) => (
+            // An attached file keeps its name if it can't be shown.
+            <ImageThumb
+              key={path}
+              path={path}
+              named={view.paths.includes(path)}
             />
           ))}
         </View>
       )}
-      {(view.paths.length > 0 || gone > 0) && (
+      {(files.length > 0 || gone > 0) && (
         <View style={styles.files}>
-          {view.paths.map((path) => (
+          {files.map((path) => (
             <View key={path} style={styles.chip}>
               <SymbolView name="doc" size={11} tintColor={C.dim} />
               <Text style={styles.chipText} numberOfLines={1}>
@@ -86,12 +103,6 @@ export function UserMessage({
 
 const styles = StyleSheet.create({
   images: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-  thumb: {
-    width: 72,
-    height: 72,
-    borderRadius: 10,
-    backgroundColor: F.gapBg,
-  },
   files: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   chip: {
     flexDirection: "row",

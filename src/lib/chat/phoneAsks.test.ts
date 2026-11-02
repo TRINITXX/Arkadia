@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  roundSheetBorn,
   PERMISSION_DIFF_ROWS,
   permissionView,
   phoneAsk,
@@ -152,5 +153,25 @@ describe("round sheet", () => {
     expect(withDictatedText(sheet, "m1#2", "oui").answers["m1#2"]).toEqual({
       text: "oui",
     });
+  });
+});
+
+describe("roundSheetBorn", () => {
+  it("folds the round a rewind brings back, not the one shown at the ask", () => {
+    const born = { at: 0, except: "R2" };
+    const r2 = { replyId: "R2", answers: {}, closed: false, folded: false };
+    // Read again before the rewind lands: R2 keeps its sheet, the ask waits.
+    expect(roundSheetBorn(r2, born, "R2", 1)).toEqual({ sheet: r2, consumed: false });
+    // Even if its sheet went meanwhile.
+    expect(roundSheetBorn(undefined, born, "R2", 1).consumed).toBe(false);
+    // The rewind lands: R1 comes back folded, the ask is spent.
+    const r1 = roundSheetBorn(r2, born, "R1", 1);
+    expect(r1.sheet).toMatchObject({ replyId: "R1", folded: true });
+    expect(r1.consumed).toBe(true);
+  });
+
+  it("opens unfolded once the ask is too old", () => {
+    const late = roundSheetBorn(undefined, { at: 0, except: null }, "R1", 31_000);
+    expect(late.sheet.folded).toBe(false);
   });
 });

@@ -33,6 +33,14 @@ describe("phoneChatCommand", () => {
     expect(phoneDrives("visual_html")).toBe(false);
   });
 
+  it("passes on an ask whose answer is everyone's, unaddressed", () => {
+    expect(phoneChatCommand("c", { type: "mcp_status" }, to, "C:/p")).toEqual({
+      type: "mcp_status",
+      chatId: "c",
+    });
+    expect(phoneDrives("mcp_status")).toBe(false);
+  });
+
   it("refuses what only the desktop sends", () => {
     for (const command of [
       { type: "close" },
@@ -81,18 +89,24 @@ describe("phonePromptButton", () => {
   });
 
   it("sends a terminal-only name Claude Code lists (a skill)", () => {
-    expect(phonePromptButton(button("/status"), (n) => n === "status")).toEqual({
-      kind: "send",
-      text: "/status",
+    expect(phonePromptButton(button("/status"), (n) => n === "status")).toEqual(
+      {
+        kind: "send",
+        text: "/status",
+      },
+    );
+  });
+
+  it("opens the phone's sheet for what the desktop's input opens", () => {
+    expect(phonePromptButton(button("/resume bug"))).toEqual({
+      kind: "panel",
+      panel: "resume",
+      query: "bug",
     });
   });
 
-  it("refuses a keyboard shortcut and what only the PC opens", () => {
-    for (const b of [
-      button("\x1b", true, "keys"),
-      button("/resume"),
-      button("/memory"),
-    ])
+  it("refuses a keyboard shortcut and a terminal-only command", () => {
+    for (const b of [button("\x1b", true, "keys"), button("/memory")])
       expect(phonePromptButton(b).kind).toBe("refuse");
   });
 });

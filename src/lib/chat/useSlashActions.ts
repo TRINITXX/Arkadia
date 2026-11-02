@@ -27,6 +27,11 @@ export interface SlashActions {
   /** Async: the panes are looked at again at the moment of the choice. */
   resume: (sessionId: string) => Promise<string | null>;
   rewind: (point: RewindPoint, mode: RewindMode) => string | null;
+  /**
+   * The last pick's sending to the chat's server: rejects if it failed. The
+   * phone waits on it (App's `chatResume`, `chatRewind`), the PC never.
+   */
+  sent?: () => Promise<void>;
 }
 
 type ListAnswer = Extract<ChatEvent, { type: "sessions" | "rewind_points" }>;
@@ -43,82 +48,101 @@ export function useSlashActions(
   /** Sessions running in Arkadia's other panes (`usePaneChats`). */
   liveSessions: (exceptPaneId: string) => Promise<Set<string>> = NONE,
 ): SlashActions {
-  return useMemo(() => {
-    function ask(type: ListAnswer["type"]): Promise<ListAnswer> {
-      return new Promise((resolve, reject) => {
-        const requestId = `${type}:${Date.now()}:${Math.random()}`;
-        const done = () => {
-          window.clearTimeout(timer);
-          off();
-        };
-        const timer = window.setTimeout(() => {
-          done();
-          reject(new Error("Le chat ne répond pas"));
-        }, LIST_TIMEOUT_MS);
-        const off = subscribeChat(chatId, (event) => {
-          if (event.type !== "sessions" && event.type !== "rewind_points")
-            return;
-          if (event.requestId !== requestId) return;
-          done();
-          if (event.error) reject(new Error(event.error));
-          else resolve(event);
-        });
-        chatCommand(accountId, { type, chatId, requestId }).catch(
-          (e: unknown) => {
-            done();
-            reject(e instanceof Error ? e : new Error(String(e)));
-          },
-        );
+  return useMemo(
+    () => slashActions(chatId, accountId, onError, liveSessions),
+    [chatId, accountId, onError, liveSessions],
+  );
+}
+
+/**
+ * The same, outside a pane: the phone's /resume and /rewind (App's
+ * `chatSessions`, `chatResume`…), with the desktop's rules. `from`: who asks
+ * (`chatCommand`), the phone's never hands the chat back to the PC.
+ */
+export function slashActions(
+  chatId: string,
+  accountId: string | undefined,
+  onError: (message: string) => void,
+  liveSessions: (exceptPaneId: string) => Promise<Set<string>> = NONE,
+  from: "desktop" | "phone" = "desktop",
+): SlashActions {
+  function ask(type: ListAnswer["type"]): Promise<ListAnswer> {
+    return new Promise((resolve, reject) => {
+      const requestId = `${type}:${Date.now()}:${Math.random()}`;
+      const done = () => {
+        window.clearTimeout(timer);
+        off();
+      };
+      const timer = window.setTimeout(() => {
+        done();
+        reject(new Error("Le chat ne répond pas"));
+      }, LIST_TIMEOUT_MS);
+      const off = subscribeChat(chatId, (event) => {
+        if (event.type !== "sessions" && event.type !== "rewind_points") return;
+        if (event.requestId !== requestId) return;
+        done();
+        if (event.error) reject(new Error(event.error));
+        else resolve(event);
       });
-    }
-    // Only Claude at rest: a relaunch ends its Claude Code, and with it a
-    // turn, a request or a background task (as the switch to the terminal);
-    // files restored under a working Claude would race its edits.
-    const busy = () =>
-      chatBusyReason(chatActivity(chatId), chatReplaying(chatId));
-    const run = (command: Parameters<typeof chatCommand>[1]) => {
+      chatCommand(accountId, { type, chatId, requestId }, from).catch(
+        (e: unknown) => {
+          done();
+          reject(e instanceof Error ? e : new Error(String(e)));
+        },
+      );
+    });
+  }
+  // Only Claude at rest: a relaunch ends its Claude Code, and with it a
+  // turn, a request or a background task (as the switch to the terminal);
+  // files restored under a working Claude would race its edits.
+  const busy = () =>
+    chatBusyReason(chatActivity(chatId), chatReplaying(chatId));
+  let last: Promise<void> = Promise.resolve();
+  const run = (command: Parameters<typeof chatCommand>[1]) => {
+    const why = busy();
+    if (why) return why;
+    const sending = chatCommand(accountId, command, from);
+    last = sending;
+    sending.catch((e: unknown) => onError(String(e)));
+    return null;
+  };
+  const lists = async () => {
+    const [answer, live] = await Promise.all([
+      ask("sessions"),
+      liveSessions(chatId),
+    ]);
+    return {
+      sessions: answer.type === "sessions" ? answer.sessions : [],
+      live,
+    };
+  };
+  return {
+    sessions: async () => {
+      const { sessions, live } = await lists();
+      return markLive(sessions, live);
+    },
+    rewindPoints: () =>
+      ask("rewind_points").then((e) =>
+        e.type === "rewind_points" ? e.points : [],
+      ),
+    // The panel's list may date: a session may have opened elsewhere since.
+    resume: async (sessionId) => {
       const why = busy();
       if (why) return why;
-      chatCommand(accountId, command).catch((e: unknown) => onError(String(e)));
-      return null;
-    };
-    const lists = async () => {
-      const [answer, live] = await Promise.all([
-        ask("sessions"),
-        liveSessions(chatId),
-      ]);
-      return {
-        sessions: answer.type === "sessions" ? answer.sessions : [],
-        live,
-      };
-    };
-    return {
-      sessions: async () => {
-        const { sessions, live } = await lists();
-        return markLive(sessions, live);
-      },
-      rewindPoints: () =>
-        ask("rewind_points").then((e) =>
-          e.type === "rewind_points" ? e.points : [],
-        ),
-      // The panel's list may date: a session may have opened elsewhere since.
-      resume: async (sessionId) => {
-        const why = busy();
-        if (why) return why;
-        const { sessions, live } = await lists();
-        return (
-          resumeRefusal(sessions, live, sessionId) ??
-          run({ type: "relaunch", chatId, resume: sessionId })
-        );
-      },
-      rewind: (point, mode) =>
-        mode === "code"
-          ? run({ type: "restore_code", chatId, before: point.uuid })
-          : run({
-              type: "relaunch",
-              chatId,
-              rewind: { before: point.uuid, code: mode === "both" },
-            }),
-    };
-  }, [chatId, accountId, onError, liveSessions]);
+      const { sessions, live } = await lists();
+      return (
+        resumeRefusal(sessions, live, sessionId) ??
+        run({ type: "relaunch", chatId, resume: sessionId })
+      );
+    },
+    rewind: (point, mode) =>
+      mode === "code"
+        ? run({ type: "restore_code", chatId, before: point.uuid })
+        : run({
+            type: "relaunch",
+            chatId,
+            rewind: { before: point.uuid, code: mode === "both" },
+          }),
+    sent: () => last,
+  };
 }

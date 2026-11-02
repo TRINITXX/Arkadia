@@ -3,6 +3,7 @@ import type { ChatCommand } from "@/lib/chat/chatProtocol";
 import {
   pageCommand,
   parseSlash,
+  type PagePanel,
   TERMINAL_ONLY,
   terminalOnlyNotice,
 } from "@/lib/chat/chatSlash";
@@ -43,6 +44,9 @@ const DOING = new Set<PhoneChatCommand["type"]>([
   "elicit_answer",
 ]);
 
+/** Asks whose answer is everyone's (the MCP servers' state, its `mcp` event). */
+const SHARED = new Set<PhoneChatCommand["type"]>(["mcp_status"]);
+
 /** Reads whose answer only the asking phone needs. */
 const READS = new Set<PhoneChatCommand["type"]>([
   "older",
@@ -81,13 +85,16 @@ export type PhonePromptButton =
   | { kind: "bash"; command: string }
   /** Typed in the phone's input, to edit before sending. */
   | { kind: "type"; text: string }
+  /** /resume, /rewind, /mcp: the phone's own sheet, filtered by its words. */
+  | { kind: "panel"; panel: PagePanel; query: string }
   | { kind: "refuse"; reason: string };
 
 /**
  * The desktop's « Commandes » rules (`runCommand` of `chat-composer.tsx`) for
  * a button the phone pressed: a keyboard shortcut is a terminal's, `!` goes
- * to the shell, and what the desktop's input opens itself (/resume, /rewind,
- * /mcp) or a terminal-only command is not sent from the phone, unless
+ * to the shell, what the desktop's input opens itself (/resume, /rewind,
+ * /mcp) opens the phone's sheet, and a terminal-only command is not sent,
+ * unless
  * Claude Code lists one of that name (a skill: `listed`, as the desktop's
  * `takes`).
  */
@@ -104,8 +111,8 @@ export function phonePromptButton(
   const command = bashCommand(button.command);
   if (command) return { kind: "bash", command };
   const slash = parseSlash(button.command);
-  if (slash && pageCommand(slash.name))
-    return { kind: "refuse", reason: `/${slash.name} se fait sur le PC` };
+  const page = slash && pageCommand(slash.name);
+  if (page) return { kind: "panel", panel: page.panel, query: slash.args };
   if (slash && TERMINAL_ONLY.has(slash.name) && !listed(slash.name))
     return { kind: "refuse", reason: terminalOnlyNotice(slash.name) };
   return { kind: "send", text: button.command };
@@ -127,5 +134,6 @@ export function phoneChatCommand(
   if (DOING.has(command.type)) return { ...command, chatId } as ChatCommand;
   if (command.type === "agent_history") return { ...command, chatId, to, cwd };
   if (READS.has(command.type)) return { ...command, chatId, to } as ChatCommand;
+  if (SHARED.has(command.type)) return { ...command, chatId } as ChatCommand;
   return null;
 }

@@ -5,7 +5,13 @@
  * by `App` with the same functions as the desktop UI.
  */
 
-import type { ChatCommand } from "@/lib/chat/chatProtocol";
+import type {
+  ChatCommand,
+  RewindPoint,
+  SessionChoice,
+} from "@/lib/chat/chatProtocol";
+import type { McpAction, PagePanel } from "@/lib/chat/chatSlash";
+import type { RewindMode } from "@/lib/chat/useSlashActions";
 import type { ClaudeSession } from "@/lib/sessionsIndex";
 import { findItem } from "@/lib/toolbarTree";
 import type { ActionButton, ToolbarButton } from "@/types";
@@ -58,7 +64,30 @@ export type RemoteAction =
       command: PhoneChatCommand;
     }
   /** Chat ⇄ terminal, as the desktop toolbar's switch. */
-  | { kind: "chatToggle"; paneId: string };
+  | { kind: "chatToggle"; paneId: string }
+  /**
+   * The desktop's /resume, /rewind and /mcp for a chat the phone shows, with
+   * the desktop's rules (`slashActions`, `mcpAction`): the lists to pick
+   * from, then the pick. `paneId` on a pick: the phone drives the tab.
+   */
+  | { kind: "chatSessions"; chatId: string }
+  | { kind: "chatResume"; chatId: string; paneId: string; sessionId: string }
+  | { kind: "chatRewindPoints"; chatId: string }
+  | {
+      kind: "chatRewind";
+      chatId: string;
+      paneId: string;
+      /** The user message to go back before (`RewindPoint.uuid`). */
+      before: string;
+      mode: RewindMode;
+    }
+  | {
+      kind: "chatMcp";
+      chatId: string;
+      paneId: string;
+      server: string;
+      action: McpAction;
+    };
 
 /** `tabId`: the tab the phone should open next (new or reused). */
 export interface RemoteActionResult {
@@ -67,6 +96,14 @@ export interface RemoteActionResult {
   /** A prompt button of a chat pane that types without sending: its text,
    *  for the phone's own input (the chat's input lives on the phone). */
   text?: string;
+  /** `chatSessions`: the folder's sessions, those open elsewhere marked. */
+  sessions?: SessionChoice[];
+  /** `chatRewindPoints`: the user's messages to go back before. */
+  points?: RewindPoint[];
+  /** `chatMcp`: a sign-in's page, opened in the PC's browser. */
+  authUrl?: string;
+  /** A chat's prompt button for /resume, /rewind or /mcp: the phone's sheet. */
+  panel?: { name: PagePanel; query: string };
 }
 
 /** `remote-action` event payload (see src-tauri `remote::server`). */

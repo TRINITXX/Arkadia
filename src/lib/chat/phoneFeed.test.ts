@@ -28,6 +28,12 @@ const user = (id: string, at?: number): ChatItem => ({
   images: 0,
   at,
 });
+const think = (id: string): ChatItem => ({
+  kind: "thinking",
+  id,
+  text: `pensée ${id}`,
+  streaming: false,
+});
 
 describe("feedRows", () => {
   it("gives the column's units newest first, the work folded into one row", () => {
@@ -72,10 +78,81 @@ describe("feedRows", () => {
   it("marks the day before its first row", () => {
     const now = new Date(2026, 10, 2, 12).getTime();
     const yesterday = new Date(2026, 10, 1, 9).getTime();
-    const rows = feedRows([user("u", yesterday), text("a", now)], false, now);
+    const rows = feedRows([user("u", yesterday), text("a", now)], false, {
+      now,
+    });
     expect(
       rows.map((r) => (r.unit.kind === "day" ? r.unit.label : r.key)),
     ).toEqual(["a", "Aujourd'hui", "u", "Hier"]);
+  });
+});
+
+describe("feedRows « Récit »", () => {
+  it("puts thinking behind the reply it led to, past tools behind a wrench", () => {
+    const rows = feedRows(
+      [
+        user("u1"),
+        think("t1"),
+        text("s1"),
+        tool("Bash", "b1"),
+        text("answer"),
+        user("u2"),
+        text("now"),
+        tool("Bash", "b2"),
+      ],
+      false,
+    );
+    const row = (key: string) => rows.find((r) => r.key === key);
+    // The thinking and the past exchange's tools leave the feed…
+    expect(rows.map((r) => r.key)).toEqual([
+      "activity:b2",
+      "now",
+      "u2",
+      "answer",
+      "s1",
+      "u1",
+    ]);
+    // …for the icons of the replies they belong to.
+    expect(row("s1")?.thoughts?.map((t) => t.id)).toEqual(["t1"]);
+    expect(row("s1")?.tools?.length).toBe(1);
+    expect(row("s1")?.past).toBe(true);
+    // The exchange under way keeps its tool line: no wrench.
+    expect(row("now")?.tools).toBeNull();
+    expect(row("now")?.past).toBe(false);
+  });
+
+  it("shows the latest thought in full while Claude works, else its own bulb", () => {
+    const items = [user("u"), think("t1")];
+    const live = feedRows(items, true);
+    expect(live[0].unit.kind).toBe("thoughts");
+    expect(live[0].alone).toBe(false);
+    expect(feedRows(items, false)[0].alone).toBe(true);
+  });
+});
+
+describe("feedRows « Messages seuls »", () => {
+  it("keeps the words and drops the work, thinking and « Terminé en »", () => {
+    const rows = feedRows(
+      [
+        user("u"),
+        think("t1"),
+        tool("Bash", "b1"),
+        text("a"),
+        {
+          kind: "turn",
+          id: "t",
+          durationMs: 11 * 60_000,
+          tools: 1,
+          files: 0,
+          at: Date.now(),
+        },
+      ],
+      false,
+      { messagesOnly: true },
+    );
+    expect(rows.map((r) => r.key)).toEqual(["a", "u"]);
+    // Its thinking went with the work: no bulb to open.
+    expect(rows[0].thoughts).toBeNull();
   });
 });
 

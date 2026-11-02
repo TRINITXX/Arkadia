@@ -100,37 +100,7 @@ export function useChatSdkActions(
       },
       refreshMcp: () => run({ type: "mcp_status", chatId }),
       mcpAction: (server, action) =>
-        new Promise<string | undefined>((resolve, reject) => {
-          const requestId = `mcp:${Date.now()}:${Math.random()}`;
-          const done = () => {
-            window.clearTimeout(timer);
-            off();
-          };
-          const timer = window.setTimeout(() => {
-            done();
-            reject(new Error("Le chat ne répond pas"));
-          }, MCP_ACTION_TIMEOUT_MS);
-          const off = subscribeChat(chatId, (event) => {
-            if (
-              event.type !== "mcp_action_done" ||
-              event.requestId !== requestId
-            )
-              return;
-            done();
-            if (event.error) reject(new Error(event.error));
-            else resolve(event.authUrl);
-          });
-          chatCommand(accountId, {
-            type: "mcp_action",
-            chatId,
-            requestId,
-            server,
-            action,
-          }).catch((e: unknown) => {
-            done();
-            reject(e instanceof Error ? e : new Error(String(e)));
-          });
-        }),
+        mcpAction(chatId, accountId, server, action),
       reloadPlugins: () => run({ type: "reload_plugins", chatId }),
       visualHtml: (toolUseId) =>
         run({ type: "visual_html", chatId, toolUseId }),
@@ -138,4 +108,44 @@ export function useChatSdkActions(
         run({ type: "visual_open", chatId, html, title }),
     };
   }, [chatId, accountId, onError]);
+}
+
+/**
+ * /mcp's button for one server: resolves with the page to sign in on, if one
+ * is left. Outside a pane too: the phone's /mcp (App's `chatMcp`), whose
+ * `from` never hands the chat back to the PC (`chatCommand`).
+ */
+export function mcpAction(
+  chatId: string,
+  accountId: string | undefined,
+  server: string,
+  action: McpAction,
+  from: "desktop" | "phone" = "desktop",
+): Promise<string | undefined> {
+  return new Promise<string | undefined>((resolve, reject) => {
+    const requestId = `mcp:${Date.now()}:${Math.random()}`;
+    const done = () => {
+      window.clearTimeout(timer);
+      off();
+    };
+    const timer = window.setTimeout(() => {
+      done();
+      reject(new Error("Le chat ne répond pas"));
+    }, MCP_ACTION_TIMEOUT_MS);
+    const off = subscribeChat(chatId, (event) => {
+      if (event.type !== "mcp_action_done" || event.requestId !== requestId)
+        return;
+      done();
+      if (event.error) reject(new Error(event.error));
+      else resolve(event.authUrl);
+    });
+    chatCommand(
+      accountId,
+      { type: "mcp_action", chatId, requestId, server, action },
+      from,
+    ).catch((e: unknown) => {
+      done();
+      reject(e instanceof Error ? e : new Error(String(e)));
+    });
+  });
 }

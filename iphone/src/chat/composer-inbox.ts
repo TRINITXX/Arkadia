@@ -5,7 +5,14 @@
  * after what is written, a choice in place of the one before (`withChoice`).
  */
 
-export type ComposerInsert = { text: string; kind: "paths" | "choice" };
+/**
+ * `paths`: after what is written; `choice`: in place of the previous choice;
+ * `message`: a message taken back (the pencil, /rewind), before it.
+ */
+export type ComposerInsert = {
+  text: string;
+  kind: "paths" | "choice" | "message";
+};
 
 const inboxes = new Map<string, Set<(insert: ComposerInsert) => void>>();
 

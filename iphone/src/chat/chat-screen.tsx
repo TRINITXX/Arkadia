@@ -26,6 +26,7 @@ import { C } from "~/chat/chat-theme";
 import { putInComposer } from "~/chat/composer-inbox";
 import { AgentSheet } from "~/chat/feed/agent-sheet";
 import { useChat, useChatLive } from "~/chat/use-chat";
+import { useMessageEdit } from "~/chat/use-message-edit";
 import { act, type Status } from "~/remote/connection";
 import { sfIcon } from "~/ui/sf-icon";
 import { AccountChip, BadgeDot } from "~/ui/status-dots";
@@ -37,6 +38,9 @@ interface ChatScreenProps {
   pane: RemotePane;
   status: Status;
 }
+
+/** The chats shown « Messages seuls », by pane, while the app runs. */
+const MESSAGES_ONLY = new Set<string>();
 
 async function run(action: RemoteAction) {
   try {
@@ -64,8 +68,20 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
   const { state } = live;
   // A request, or the ❓ round unfolded, takes the input's place (desktop).
   const covered = useAsksCoverComposer(chatId, state);
+  // The pencil on the user's messages: back before one, its text to edit.
+  const edit = useMessageEdit(chatId, state, actions);
   // A running subagent's pill opened: its conversation in a sheet.
   const [agent, setAgent] = useState<Subagent | null>(null);
+  // « Messages seuls », per chat, as the desktop pane's (kept while the app runs).
+  const [messagesOnly, setMessagesOnly] = useState(() =>
+    MESSAGES_ONLY.has(chatId),
+  );
+  const toggleMessagesOnly = () => {
+    const next = !messagesOnly;
+    if (next) MESSAGES_ONLY.add(chatId);
+    else MESSAGES_ONLY.delete(chatId);
+    setMessagesOnly(next);
+  };
   // An action answered after this screen left must not navigate from it.
   const mounted = useRef(true);
   useEffect(
@@ -152,6 +168,13 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
               ))}
             </Stack.Toolbar.Menu>
           )}
+          <Stack.Toolbar.MenuAction
+            icon="text.bubble"
+            isOn={messagesOnly}
+            onPress={toggleMessagesOnly}
+          >
+            Messages seuls
+          </Stack.Toolbar.MenuAction>
           <Stack.Toolbar.MenuAction icon="terminal" onPress={toTerminal}>
             Passer en terminal
           </Stack.Toolbar.MenuAction>
@@ -177,6 +200,9 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
           live={live}
           actions={actions}
           onChoose={onChoose}
+          messagesOnly={messagesOnly}
+          onEdit={edit.onEdit}
+          editBlocked={edit.blocked !== null}
         />
         <ChatLiveLine state={state} cwd={null} onOpenAgent={setAgent} />
         <ChatAsks chatId={chatId} state={state} actions={actions} />
@@ -230,7 +256,11 @@ function toolbarItems(
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: C.bg },
-  hidden: { display: "none" },
+  /**
+   * Hidden under an ask, kept mounted: Fabric unmounts a `display: none`
+   * subtree, and with it the composer's /resume, /rewind, /mcp sheets.
+   */
+  hidden: { height: 0, overflow: "hidden" },
   title: { alignItems: "center", maxWidth: 230 },
   titleText: { color: "#ffffff", fontSize: 15, fontWeight: "600" },
   subtitle: { flexDirection: "row", alignItems: "center", gap: 5 },

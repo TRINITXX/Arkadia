@@ -257,12 +257,15 @@ function request<T>(
 }
 
 /** Runs an action on the desktop (new tab, button, close…). */
-export async function act(action: RemoteAction): Promise<RemoteActionResult> {
-  const result = await request<RemoteActionResult>((id) => ({
-    t: "action",
-    id,
-    action,
-  }));
+export async function act(
+  action: RemoteAction,
+  /** Longer for what the PC itself waits on longer (an MCP sign-in). */
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<RemoteActionResult> {
+  const result = await request<RemoteActionResult>(
+    (id) => ({ t: "action", id, action }),
+    timeoutMs,
+  );
   if (result.error) throw new Error(result.error);
   return result;
 }

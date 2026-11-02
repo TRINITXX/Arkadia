@@ -141,6 +141,9 @@ import {
   phoneTarget,
 } from "@/lib/chat/phoneChat";
 import { isListed } from "@/lib/chat/chatSlash";
+import { mcpAction } from "@/lib/chat/useChatSdkActions";
+import { slashActions } from "@/lib/chat/useSlashActions";
+import { openUrl } from "@/lib/bridge";
 import { dropSheet, openRoundSheet } from "@/lib/chat/chatSheetAnswers";
 import { useChatLimitSwitch } from "@/lib/chat/useChatLimitSwitch";
 import { PromptButtonsContext } from "@/lib/chat/promptButtonsContext";
@@ -3069,6 +3072,8 @@ export function App() {
             );
             if (run.kind === "refuse") return { error: run.reason };
             if (run.kind === "type") return { text: run.text };
+            if (run.kind === "panel")
+              return { panel: { name: run.panel, query: run.query } };
             await chatCommand(
               pane.accountId,
               run.kind === "bash"
@@ -3168,6 +3173,54 @@ export function App() {
         case "chatToggle": {
           const refused = await chatHandlers.onToggle(action.paneId);
           return refused ? { error: refused } : {};
+        }
+        case "chatSessions":
+        case "chatResume":
+        case "chatRewindPoints":
+        case "chatRewind":
+        case "chatMcp": {
+          const pane = tabsRef.current
+            .map((t) => t.panes[action.chatId])
+            .find(Boolean);
+          if (!pane?.chat) return { error: "Ce volet n’est plus un chat" };
+          // The desktop's own /resume, /rewind and /mcp, rules and all. A
+          // send that fails is said to the phone that asked, not on the PC.
+          const slash = slashActions(
+            pane.id,
+            pane.accountId,
+            () => {},
+            chatHandlers.liveSessions,
+            "phone",
+          );
+          if (action.kind === "chatSessions")
+            return { sessions: await slash.sessions() };
+          if (action.kind === "chatRewindPoints")
+            return { points: await slash.rewindPoints() };
+          if (action.kind === "chatResume") {
+            const why = await slash.resume(action.sessionId);
+            if (why) return { error: why };
+            await slash.sent?.();
+            return {};
+          }
+          if (action.kind === "chatRewind") {
+            const why = slash.rewind(
+              { uuid: action.before, text: "" },
+              action.mode,
+            );
+            if (why) return { error: why };
+            await slash.sent?.();
+            return {};
+          }
+          const authUrl = await mcpAction(
+            pane.id,
+            pane.accountId,
+            action.server,
+            action.action,
+            "phone",
+          );
+          // Signed in on the PC: its browser holds the sign-in's callback.
+          if (authUrl) void openUrl(authUrl).catch(() => {});
+          return authUrl ? { authUrl } : {};
         }
       }
     },

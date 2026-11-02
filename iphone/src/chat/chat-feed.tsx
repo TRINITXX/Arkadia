@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { StyleSheet, View } from "react-native";
-import type { Subagent } from "@/lib/chat/chatState";
+import type { ChatItem, Subagent } from "@/lib/chat/chatState";
 import type { PhoneChatLive } from "@/lib/chat/phoneChatFold";
 import { feedRows } from "@/lib/chat/phoneFeed";
 import { useRoundShown } from "~/chat/asks/round-store";
@@ -19,6 +19,12 @@ export interface ChatFeedProps {
   actions: ChatActions;
   /** A visual's button chose a text: it goes into the composer (not sent). */
   onChoose: (text: string) => void;
+  /** « Messages seuls » (the ⋯ menu): the user's and Claude's words only. */
+  messagesOnly: boolean;
+  /** The pencil on the user's messages; absent: no pencil. */
+  onEdit?: (item: Extract<ChatItem, { kind: "user" }>) => void;
+  /** The pencil can't act now (Claude at work, a request open): dim. */
+  editBlocked: boolean;
 }
 
 /**
@@ -27,11 +33,24 @@ export interface ChatFeedProps {
  * row re-renders for its own items only (`sameRow`); what a row folds opens
  * whole in a sheet (`FeedList`).
  */
-export function ChatFeed({ chatId, live, actions, onChoose }: ChatFeedProps) {
+export function ChatFeed({
+  chatId,
+  live,
+  actions,
+  onChoose,
+  messagesOnly,
+  onEdit,
+  editBlocked,
+}: ChatFeedProps) {
   const { state } = live;
+  // « Messages seuls » keeps the plan a request waits on.
+  const pending = useMemo(
+    () => new Set(state.requests.map((r) => r.toolUseId)),
+    [state.requests],
+  );
   const rows = useMemo(
-    () => feedRows(state.items, state.working),
-    [state.items, state.working],
+    () => feedRows(state.items, state.working, { messagesOnly, pending }),
+    [state.items, state.working, messagesOnly, pending],
   );
   // The ❓ round's sheet unfolded: its questions leave those replies.
   const bareIds = useRoundShown(chatId, state);
@@ -100,6 +119,8 @@ export function ChatFeed({ chatId, live, actions, onChoose }: ChatFeedProps) {
         bottom={bottom}
         agentSheet={agentSheet}
         bareIds={bareIds}
+        onEdit={onEdit}
+        editBlocked={editBlocked}
       />
     </View>
   );
