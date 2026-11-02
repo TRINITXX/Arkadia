@@ -2,7 +2,12 @@ import { memo } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { ChatState } from "@/lib/chat/chatState";
 import type { VisualEntry } from "@/lib/chat/chatVisual";
-import { bashServerId, sameRow, sentUuid, type FeedRow } from "@/lib/chat/phoneFeed";
+import {
+  bashServerId,
+  sameRow,
+  sentUuid,
+  type FeedRow,
+} from "@/lib/chat/phoneFeed";
 import { C, T } from "~/chat/chat-theme";
 import { ActivityLine } from "~/chat/feed/activity-line";
 import { BashCard } from "~/chat/feed/bash-card";
@@ -86,9 +91,13 @@ export const FeedRowView = memo(function FeedRowView({
     case "command": {
       const uuid = unit.item.queued ? sentUuid(unit.item.id) : null;
       const onSendNow =
-        unit.item.queued && sendNow ? () => void env.actions.interrupt() : undefined;
+        unit.item.queued && sendNow
+          ? () => void env.actions.interrupt()
+          : undefined;
       const onRemove =
-        uuid && withdraw ? () => void env.actions.cancelQueued(uuid) : undefined;
+        uuid && withdraw
+          ? () => void env.actions.cancelQueued(uuid)
+          : undefined;
       if (unit.kind === "user") {
         const { item } = unit;
         const { edit } = env;
@@ -175,8 +184,8 @@ export const FeedRowView = memo(function FeedRowView({
         />
       );
     }
-    // The exchange under way's tool lines; a past one's are behind the
-    // wrench of the reply that announced them, or a wrench of their own.
+    // The tool line under way; the others are behind the wrench of the
+    // reply that announced them, or a wrench of their own.
     case "activity":
       return row.alone ? (
         <PeekAlone kind="tools" onPress={open("activity")} />

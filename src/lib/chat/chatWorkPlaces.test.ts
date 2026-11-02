@@ -85,7 +85,7 @@ describe("placeWork", () => {
     ]);
   });
 
-  it("keeps the exchange under way in view until the user's next message", () => {
+  it("keeps the exchange under way's replies in full ink, its tools behind them", () => {
     const shown = units([
       user("u1"),
       say("old"),
@@ -98,9 +98,55 @@ describe("placeWork", () => {
     const places = placeWork(shown, false);
     const lines = shown.filter((u) => u.kind === "activity").map((u) => u.id);
     expect(places.current.has("new")).toBe(true);
-    expect(places.current.has(lines[1])).toBe(true);
     expect(places.current.has("old")).toBe(false);
-    expect(places.current.has(lines[0])).toBe(false);
+    // Its tools behind its wrench already: only a line under way shows.
+    expect(places.current.has(lines[1])).toBe(false);
+    expect(toolIds(places, "new")).toEqual(["b2"]);
+    expect(toolIds(places, "old")).toEqual(["b1"]);
+  });
+
+  it("shows only the tool line under way, a message waiting under it aside", () => {
+    const shown = units([
+      user("u"),
+      say("s1"),
+      run("b1"),
+      say("s2"),
+      run("b2"),
+      user("q", { queued: true }),
+    ]);
+    const places = placeWork(shown, true);
+    const lines = shown.filter((u) => u.kind === "activity").map((u) => u.id);
+    expect(places.current.has(lines[1])).toBe(true);
+    expect(toolIds(places, "s1")).toEqual(["b1"]);
+    expect(places.tools.has("s2")).toBe(false);
+    // The turn over: that line goes behind its reply's wrench too.
+    expect(toolIds(placeWork(shown, false), "s2")).toEqual(["b2"]);
+  });
+
+  it("keeps the line under way shown under a notice", () => {
+    const notice: ChatItem = {
+      kind: "notice",
+      id: "n1",
+      text: "Hook PostToolUse : avertissement",
+      tone: "info",
+    } as ChatItem;
+    const shown = units([user("u"), say("s1"), run("b1"), notice]);
+    const line = shown.find((u) => u.kind === "activity")?.id ?? "";
+    const places = placeWork(shown, true);
+    expect(places.current.has(line)).toBe(true);
+    expect(places.tools.has("s1")).toBe(false);
+  });
+
+  it("lets tools before any reply wait for it unseen while Claude works", () => {
+    const visual: ChatItem = {
+      kind: "tool",
+      id: "v1",
+      name: "mcp__arkadia__show_visual",
+      input: { html: "<p>x</p>", title: "x" },
+    };
+    const shown = units([user("u"), run("b1"), visual, run("b2")]);
+    const places = placeWork(shown, true);
+    expect(places.alone.size).toBe(0);
   });
 
   it("lets a message still waiting not cut what Claude is doing", () => {

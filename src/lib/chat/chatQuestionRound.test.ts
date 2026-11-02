@@ -182,6 +182,64 @@ describe("question rounds in Claude's reply", () => {
     );
   });
 
+  it("reads every « Question n sur N » of one reply, bold with its dot inside", () => {
+    // The Cockpit's reply of 02/11/2026: no sheet showed.
+    const two = [
+      "Une autre session avait des modifications en cours.",
+      "",
+      "**Question 1 sur 2.**",
+      "",
+      "Le lien Amazon mène à un autre robot.",
+      "",
+      "Faut-il prendre cette fiche ?",
+      "",
+      "  a) Non : le site le masque seul demain",
+      "  b) Oui : je remplace la fiche",
+      "",
+      "Je pencherais pour (a) : plus cher, peu d'avis.",
+      "",
+      "**Question 2 sur 2.**",
+      "",
+      "Je corrige maintenant ?",
+      "",
+      "  a) Oui",
+      "  b) Plus tard",
+      "",
+      "Je pencherais pour (a) : sinon la retouche reste en ligne.",
+      "",
+      "---",
+      "Détail technique : `1b087d9`.",
+    ].join("\n");
+    const [q1, q2] = parseQuestionRound(two);
+    expect(q1).toMatchObject({
+      id: "Q1",
+      title: "Faut-il prendre cette fiche ?",
+      recommendedKey: "a",
+    });
+    expect(q1.options).toHaveLength(2);
+    expect(q2).toMatchObject({
+      id: "Q2",
+      title: "Je corrige maintenant ?",
+      options: [
+        { key: "a", label: "Oui" },
+        { key: "b", label: "Plus tard" },
+      ],
+      recommendedKey: "a",
+    });
+    expect(withoutQuestions(two)).toBe(
+      "Une autre session avait des modifications en cours.\n\nDétail technique : `1b087d9`.",
+    );
+  });
+
+  it("reads « Question n sur N » as a heading or with a colon", () => {
+    const ask = (head: string) =>
+      parseQuestionRound(
+        [head, "", "On garde ?", "", "  a) Oui", "  b) Non"].join("\n"),
+      );
+    expect(ask("### Question 1 sur 2")).toHaveLength(1);
+    expect(ask("**Question 1 sur 2 :**")).toHaveLength(1);
+  });
+
   it("offers the sheet for the last finished reply only", () => {
     const text = (id: string, t: string, streaming = false): ChatItem => ({
       kind: "text",

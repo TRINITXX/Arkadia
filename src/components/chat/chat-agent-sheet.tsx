@@ -46,6 +46,8 @@ export function ChatAgentSheet({
           ) : (
             <ChatTimeline
               items={conversation.items}
+              // Followed live: its tool line under way shows (« Récit »).
+              working={agent.status === "running"}
               cwd={cwd}
               subagents={[]}
               pendingToolIds={NONE}

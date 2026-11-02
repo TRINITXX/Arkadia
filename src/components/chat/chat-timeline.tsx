@@ -164,10 +164,10 @@ export const ChatTimeline = memo(function ChatTimeline({
     }),
     [onToast],
   );
-  // A reply's icons: its thinking, and its tools once its exchange is past.
+  // A reply's icons: its thinking, and its tools (all but the line under way).
   const peeks = (id: string): React.ReactNode => {
     const thoughts = places.thoughts.get(id);
-    const tools = places.current.has(id) ? undefined : places.tools.get(id);
+    const tools = places.tools.get(id);
     if (!thoughts && !tools) return null;
     return (
       <>
@@ -413,8 +413,8 @@ export const ChatTimeline = memo(function ChatTimeline({
           />
         );
       }
-      // Claude's tools in the exchange under way, behind the wrench of the
-      // reply that announced them once it's past (« Récit », the user's
+      // Claude's tools: the line under way shown, the others behind the
+      // wrench of the reply that announced them (« Récit », the user's
       // picks of 02/11/2026), or a wrench of their own.
       case "activity":
         if (places.current.has(unit.id))

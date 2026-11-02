@@ -45,7 +45,10 @@ const ARROW = /^\s*➡️?\s*/;
 /** `a) Label`, `(a) Label`, `- **b)** Label`, `c. Label`. */
 const OPTION =
   /^\s*(?:[-*•]\s+)?(?:\*\*)?\(?([a-hA-H])(?:\)|\.)(?:\*\*)?\s*[:\-–—]?\s*(.+)$/;
-const SERIES = /^\s*\**\s*Question\s+(\d+)\s+sur\s+(\d+)\s*\**\s*\.?\s*$/i;
+/** « Question 1 sur 2. », bold or a heading or neither, a dot or a colon in
+ *  or out of the bold (`**Question 1 sur 2.**`, missed on 02/11/2026). */
+const SERIES =
+  /^\s*(?:#{1,6}\s*)?\**\s*Question\s+(\d+)\s+sur\s+(\d+)\s*[.:]?\s*\**\s*[.:]?\s*$/i;
 /** « Je pencherais pour (b) : … »: a letter alone, never a word's first
  *  (« pour celle qui… »). */
 const LEANING =
@@ -234,17 +237,18 @@ function grillingRound(lines: string[]): ParsedQuestion[] {
 }
 
 /**
- * « Question n sur N. », context, the question, `a) b) c)`, the leaning: the
- * question, and its lines `[start, end)`, down to the leaning (else its
- * options). What follows is Claude's own words again.
+ * « Question n sur N. » at `start`, context, the question, `a) b) c)`, the
+ * leaning, up to `stop` (the next one): the question, and its lines
+ * `[start, end)`, down to the leaning (else its options). What follows is
+ * Claude's own words again.
  */
 function seriesRead(
   lines: string[],
+  start: number,
+  stop: number,
 ): { question: ParsedQuestion; start: number; end: number } | null {
-  const start = lines.findIndex((l) => SERIES.test(l));
-  if (start < 0) return null;
   const n = SERIES.exec(lines[start])![1];
-  const after = lines.slice(start + 1);
+  const after = lines.slice(start + 1, stop);
   // The options come before the leaning, whose « (a) » is none.
   const leanAt = after.findIndex((l) => LEANING.test(l));
   const scope = leanAt >= 0 ? after.slice(0, leanAt) : after;
@@ -277,14 +281,21 @@ function seriesRead(
   };
 }
 
+/** Every « Question n sur N » of a reply: one message may ask several. */
+function seriesReads(lines: string[]) {
+  const starts = lines.flatMap((l, i) => (SERIES.test(l) ? [i] : []));
+  return starts.flatMap((start, k) => {
+    const read = seriesRead(lines, start, starts[k + 1] ?? lines.length);
+    return read ? [read] : [];
+  });
+}
+
 function seriesQuestion(lines: string[]): ParsedQuestion[] {
-  const read = seriesRead(lines);
-  return read ? [read.question] : [];
+  return seriesReads(lines).map((read) => read.question);
 }
 
 function seriesBlock(lines: string[]): [number, number][] {
-  const read = seriesRead(lines);
-  return read ? [[read.start, read.end]] : [];
+  return seriesReads(lines).map((read) => [read.start, read.end]);
 }
 
 const linesOf = (text: string) => text.replace(/\r\n/g, "\n").split("\n");

@@ -47,9 +47,11 @@ describe("feedRows", () => {
       ],
       false,
     );
-    expect(rows.map((r) => r.key)).toEqual(["end", "activity:b1", "step", "u"]);
+    // The turn over, its work goes behind the wrench of the reply before it.
+    expect(rows.map((r) => r.key)).toEqual(["end", "step", "u"]);
+    expect(rows.find((r) => r.key === "step")?.tools?.length).toBe(1);
     // A reply followed by work is a step; the turn's last one is its answer.
-    expect(rows.map((r) => r.step)).toEqual([false, false, true, false]);
+    expect(rows.map((r) => r.step)).toEqual([false, true, false]);
   });
 
   it("leaves out a short turn's line and a thinking with no words", () => {
@@ -103,22 +105,19 @@ describe("feedRows « Récit »", () => {
       false,
     );
     const row = (key: string) => rows.find((r) => r.key === key);
-    // The thinking and the past exchange's tools leave the feed…
-    expect(rows.map((r) => r.key)).toEqual([
-      "activity:b2",
-      "now",
-      "u2",
-      "answer",
-      "s1",
-      "u1",
-    ]);
+    // The thinking and the tools leave the feed…
+    expect(rows.map((r) => r.key)).toEqual(["now", "u2", "answer", "s1", "u1"]);
     // …for the icons of the replies they belong to.
     expect(row("s1")?.thoughts?.map((t) => t.id)).toEqual(["t1"]);
     expect(row("s1")?.tools?.length).toBe(1);
     expect(row("s1")?.past).toBe(true);
-    // The exchange under way keeps its tool line: no wrench.
-    expect(row("now")?.tools).toBeNull();
+    // The exchange under way's too, its reply in full ink.
+    expect(row("now")?.tools?.length).toBe(1);
     expect(row("now")?.past).toBe(false);
+    // While Claude works, the line under way shows: no wrench for it.
+    const live = feedRows([user("u2"), text("now"), tool("Bash", "b2")], true);
+    expect(live.map((r) => r.key)).toEqual(["activity:b2", "now", "u2"]);
+    expect(live.find((r) => r.key === "now")?.tools).toBeNull();
   });
 
   it("shows the latest thought in full while Claude works, else its own bulb", () => {
@@ -160,7 +159,9 @@ describe("sameRow", () => {
   it("is the same row while its items are, rebuilt or not", () => {
     const items = [user("u"), tool("Bash", "b1"), tool("Read", "r1")];
     const before = feedRows(items, true);
-    const after = feedRows([...items, text("new")], true);
+    // A message typed meanwhile, waiting: the line under way stays.
+    const queued: ChatItem = { ...user("q"), queued: true } as ChatItem;
+    const after = feedRows([...items, queued], true);
     expect(sameRow(before[0], after[1])).toBe(true);
     // A tool's result came: its row draws again.
     const done = items.map((i) =>

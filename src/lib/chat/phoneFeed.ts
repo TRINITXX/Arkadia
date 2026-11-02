@@ -35,7 +35,7 @@ export interface FeedRow {
   turn: string | null;
   /** « Récit » (`placeWork`): the thoughts behind a reply's bulb. */
   thoughts: ThinkingItem[] | null;
-  /** The tools behind a reply's wrench, once its exchange is past. */
+  /** The tools behind a reply's wrench: all but the line under way. */
   tools: FoldedUnit[] | null;
   /** A reply said before the exchange under way: a step reply dims. */
   past: boolean;
@@ -89,8 +89,7 @@ export function lastThought(items: readonly ThinkingItem[]): string {
 /**
  * Whether the column draws a unit (`chat-timeline.tsx`): a long turn's
  * « Terminé en » only, a thinking with words in full while live or behind
- * its own bulb, tool lines while their exchange runs or behind their own
- * wrench. The others are behind a reply's icon, or nothing.
+ * its own bulb, the tool line under way or tools behind their own wrench. The others are behind a reply's icon, or nothing.
  */
 function drawn(u: ChatUnit, places: WorkPlaces, turn: string | null): boolean {
   switch (u.kind) {
@@ -154,7 +153,7 @@ export function feedRows(
       plan: unit.kind === "plan" ? planUpTo(items, unit.item.id) : null,
       turn,
       thoughts: thoughts && lastThought(thoughts) ? thoughts : null,
-      tools: (reply && !current && places.tools.get(reply)) || null,
+      tools: (reply && places.tools.get(reply)) || null,
       past: reply !== null && !current,
       alone:
         (unit.kind === "thoughts" && unit.id !== places.live) ||
