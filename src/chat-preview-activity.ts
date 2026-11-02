@@ -157,11 +157,30 @@ function turnEvents(withTool: boolean): ChatEvent[] {
 export function activityScenarios(): Record<string, () => ChatState> {
   return {
     activity: () => replayNow(untilFirstEnd()),
+    // A big fan-out: the agents' list scrolls, under an opaque line.
+    "activity-crowded": () => crowded(replayNow(untilFirstEnd())),
     "activity-done": () => replayNow(live),
     "activity-resumed": resumed,
     // Stamped `ago` already: replayed as they are.
     thinking: () => replayAsIs(turnEvents(false)),
     "tool-running": () => replayAsIs(turnEvents(true)),
+  };
+}
+
+/** The workflow given 40 more agents like its first, in its phase. */
+function crowded(state: ChatState): ChatState {
+  return {
+    ...state,
+    workflows: state.workflows.map((w) => {
+      const first = w.agents[0];
+      if (!first) return w;
+      const more = Array.from({ length: 40 }, (_, i) => ({
+        ...first,
+        agentId: `${first.agentId}-${i}`,
+        label: `${first.label}-${i + 1}`,
+      }));
+      return { ...w, agents: [...w.agents, ...more] };
+    }),
   };
 }
 

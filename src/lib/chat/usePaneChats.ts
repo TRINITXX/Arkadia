@@ -157,6 +157,20 @@ export function chatBusyReason(
 }
 
 /**
+ * Whether a chat the usage limit stopped still waits before it moves to
+ * another account: for its turn, or a question to Claude, never for what
+ * runs behind. A background shell (a dev server) never ends, and the quota
+ * is gone anyway (« s'il y a plus de quota, il faut quoi qu'il arrive
+ * changer de compte », 02/11/2026).
+ */
+export function chatTurnHolds(
+  activity: ChatActivity,
+  replaying: boolean,
+): boolean {
+  return replaying || activity.busy || activity.pending > 0;
+}
+
+/**
  * Why a terminal Claude can't leave for the chat now, or null: only one
  * resting at its plain input box quits cleanly. A menu on screen (a question,
  * a plan, a permission) would take `/exit`'s Enter as an answer, and a

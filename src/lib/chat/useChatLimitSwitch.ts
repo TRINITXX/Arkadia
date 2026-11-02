@@ -19,11 +19,14 @@ import {
 } from "@/lib/chat/chatLimit";
 import { resetClock } from "@/lib/chat/chatQuota";
 import { attachLiveChat, startLiveChat } from "@/lib/chat/chatLive";
-import { chatBusyReason } from "@/lib/chat/usePaneChats";
+import { chatTurnHolds } from "@/lib/chat/usePaneChats";
 import type { PaneChat, PaneState, Tab } from "@/types";
 
-/** A reset unknown or past: the wait for rest lasts at least this. */
-const MIN_REST_WAIT_MS = 5 * 60_000;
+/**
+ * A turn the limit refuses ends at once: past this, the chat moves anyway,
+ * its turn or question cut (the quota is gone either way).
+ */
+const TURN_WAIT_MS = 60_000;
 /** The hit comes mid-turn: a wait is said only when it lasts past this. */
 const SLOW_REST_MS = 5_000;
 /** A long wait looks this often whether its pane still holds the chat. */
@@ -51,8 +54,15 @@ type Relaunch = (
   chat: PaneChat,
   accountId: string,
   stillThere: () => boolean,
-  onStarted?: (paneId: string, chat: PaneChat, accountId?: string) => void,
+  opts?: RelaunchOptions,
 ) => Promise<"done" | "skipped" | "failed">;
+
+export interface RelaunchOptions {
+  /** The new pane and its chat (the limit switch starts it at once). */
+  onStarted?: (paneId: string, chat: PaneChat, accountId?: string) => void;
+  /** Moves even a chat at work: its turn, requests and tasks stop. */
+  force?: boolean;
+}
 
 /** Each decision in the Lab's log: a chat left on a limited account says why. */
 function logSwitch(message: string): void {
@@ -70,10 +80,13 @@ function activityLine(chatId: string): string {
 /** « à 07:20 » for a time in ms. */
 const clock = (at: number) => resetClock(Math.round(at / 1000), Date.now());
 
-/** Resolves true once the chat rests (no turn, request nor task), false at the timeout. */
-function waitForRest(chatId: string, timeoutMs: number): Promise<boolean> {
+/**
+ * Resolves true once the chat's turn ended (`chatTurnHolds`: its background
+ * tasks and shells don't count), false at the timeout.
+ */
+function waitForTurnEnd(chatId: string, timeoutMs: number): Promise<boolean> {
   const resting = () =>
-    chatBusyReason(chatActivity(chatId), chatReplaying(chatId)) === null;
+    !chatTurnHolds(chatActivity(chatId), chatReplaying(chatId));
   return new Promise((resolve) => {
     if (resting()) return resolve(true);
     const done = (ok: boolean) => {
@@ -90,9 +103,10 @@ function waitForRest(chatId: string, timeoutMs: number): Promise<boolean> {
 
 /**
  * The terminal's « Reprise automatique à la limite », for chats: a chat
- * whose turn the usage limit refuses moves, once at rest (account switches
- * never cut a turn), to the free account whose quota resets soonest
- * (`planChatLimitSwitch`), and goes on with « continue ». The account is
+ * whose turn the usage limit refuses moves, once its turn ended (a minute at
+ * most), to the free account whose quota resets soonest
+ * (`planChatLimitSwitch`), and goes on with « continue ». What runs behind
+ * (shells, subagents, workflows) stops with the move. The account is
  * marked blocked until its reset either way; with the setting off, nothing
  * moves. Bounded: blocked accounts are never chosen, and one conversation
  * moves at most 3 times in 30 min.
@@ -183,31 +197,25 @@ export function useChatLimitSwitch({
         onToast("error", `limite atteinte sur ${label(from)} · chat laissé là`);
         return;
       }
-      // Busy (a turn, a task, a question): it moves once at rest, however
-      // long that takes while the account stays limited. The hit comes
-      // mid-turn: the wait is said only when it lasts.
+      // Its turn (or a question) first, a minute at most; never what runs
+      // behind: a dev server would hold it until the reset (02/11/2026).
+      // The hit comes mid-turn: the wait is said only when it lasts.
       const slow = window.setTimeout(() => {
-        if (
-          chatBusyReason(chatActivity(chatId), chatReplaying(chatId)) === null
-        )
-          return;
+        if (!chatTurnHolds(chatActivity(chatId), chatReplaying(chatId))) return;
         logSwitch(
-          `${chatId} on ${from}: waits for rest (${activityLine(chatId)})`,
+          `${chatId} on ${from}: waits for its turn's end (${activityLine(chatId)})`,
         );
         deps.current.onToast(
           "info",
-          `limite atteinte sur ${label(from)} · bascule dès que le chat a fini`,
+          `limite atteinte sur ${label(from)} · bascule à la fin de son tour`,
         );
       }, SLOW_REST_MS);
-      const wait = Math.max(until - Date.now(), MIN_REST_WAIT_MS);
-      const rested = await waitForRest(chatId, wait);
+      const ended = await waitForTurnEnd(chatId, TURN_WAIT_MS);
       window.clearTimeout(slow);
-      if (!rested) {
+      if (!ended)
         logSwitch(
-          `${chatId} on ${from}: still busy at its reset (${activityLine(chatId)})`,
+          `${chatId} on ${from}: turn still on, moves anyway (${activityLine(chatId)})`,
         );
-        return;
-      }
       if (!enabledRef.current) {
         logSwitch(`${chatId} on ${from}: setting turned off while it waited`);
         return;
@@ -219,6 +227,7 @@ export function useChatLimitSwitch({
      * An at-rest chat whose account is limited: to the free account, else
      * to the first one back, else « continue » on its own at its reset.
      * Each wait is saved (`chatWaits`), so a restart picks it up again.
+     * `firstLook`: a wait picked up after a restart.
      */
     const settle = async (
       chatId: string,
@@ -226,7 +235,7 @@ export function useChatLimitSwitch({
       until: number,
       key: string,
       recent: number[],
-      firstLook = Date.now(),
+      firstLook?: number,
     ) => {
       // Only a real session id survives a restart; a bare chat id does not.
       const sid = find(chatId)?.chat.resume;
@@ -234,7 +243,10 @@ export function useChatLimitSwitch({
         if (sid) deps.current.chatWaits.set(sid, at);
       };
       let told = false;
-      if (firstLook > Date.now()) {
+      // Time went by since the limit (a wait, a restart): Alexis may be at
+      // work in the chat again, its own account back.
+      let waited = firstLook !== undefined;
+      if (firstLook !== undefined && firstLook > Date.now()) {
         save(firstLook);
         if (!(await sleepUntil(chatId, firstLook))) return save(null);
       }
@@ -254,6 +266,22 @@ export function useChatLimitSwitch({
         const blocked = deps.current.blocked();
         const plan = planChatLimitSwitch(accounts, blocked, from, Date.now());
         if (plan.kind === "switch") {
+          if (waited && (blocked[from] ?? 0) <= Date.now()) {
+            // Its account came back meanwhile: it stays, goes on if at rest.
+            save(null);
+            logSwitch(`${chatId} on ${from}: account back, no move`);
+            await continueHere(chatId, from);
+            return;
+          }
+          // Still limited, a turn under way after a wait: the user's (some
+          // quota is left, another model's): moved at its end, never cut.
+          if (
+            waited &&
+            chatTurnHolds(chatActivity(chatId), chatReplaying(chatId))
+          ) {
+            await waitForTurnEnd(chatId, PANE_CHECK_MS);
+            continue;
+          }
           save(null);
           await move(chatId, again, from, plan.accountId, key, recent);
           return;
@@ -280,29 +308,7 @@ export function useChatLimitSwitch({
           if (!(await sleepUntil(chatId, until + RESET_MARGIN_MS)))
             return save(null);
           save(null);
-          if (!enabledRef.current) {
-            logSwitch(`${chatId} on ${from}: setting turned off, no continue`);
-            return;
-          }
-          // Working again (the user went on): nothing to add.
-          if (
-            chatBusyReason(chatActivity(chatId), chatReplaying(chatId)) !== null
-          )
-            return;
-          const here = find(chatId);
-          if (!here) return;
-          // A chat not on screen since a restart was never started: started
-          // here on its pane's account, else « continue » reaches no server.
-          const account = here.pane.accountId;
-          if (attachLiveChat(chatId, account))
-            await startLiveChat(chatId, account, here.chat);
-          // Arkadia's own « continue »: not the user, the phone keeps its tab.
-          await chatCommand(
-            account,
-            { type: "send", chatId, text: "continue", images: [] },
-            "auto",
-          ).catch(() => {});
-          logSwitch(`${chatId} on ${from}: continued after its reset`);
+          await continueHere(chatId, from);
           return;
         }
         if (!told) {
@@ -318,7 +324,32 @@ export function useChatLimitSwitch({
         save(next + RESET_MARGIN_MS);
         if (!(await sleepUntil(chatId, next + RESET_MARGIN_MS)))
           return save(null);
+        waited = true;
       }
+    };
+
+    /** Its own account back: « continue » there, unless it works again. */
+    const continueHere = async (chatId: string, from: string) => {
+      if (!enabledRef.current) {
+        logSwitch(`${chatId} on ${from}: setting turned off, no continue`);
+        return;
+      }
+      // Working again (the user went on): nothing to add.
+      if (chatTurnHolds(chatActivity(chatId), chatReplaying(chatId))) return;
+      const here = find(chatId);
+      if (!here) return;
+      // A chat not on screen since a restart was never started: started
+      // here on its pane's account, else « continue » reaches no server.
+      const account = here.pane.accountId;
+      if (attachLiveChat(chatId, account))
+        await startLiveChat(chatId, account, here.chat);
+      // Arkadia's own « continue »: not the user, the phone keeps its tab.
+      await chatCommand(
+        account,
+        { type: "send", chatId, text: "continue", images: [] },
+        "auto",
+      ).catch(() => {});
+      logSwitch(`${chatId} on ${from}: continued after its reset`);
     };
 
     /** The chat to `to`, « continue » in its input. */
@@ -337,14 +368,19 @@ export function useChatLimitSwitch({
         );
       const out: { next?: { id: string; chat: PaneChat; account?: string } } =
         {};
+      // Forced: no quota left, whatever runs behind stops with the move
+      // (a turn only once `handle` waited for it, or `settle` saw it end).
       const result = await relaunch(
         at.tab.id,
         at.pane,
         at.chat,
         to,
         stillThere,
-        (id, chat, account) => {
-          out.next = { id, chat, account };
+        {
+          force: true,
+          onStarted: (id, chat, account) => {
+            out.next = { id, chat, account };
+          },
         },
       );
       const { next } = out;

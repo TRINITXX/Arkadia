@@ -125,7 +125,12 @@ import {
   chatReplaying,
   closeChat,
   IDLE_CHAT,
+  stopAndCloseChat,
+  subscribeEveryChat,
 } from "@/lib/chat/chatEvents";
+import { publishedArtifact } from "@/lib/chat/chatArtifactOpen";
+import { isLiveEvent } from "@/lib/chat/chatNotify";
+import { sentUuid } from "@/lib/chat/phoneFeed";
 import { dropDraft, moveDraft } from "@/lib/chat/chatDrafts";
 import {
   attachLiveChat,
@@ -145,7 +150,10 @@ import { mcpAction } from "@/lib/chat/useChatSdkActions";
 import { slashActions } from "@/lib/chat/useSlashActions";
 import { openUrl } from "@/lib/bridge";
 import { dropSheet, openRoundSheet } from "@/lib/chat/chatSheetAnswers";
-import { useChatLimitSwitch } from "@/lib/chat/useChatLimitSwitch";
+import {
+  useChatLimitSwitch,
+  type RelaunchOptions,
+} from "@/lib/chat/useChatLimitSwitch";
 import { PromptButtonsContext } from "@/lib/chat/promptButtonsContext";
 import { useChatNotify } from "@/lib/chat/useChatNotify";
 import { useVisualProbe } from "@/lib/chat/useVisualProbe";
@@ -774,6 +782,19 @@ export function App() {
       for (const fn of unlisteners) fn();
     };
   }, [openArtifactFor, changeArtifacts]);
+  // A chat's first publish opens in its tab's panel, as Claude Code opens a
+  // terminal's (`publishedArtifact`). A replay's is old news.
+  useEffect(
+    () =>
+      subscribeEveryChat((event) => {
+        if (event.type !== "sdk") return;
+        if (!isLiveEvent(event, chatReplaying(event.chatId), Date.now()))
+          return;
+        const url = publishedArtifact(event.message);
+        if (url) openArtifactFor(url, event.chatId, "publish");
+      }),
+    [openArtifactFor],
+  );
   useEffect(() => {
     const reclaim = (e: Event) => {
       const under =
@@ -1703,10 +1724,11 @@ export function App() {
 
   // A chat pane on another account: a fresh pane there (its shell carries the
   // account, for a later switch to the terminal), whose chat resumes the same
-  // conversation, with the input as it was. Only a chat at rest moves, as for
-  // the switch to the terminal, and the old chat is gone before the new one
-  // starts: never two Claude on one session. Transcripts are shared by every
-  // account.
+  // conversation, with the input as it was. Only a chat at rest moves, unless
+  // forced (Alexis's own pick in the tab's menu, a limit with no quota left:
+  // its turn and what runs behind stop), and the old chat is gone before the
+  // new one starts: never two Claude on one session. Transcripts are shared
+  // by every account.
   const relaunchChatOnAccount = useCallback(
     async (
       tabId: string,
@@ -1714,10 +1736,10 @@ export function App() {
       chat: PaneChat,
       accountId: string,
       stillThere: () => boolean,
-      /** The new pane and its chat (the limit switch starts it at once). */
-      onStarted?: (paneId: string, chat: PaneChat, accountId?: string) => void,
+      { onStarted, force = false }: RelaunchOptions = {},
     ): Promise<"done" | "skipped" | "failed"> => {
-      const busy = chatBusyReason(chatActivity(old.id), chatReplaying(old.id));
+      const busy =
+        !force && chatBusyReason(chatActivity(old.id), chatReplaying(old.id));
       if (busy) {
         pushToast("info", `Volet chat gardé sur son compte : ${busy}`);
         return "skipped";
@@ -1732,16 +1754,28 @@ export function App() {
         return "skipped";
       }
       // A turn may have begun while the new pane spawned.
-      const nowBusy = chatBusyReason(
-        chatActivity(old.id),
-        chatReplaying(old.id),
-      );
+      const nowBusy =
+        !force && chatBusyReason(chatActivity(old.id), chatReplaying(old.id));
       if (nowBusy) {
         drop();
         pushToast("info", `Volet chat gardé sur son compte : ${nowBusy}`);
         return "skipped";
       }
-      await closeChat(old.accountId, old.id).catch(() => {});
+      // At work (forced): its turn and tasks stopped, its queued messages
+      // back in the input, its Claude Code gone before the new pane resumes.
+      if (
+        force &&
+        chatBusyReason(chatActivity(old.id), chatReplaying(old.id)) !== null
+      ) {
+        const queued = liveChatState(old.id).items.flatMap((i) => {
+          const uuid =
+            (i.kind === "user" || i.kind === "command") && i.queued
+              ? sentUuid(i.id)
+              : null;
+          return uuid ? [uuid] : [];
+        });
+        await stopAndCloseChat(old.accountId, old.id, queued);
+      } else await closeChat(old.accountId, old.id).catch(() => {});
       // Closed meanwhile: the new pane has no place left.
       if (!stillThere()) {
         drop();
@@ -1806,13 +1840,15 @@ export function App() {
   // `~/.claude`), so `ccd --resume` finds it. The new pane takes the old one's
   // place in the layout; the old one is closed only once the new one exists.
   // `prompt` becomes the resumed session's first message. "failed" = no pane
-  // could be spawned at all, worth stopping a batch over.
+  // could be spawned at all, worth stopping a batch over. `force`: a chat at
+  // work moves too (`relaunchChatOnAccount`).
   const relaunchPaneOnAccount = useCallback(
     async (
       tabId: string,
       oldId: string,
       accountId: string,
       prompt?: string,
+      force = false,
     ): Promise<"done" | "skipped" | "failed"> => {
       const stillThere = () =>
         tabsRef.current.some(
@@ -1829,6 +1865,7 @@ export function App() {
           old.chat,
           accountId,
           stillThere,
+          { force },
         );
       }
       const sid = await invoke<string | null>("pane_session_id", {
@@ -1896,15 +1933,18 @@ export function App() {
       if (!tab || switchingTabs.current.has(tabId)) return;
       const paneIds = claudePanesToSwitch(tab, accountId);
       if (paneIds.length === 0) return;
-      // A chat pane at work is refused on its own (`relaunchChatOnAccount`).
+      // Alexis's pick always moves (« si je veux changer de compte en passant
+      // par l'onglet, je veux que ça change de compte », 02/11/2026): what
+      // would stop is said first. A chat's background tasks count.
       if (
-        paneIds.some(
-          (id) =>
-            !tab.panes[id]?.chat && effectivePaneStates[id]?.kind === "busy",
+        paneIds.some((id) =>
+          tab.panes[id]?.chat
+            ? chatBusyReason(chatActivity(id), chatReplaying(id)) !== null
+            : effectivePaneStates[id]?.kind === "busy",
         )
       ) {
         const ok = await ask(
-          "Claude travaille encore dans cet onglet. Changer de compte coupe sa tâche en cours.",
+          "Claude travaille encore dans cet onglet, ou des tâches y tournent en fond. Changer de compte les arrête.",
           {
             title: "Changer de compte",
             kind: "warning",
@@ -1918,14 +1958,20 @@ export function App() {
       let switched = 0;
       try {
         for (const oldId of paneIds) {
-          const result = await relaunchPaneOnAccount(tabId, oldId, accountId);
+          const result = await relaunchPaneOnAccount(
+            tabId,
+            oldId,
+            accountId,
+            undefined,
+            true,
+          );
           if (result === "failed") break;
           if (result === "done") switched++;
         }
       } finally {
         switchingTabs.current.delete(tabId);
       }
-      // Chat panes that stayed have said why already.
+      // Chat panes that stayed (closed meanwhile) need no word.
       if (switched === 0 && paneIds.every((id) => tab.panes[id]?.chat)) return;
       const label =
         accounts.state?.accounts.find((a) => a.id === accountId)?.label ??

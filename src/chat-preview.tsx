@@ -48,6 +48,7 @@ import pastedPng from "../src-tauri/icons/128x128@2x.png?inline";
 import { attachDraft, attachEvents } from "@/chat-preview-attach";
 import { tallEvents, visualNext, visualStart } from "@/chat-preview-visuals";
 import { sleepScenarios } from "@/chat-preview-sleep";
+import { rememberPastes } from "@/lib/chat/chatPastes";
 import { createVisualProbe } from "@/lib/chat/chatVisualDom";
 
 /**
@@ -443,6 +444,23 @@ const SCENARIOS: Record<string, () => ChatState> = {
         },
       ],
     }),
+  // A long text sent from a tag: its text on hover scrolls (`ChatPasteChip`).
+  paste: () => {
+    const log = Array.from(
+      { length: 60 },
+      (_, i) =>
+        `12:${String(i).padStart(2, "0")}:07 [remote] phone connected, then left after ${i + 1} s`,
+    ).join("\n");
+    rememberPastes([log]);
+    return replay([
+      {
+        type: "user_sent",
+        chatId: "preview",
+        text: `Regarde ce journal :\n\n${log}\n\nPourquoi ça boucle ?`,
+        images: 0,
+      },
+    ]);
+  },
   // A message typed while Claude works: grey until Claude Code takes it.
   queued: () =>
     reduceChat(

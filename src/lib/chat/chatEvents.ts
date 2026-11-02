@@ -324,6 +324,50 @@ export async function closeChat(
   await new Promise((r) => setTimeout(r, CLOSE_GRACE_MS));
 }
 
+/** A forced close waits this long at most for its Claude Code to be gone. */
+const FORCED_CLOSE_WAIT_MS = 10_000;
+
+/**
+ * Closes a chat at work (a forced account switch): its queued messages are
+ * withdrawn first (their text comes back to the input, `queued_removed`),
+ * its turn, tasks, shells and `!` commands stopped, then it waits for its
+ * Claude Code to be gone (`closed`). Closing its input alone lets a turn
+ * run on for seconds, the SDK kills it only 7 s later: the new pane would
+ * resume the session under a Claude still at work on it.
+ */
+export async function stopAndCloseChat(
+  accountId: string | undefined,
+  chatId: string,
+  queued: readonly string[],
+): Promise<void> {
+  const a = chatActivity(chatId);
+  const send = (command: ChatCommand) =>
+    chatCommand(accountId, command).catch(() => {});
+  for (const uuid of queued)
+    await send({ type: "cancel_queued", chatId, uuid });
+  await Promise.all([
+    send({ type: "interrupt", chatId }),
+    ...[...a.tasks, ...a.shells].map((taskId) =>
+      send({ type: "stop_task", chatId, taskId }),
+    ),
+    ...a.bangs.map((id) => send({ type: "bash_stop", chatId, id })),
+  ]);
+  const gone = new Promise<void>((resolve) => {
+    const done = () => {
+      off();
+      window.clearTimeout(timer);
+      resolve();
+    };
+    const off = subscribeChat(chatId, (e) => {
+      if (e.type === "closed") done();
+    });
+    const timer = window.setTimeout(done, FORCED_CLOSE_WAIT_MS);
+  });
+  await send({ type: "close", chatId });
+  await gone;
+  await new Promise((r) => setTimeout(r, CLOSE_GRACE_MS));
+}
+
 /**
  * The accounts whose server runs (`liveServers`), as `chatCommand` takes
  * them: never one that stopped, a command would start it again for nothing.

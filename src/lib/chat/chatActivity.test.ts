@@ -6,6 +6,7 @@ import {
   chatForCommand,
   chatLabelOf,
   chatTitle,
+  chatTurnHolds,
   paneChatTitle,
   restoredChat,
   restoredLaunch,
@@ -209,6 +210,20 @@ describe("chatBusyReason", () => {
     expect(chatBusyReason({ ...IDLE_CHAT, pending: 1 }, false)).toMatch(
       /Réponds/,
     );
+  });
+});
+
+describe("chatTurnHolds", () => {
+  it("holds a limit's move for the turn or a question, never for tasks behind", () => {
+    expect(chatTurnHolds({ ...IDLE_CHAT, busy: true }, false)).toBe(true);
+    expect(chatTurnHolds({ ...IDLE_CHAT, pending: 1 }, false)).toBe(true);
+    expect(chatTurnHolds(IDLE_CHAT, true)).toBe(true);
+    expect(
+      chatTurnHolds(
+        { ...IDLE_CHAT, tasks: ["w1"], shells: ["b1"], bangs: ["x"] },
+        false,
+      ),
+    ).toBe(false);
   });
 });
 
