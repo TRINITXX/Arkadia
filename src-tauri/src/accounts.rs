@@ -12,8 +12,9 @@
 //! `.credentials.json`.
 //!
 //! Usage (5-hour / weekly %) lands in `%LOCALAPPDATA%\Arkadia\usage\<id>.json`:
-//! written live by the status-line script of a running session, otherwise
-//! polled from the subscription usage endpoint every 30 min. A signed-in
+//! written live by a running session (a terminal's status-line script, a
+//! chat through [`account_report_usage`]), otherwise polled from the
+//! subscription usage endpoint every 30 min. A signed-in
 //! account with no 5-hour window running gets a one-word headless message,
 //! so its next window starts at once instead of at its next real message.
 
@@ -109,7 +110,7 @@ struct Registry {
     accounts: Vec<Account>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
     pub pct: f64,
@@ -853,6 +854,33 @@ fn store_usage(id: &str, usage: &Usage) {
     }
 }
 
+/// Whether a live 5-hour figure may replace the stored one. Within a window
+/// usage only climbs: a lower figure for the same window, or an older
+/// window, comes from a session that hasn't seen the latest (the status-line
+/// script's rule, after 52 % shown instead of 100 % on 26/10/2026). Windows
+/// start on 20-minute steps: resets less than 10 min apart are one window.
+fn takes_live(old: Option<&UsageWindow>, new: &UsageWindow) -> bool {
+    let Some(old) = old else {
+        return true;
+    };
+    let (Some(was), Some(is)) = (old.resets_at, new.resets_at) else {
+        return true;
+    };
+    let gap = is - was;
+    !(gap < -600.0 || (gap.abs() <= 600.0 && new.pct < old.pct))
+}
+
+/// One window of a live report against the stored one, each window on its
+/// own: the live one when it may replace it ([`takes_live`]), else the
+/// stored one. A window the chat doesn't know yet keeps the stored one (a
+/// chat with no weekly figure erased the poll's).
+fn merge_live(old: Option<UsageWindow>, new: Option<UsageWindow>) -> Option<UsageWindow> {
+    match new {
+        Some(new) if takes_live(old.as_ref(), &new) => Some(new),
+        _ => old,
+    }
+}
+
 /// Whether the account has no 5-hour window running. No data counts as no
 /// window: a hello sent where one already runs costs next to nothing. The
 /// weekly limit is not checked (the endpoint leaves `seven_day` empty): a
@@ -1045,6 +1073,42 @@ pub fn accounts_state() -> AccountsState {
         max: MAX_ACCOUNTS,
         accounts,
     }
+}
+
+/// A chat's live usage of its account (its rate limits), stored as the
+/// status line of a terminal session stores it: since the chats replaced the
+/// terminals (01/11/2026), the Comptes menu only had the 30-min poll, 64 %
+/// shown for an account at 100 % (02/11/2026).
+/// Off the main thread (it reads and writes files), so concurrent with
+/// itself: one lock over the check, the read and the write, or two chats of
+/// one account reporting at once could write the lower figure last.
+#[tauri::command(async)]
+pub fn account_report_usage(
+    id: String,
+    five_hour: Option<UsageWindow>,
+    seven_day: Option<UsageWindow>,
+) -> Result<(), String> {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if !valid_id(&id) || !load_registry().accounts.iter().any(|a| a.id == id) {
+        return Err(format!("compte inconnu : {id}"));
+    }
+    let old = stored_usage(&id).unwrap_or_default();
+    let five_hour = merge_live(old.five_hour.clone(), five_hour);
+    let seven_day = merge_live(old.seven_day.clone(), seven_day);
+    // Nothing new: the stored figure keeps its age, and the poll its turn.
+    if five_hour == old.five_hour && seven_day == old.seven_day {
+        return Ok(());
+    }
+    store_usage(
+        &id,
+        &Usage {
+            five_hour,
+            seven_day,
+            updated_at: now_ms(),
+            source: "live".into(),
+        },
+    );
+    Ok(())
 }
 
 /// Registers a new account and prepares its config dir. It does NOT become
@@ -1249,6 +1313,43 @@ mod tests {
         let mut own = json!({"autoMemoryDirectory": "D:/notes"});
         assert!(!with_memory_dir(&mut own, b));
         assert_eq!(own["autoMemoryDirectory"], "D:/notes");
+    }
+
+    #[test]
+    fn a_live_figure_never_goes_back_within_its_window() {
+        let w = |pct, resets_at| UsageWindow {
+            pct,
+            resets_at: Some(resets_at),
+        };
+        let now = 1_000_000.0;
+        // The poll's 64 %, then the chat's 100 % of the same window.
+        assert!(takes_live(Some(&w(64.0, now)), &w(100.0, now + 1.0)));
+        // A chat that hadn't seen the latest: lower, same window.
+        assert!(!takes_live(Some(&w(100.0, now)), &w(64.0, now)));
+        // An older window, a newer one.
+        assert!(!takes_live(Some(&w(10.0, now)), &w(90.0, now - 18_000.0)));
+        assert!(takes_live(Some(&w(100.0, now)), &w(2.0, now + 18_000.0)));
+        // Nothing stored, or no reset to compare.
+        assert!(takes_live(None, &w(5.0, now)));
+        let unknown = UsageWindow {
+            pct: 50.0,
+            resets_at: None,
+        };
+        assert!(takes_live(Some(&unknown), &w(5.0, now)));
+    }
+
+    #[test]
+    fn a_window_the_chat_doesnt_know_keeps_the_stored_one() {
+        let week = UsageWindow {
+            pct: 40.0,
+            resets_at: Some(2_000_000.0),
+        };
+        assert_eq!(merge_live(Some(week.clone()), None), Some(week.clone()));
+        let lower = UsageWindow {
+            pct: 10.0,
+            ..week.clone()
+        };
+        assert_eq!(merge_live(Some(week.clone()), Some(lower)), Some(week));
     }
 
     #[test]

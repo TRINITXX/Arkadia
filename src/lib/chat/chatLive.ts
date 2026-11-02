@@ -19,6 +19,7 @@ import {
   type ChatState,
 } from "@/lib/chat/chatState";
 import type { ChatStart } from "@/lib/chat/useChatSession";
+import { reportChatUsage } from "@/lib/chat/chatUsageReport";
 
 /**
  * Each chat's conversation, kept page-side across its pane's unmounts (a pane
@@ -147,6 +148,8 @@ function flush(chat: LiveChat): void {
   if (state === chat.state) return;
   const before = chat.state;
   chat.state = state;
+  if (state.limits !== before.limits)
+    reportChatUsage(chat.accountId, before.limits, state.limits);
   notify(chat, before, reset);
 }
 

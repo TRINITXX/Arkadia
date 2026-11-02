@@ -287,6 +287,7 @@ pub fn run() {
             accounts::account_remove,
             accounts::account_update,
             accounts::account_set_current,
+            accounts::account_report_usage,
             artifact_view::artifact_view_show,
             artifact_view::artifact_view_place,
             artifact_view::artifact_view_reload,
