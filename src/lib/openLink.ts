@@ -1,18 +1,5 @@
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-
-/** `https://claude.ai/artifact/<id>` or `https://claude.ai/code/artifact/<id>`. */
-export function isArtifactUrl(url: string): boolean {
-  try {
-    const u = new URL(url);
-    return (
-      u.protocol === "https:" &&
-      u.hostname === "claude.ai" &&
-      u.pathname.includes("/artifact/")
-    );
-  } catch {
-    return false;
-  }
-}
+import { isArtifactUrl } from "@/lib/artifactUrl";
 
 /** The artifact's page, without query or fragment: Claude Code opens
  *  `…/artifact/<id>?via=auto_preview`, the terminal prints the bare link, and

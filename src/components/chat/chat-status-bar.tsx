@@ -4,12 +4,9 @@ import { ChatContextGauge } from "@/components/chat/chat-context-gauge";
 import { ChatMcpChip } from "@/components/chat/chat-mcp-chip";
 import { ChatRing } from "@/components/chat/chat-ring";
 import type { ContextDetail } from "@/lib/chat/chatProtocol";
-import { resetLabel } from "@/lib/chat/chatLabels";
-import { liveWindow, type ChatState } from "@/lib/chat/chatState";
+import type { ChatState } from "@/lib/chat/chatState";
+import { statusFigures } from "@/lib/chat/chatStatus";
 import { useChatShown } from "@/lib/chat/useChatShown";
-
-/** Past this share of a window, its figure turns amber. */
-const HOT = 0.8;
 
 /** The countdown moves by the minute: a look every 30 s keeps it current. */
 const TICK_MS = 30_000;
@@ -47,45 +44,36 @@ export function ChatStatusBar({
     return () => window.clearInterval(id);
   }, [fiveReset, sevenReset, shown]);
 
-  const fiveHour = liveWindow(state.limits.fiveHour, now);
-  const sevenDay = liveWindow(state.limits.sevenDay, now);
-  const reset =
-    fiveHour?.resetsAt !== undefined
-      ? resetLabel(fiveHour.resetsAt, now)
-      : null;
+  // The same figures as the iPhone's row (`statusFigures`).
+  const { context, fiveHour, sevenDay, reset, resetFull } = statusFigures(
+    state,
+    now,
+  );
   return (
     <div className="chat-status">
-      {state.context && (
+      {context && (
         <ChatContextGauge
-          percentage={state.context.percentage}
-          hot={state.context.percentage >= HOT * 100}
+          percentage={context.percent}
+          hot={context.hot}
           onDetail={onContextDetail}
         />
       )}
       {fiveHour && (
-        <span
-          title={`Session de 5 h utilisée : ${pct(fiveHour.utilization * 100)}`}
-        >
-          <ChatRing
-            percent={fiveHour.utilization * 100}
-            hot={fiveHour.utilization >= HOT}
-          />
+        <span title={`Session de 5 h utilisée : ${pct(fiveHour.percent)}`}>
+          <ChatRing percent={fiveHour.percent} hot={fiveHour.hot} />
           Session
         </span>
       )}
       {sevenDay && (
-        <span title={`Semaine utilisée : ${pct(sevenDay.utilization * 100)}`}>
-          <ChatRing
-            percent={sevenDay.utilization * 100}
-            hot={sevenDay.utilization >= HOT}
-          />
+        <span title={`Semaine utilisée : ${pct(sevenDay.percent)}`}>
+          <ChatRing percent={sevenDay.percent} hot={sevenDay.hot} />
           Semaine
         </span>
       )}
       {reset && (
-        <span title={`Reset de la session dans ${reset}`}>
+        <span title={`Reset de la session dans ${resetFull}`}>
           <Timer size={13} />
-          <b>{reset.includes(" h ") ? reset.replace(/ min$/, "") : reset}</b>
+          <b>{reset}</b>
         </span>
       )}
       {state.gitBranch && (

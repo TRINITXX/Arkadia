@@ -5,6 +5,7 @@ import { retryLabel, type RetryInfo } from "@/lib/chat/chatErrors";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import type { Subagent, TaskItem } from "@/lib/chat/chatState";
 import { liveElapsed } from "@/lib/chat/chatSteps";
+import { taskLine } from "@/lib/chat/chatTaskLine";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 import { useChatShown } from "@/lib/chat/useChatShown";
 
@@ -75,10 +76,8 @@ export function ChatLiveLine({
     return () => window.clearInterval(id);
   }, [working, shown]);
 
-  const done = tasks.filter((t) => t.status === "completed").length;
-  const openTasks = tasks.length > 0 && done < tasks.length;
-  const current = tasks.find((t) => t.status === "in_progress");
-  const next = tasks.find((t) => t.status === "pending");
+  // The same line as the iPhone's (`taskLine`).
+  const { done, current, next, open: openTasks } = taskLine(tasks);
   const quiet = !working && !hook && subagents.length === 0 && !openTasks;
   // Esc closes the tasks shown, never Claude's turn (`chatLayers`).
   useChatLayer(tasksOpen && tasks.length > 0 && !quiet, () =>
@@ -113,11 +112,9 @@ export function ChatLiveLine({
   const taskList = (
     <span className="chat-anchor" {...hoverTasks}>
       <span className="chat-task-dots">
-        {tasks
-          .filter((t) => t.status === "completed")
-          .map((t) => (
-            <i key={t.id} />
-          ))}
+        {done.map((t) => (
+          <i key={t.id} />
+        ))}
         {current && <i className="cur" />}
       </span>
       {tasksOpen && (

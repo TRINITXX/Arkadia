@@ -11,6 +11,7 @@ import {
 import { elapsedLabel, modelLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 import {
+  workflowActivePhase,
   workflowCounts,
   type Workflow,
   type WorkflowAgent,
@@ -49,12 +50,7 @@ export function ChatWorkflowCard({
   );
   const elapsed = (workflow.endedAt ?? now) - workflow.startedAt;
   // The phase at work: its latest running agent's, else the last one.
-  const active =
-    [...workflow.agents].reverse().find((a) => a.state === "running")
-      ?.phaseIndex ??
-    workflow.phases[workflow.phases.length - 1]?.index ??
-    0;
-  const phase = picked ?? active;
+  const phase = picked ?? workflowActivePhase(workflow);
   const agents = workflow.agents.filter((a) => a.phaseIndex === phase);
 
   return (

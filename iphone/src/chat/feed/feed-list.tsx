@@ -7,10 +7,12 @@ import {
   type ReactElement,
 } from "react";
 import { FlatList, StyleSheet, type ListRenderItemInfo } from "react-native";
+import { isArtifactUrl } from "@/lib/artifactUrl";
 import { runningBash } from "@/lib/chat/chatBash";
 import { peerLabel } from "@/lib/chat/chatPeer";
 import type { ChatItem, ChatState } from "@/lib/chat/chatState";
 import type { FeedRow } from "@/lib/chat/phoneFeed";
+import { ArtifactCard } from "~/chat/feed/artifact-card";
 import type {
   AgentSheetRender,
   FeedEnv,
@@ -22,12 +24,20 @@ import { FeedSheet } from "~/chat/feed/feed-sheet";
 import { FeedSheetContent, sheetHead } from "~/chat/feed/feed-sheet-content";
 import { ImageViewerHost } from "~/chat/feed/image-viewer";
 import type { ChatActions } from "~/chat/use-chat";
+import { LinkCardsContext, type LinkCards } from "~/messages/link-cards";
 import { tap } from "~/ui/haptics";
 
 type UserItem = Extract<ChatItem, { kind: "user" }>;
 
 const rowKey = (row: FeedRow) => row.key;
 const NO_IDS: readonly string[] = [];
+
+/**
+ * The chat's artifact links as cards, by the desktop's rule
+ * (`chat-prose-contexts.tsx`); the Messages tab, as the desktop's reading
+ * view, keeps links.
+ */
+const LINK_CARDS: LinkCards = { match: isArtifactUrl, Card: ArtifactCard };
 
 /**
  * The newest row stays in place when rows come under it while the reader
@@ -164,47 +174,50 @@ export function FeedList({
       );
   }, [found, shown]);
   const row = found ?? sheet?.row;
-  const head = sheet && row ? sheetHead(sheet.kind, row) : null;
+  const head = sheet && row ? sheetHead(sheet.kind, row, sheet.paste) : null;
   return (
-    <ImageViewerHost items={state.items}>
-      <FlatList
-        inverted
-        data={rows}
-        keyExtractor={rowKey}
-        renderItem={renderItem}
-        ItemSeparatorComponent={FeedGap}
-        // Inverted: the header draws under the newest row, the footer above
-        // the oldest.
-        ListHeaderComponent={bottom ?? undefined}
-        ListFooterComponent={top ?? undefined}
-        contentContainerStyle={styles.list}
-        maintainVisibleContentPosition={FOLLOW}
-        keyboardDismissMode="on-drag"
-        keyboardShouldPersistTaps="handled"
-        indicatorStyle="white"
-        initialNumToRender={12}
-        maxToRenderPerBatch={8}
-        windowSize={13}
-      />
-      {sheet && row && head && (
-        <FeedSheet
-          visible={shown}
-          title={head.title}
-          icon={head.icon}
-          onClose={close}
-        >
-          <ImageViewerHost items={state.items}>
-            <FeedSheetContent
-              kind={sheet.kind}
-              row={row}
-              cwd={cwd}
-              subagents={state.subagents}
-              agentSheet={agentSheet}
-            />
-          </ImageViewerHost>
-        </FeedSheet>
-      )}
-    </ImageViewerHost>
+    <LinkCardsContext.Provider value={LINK_CARDS}>
+      <ImageViewerHost items={state.items}>
+        <FlatList
+          inverted
+          data={rows}
+          keyExtractor={rowKey}
+          renderItem={renderItem}
+          ItemSeparatorComponent={FeedGap}
+          // Inverted: the header draws under the newest row, the footer above
+          // the oldest.
+          ListHeaderComponent={bottom ?? undefined}
+          ListFooterComponent={top ?? undefined}
+          contentContainerStyle={styles.list}
+          maintainVisibleContentPosition={FOLLOW}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+          indicatorStyle="white"
+          initialNumToRender={12}
+          maxToRenderPerBatch={8}
+          windowSize={13}
+        />
+        {sheet && row && head && (
+          <FeedSheet
+            visible={shown}
+            title={head.title}
+            icon={head.icon}
+            onClose={close}
+          >
+            <ImageViewerHost items={state.items}>
+              <FeedSheetContent
+                kind={sheet.kind}
+                row={row}
+                paste={sheet.paste}
+                cwd={cwd}
+                subagents={state.subagents}
+                agentSheet={agentSheet}
+              />
+            </ImageViewerHost>
+          </FeedSheet>
+        )}
+      </ImageViewerHost>
+    </LinkCardsContext.Provider>
   );
 }
 

@@ -4,11 +4,14 @@ import {
   dropTag,
   editPaste,
   expandPastes,
+  framePastes,
   pasteInto,
+  pasteOfHref,
   pastesIn,
   rememberPastes,
   tagAt,
   unfoldPaste,
+  withPasteTags,
 } from "@/lib/chat/chatPastes";
 
 const LONG =
@@ -67,5 +70,21 @@ describe("a long text pasted in the chat's input", () => {
     rememberPastes([LONG]);
     expect(pastesIn(`Corrige ${LONG} vite`)).toEqual([LONG]);
     expect(pastesIn("autre chose")).toEqual([]);
+  });
+
+  it("tags the pastes a message carries, where this page never sent them", () => {
+    // The phone remembers nothing: the message's own pastes are enough.
+    const carried = "un deux trois quatre cinq six sept huit neuf dix onze";
+    const text = `Vois ${carried} puis ${LONG}`;
+    rememberPastes([LONG]);
+    const pastes = framePastes(text, [carried, "absent du message"]);
+    expect(pastes).toEqual([LONG, carried]);
+    const shown = withPasteTags(text, pastes);
+    expect(shown).toBe(
+      "Vois [Texte collé · 11 mots](#arkadia-paste-1) puis " +
+        "[Texte collé · 12 mots](#arkadia-paste-0)",
+    );
+    expect(pasteOfHref("#arkadia-paste-1", pastes)).toBe(carried);
+    expect(pasteOfHref("https://claude.ai/artifact/x", pastes)).toBeNull();
   });
 });

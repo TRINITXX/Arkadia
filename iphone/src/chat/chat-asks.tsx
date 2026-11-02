@@ -23,6 +23,12 @@ export interface ChatAsksProps {
   chatId: string;
   state: ChatState;
   actions: ChatActions;
+  /**
+   * Which of them this place shows: the ❓ round above the docked pills and
+   * workflow card, a request under them, in the input's place, as the
+   * desktop's column stacks them (`chat-view.tsx`).
+   */
+  part: "round" | "request";
 }
 
 /**
@@ -34,9 +40,11 @@ export interface ChatAsksProps {
  *
  * The screen hides its composer while a request or an elicitation shows,
  * and under the round's unfolded sheet (`useRoundShown`), as the desktop's
- * input card does.
+ * input card does. Short of room (pills and workflow card under it, the
+ * keyboard up), the sheet or the card alone shrinks and scrolls inside, as
+ * the desktop's sheet does (`sheet-open`).
  */
-export function ChatAsks({ chatId, state, actions }: ChatAsksProps) {
+export function ChatAsks({ chatId, state, actions, part }: ChatAsksProps) {
   const { closed, requests, sdk, working, items, restRound } = state;
   const ask = useMemo(
     () => phoneAsk({ closed, requests, sdk, working, items, restRound }),
@@ -54,7 +62,8 @@ export function ChatAsks({ chatId, state, actions }: ChatAsksProps) {
     return typeof own === "string" && own.trim() ? own : latestPlan(items);
   }, [ask, items]);
 
-  if (!ask || (ask.kind === "round" && round.closed)) return null;
+  if (!ask || (ask.kind === "round") !== (part === "round")) return null;
+  if (ask.kind === "round" && round.closed) return null;
 
   if (ask.kind === "round")
     return (
@@ -118,6 +127,7 @@ export function ChatAsks({ chatId, state, actions }: ChatAsksProps) {
 const styles = StyleSheet.create({
   /** `.chat-box.ask`: the input card, brown-edged while it waits. */
   card: {
+    flexShrink: 1,
     marginHorizontal: 8,
     marginBottom: 8,
     paddingHorizontal: 12,
@@ -130,6 +140,7 @@ const styles = StyleSheet.create({
   },
   /** `.chat-sheet-q`. */
   sheet: {
+    flexShrink: 1,
     marginHorizontal: 8,
     marginBottom: 8,
     borderRadius: 16,

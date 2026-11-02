@@ -16,6 +16,7 @@ import {
 } from "@/lib/chat/chatLive";
 import type { PermissionMode, PermissionResult } from "@/lib/chat/chatProtocol";
 import { isCommandSent } from "@/lib/chat/chatCommands";
+import { pastesIn } from "@/lib/chat/chatPastes";
 import { reduceChat, type ChatState } from "@/lib/chat/chatState";
 import { sendNowPlan, stopTurnPlan } from "@/lib/chat/chatTasks";
 
@@ -113,7 +114,16 @@ export function useChatSession(
   });
   const send = useCallback(
     (text: string, images: ChatImage[] = [], now = false) => {
-      const command = { type: "send" as const, chatId, text, images };
+      // The texts the frame shows as tags travel with the message: the
+      // phone shows them so too (02/11/2026).
+      const pastes = pastesIn(text);
+      const command = {
+        type: "send" as const,
+        chatId,
+        text,
+        images,
+        ...(pastes.length > 0 ? { pastes } : {}),
+      };
       if (!now) return run(command);
       // Foreground agents running: queued, then they go to the background
       // and Claude takes it there (`sendNowPlan`).

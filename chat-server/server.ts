@@ -105,6 +105,8 @@ export type Command =
       chatId: string;
       text: string;
       images?: ImageInput[];
+      /** The texts in `text` pasted as tags: told back in `user_sent`. */
+      pastes?: string[];
       /** « Envoyer maintenant »: Claude Code stops the turn under way for it. */
       priority?: "now";
       /**
@@ -181,8 +183,8 @@ export type Command =
   | { type: "bash_stop"; chatId: string; id: string }
   /** The page's answer to an MCP server's request. */
   | { type: "elicit_answer"; chatId: string; requestId: string; result: ElicitationResult }
-  /** The context by category (token counts: asked on hover only). */
-  | { type: "context_detail"; chatId: string; requestId: string }
+  /** The context by category (token counts: asked on hover only). `to`: a phone's ask. */
+  | { type: "context_detail"; chatId: string; requestId: string; to?: string }
   /** The MCP servers' state again (their list opened). */
   | { type: "mcp_status"; chatId: string }
   /** /mcp's buttons: a sign-in, a reconnection, a server on or off. */
@@ -284,6 +286,8 @@ export type ServerEvent =
       images: number;
       /** The pasted images themselves, for the message's strip in the page. */
       pasted: ImageInput[];
+      /** The texts it sent from tags: tags again in its frame, the phone's too. */
+      pastes?: string[];
       /** Its `command_lifecycle` frames name it: « started » once Claude takes it. */
       uuid: string;
     }
@@ -1388,11 +1392,14 @@ class Chat {
     await this.reportMcp(await this.ready, MCP_POLLS);
   }
 
-  /** The context by category for the ring's hover: token counts, a second or two. */
-  async contextDetail(requestId: string): Promise<void> {
+  /**
+   * The context by category for the ring's hover: token counts, a second or
+   * two. A phone's ask (`to`) is answered to that phone alone.
+   */
+  async contextDetail(requestId: string, to?: string): Promise<void> {
     // Asleep: the ring keeps its figure; counting would wake Claude Code.
     if (this.asleep) {
-      emit({ type: "context_detail", chatId: this.chatId, requestId, error: "Claude en veille : détail indisponible" });
+      emit({ type: "context_detail", chatId: this.chatId, requestId, error: "Claude en veille : détail indisponible" }, to);
       return;
     }
     try {
@@ -1406,19 +1413,22 @@ class Chat {
         maxTokens: u.rawMaxTokens,
         model: u.model,
       });
-      emit({
-        type: "context_detail",
-        chatId: this.chatId,
-        requestId,
-        detail: {
-          categories: u.categories.map(({ id, name, tokens, kind }) => ({ id, name, tokens, kind })),
-          totalTokens: u.totalTokens,
-          rawMaxTokens: u.rawMaxTokens,
-          memoryFiles: u.memoryFiles.map(({ path, tokens }) => ({ path, tokens })),
+      emit(
+        {
+          type: "context_detail",
+          chatId: this.chatId,
+          requestId,
+          detail: {
+            categories: u.categories.map(({ id, name, tokens, kind }) => ({ id, name, tokens, kind })),
+            totalTokens: u.totalTokens,
+            rawMaxTokens: u.rawMaxTokens,
+            memoryFiles: u.memoryFiles.map(({ path, tokens }) => ({ path, tokens })),
+          },
         },
-      });
+        to,
+      );
     } catch (e) {
-      emit({ type: "context_detail", chatId: this.chatId, requestId, error: String(e) });
+      emit({ type: "context_detail", chatId: this.chatId, requestId, error: String(e) }, to);
     }
   }
 
@@ -1665,6 +1675,7 @@ class Chat {
     images: ImageInput[] = [],
     priority?: "now",
     spare: string[] = [],
+    pastes: string[] = [],
   ): Promise<void> {
     // Asleep: Claude Code starts again, the message waits in its input.
     this.wake();
@@ -1677,6 +1688,8 @@ class Chat {
       text,
       images: images.length,
       pasted: images,
+      // Display only: Claude gets `text`, the pastes in it.
+      ...(pastes.length > 0 ? { pastes } : {}),
       uuid,
     });
     const message: SDKUserMessage = {
@@ -2317,7 +2330,7 @@ async function handle(cmd: Command): Promise<void> {
   if (ACTIVE_COMMANDS.has(cmd.type)) chat.touch();
   switch (cmd.type) {
     case "send":
-      return chat.send(cmd.text, cmd.images, cmd.priority, cmd.spare);
+      return chat.send(cmd.text, cmd.images, cmd.priority, cmd.spare, cmd.pastes);
     case "interrupt":
       await chat.interrupt(cmd.spare);
       return;
@@ -2358,7 +2371,7 @@ async function handle(cmd: Command): Promise<void> {
     case "elicit_answer":
       return chat.answerElicitation(cmd.requestId, cmd.result);
     case "context_detail":
-      return chat.contextDetail(cmd.requestId);
+      return chat.contextDetail(cmd.requestId, cmd.to);
     case "mcp_status":
       return chat.refreshMcp();
     case "mcp_action":

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionSheetIOS,
-  Alert,
   Keyboard,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,7 +13,13 @@ import * as Clipboard from "expo-clipboard";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { bashCommand } from "@/lib/chat/chatBash";
-import { MODE_CYCLE, modeLabel, modelLabel } from "@/lib/chat/chatLabels";
+import {
+  fastModeLabel,
+  fastModeLine,
+  MODE_CYCLE,
+  modeLabel,
+  modelLabel,
+} from "@/lib/chat/chatLabels";
 import type { PermissionMode } from "@/lib/chat/chatProtocol";
 import type { PagePanel, SlashEntry } from "@/lib/chat/chatSlash";
 import {
@@ -26,13 +32,18 @@ import type { ChatState } from "@/lib/chat/chatState";
 import { withChoice } from "@/lib/chat/chatVisual";
 import { lastCodeBlock } from "@/lib/chat/phoneCode";
 import { phoneSlashMenu, slashIntent, slashPick } from "@/lib/chat/phoneSlash";
+import { useChatSuggestion } from "@/lib/chat/useChatSuggestion";
 import { useWakeOnInput } from "@/lib/chat/useWakeOnInput";
 import type { RemoteButton } from "@/lib/remoteSnapshot";
 import { C, T } from "~/chat/chat-theme";
 import { foldNextRound } from "~/chat/asks/round-store";
+import type { ComposerCover } from "~/chat/asks/use-asks-cover";
+import { ShellsChip } from "~/chat/background/shells-chip";
 import { onComposerInsert } from "~/chat/composer-inbox";
 import { SlashMenu } from "~/chat/slash/slash-menu";
 import { SlashPanels, type OpenPanel } from "~/chat/slash/slash-panels";
+import { McpChip } from "~/chat/status/mcp-chip";
+import { StatusChips } from "~/chat/status/status-chips";
 import type { ChatActions } from "~/chat/use-chat";
 import { DictationBubble } from "~/dictation/dictation-bubble";
 import { useDictation } from "~/dictation/use-dictation";
@@ -42,11 +53,15 @@ import { showFailure, showNotice } from "~/ui/notice";
 
 /**
  * The chat's input, as the desktop's (`chat-composer.tsx`): the field, then
- * one row with the model, the effort, the context, and the buttons (+,
- * dictation, send, stop). « !commande » runs in the tab's folder, « / » lists
- * the desktop's commands; /resume, /rewind and /mcp open their sheet instead
- * of being sent. A message sent while Claude works waits its turn; a long
- * press on send sends it now.
+ * one row with the shells at work and the MCP servers in failure, the
+ * model, the effort, fast mode, the mode, the status rings (context,
+ * session, week), and the buttons (+, dictation, send, stop). Under a
+ * request, that row alone stays, without the buttons (`cover`).
+ * « !commande » runs in the tab's folder, « / » lists the desktop's
+ * commands; /resume, /rewind and /mcp open their sheet instead of being
+ * sent. A message sent while Claude works waits its turn; a long press on
+ * send sends it now. Claude Code's suggested next message shows in the
+ * empty field: « ↵ Prendre » puts it there in one tap (no Tab on iOS).
  */
 export function ChatComposer({
   chatId,
@@ -54,16 +69,23 @@ export function ChatComposer({
   actions,
   promptButtons,
   bottomInset,
-  covered,
+  cover,
 }: {
   chatId: string;
   state: ChatState;
   actions: ChatActions;
   promptButtons: RemoteButton[] | null;
   bottomInset: number;
-  /** An ask takes its place (hidden, its draft kept): its microphone stops. */
-  covered: boolean;
+  /**
+   * An ask takes its place, its draft kept, its microphone stopped: a
+   * request leaves only the status row (`ComposerCover`), the round's
+   * sheet hides it all (the screen does).
+   */
+  cover: ComposerCover;
 }) {
+  const covered = cover !== null;
+  // Under a request: the chips' row alone, as the desktop's status row.
+  const rowOnly = cover === "request";
   const [text, setText] = useState("");
   const dictation = useDictation();
   const { phase, finish, error, clearError } = dictation;
@@ -99,6 +121,20 @@ export function ChatComposer({
   // A chat asleep wakes at the first change to the field, as on the desktop:
   // a key, a paste, a dictation or a choice that lands.
   useWakeOnInput(state.asleep, text, actions.wake);
+  // The next message Claude Code suggests, grey in the empty field: taken
+  // into it, never sent by itself; anything typed dismisses it (desktop's).
+  // Asleep or ended, nothing: no Claude to take it.
+  const ghost = useChatSuggestion(
+    state.suggestion,
+    text,
+    state.working,
+    state.asleep || state.closed !== null,
+  );
+  const takeGhost = () => {
+    if (!ghost) return;
+    tick();
+    setText(ghost);
+  };
 
   // A page command's sheet (/resume, /rewind, /mcp), and a notice in the
   // menu's place kept while its text stays (a terminal-only command).
@@ -111,6 +147,11 @@ export function ChatComposer({
     Keyboard.dismiss();
     setSlashSheet({ panel, query, open: true });
   }, []);
+  // « N MCP en échec » of the status row: /mcp's sheet, the draft left as it is.
+  const openMcp = () => {
+    Keyboard.dismiss();
+    setSlashSheet({ panel: "mcp", query: "", open: true });
+  };
   const pickSlash = (entry: SlashEntry) => {
     const pick = slashPick(entry);
     if (pick.kind === "panel") return openPanel(pick.panel, "");
@@ -186,6 +227,8 @@ export function ChatComposer({
         tick();
         void actions.setModel(rows[i].value);
       },
+      // The desktop's session menu ends on fast mode's line.
+      fastModeLine(state.sdk.fastMode),
     );
   };
   const pickEffort = () =>
@@ -205,14 +248,6 @@ export function ChatComposer({
   const chip = (open: () => void) => () => {
     tick();
     open();
-  };
-  const showFigures = () => {
-    const lines = [
-      state.context && `Contexte : ${Math.round(state.context.percentage)} %`,
-      windowLine("Session (5 h)", state.limits.fiveHour),
-      windowLine("Semaine", state.limits.sevenDay),
-    ].filter(Boolean);
-    Alert.alert("Utilisation", lines.join("\n") || "Pas encore connue.");
   };
   const copyCode = async () => {
     const code = lastCodeBlock(state.items);
@@ -294,11 +329,13 @@ export function ChatComposer({
         ? "Claude travaille… ton message attendra son tour"
         : "Écrire à Claude…";
   const hasText = text.trim().length > 0;
-  const percent = state.context ? Math.round(state.context.percentage) : null;
+  const fast = fastModeLabel(state.sdk.fastMode);
 
   return (
     <View style={[styles.wrap, { paddingBottom: Math.max(8, bottomInset) }]}>
-      {phase !== "idle" && (
+      {/* Under a request, what goes with the field goes with it; the chips
+          and the sheets they open keep their place in the tree. */}
+      {!rowOnly && phase !== "idle" && (
         <DictationBubble
           transcript={dictation.transcript}
           level={dictation.level}
@@ -307,11 +344,13 @@ export function ChatComposer({
           onWrite={() => void writeDictation()}
         />
       )}
-      <SlashMenu
-        rows={slash}
-        hint={hint?.for === text ? hint.text : null}
-        onPick={pickSlash}
-      />
+      {!rowOnly && (
+        <SlashMenu
+          rows={slash}
+          hint={hint?.for === text ? hint.text : null}
+          onPick={pickSlash}
+        />
+      )}
       <SlashPanels
         sheet={slashSheet}
         state={state}
@@ -321,82 +360,134 @@ export function ChatComposer({
         onText={setText}
         onRewinding={() => foldNextRound(chatId, state)}
       />
-      <View style={styles.card}>
-        <TextInput
-          value={text}
-          onChangeText={setText}
-          placeholder={placeholder}
-          placeholderTextColor={C.mute}
-          style={styles.field}
-          multiline
-          editable={!state.closed}
-          keyboardAppearance="dark"
-          autoCapitalize="sentences"
-          autoCorrect
-          selectionColor={C.accent}
-        />
-        <View style={styles.bar}>
-          <Pressable style={styles.chip} onPress={chip(pickModel)} hitSlop={6}>
-            <Text style={styles.chipText}>
-              {modelLabel(model?.model ?? state.model)}
-            </Text>
-            <SymbolView name="chevron.up" size={10} tintColor={C.mute} />
-          </Pressable>
-          {efforts.length > 0 && state.sdk.effort && (
+      <View style={rowOnly ? styles.rowAlone : styles.card}>
+        {!rowOnly && (
+          <View style={styles.fieldRow}>
+            <TextInput
+              value={text}
+              onChangeText={setText}
+              placeholder={ghost ?? placeholder}
+              placeholderTextColor={ghost ? GHOST : C.mute}
+              style={[styles.field, ghost !== null && styles.ghost]}
+              multiline
+              editable={!state.closed}
+              keyboardAppearance="dark"
+              autoCapitalize="sentences"
+              autoCorrect
+              selectionColor={C.accent}
+            />
+            {ghost !== null && (
+              <Pressable
+                style={styles.take}
+                onPress={takeGhost}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Prendre la suggestion"
+              >
+                <Text style={styles.takeText}>↵ Prendre</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
+        <View style={[styles.bar, rowOnly && styles.barAlone]}>
+          {/* The session's chips scroll in their strip when they don't fit:
+              the buttons keep their place. What must be seen leads, in sight
+              without a swipe on any iPhone: the shells at work, the MCP
+              servers in failure. */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            style={styles.chips}
+            contentContainerStyle={styles.chipsRow}
+          >
+            <ShellsChip chatId={chatId} state={state} actions={actions} />
+            <McpChip servers={state.sdk.mcpServers} onOpen={openMcp} />
             <Pressable
               style={styles.chip}
-              onPress={chip(pickEffort)}
+              onPress={chip(pickModel)}
               hitSlop={6}
             >
               <Text style={styles.chipText}>
-                {effortLabel(state.sdk.effort)}
+                {modelLabel(model?.model ?? state.model)}
               </Text>
+              <SymbolView name="chevron.up" size={10} tintColor={C.mute} />
             </Pressable>
-          )}
-          {state.mode && state.mode !== "default" && (
-            <Pressable style={styles.chip} onPress={chip(pickMode)} hitSlop={6}>
-              <Text style={[styles.chipText, styles.mode]}>
-                {modeLabel(state.mode)}
-              </Text>
-            </Pressable>
-          )}
-          {percent !== null && (
-            <Pressable
-              style={styles.ring}
-              onPress={chip(showFigures)}
-              hitSlop={6}
-            >
-              <Text style={styles.ringText}>{percent}</Text>
-            </Pressable>
-          )}
-          <View style={styles.spacer} />
-          <IconButton name="plus" onPress={openPlus} />
-          <IconButton
-            name={phase === "listening" ? "waveform" : "mic"}
-            onPress={onMic}
-            on={phase === "listening"}
-          />
-          {state.working && (
-            <IconButton
-              name="stop.fill"
-              onPress={tapThen(() => void actions.interrupt())}
-            />
-          )}
-          {(hasText || !state.working) && (
-            <Pressable
-              style={[styles.send, !hasText && styles.sendOff]}
-              onPress={() => submit(false)}
-              onLongPress={() => submit(true)}
-              disabled={!hasText}
-              hitSlop={6}
-            >
-              <SymbolView
-                name="arrow.up"
-                size={16}
-                tintColor={C.accentInk}
-                weight="bold"
+            {efforts.length > 0 && state.sdk.effort && (
+              <Pressable
+                style={styles.chip}
+                onPress={chip(pickEffort)}
+                hitSlop={6}
+              >
+                <Text style={styles.chipText}>
+                  {effortLabel(state.sdk.effort)}
+                </Text>
+              </Pressable>
+            )}
+            {/* Fast mode kept in sight, as on the desktop's session button. */}
+            {fast && (
+              <Pressable
+                style={styles.chip}
+                onPress={chip(pickModel)}
+                hitSlop={6}
+              >
+                <Text
+                  style={[
+                    styles.chipText,
+                    state.sdk.fastMode === "on"
+                      ? styles.fastOn
+                      : styles.fastOff,
+                  ]}
+                >
+                  {fast}
+                </Text>
+              </Pressable>
+            )}
+            {state.mode && state.mode !== "default" && (
+              <Pressable
+                style={styles.chip}
+                onPress={chip(pickMode)}
+                hitSlop={6}
+              >
+                <Text style={[styles.chipText, styles.mode]}>
+                  {modeLabel(state.mode)}
+                </Text>
+              </Pressable>
+            )}
+            <StatusChips chatId={chatId} state={state} />
+          </ScrollView>
+          {!rowOnly && (
+            <>
+              <View style={styles.spacer} />
+              <IconButton name="plus" onPress={openPlus} />
+              <IconButton
+                name={phase === "listening" ? "waveform" : "mic"}
+                onPress={onMic}
+                on={phase === "listening"}
               />
-            </Pressable>
+              {state.working && (
+                <IconButton
+                  name="stop.fill"
+                  onPress={tapThen(() => void actions.interrupt())}
+                />
+              )}
+              {(hasText || !state.working) && (
+                <Pressable
+                  style={[styles.send, !hasText && styles.sendOff]}
+                  onPress={() => submit(false)}
+                  onLongPress={() => submit(true)}
+                  disabled={!hasText}
+                  hitSlop={6}
+                >
+                  <SymbolView
+                    name="arrow.up"
+                    size={16}
+                    tintColor={C.accentInk}
+                    weight="bold"
+                  />
+                </Pressable>
+              )}
+            </>
           )}
         </View>
       </View>
@@ -428,15 +519,17 @@ function IconButton({
   );
 }
 
-/** An iOS action sheet; `title` null: none. */
+/** An iOS action sheet; `title` null: none; `message`: a line under it. */
 function sheet(
   title: string | null,
   options: string[],
   onPick: (index: number) => void,
+  message: string | null = null,
 ) {
   ActionSheetIOS.showActionSheetWithOptions(
     {
       title: title ?? undefined,
+      message: message ?? undefined,
       options: [...options, "Annuler"],
       cancelButtonIndex: options.length,
       userInterfaceStyle: "dark",
@@ -445,21 +538,6 @@ function sheet(
       if (i < options.length) onPick(i);
     },
   );
-}
-
-function windowLine(
-  label: string,
-  window: { utilization: number; resetsAt?: number } | undefined,
-): string | null {
-  if (!window) return null;
-  const pct = Math.round(window.utilization * 100);
-  if (!window.resetsAt) return `${label} : ${pct} %`;
-  const at = new Date(window.resetsAt * 1000).toLocaleString("fr-FR", {
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  return `${label} : ${pct} % (jusqu’à ${at})`;
 }
 
 /**
@@ -472,6 +550,9 @@ function flatButtons(buttons: RemoteButton[] | null): RemoteButton[] {
   );
 }
 
+/** The desktop's suggestion grey (`textarea.suggest::placeholder`). */
+const GHOST = "#8b8f97";
+
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: 10, paddingTop: 4, gap: 6 },
   card: {
@@ -483,7 +564,9 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 8,
   },
+  fieldRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   field: {
+    flex: 1,
     color: C.ink,
     fontSize: T.body,
     minHeight: 36,
@@ -491,6 +574,20 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: 6,
   },
+  /** The desktop's suggestion is italic (`textarea.suggest`). */
+  ghost: { fontStyle: "italic" },
+  take: {
+    marginTop: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: C.lineStrong,
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    height: 24,
+    justifyContent: "center",
+  },
+  takeText: { color: C.dim, fontSize: T.tiny, fontWeight: "600" },
+  /** Under a request: the chips where the card would hold them, no card. */
+  rowAlone: { paddingHorizontal: 12 },
   bar: {
     flexDirection: "row",
     alignItems: "center",
@@ -499,6 +596,11 @@ const styles = StyleSheet.create({
     borderTopColor: C.line,
     paddingTop: 6,
   },
+  barAlone: { borderTopWidth: 0, paddingTop: 0 },
+  /** Its content's width, narrower when the row runs short. */
+  chips: { flexGrow: 0, flexShrink: 1, marginVertical: -6 },
+  /** The chips' touch room (`hitSlop`) inside the strip, which clips it. */
+  chipsRow: { alignItems: "center", gap: 6, paddingVertical: 6 },
   chip: {
     flexDirection: "row",
     alignItems: "center",
@@ -511,17 +613,9 @@ const styles = StyleSheet.create({
   },
   chipText: { color: C.dim, fontSize: T.tiny, fontWeight: "600" },
   mode: { color: C.accent },
-  ring: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    borderWidth: 2,
-    borderColor: C.lineStrong,
-    borderTopColor: C.accent,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  ringText: { color: C.dim, fontSize: 9, fontWeight: "700" },
+  /** The desktop's `.fast` amber, grey while paused. */
+  fastOn: { color: "#fcd34d" },
+  fastOff: { color: C.mute },
   spacer: { flex: 1 },
   icon: {
     width: 32,

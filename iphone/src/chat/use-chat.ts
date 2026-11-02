@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { isCommandSent } from "@/lib/chat/chatCommands";
 import type {
   EffortLevel,
@@ -13,6 +19,7 @@ import type { RewindMode } from "@/lib/chat/useSlashActions";
 import { reduceChat } from "@/lib/chat/chatState";
 import { sendNowPlan, stopTurnPlan } from "@/lib/chat/chatTasks";
 import { phoneDrives } from "@/lib/chat/phoneChat";
+import { phoneChatReadable } from "@/lib/chat/phoneChatFold";
 import type { PhoneChatCommand } from "@/lib/remoteActions";
 import {
   chatLive,
@@ -125,7 +132,13 @@ export function useChat(chatId: string) {
           command,
         }),
       stopBash: (id: string) => run({ type: "bash_stop", id }),
-      taskOutput: (taskId: string) => run({ type: "task_output", taskId }),
+      /**
+       * Asked every second while the shells sheet is open: one lost
+       * (offline, the PC slow) waits for the next ask, never a notice in
+       * the feed each second.
+       */
+      taskOutput: (taskId: string) =>
+        chatDo(chatId, { type: "task_output", taskId }).catch(() => {}),
       visualHtml: (toolUseId: string) =>
         run({ type: "visual_html", toolUseId }),
       loadOlder() {
@@ -133,16 +146,20 @@ export function useChat(chatId: string) {
         if (cursor)
           void run({ type: "older", before: cursor, limit: OLDER_PAGE });
       },
-      openAgent(agentId: string) {
+      /** `quiet`: the sheet's own refresh every 2 s, a lost one (offline)
+       *  waits for the next, never a notice in the feed each time. */
+      openAgent(agentId: string, quiet = false) {
         const s = stateRef.current;
         if (!agentId || !s.sessionId) return;
-        void run({
+        const command = {
           type: "agent_history",
           sessionId: s.sessionId,
           cwd: "",
           limit: AGENT_PAGE,
           agentId,
-        });
+        } as const;
+        if (quiet) void chatDo(chatId, command).catch(() => {});
+        else void run(command);
       },
       /** « Reprendre »: an ended chat starts again on its session. */
       restart: () =>
@@ -185,6 +202,18 @@ export function useChatLive(chatId: string) {
   return useSyncExternalStore(
     useCallback((cb: () => void) => subscribeChat(chatId, cb), [chatId]),
     () => chatLive(chatId),
+  );
+}
+
+/**
+ * Whether the reads the app asks on its own (a poll, a sheet's count) may
+ * go: the chat runs, its server too (`phoneChatReadable`). Every such read
+ * waits on it.
+ */
+export function useChatReadable(chatId: string): boolean {
+  return useSyncExternalStore(
+    useCallback((cb: () => void) => subscribeChat(chatId, cb), [chatId]),
+    () => phoneChatReadable(chatLive(chatId)),
   );
 }
 

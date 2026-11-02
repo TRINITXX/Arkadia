@@ -13,6 +13,7 @@ import type { ChatState } from "@/lib/chat/chatState";
 import {
   foldPhoneChat,
   NEW_PHONE_CHAT,
+  phoneServerExit,
   type PhoneChatLive,
 } from "@/lib/chat/phoneChatFold";
 import {
@@ -21,6 +22,7 @@ import {
   type PhoneChatFeel,
   type PhoneChatWatch,
 } from "@/lib/chat/phoneChatFeel";
+import { putShellOutput } from "~/chat/background/shell-outputs";
 import { putInComposer } from "~/chat/composer-inbox";
 import {
   act,
@@ -128,6 +130,14 @@ export function catchUp(chatId: string) {
   const e = entry(chatId);
   if (Date.now() - e.catchingUp < CATCH_UP_WAIT_MS) return;
   e.catchingUp = Date.now();
+  // Its server may have stopped while this phone wasn't listening (in the
+  // background, offline, the chat covered): no read of the app's goes
+  // until the replay (`attached`) says it runs, or Rust starts it again.
+  const unconfirmed = phoneServerExit(e.live);
+  if (unconfirmed !== e.live) {
+    e.live = unconfirmed;
+    notify(e);
+  }
   act({ kind: "chatOpen", chatId, restart: false }).catch((err: unknown) => {
     e.catchingUp = 0;
     if (err instanceof Error && err.message === SERVER_GONE)
@@ -149,9 +159,23 @@ function listen() {
   onChatEvent((event) => {
     if (event.type === "server_exit") {
       const chatId = shownChatId();
-      if (chatId) setTimeout(() => catchUp(chatId), AFTER_SERVER_EXIT_MS);
+      if (!chatId) return;
+      // Maybe its own: no read of the app's goes until it is replayed.
+      const e = entry(chatId);
+      const live = phoneServerExit(e.live);
+      if (live !== e.live) {
+        e.live = live;
+        notify(e);
+      }
+      // A catch-up asked just before is stale: this one must go.
+      e.catchingUp = 0;
+      setTimeout(() => catchUp(chatId), AFTER_SERVER_EXIT_MS);
       return;
     }
+    // A shell's output, asked by its sheet: no event of the chat's life.
+    if (event.type === "task_output") return putShellOutput(event);
+    // The context's breakdown, asked by its sheet (`contextDetail`): same.
+    if (event.type === "context_detail") return;
     if ("chatId" in event && event.chatId) push(event.chatId, event);
   });
   onChatCatchUp((chatId) => {

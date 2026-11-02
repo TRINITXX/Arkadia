@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resetLabel, tokensLabel } from "@/lib/chat/chatLabels";
+import {
+  fastModeLabel,
+  fastModeLine,
+  resetLabel,
+  tokensLabel,
+} from "@/lib/chat/chatLabels";
 
 describe("resetLabel", () => {
   const now = 1_000_000_000_000;
@@ -25,5 +30,17 @@ describe("tokensLabel", () => {
     expect(tokensLabel(999_960)).toBe("1 M");
     expect(tokensLabel(1_006_800)).toBe("1 M");
     expect(tokensLabel(1_250_000)).toBe("1,3 M");
+  });
+});
+
+describe("fastModeLabel", () => {
+  it("says fast mode on or paused, nothing while it is off", () => {
+    expect(fastModeLabel("on")).toBe("↯ rapide");
+    expect(fastModeLabel("cooldown")).toBe("↯ en pause");
+    expect(fastModeLabel(null)).toBeNull();
+    expect(fastModeLine("cooldown")).toBe(
+      "↯ Mode rapide en pause après une limite d'usage",
+    );
+    expect(fastModeLine(null)).toBeNull();
   });
 });

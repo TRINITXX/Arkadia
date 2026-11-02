@@ -81,3 +81,20 @@ export function resetLabel(epochSeconds: number, now: number): string | null {
   if (h === 0) return `${m} min`;
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
+
+/** Claude Code's fast mode: on, or paused after a usage limit. */
+type FastMode = "on" | "cooldown" | null;
+
+/** Fast mode kept in sight by the session's button: « ↯ rapide », « ↯ en pause ». */
+export function fastModeLabel(fast: FastMode): string | null {
+  if (!fast) return null;
+  return `↯ ${fast === "on" ? "rapide" : "en pause"}`;
+}
+
+/** Its line in the session's menu (the model's sheet on the iPhone). */
+export function fastModeLine(fast: FastMode): string | null {
+  if (!fast) return null;
+  return fast === "on"
+    ? "↯ Mode rapide activé (/fast pour l'arrêter)"
+    : "↯ Mode rapide en pause après une limite d'usage";
+}

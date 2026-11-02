@@ -190,7 +190,7 @@ export function ChatComposer({
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const layers = useChatLayers();
   // Asleep, the input's only words are the sleep's (its first key wakes it).
-  const ghost = useChatSuggestion(asleep ? null : suggestion, text, working);
+  const ghost = useChatSuggestion(suggestion, text, working, asleep);
   // ↑ / ↓ bring back the pane's last messages (empty input), their
   // attachments as cards.
   const history = useInputHistory(

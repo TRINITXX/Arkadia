@@ -598,6 +598,67 @@ export function agentCards(subagents: Subagent[], now: number): Subagent[] {
   );
 }
 
+/** How long a subagent has run, or ran; a resumed session's has no start: its duration. */
+export function agentElapsed(
+  agent: Pick<Subagent, "startedAt" | "endedAt" | "durationMs">,
+  now: number,
+): number {
+  return agent.startedAt
+    ? (agent.endedAt ?? now) - agent.startedAt
+    : agent.durationMs;
+}
+
+/** A stop sent to a subagent: when, and to which run of it (its start). */
+export interface SentStop {
+  at: number;
+  run: number | undefined;
+}
+
+/** A stop sent and the agent still running this long: the button again. */
+export const STOP_RETRY_MS = 10_000;
+
+/**
+ * Whether a subagent shows « arrêt demandé… » in place of its stop: still
+ * running, the run the stop went to, for `STOP_RETRY_MS` at most. A stop
+ * refused or lost gives the button back, and an agent run again
+ * (SendMessage) goes on without the old stop.
+ */
+export function stopPending(
+  stop: SentStop | undefined,
+  agent: Pick<Subagent, "status" | "startedAt">,
+  now: number,
+): boolean {
+  return (
+    !!stop &&
+    agent.status === "running" &&
+    stop.run === agent.startedAt &&
+    now - stop.at < STOP_RETRY_MS
+  );
+}
+
+/**
+ * How many agent pills the row holds (`widths`, measured): all when they
+ * fit, else as many as leave room for the « +N » pill (`more`).
+ */
+export function pillsThatFit(
+  widths: number[],
+  room: number,
+  gap: number,
+  more: number,
+): number {
+  const total = widths.reduce((s, w, i) => s + w + (i ? gap : 0), 0);
+  if (total <= room) return widths.length;
+  let used = 0;
+  let n = 0;
+  for (const w of widths) {
+    const next = used + (n ? gap : 0) + w;
+    if (next + gap + more > room) break;
+    used = next;
+    n++;
+  }
+  return n;
+}
+
 /** « Agents terminés (N) » shows this long after the latest subagent ended. */
 export const DONE_AGENTS_MS = 30_000;
 
@@ -641,6 +702,13 @@ export function workflowCard(
 /** The shells the chip counts: in the background and still running. */
 export function runningShells(shells: BackgroundShell[]): BackgroundShell[] {
   return shells.filter((s) => s.background && s.status === "running");
+}
+
+/** A workflow's phase at work: its latest running agent's, else its last (0: none yet). */
+export function workflowActivePhase(wf: Workflow): number {
+  for (let i = wf.agents.length - 1; i >= 0; i--)
+    if (wf.agents[i].state === "running") return wf.agents[i].phaseIndex;
+  return wf.phases[wf.phases.length - 1]?.index ?? 0;
 }
 
 /** A workflow's agents done, of those it started so far. */

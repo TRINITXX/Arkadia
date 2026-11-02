@@ -9,6 +9,8 @@ import {
   Zap,
 } from "lucide-react";
 import {
+  fastModeLabel,
+  fastModeLine,
   MODELS,
   MODE_CYCLE,
   modeLabel,
@@ -96,7 +98,7 @@ export function ChatSessionMenu({
             {sdk.fastMode && (
               <span className={`fast ${sdk.fastMode}`}>
                 {" "}
-                ↯ {sdk.fastMode === "on" ? "rapide" : "en pause"}
+                {fastModeLabel(sdk.fastMode)}
               </span>
             )}
           </small>
@@ -148,12 +150,7 @@ export function ChatSessionMenu({
             })}
           </div>
           {sdk.fastMode && (
-            <p className="chat-session-fast">
-              ↯{" "}
-              {sdk.fastMode === "on"
-                ? "Mode rapide activé (/fast pour l'arrêter)"
-                : "Mode rapide en pause après une limite d'usage"}
-            </p>
+            <p className="chat-session-fast">{fastModeLine(sdk.fastMode)}</p>
           )}
         </div>
       )}

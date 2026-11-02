@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Linking,
   Pressable,
@@ -11,6 +17,7 @@ import * as Clipboard from "expo-clipboard";
 import { SymbolView } from "expo-symbols";
 import { endsWithHourglass } from "@/lib/chat/chatHourglass";
 import { copiedCodeMessage } from "@/lib/codeCopy";
+import { LinkCardsContext, type LinkCards } from "~/messages/link-cards";
 import { success } from "~/ui/haptics";
 import { showFailure, showNotice } from "~/ui/notice";
 
@@ -115,66 +122,133 @@ const APP_TONE: MarkdownTone = {
   line: "rgba(255,255,255,0.12)",
 };
 
-const INLINE = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)\s]+\)|(?<![\w*])\*[^*\s][^*]*\*(?!\w)|(?<!\w)_[^_\s][^_]*_(?!\w))/g;
+// A bare web address last: it ends before closing punctuation, as GFM's.
+const INLINE = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)\s]+\)|(?<![\w*])\*[^*\s][^*]*\*(?!\w)|(?<!\w)_[^_\s][^_]*_(?!\w)|https?:\/\/[^\s<>()[\]"'`]*[^\s<>()[\]"'`.,;:!?»])/g;
 
-/** `code`, **bold**, *italics* and [links](…) inside a line. */
+const LINK = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
+
+/**
+ * A part the view draws as a card (`LinkCardsContext`: the chat's artifact
+ * links and pasted texts, the desktop's): a [link](…) or a bare address,
+ * its label the address itself. Null: drawn inline.
+ */
+function cardOf(
+  part: string,
+  cards: LinkCards | null,
+): { href: string; label: string } | null {
+  if (!cards) return null;
+  const link = LINK.exec(part);
+  const href = link ? link[2] : /^https?:\/\//.test(part) ? part : null;
+  return href && cards.match(href) ? { href, label: link?.[1] ?? part } : null;
+}
+
+/** A line cut at its cards: words (from part `at`), or a card. */
+type Run =
+  | { at: number; parts: string[] }
+  | { at: number; href: string; label: string };
+
+/** One inline part: `code`, **bold**, *italics*, a [link](…), or plain. */
+function inlinePart(p: string, i: number, tone: MarkdownTone): ReactNode {
+  if (p.startsWith("`") && p.endsWith("`") && p.length > 2)
+    return (
+      <Text key={i} style={[styles.inlineCode, { backgroundColor: tone.codeBg }]}>
+        {p.slice(1, -1)}
+      </Text>
+    );
+  if (p.startsWith("**") && p.endsWith("**") && p.length > 4)
+    return (
+      <Text key={i} style={styles.bold}>
+        {p.slice(2, -2)}
+      </Text>
+    );
+  const link = LINK.exec(p);
+  if (link) {
+    const url = link[2];
+    const web = /^https?:\/\//i.test(url);
+    return (
+      <Text
+        key={i}
+        style={{ color: tone.link }}
+        onPress={web ? () => void Linking.openURL(url) : undefined}
+      >
+        {link[1]}
+      </Text>
+    );
+  }
+  if (
+    (p.startsWith("*") && p.endsWith("*") && p.length > 2) ||
+    (p.startsWith("_") && p.endsWith("_") && p.length > 2)
+  )
+    return (
+      <Text key={i} style={styles.italic}>
+        {p.slice(1, -1)}
+      </Text>
+    );
+  return p;
+}
+
+/**
+ * `code`, **bold**, *italics* and [links](…) inside a line. A link the view
+ * draws as a card stands on its own line between the words around it: an
+ * inline view in a phone's narrow line would wrap it badly. `box`: where the
+ * line sits in its row (an item's text), for the words and cards alike.
+ */
 function Inline({
   text,
   style,
+  box,
   tone,
   trailing,
 }: {
   text: string;
   style: object;
+  box?: object;
   tone: MarkdownTone;
   trailing?: ReactNode;
 }) {
+  const cards = useContext(LinkCardsContext);
   const parts = text.split(INLINE).filter(Boolean);
+  if (!cards || !parts.some((p) => cardOf(p, cards)))
+    return (
+      <Text style={[style, box]}>
+        {parts.map((p, i) => inlinePart(p, i, tone))}
+        {trailing}
+      </Text>
+    );
+  // Runs of words between the cards, their edges by a card trimmed.
+  const runs: Run[] = [];
+  parts.forEach((p, i) => {
+    const card = cardOf(p, cards);
+    const last = runs[runs.length - 1];
+    if (card) runs.push({ at: i, ...card });
+    else if (last && "parts" in last) last.parts.push(p);
+    else runs.push({ at: i, parts: [p] });
+  });
+  const lastRun = runs[runs.length - 1];
   return (
-    <Text style={style}>
-      {parts.map((p, i) => {
-        if (p.startsWith("`") && p.endsWith("`") && p.length > 2)
-          return (
-            <Text
-              key={i}
-              style={[styles.inlineCode, { backgroundColor: tone.codeBg }]}
-            >
-              {p.slice(1, -1)}
-            </Text>
-          );
-        if (p.startsWith("**") && p.endsWith("**") && p.length > 4)
-          return (
-            <Text key={i} style={styles.bold}>
-              {p.slice(2, -2)}
-            </Text>
-          );
-        const link = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(p);
-        if (link) {
-          const url = link[2];
-          const web = /^https?:\/\//i.test(url);
-          return (
-            <Text
-              key={i}
-              style={{ color: tone.link }}
-              onPress={web ? () => void Linking.openURL(url) : undefined}
-            >
-              {link[1]}
-            </Text>
-          );
-        }
-        if (
-          (p.startsWith("*") && p.endsWith("*") && p.length > 2) ||
-          (p.startsWith("_") && p.endsWith("_") && p.length > 2)
-        )
-          return (
-            <Text key={i} style={styles.italic}>
-              {p.slice(1, -1)}
-            </Text>
-          );
-        return p;
+    <View style={[box, styles.mixed]}>
+      {runs.map((run, r) => {
+        if (!("parts" in run))
+          return <cards.Card key={run.at} href={run.href} label={run.label} />;
+        const words = run.parts.map((p, k) => {
+          let w = p;
+          if (k === 0 && r > 0) w = w.trimStart();
+          if (k === run.parts.length - 1 && r < runs.length - 1) w = w.trimEnd();
+          return w;
+        });
+        const ends = run === lastRun;
+        if (!words.join("") && !(ends && trailing)) return null;
+        return (
+          <Text key={run.at} style={style}>
+            {words.map((w, k) => inlinePart(w, run.at + k, tone))}
+            {ends && trailing}
+          </Text>
+        );
       })}
-      {trailing}
-    </Text>
+      {!("parts" in lastRun) && trailing ? (
+        <Text style={style}>{trailing}</Text>
+      ) : null}
+    </View>
   );
 }
 
@@ -331,7 +405,8 @@ export function MarkdownText({
                 text={b.text}
                 tone={tone}
                 trailing={end(i)}
-                style={[body, styles.itemText]}
+                style={body}
+                box={styles.itemText}
               />
             </View>
           );
@@ -377,6 +452,8 @@ const styles = StyleSheet.create({
   italic: { fontStyle: "italic" },
   item: { flexDirection: "row", gap: 8 },
   itemText: { flex: 1 },
+  // A line with cards: its words and cards stacked, each its own width.
+  mixed: { gap: 6, alignItems: "flex-start" },
   quote: { borderLeftWidth: 3, paddingLeft: 10 },
   rule: { height: StyleSheet.hairlineWidth, marginVertical: 4 },
   inlineCode: { fontFamily: "Menlo", fontSize: 13 },

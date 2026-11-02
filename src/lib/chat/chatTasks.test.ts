@@ -6,17 +6,23 @@ import {
   type ChatItem,
   type ChatState,
 } from "@/lib/chat/chatState";
+import { currentAgent } from "@/lib/chat/chatAgentView";
 import {
   agentCards,
+  agentElapsed,
   CARD_LINGER_MS,
   DONE_AGENTS_MS,
   doneAgentsUntil,
   historySubagents,
   outputTail,
+  pillsThatFit,
   runningShells,
   sendNowPlan,
   spareOnInterrupt,
+  STOP_RETRY_MS,
+  stopPending,
   stopTurnPlan,
+  workflowActivePhase,
 } from "@/lib/chat/chatTasks";
 
 const sdk = (message: JsonObject, at = 1000): ChatEvent =>
@@ -331,6 +337,67 @@ describe("Esc", () => {
 });
 
 describe("subagent cards", () => {
+  it("counts a pill's time from its start, a resumed agent's from its duration", () => {
+    const agent = { startedAt: 1000, durationMs: 0 };
+    expect(agentElapsed(agent, 4000)).toBe(3000);
+    expect(agentElapsed({ ...agent, endedAt: 2500 }, 4000)).toBe(1500);
+    expect(agentElapsed({ durationMs: 700 }, 4000)).toBe(700);
+  });
+
+  it("keeps room for « +N » once the pills overflow the row", () => {
+    expect(pillsThatFit([100, 100], 206, 6, 48)).toBe(2);
+    expect(pillsThatFit([100, 100, 100], 300, 6, 48)).toBe(2);
+    expect(pillsThatFit([100, 100, 100], 250, 6, 48)).toBe(1);
+    expect(pillsThatFit([280], 260, 6, 48)).toBe(0);
+  });
+
+  it("says « arrêt demandé… » for the run stopped, 10 s at most", () => {
+    const stop = { at: 5000, run: 1000 };
+    const running = { status: "running" as const, startedAt: 1000 };
+    expect(stopPending(stop, running, 5000 + STOP_RETRY_MS - 1)).toBe(true);
+    expect(stopPending(stop, running, 5000 + STOP_RETRY_MS)).toBe(false);
+    // Run again by SendMessage: a new start, the old stop is not its own.
+    expect(stopPending(stop, { ...running, startedAt: 9000 }, 6000)).toBe(
+      false,
+    );
+    expect(stopPending(stop, { ...running, status: "stopped" }, 6000)).toBe(
+      false,
+    );
+  });
+
+  it("follows the opened agent: the chat's, else a workflow's", () => {
+    const s = run([
+      task("task_started", { task_id: "a1", task_type: "local_agent" }),
+      task("task_started", { task_id: "w1", task_type: "local_workflow" }),
+      task("task_progress", {
+        task_id: "w1",
+        workflow_progress: [
+          {
+            type: "workflow_agent",
+            agentId: "w-a",
+            label: "lit",
+            state: "done",
+          },
+        ],
+      }),
+    ]);
+    const opened = {
+      taskId: "",
+      description: "",
+      toolUses: 0,
+      tokens: 0,
+      durationMs: 0,
+    };
+    expect(
+      currentAgent(s, { ...opened, taskId: "a1", status: "completed" }).status,
+    ).toBe("running");
+    expect(
+      currentAgent(s, { ...opened, taskId: "w-a", status: "running" }).status,
+    ).toBe("completed");
+    const gone = { ...opened, taskId: "x", status: "failed" as const };
+    expect(currentAgent(s, gone)).toBe(gone);
+  });
+
   it("takes its last action and keeps its messages for the sheet", () => {
     const s = run([
       task("task_started", {
@@ -467,6 +534,14 @@ describe("workflow card", () => {
         },
       ],
     });
+
+  it("opens on the phase at work, else the last one", () => {
+    const s = run([started, progress("start")]);
+    expect(workflowActivePhase(s.workflows[0])).toBe(1);
+    const ended = run([progress("done")], s);
+    expect(workflowActivePhase(ended.workflows[0])).toBe(2);
+    expect(workflowActivePhase(run([started]).workflows[0])).toBe(0);
+  });
 
   it("reads phases and agents from workflow_progress (seen live on 2.1.314)", () => {
     const s = run([started, progress("start")]);

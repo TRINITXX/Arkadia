@@ -47,12 +47,17 @@ const DOING = new Set<PhoneChatCommand["type"]>([
 /** Asks whose answer is everyone's (the MCP servers' state, its `mcp` event). */
 const SHARED = new Set<PhoneChatCommand["type"]>(["mcp_status"]);
 
-/** Reads whose answer only the asking phone needs. */
+/**
+ * Reads whose answer only the asking phone needs. `context_detail`: the
+ * context ring's sheet (02/11/2026); an older desktop refuses it, and the
+ * phone's sheet says the PC needs updating.
+ */
 const READS = new Set<PhoneChatCommand["type"]>([
   "older",
   "task_output",
   "agent_history",
   "visual_html",
+  "context_detail",
 ]);
 
 /** What the PC alone does, the user's too: a /resume, a /rewind, /mcp… */

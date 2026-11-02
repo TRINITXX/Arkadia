@@ -450,6 +450,23 @@ describe("times, images and the turn's figures", () => {
     expect(second.kind === "user" && second.pasted).toHaveLength(1);
   });
 
+  it("keeps the texts a message sent from tags, for its frame's tags", () => {
+    const state = reduceChat(
+      EMPTY_CHAT,
+      {
+        type: "user_sent",
+        chatId: "c",
+        text: "Corrige ce log",
+        images: 0,
+        pastes: ["ce log"],
+        uuid: "u1",
+      },
+      1,
+    );
+    const [user] = state.items;
+    expect(user.kind === "user" && user.pastes).toEqual(["ce log"]);
+  });
+
   it("reads the times and pasted images of a resumed session", () => {
     const state = reduceChat(
       EMPTY_CHAT,

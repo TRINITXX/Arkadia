@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   agentConversation,
+  currentAgent,
   workflowAgentSubagent,
 } from "@/lib/chat/chatAgentView";
 import type { ChatState, Subagent } from "@/lib/chat/chatState";
@@ -25,16 +26,11 @@ export function useAgentSheet(
 ) {
   const [opened, setOpened] = useState<Subagent | null>(null);
   // The opened agent as it is now: its card's figures move.
-  const sheet = useMemo(() => {
-    if (!opened) return null;
-    const live = state.subagents.find((s) => s.taskId === opened.taskId);
-    if (live) return live;
-    for (const wf of state.workflows) {
-      const a = wf.agents.find((x) => x.agentId === opened.taskId);
-      if (a) return workflowAgentSubagent(a);
-    }
-    return opened;
-  }, [opened, state.subagents, state.workflows]);
+  const { subagents, workflows } = state;
+  const sheet = useMemo(
+    () => (opened ? currentAgent({ subagents, workflows }, opened) : null),
+    [opened, subagents, workflows],
+  );
 
   const messages = sheet?.toolUseId
     ? state.agentMessages[sheet.toolUseId]

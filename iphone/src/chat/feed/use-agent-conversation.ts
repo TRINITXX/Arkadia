@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { agentConversation } from "@/lib/chat/chatAgentView";
+import { agentConversation, currentAgent } from "@/lib/chat/chatAgentView";
 import type { ChatState, Subagent } from "@/lib/chat/chatState";
 
 /** A running subagent's transcript is read again this often while shown. */
@@ -9,23 +9,25 @@ const REFRESH_MS = 2_000;
  * A subagent's conversation, as the desktop's sheet builds it
  * (`useAgentSheet`): from its live messages while this chat runs it, so it
  * follows the agent as it works; else from its transcript (`agent_history`,
- * `PhoneChatLive.agents`), asked on open and every 2 s while it runs.
+ * `PhoneChatLive.agents`), asked on open and every 2 s while it runs. The
+ * ask on open is the user's (a finished chat's agents read too); the
+ * refresh, the app's own, waits on a running chat.
  */
 export function useAgentConversation(
   state: ChatState,
   agents: Record<string, ChatState>,
   opened: Subagent | null,
-  openAgent: (agentId: string) => void,
+  openAgent: (agentId: string, quiet?: boolean) => void,
   /** Its sheet is up: nothing is asked while it isn't. */
   shown: boolean,
+  /** The chat runs, its server too (`useChatReadable`): else no refresh. */
+  readable: boolean,
 ) {
-  // The opened agent as it is now: its figures move.
+  // The opened agent as it is now (a workflow's too): its figures move.
+  const { subagents, workflows } = state;
   const agent = useMemo(
-    () =>
-      opened
-        ? (state.subagents.find((s) => s.taskId === opened.taskId) ?? opened)
-        : null,
-    [opened, state.subagents],
+    () => (opened ? currentAgent({ subagents, workflows }, opened) : null),
+    [opened, subagents, workflows],
   );
   const toolUseId = agent?.toolUseId;
   const messages = toolUseId ? state.agentMessages[toolUseId] : undefined;
@@ -47,11 +49,13 @@ export function useAgentConversation(
   useEffect(() => {
     if (taskId && shown) openAgent(taskId);
   }, [taskId, shown, openAgent]);
+  // Never to a chat ended, asleep or whose server stopped: Rust would start
+  // its server again every 2 s.
   useEffect(() => {
-    if (!taskId || !running || live || !shown) return;
-    const id = setInterval(() => openAgent(taskId), REFRESH_MS);
+    if (!taskId || !running || live || !shown || !readable) return;
+    const id = setInterval(() => openAgent(taskId, true), REFRESH_MS);
     return () => clearInterval(id);
-  }, [taskId, running, live, shown, openAgent]);
+  }, [taskId, running, live, shown, readable, openAgent]);
 
   return { agent, conversation };
 }

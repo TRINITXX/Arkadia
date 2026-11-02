@@ -4,8 +4,15 @@ import type { FeedRow } from "@/lib/chat/phoneFeed";
 import type { ChatActions } from "~/chat/use-chat";
 
 /** What a row opens over the feed: its whole content in a sheet. A reply's
- *  bulb opens `thoughts`, its wrench `activity` (« Récit »). */
-export type FeedSheetKind = "activity" | "thoughts" | "plan" | "command" | "bash";
+ *  bulb opens `thoughts`, its wrench `activity` (« Récit »); a pasted
+ *  text's tag in the user's message, `paste`. */
+export type FeedSheetKind =
+  | "activity"
+  | "thoughts"
+  | "plan"
+  | "command"
+  | "bash"
+  | "paste";
 
 export interface FeedSheetRef {
   kind: FeedSheetKind;
@@ -14,6 +21,8 @@ export interface FeedSheetRef {
   /** The row as it opened: shown while it's gone from the feed (a live
    *  thought gone behind its reply's bulb), until the sheet closes. */
   row: FeedRow;
+  /** `paste`: the text its tag stands for. */
+  paste?: string;
 }
 
 /**

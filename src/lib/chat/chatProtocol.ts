@@ -31,6 +31,8 @@ export type ChatEvent =
       images: number;
       /** The pasted images themselves, for the message's strip. */
       pasted?: { mediaType: string; data: string }[];
+      /** The texts it sent from tags (`send`'s `pastes`). */
+      pastes?: string[];
       /** Named by its `command_lifecycle` frames (absent: older server). */
       uuid?: string;
     }
@@ -333,6 +335,9 @@ export type ChatCommand =
       chatId: string;
       text: string;
       images?: { mediaType: string; data: string; label?: string }[];
+      /** The texts in `text` pasted as tags (`chatPastes`): its frame shows
+       *  them as tags again, on the phone too (`user_sent`). */
+      pastes?: string[];
       /** « Envoyer maintenant »: Claude Code ends the turn under way for it. */
       priority?: "now";
       /**
@@ -414,8 +419,11 @@ export type ChatCommand =
       requestId: string;
       result: ElicitationAnswer;
     }
-  /** The context by category: token counts, so asked on hover only. */
-  | { type: "context_detail"; chatId: string; requestId: string }
+  /**
+   * The context by category: token counts, so asked on hover only (on the
+   * iPhone, a tap on its ring). `to`: a phone's ask, answered to it alone.
+   */
+  | { type: "context_detail"; chatId: string; requestId: string; to?: string }
   /** The MCP servers' state again (their list opened). */
   | { type: "mcp_status"; chatId: string }
   /** /mcp's buttons: a sign-in, a reconnection, a server on or off. */

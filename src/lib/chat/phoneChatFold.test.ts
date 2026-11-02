@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ChatEvent } from "@/lib/chat/chatProtocol";
-import { foldPhoneChat, NEW_PHONE_CHAT } from "@/lib/chat/phoneChatFold";
+import {
+  foldPhoneChat,
+  NEW_PHONE_CHAT,
+  phoneChatReadable,
+  phoneServerExit,
+} from "@/lib/chat/phoneChatFold";
 
 const sent = (text: string): ChatEvent => ({
   type: "user_sent",
@@ -71,5 +76,24 @@ describe("foldPhoneChat", () => {
     );
     expect(Object.keys(chat.agents)).toEqual(["a1"]);
     expect(chat.state).toBe(NEW_PHONE_CHAT.state);
+  });
+
+  it("sends its own reads only to a chat running, until its replay after a server stop", () => {
+    expect(phoneChatReadable(NEW_PHONE_CHAT)).toBe(true);
+    // Its server stopped: nothing asked until a server replays it again.
+    let chat = phoneServerExit(NEW_PHONE_CHAT);
+    expect(phoneChatReadable(chat)).toBe(false);
+    ({ chat } = foldPhoneChat(chat, [sent("live")], 0));
+    expect(phoneChatReadable(chat)).toBe(false);
+    ({ chat } = foldPhoneChat(chat, [{ type: "attached", chatId: "c" }], 0));
+    expect(phoneChatReadable(chat)).toBe(true);
+    // Ended or asleep: no read either.
+    ({ chat } = foldPhoneChat(chat, [{ type: "closed", chatId: "c" }], 0));
+    expect(phoneChatReadable(chat)).toBe(false);
+    const asleep = {
+      ...NEW_PHONE_CHAT,
+      state: { ...NEW_PHONE_CHAT.state, asleep: true },
+    };
+    expect(phoneChatReadable(asleep)).toBe(false);
   });
 });

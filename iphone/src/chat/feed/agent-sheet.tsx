@@ -1,9 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { StyleSheet, Text } from "react-native";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import type { Subagent } from "@/lib/chat/chatState";
 import { feedRows } from "@/lib/chat/phoneFeed";
-import type { PhoneChatLive } from "@/lib/chat/phoneChatFold";
+import {
+  phoneChatReadable,
+  type PhoneChatLive,
+} from "@/lib/chat/phoneChatFold";
 import { C, T } from "~/chat/chat-theme";
 import { FeedList } from "~/chat/feed/feed-list";
 import { FeedSheet } from "~/chat/feed/feed-sheet";
@@ -22,7 +25,8 @@ const STATUS: Record<Subagent["status"], string> = {
 /**
  * A subagent's own conversation over the chat (`chat-agent-sheet.tsx`), with
  * the feed's rows, newest at the bottom. Read only: its marks and stops are
- * the chat's. Also for the screen's running-agent pills to open.
+ * the chat's. A running agent's pill opens it with its detail on top (what
+ * the desktop's pill shows on hover: summary, last action, stop).
  */
 export function AgentSheet({
   agent: opened,
@@ -33,6 +37,7 @@ export function AgentSheet({
   actions,
   onChoose,
   onClose,
+  detail,
 }: {
   agent: Subagent | null;
   visible: boolean;
@@ -43,6 +48,8 @@ export function AgentSheet({
   actions: ChatActions;
   onChoose: (text: string) => void;
   onClose: () => void;
+  /** In place of its figures line: the agent as it is now. */
+  detail?: (agent: Subagent) => ReactNode;
 }) {
   const { agent, conversation } = useAgentConversation(
     live.state,
@@ -50,6 +57,7 @@ export function AgentSheet({
     opened,
     actions.openAgent,
     visible,
+    phoneChatReadable(live),
   );
   const running = agent?.status === "running";
   const rows = useMemo(
@@ -74,7 +82,11 @@ export function AgentSheet({
       onClose={onClose}
       scroll={false}
     >
-      {figures ? <Text style={styles.figures}>{figures}</Text> : null}
+      {agent && detail ? (
+        detail(agent)
+      ) : figures ? (
+        <Text style={styles.figures}>{figures}</Text>
+      ) : null}
       {!conversation ? (
         <QuietNote text="Chargement de sa conversation…" />
       ) : rows.length === 0 ? (

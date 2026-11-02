@@ -74,6 +74,8 @@ type ChatMsg = Extract<ServerMsg, { t: "chat" }>["event"];
 const chatSubs = new Set<(event: ChatMsg) => void>();
 /** Told the chat shown when it must catch up: back online, in front, on top. */
 const chatCatchUpSubs = new Set<(chatId: string) => void>();
+/** Told when another chat (or none) comes on top of the stack. */
+const shownChatSubs = new Set<() => void>();
 const followSubs = new Set<() => void>();
 const viewSubs = new Set<() => void>();
 const frameSubs = new Set<() => void>();
@@ -359,6 +361,7 @@ function setShownChat(paneId: string | null) {
   if (paneId === shownChat) return;
   shownChat = paneId;
   if (inFront) send({ t: "chat", pane: paneId });
+  for (const cb of shownChatSubs) cb();
 }
 
 /**
@@ -419,6 +422,21 @@ export function acquireChat(paneId: string): () => void {
 /** The chat on screen now (the topmost screen's), if any. */
 export function shownChatId(): string | null {
   return shownChat;
+}
+
+function subscribeShownChat(cb: () => void): () => void {
+  shownChatSubs.add(cb);
+  return () => {
+    shownChatSubs.delete(cb);
+  };
+}
+
+/**
+ * Whether `chatId`'s screen is the topmost one: a screen covered by another
+ * gets no events (`topStreams`), nor should its clocks tick.
+ */
+export function useChatOnTop(chatId: string): boolean {
+  return useSyncExternalStore(subscribeShownChat, () => shownChat === chatId);
 }
 
 /** Each event of the chat shown (or for this phone alone); returns the unsubscribe. */

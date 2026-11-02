@@ -4,6 +4,7 @@ import { activityCounts, type FoldedUnit } from "@/lib/chat/chatGroups";
 import type { Subagent } from "@/lib/chat/chatState";
 import { outputTail } from "@/lib/chat/chatTasks";
 import { bashCutNote } from "@/lib/chat/chatBash";
+import { sentPasteLabel } from "@/lib/chat/chatPastes";
 import { thoughtBody } from "@/lib/chat/chatThoughts";
 import type { FeedRow } from "@/lib/chat/phoneFeed";
 import { C, MONO, T } from "~/chat/chat-theme";
@@ -11,6 +12,7 @@ import { ActivityDetail } from "~/chat/feed/activity-detail";
 import { bashEnd } from "~/chat/feed/bash-card";
 import type { AgentSheetRender, FeedSheetKind } from "~/chat/feed/feed-env";
 import { CHAT_TONE, DIM_TONE, F } from "~/chat/feed/feed-style";
+import { PasteSheetText } from "~/chat/feed/paste-sheet-text";
 import { MarkdownText } from "~/messages/markdown-text";
 
 /** A whole output in its sheet: its tail past this (the rest is on the PC). */
@@ -37,13 +39,16 @@ const thoughtsOf = ({ unit, thoughts }: FeedRow) =>
       ? [unit.item]
       : []);
 
-/** A sheet's title and icon, from the row it opens. */
+/** A sheet's title and icon, from the row it opens (and a tag's paste). */
 export function sheetHead(
   kind: FeedSheetKind,
   row: FeedRow,
+  paste?: string,
 ): { title: string; icon: SFSymbol } {
   const { unit } = row;
   switch (kind) {
+    case "paste":
+      return { title: sentPasteLabel(paste ?? ""), icon: "list.clipboard" };
     case "activity":
       return {
         title:
@@ -72,18 +77,22 @@ export function sheetHead(
 /**
  * What a row's sheet holds: an activity line unfolded (or a reply's
  * wrench), the thinking of its stretch (or a reply's bulb), a plan, a
- * command's answer or a `!` command's output, whole. Drawn from the row as
- * it is now: a command still running goes on there.
+ * command's answer or a `!` command's output, a text pasted in the user's
+ * message, whole. Drawn from the row as it is now: a command still running
+ * goes on there.
  */
 export function FeedSheetContent({
   kind,
   row,
+  paste,
   cwd,
   subagents,
   agentSheet,
 }: {
   kind: FeedSheetKind;
   row: FeedRow;
+  /** `paste`: the text its tag stands for. */
+  paste?: string;
   /** The chat's folder: tool lines name files from it. */
   cwd: string | null;
   subagents: readonly Subagent[];
@@ -91,6 +100,8 @@ export function FeedSheetContent({
 }) {
   const { unit, plan } = row;
   switch (kind) {
+    case "paste":
+      return paste !== undefined ? <PasteSheetText text={paste} /> : null;
     case "activity":
       return (
         <ActivityDetail

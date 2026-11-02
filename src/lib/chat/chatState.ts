@@ -55,6 +55,9 @@ export type ChatItem = (
       /** The pasted images still kept, as data URLs: the newest
        *  `KEPT_PASTED` of the chat (`keepPasted`); `images` counts them all. */
       pasted?: string[];
+      /** The texts it sent from tags (`chatPastes`): tags again in its
+       *  frame, on the phone too. Absent from a session read back. */
+      pastes?: string[];
       /** Sent while Claude worked and not taken yet (`takeQueued`). */
       queued?: boolean;
       /** Never taken: Claude Code cancelled it, or the chat ended first.
@@ -1335,6 +1338,7 @@ export function reduceChat(
                     (img) => `data:${img.mediaType};base64,${img.data}`,
                   )
                 : undefined,
+              ...(event.pastes?.length ? { pastes: event.pastes } : {}),
               at: now,
             },
           ]),
@@ -1360,6 +1364,7 @@ export function reduceChat(
                   (img) => `data:${img.mediaType};base64,${img.data}`,
                 )
               : undefined,
+            ...(event.pastes?.length ? { pastes: event.pastes } : {}),
             at: now,
           },
         ]),

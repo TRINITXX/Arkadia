@@ -6,22 +6,13 @@ import {
 } from "@/components/modern/MarkdownContent";
 import { ChatAttachments } from "@/components/chat/chat-attachments";
 import { ChatPasteChip } from "@/components/chat/chat-paste-chip";
-import { pastesIn, wordCount } from "@/lib/chat/chatPastes";
+import { framePastes, pasteOfHref, withPasteTags } from "@/lib/chat/chatPastes";
 import { LinkCardsContext, type LinkCards } from "@/lib/linkCards";
 import type { AttachmentSource } from "@/components/chat/chat-attachment-card";
 import { drawnImageKeys, userMessageView } from "@/lib/chat/chatImages";
 import { imagePathKey, isVideoPath } from "@/lib/imagePaths";
 import type { ChatItem } from "@/lib/chat/chatState";
 import type { ImageRef } from "@/lib/imageGallery";
-
-/** « 12 mots », « 1 mot ». */
-const wordsLabel = (text: string) => {
-  const n = wordCount(text);
-  return `${n} mot${n > 1 ? "s" : ""}`;
-};
-
-/** A sent paste's tag, as a link the frame's markdown draws as a chip. */
-const PASTE_HREF = "#arkadia-paste-";
 
 /**
  * What the user's frame holds: the text, then its pasted images and the
@@ -46,17 +37,14 @@ export function ChatUserBody({
   const view = userMessageView(item, cwd);
   // The texts it sent from tags (`chatPastes`): tags again, their text on
   // hover (the user's pick 1 of 01/11/2026), as links the markdown draws
-  // through the cards it already knows (`LinkCardsContext`).
-  const pasted = useMemo(() => pastesIn(view.text), [view.text]);
+  // through the cards it already knows (`LinkCardsContext`). The iPhone's
+  // frame follows the same rule (`framePastes`).
+  const pasted = useMemo(
+    () => framePastes(view.text, item.pastes),
+    [view.text, item.pastes],
+  );
   const shown = useMemo(
-    () =>
-      pasted.reduce(
-        (t, paste, i) =>
-          t
-            .split(paste)
-            .join(`[Texte collé · ${wordsLabel(paste)}](${PASTE_HREF}${i})`),
-        view.text,
-      ),
+    () => withPasteTags(view.text, pasted),
     [pasted, view.text],
   );
   const drawn = useMemo(() => drawnImageKeys(shown, cwd), [shown, cwd]);
@@ -93,18 +81,16 @@ export function ChatUserBody({
   const outer = useContext(LinkCardsContext);
   const cards = useMemo<LinkCards | null>(() => {
     if (pasted.length === 0) return outer;
-    const ours = (href: string) => href.startsWith(PASTE_HREF);
     function Card({ href, label }: { href: string; label: string }) {
-      if (ours(href))
-        return (
-          <ChatPasteChip
-            text={pasted[Number(href.slice(PASTE_HREF.length))] ?? ""}
-            label={label}
-          />
-        );
+      const paste = pasteOfHref(href, pasted);
+      if (paste !== null) return <ChatPasteChip text={paste} label={label} />;
       return outer ? <outer.Card href={href} label={label} /> : null;
     }
-    return { match: (href) => ours(href) || !!outer?.match(href), Card };
+    return {
+      match: (href) =>
+        pasteOfHref(href, pasted) !== null || !!outer?.match(href),
+      Card,
+    };
   }, [outer, pasted]);
   return (
     <>

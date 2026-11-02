@@ -11,7 +11,7 @@ import {
 import { ChatArtifactCard } from "@/components/chat/chat-artifact-card";
 import { ChatLightboxContext } from "@/lib/chat/chatLightbox";
 import { LinkCardsContext, type LinkCards } from "@/lib/linkCards";
-import { isArtifactUrl } from "@/lib/openLink";
+import { isArtifactUrl } from "@/lib/artifactUrl";
 import { PathHoverContext } from "@/lib/pathHover";
 
 /** Artifact links in the chat's prose: cards (the reading view keeps links). */

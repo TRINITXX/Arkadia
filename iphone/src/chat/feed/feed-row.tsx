@@ -117,6 +117,9 @@ export const FeedRowView = memo(function FeedRowView({
             onSendNow={onSendNow}
             onRemove={onRemove}
             onEdit={onEdit}
+            onOpenPaste={(paste) =>
+              env.open({ kind: "paste", key: row.key, row, paste })
+            }
             editBlocked={editBlocked}
           />
         );

@@ -50,6 +50,14 @@ export const F = {
   /** An image's frame while it loads (`.chat-read-thumb img`). */
   thumbBg: "#111215",
   thumbLine: "rgba(255,255,255,0.14)",
+  /** An artifact link's card, touched as hovered (`.chat-artifact`). */
+  artifactBg: "#1d2024",
+  artifactLine: "#3a3f46",
+  artifactOnBg: "#221f1d",
+  artifactOnLine: "#5a3a2c",
+  /** A pasted text's tag in the user's bubble (`.chat-paste-chip`). */
+  pasteBg: "#2c2f36",
+  pasteLine: "#3d414a",
 } as const;
 
 /** Claude's markdown in the column's colours. */

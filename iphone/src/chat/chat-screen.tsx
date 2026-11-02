@@ -7,6 +7,7 @@ import {
   View,
 } from "react-native";
 import { router, Stack } from "expo-router";
+import { SymbolView } from "expo-symbols";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Subagent } from "@/lib/chat/chatState";
 import type { RemoteAction } from "@/lib/remoteActions";
@@ -20,11 +21,13 @@ import type {
 import { useAsksCoverComposer } from "~/chat/asks/use-asks-cover";
 import { ChatAsks } from "~/chat/chat-asks";
 import { ChatComposer } from "~/chat/chat-composer";
+import { ChatDocked } from "~/chat/chat-docked";
 import { ChatFeed } from "~/chat/chat-feed";
 import { ChatLiveLine } from "~/chat/chat-live-line";
 import { C } from "~/chat/chat-theme";
 import { putInComposer } from "~/chat/composer-inbox";
 import { AgentSheet } from "~/chat/feed/agent-sheet";
+import type { AgentSheetRender } from "~/chat/feed/feed-env";
 import { useChat, useChatLive } from "~/chat/use-chat";
 import { useMessageEdit } from "~/chat/use-message-edit";
 import { act, type Status } from "~/remote/connection";
@@ -72,12 +75,11 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
   // Files named from the chat's folder, as the desktop's (`shortPath`);
   // an older desktop doesn't send it: from the home folder then.
   const cwd = pane.cwd ?? null;
-  // A request, or the ❓ round unfolded, takes the input's place (desktop).
-  const covered = useAsksCoverComposer(chatId, state);
+  // A request takes the field's place, its status row kept under it; the ❓
+  // round unfolded takes the whole input's (desktop).
+  const cover = useAsksCoverComposer(chatId, state);
   // The pencil on the user's messages: back before one, its text to edit.
   const edit = useMessageEdit(chatId, state, actions);
-  // A running subagent's pill opened: its conversation in a sheet.
-  const [agent, setAgent] = useState<Subagent | null>(null);
   // « Messages seuls », per chat, as the desktop pane's (kept while the app runs).
   const [messagesOnly, setMessagesOnly] = useState(() =>
     MESSAGES_ONLY.has(chatId),
@@ -106,11 +108,22 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
     },
     [chatId],
   );
-  // A running subagent's pill opens its sheet.
-  const openAgent = useCallback((a: Subagent) => {
-    tap();
-    setAgent(a);
-  }, []);
+  // A finished agent's conversation, over the live line's list of them.
+  const agentSheet = useCallback<AgentSheetRender>(
+    (agent: Subagent | null, visible: boolean, onClose: () => void) => (
+      <AgentSheet
+        agent={agent}
+        visible={visible}
+        chatId={chatId}
+        live={live}
+        cwd={cwd}
+        actions={actions}
+        onChoose={onChoose}
+        onClose={onClose}
+      />
+    ),
+    [chatId, live, cwd, actions, onChoose],
+  );
   // A menu's item ticks as it's picked; what it sets off says how it went.
   const runToolbarButton = (buttonId: string) => {
     tick();
@@ -176,7 +189,23 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
                     { backgroundColor: project.color },
                   ]}
                 />
-                <Text style={styles.subtitleText}>{project.name}</Text>
+                <Text style={styles.subtitleText} numberOfLines={1}>
+                  {project.name}
+                </Text>
+                {/* The desktop's status line names the branch: « projet · ⎇ branche ». */}
+                {state.gitBranch && (
+                  <>
+                    <Text style={styles.subtitleText}>·</Text>
+                    <SymbolView
+                      name="arrow.triangle.branch"
+                      size={10}
+                      tintColor={SUBTITLE}
+                    />
+                    <Text style={styles.branch} numberOfLines={1}>
+                      {state.gitBranch}
+                    </Text>
+                  </>
+                )}
                 <AccountChip account={tab.account} />
                 <BadgeDot {...headerBadge(tab, pane)} />
               </View>
@@ -240,31 +269,46 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
           onEdit={edit.onEdit}
           editBlocked={edit.blocked !== null}
         />
-        <ChatLiveLine state={state} cwd={cwd} onOpenAgent={openAgent} />
-        <ChatAsks chatId={chatId} state={state} actions={actions} />
-        {/* Hidden, not unmounted, under an ask: its draft stays. */}
-        <View style={covered ? styles.hidden : null}>
+        <ChatLiveLine
+          chatId={chatId}
+          state={state}
+          cwd={cwd}
+          agentSheet={agentSheet}
+        />
+        {/* The desktop's order: the ❓ round, the running agents' pills and
+            the workflow card, then a request or the input. */}
+        <ChatAsks
+          chatId={chatId}
+          state={state}
+          actions={actions}
+          part="round"
+        />
+        <ChatDocked
+          chatId={chatId}
+          live={live}
+          cwd={cwd}
+          actions={actions}
+          onChoose={onChoose}
+        />
+        <ChatAsks
+          chatId={chatId}
+          state={state}
+          actions={actions}
+          part="request"
+        />
+        {/* Hidden, not unmounted, under the round: its draft stays. */}
+        <View style={cover === "round" ? styles.hidden : null}>
           <ChatComposer
             chatId={chatId}
             state={state}
             actions={actions}
             promptButtons={snapshot.promptButtons}
             bottomInset={insets.bottom}
-            covered={covered}
+            cover={cover}
           />
         </View>
-        {covered && <View style={{ height: insets.bottom }} />}
+        {cover === "round" && <View style={{ height: insets.bottom }} />}
       </KeyboardAvoidingView>
-      <AgentSheet
-        agent={agent}
-        visible={agent !== null}
-        chatId={chatId}
-        live={live}
-        cwd={cwd}
-        actions={actions}
-        onChoose={onChoose}
-        onClose={() => setAgent(null)}
-      />
     </>
   );
 }
@@ -291,16 +335,26 @@ function toolbarItems(
   );
 }
 
+/** iOS's secondary label grey, under the title. */
+const SUBTITLE = "#8e8e93";
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: C.bg },
   /**
-   * Hidden under an ask, kept mounted: Fabric unmounts a `display: none`
+   * Hidden under the round, kept mounted: Fabric unmounts a `display: none`
    * subtree, and with it the composer's /resume, /rewind, /mcp sheets.
    */
   hidden: { height: 0, overflow: "hidden" },
   title: { alignItems: "center", maxWidth: 230 },
   titleText: { color: "#ffffff", fontSize: 15, fontWeight: "600" },
-  subtitle: { flexDirection: "row", alignItems: "center", gap: 5 },
-  subtitleText: { color: "#8e8e93", fontSize: 12 },
+  subtitle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    maxWidth: "100%",
+  },
+  subtitleText: { flexShrink: 1, color: SUBTITLE, fontSize: 12 },
+  /** A long branch gives way first, the project's name after it. */
+  branch: { flexShrink: 2, color: SUBTITLE, fontSize: 12 },
   projectDot: { width: 8, height: 8, borderRadius: 4 },
 });

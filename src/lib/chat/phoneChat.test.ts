@@ -33,6 +33,19 @@ describe("phoneChatCommand", () => {
     expect(phoneDrives("visual_html")).toBe(false);
   });
 
+  it("asks the context's breakdown for the asking phone alone, as a look", () => {
+    expect(
+      phoneChatCommand(
+        "c",
+        { type: "context_detail", requestId: "r" },
+        to,
+        "C:/p",
+      ),
+    ).toEqual({ type: "context_detail", chatId: "c", requestId: "r", to });
+    // Its sheet open is no action: the PC keeps the tab.
+    expect(phoneDrives("context_detail")).toBe(false);
+  });
+
   it("passes on an ask whose answer is everyone's, unaddressed", () => {
     expect(phoneChatCommand("c", { type: "mcp_status" }, to, "C:/p")).toEqual({
       type: "mcp_status",

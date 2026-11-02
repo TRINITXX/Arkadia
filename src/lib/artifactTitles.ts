@@ -17,6 +17,23 @@ export function artifactId(url: string): string | null {
   return /\/artifact\/([^/?#]+)/.exec(url)?.[1] ?? null;
 }
 
+/**
+ * The name an artifact card shows, on the desktop and the iPhone: the title
+ * its page showed in the panel (`known`, the desktop's only), else the
+ * link's own words, else its id, shortened.
+ */
+export function artifactCardTitle(
+  href: string,
+  label: string,
+  known: string | null,
+): string {
+  if (known) return known;
+  const words = label.trim();
+  if (words && words !== href && !/^https?:/.test(words)) return words;
+  const id = artifactId(href) ?? "";
+  return id.length > 10 ? `${id.slice(0, 8)}…` : id;
+}
+
 function load(): Map<string, string> {
   try {
     const raw = window.localStorage.getItem(KEY);

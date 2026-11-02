@@ -119,7 +119,8 @@ export function unfoldPaste(
 
 /**
  * The texts sent from tags, for the user's frames to show them as tags
- * again. Kept by the page only: after a reload, the frames show them whole.
+ * again. Kept by the page; the message carries them too (`send`'s `pastes`,
+ * the item's `pastes`), for the phone and a reloaded page.
  */
 const sentPastes = new Set<string>();
 
@@ -183,4 +184,45 @@ export function pastesIn(text: string): string[] {
   return [...sentPastes]
     .filter((t) => text.includes(t))
     .sort((a, b) => b.length - a.length);
+}
+
+/**
+ * The pastes a user's frame shows as tags, the longest first: those its
+ * message carries (all the phone knows, and a reloaded page), and those this
+ * page sent (`pastesIn`), on the desktop and the iPhone alike (02/11/2026).
+ */
+export function framePastes(
+  text: string,
+  carried: readonly string[] = [],
+): string[] {
+  const all = new Set([
+    ...carried.filter((t) => text.includes(t)),
+    ...pastesIn(text),
+  ]);
+  return [...all].sort((a, b) => b.length - a.length);
+}
+
+/** A sent paste's tag in the user's frame: « Texte collé · 12 mots ». */
+export const sentPasteLabel = (text: string) =>
+  `Texte collé · ${plural(wordCount(text))}`;
+
+/** A sent paste's tag, as a link the frame's markdown draws as a chip. */
+const PASTE_HREF = "#arkadia-paste-";
+
+/** The frame's text with each paste as its tag's link (`pasteOfHref`). */
+export function withPasteTags(text: string, pastes: readonly string[]): string {
+  return pastes.reduce(
+    (t, paste, i) =>
+      t.split(paste).join(`[${sentPasteLabel(paste)}](${PASTE_HREF}${i})`),
+    text,
+  );
+}
+
+/** The paste a tag's link stands for; null: another link. */
+export function pasteOfHref(
+  href: string,
+  pastes: readonly string[],
+): string | null {
+  if (!href.startsWith(PASTE_HREF)) return null;
+  return pastes[Number(href.slice(PASTE_HREF.length))] ?? null;
 }

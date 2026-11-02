@@ -3,6 +3,12 @@ import { CircleAlert, CircleCheck, OctagonX } from "lucide-react";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import type { Subagent } from "@/lib/chat/chatState";
 import { toolStep } from "@/lib/chat/chatSteps";
+import {
+  agentElapsed,
+  pillsThatFit,
+  stopPending,
+  type SentStop,
+} from "@/lib/chat/chatTasks";
 import { fitAbove } from "@/lib/chat/fitAbove";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 
@@ -12,8 +18,6 @@ import { useChatLayer } from "@/lib/chat/useChatLayers";
  * on leaving; the gap up to it is bridged in the CSS.
  */
 const OPEN_AFTER_MS = 500;
-/** A stop sent and the agent still running this long: the button again. */
-const STOP_RETRY_MS = 10_000;
 /** Between two pills, and the « +N » pill's room, as the CSS draws them. */
 const GAP_PX = 6;
 const MORE_PX = 48;
@@ -21,17 +25,11 @@ const MORE_PX = 48;
 const MORE = "+";
 
 /** A pill's stop: asked, or sent (when, to which run of the agent). */
-type StopState =
-  | { step: "ask" }
-  | { step: "sent"; at: number; run: number | undefined };
-
-/** How long it has run, or ran. */
-const elapsedOf = (agent: Subagent, now: number) =>
-  agent.startedAt ? (agent.endedAt ?? now) - agent.startedAt : agent.durationMs;
+type StopState = { step: "ask" } | ({ step: "sent" } & SentStop);
 
 const figures = (agent: Subagent, now: number) =>
   [
-    elapsedLabel(elapsedOf(agent, now)),
+    elapsedLabel(agentElapsed(agent, now)),
     agent.tokens > 0 && `${tokensLabel(agent.tokens)} tokens`,
   ]
     .filter(Boolean)
@@ -102,22 +100,10 @@ export function ChatAgentCards({
     const measure = measureRef.current;
     if (!row || !measure) return;
     const compute = () => {
-      const width = row.clientWidth;
       const widths = [...measure.children].map(
         (c) => (c as HTMLElement).offsetWidth,
       );
-      const total = widths.reduce((s, w, i) => s + w + (i ? GAP_PX : 0), 0);
-      let n = widths.length;
-      if (total > width) {
-        let used = 0;
-        n = 0;
-        for (const w of widths) {
-          const next = used + (n ? GAP_PX : 0) + w;
-          if (next + GAP_PX + MORE_PX > width) break;
-          used = next;
-          n++;
-        }
-      }
+      const n = pillsThatFit(widths, row.clientWidth, GAP_PX, MORE_PX);
       setFit((f) => (f === n ? f : n));
     };
     compute();
@@ -156,7 +142,7 @@ export function ChatAgentCards({
     <>
       <StatusIcon agent={agent} />
       <span className="name">{agent.description || "Sous-agent"}</span>
-      <span className="t">{elapsedLabel(elapsedOf(agent, now))}</span>
+      <span className="t">{elapsedLabel(agentElapsed(agent, now))}</span>
     </>
   );
   return (
@@ -268,13 +254,9 @@ function AgentDetail({
 }) {
   const running = agent.status === "running";
   const asking = running && stop?.step === "ask";
-  // No end within STOP_RETRY_MS (the stop failed or went unheard), or the
-  // agent run again (SendMessage): the button is back.
-  const stopping =
-    running &&
-    stop?.step === "sent" &&
-    stop.run === agent.startedAt &&
-    now - stop.at < STOP_RETRY_MS;
+  // No end within `STOP_RETRY_MS` (the stop failed or went unheard), or the
+  // agent run again (SendMessage): the button is back (`stopPending`).
+  const stopping = stop?.step === "sent" && stopPending(stop, agent, now);
   // Its AI summary comes every ~30 s; before it, the line is its last action.
   const summary = agent.summary?.split("\n")[0];
   const action = agent.lastAction

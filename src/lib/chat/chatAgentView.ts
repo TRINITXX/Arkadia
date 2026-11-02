@@ -72,6 +72,23 @@ export function workflowAgentSubagent(agent: WorkflowAgent): Subagent {
 }
 
 /**
+ * An agent's sheet as the agent is now (its figures move): the chat's
+ * subagent, else a workflow's agent, else as it was opened.
+ */
+export function currentAgent(
+  state: Pick<ChatState, "subagents" | "workflows">,
+  opened: Subagent,
+): Subagent {
+  const live = state.subagents.find((s) => s.taskId === opened.taskId);
+  if (live) return live;
+  for (const wf of state.workflows) {
+    const a = wf.agents.find((x) => x.agentId === opened.taskId);
+    if (a) return workflowAgentSubagent(a);
+  }
+  return opened;
+}
+
+/**
  * Each shell's command line, by task id, from the Bash call that started it:
  * the main loop's (a column item) or a subagent's (its live messages).
  */
