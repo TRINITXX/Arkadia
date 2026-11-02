@@ -53,26 +53,31 @@ export function useDictation() {
   useEffect(() => {
     const m = ExpoSpeechRecognitionModule;
     mounted.current = true;
+    // The module is one for the whole app: a chat's input and an ask's field
+    // each have their dictation, and only the one listening hears its events.
     const subs = [
       m.addListener("result", (e) => {
+        if (!listeningRef.current) return;
         transcriptRef.current = addResult(transcriptRef.current, e);
         const text = transcriptText(transcriptRef.current);
         setState((s) => ({ ...s, transcript: text }));
       }),
       m.addListener("volumechange", (e) => {
+        if (!listeningRef.current) return;
         setState((s) => ({
           ...s,
           level: Math.max(0, Math.min(e.value / 10, 1)),
         }));
       }),
       m.addListener("error", (e) => {
-        if (e.error === "aborted") return;
+        if (!listeningRef.current || e.error === "aborted") return;
         setState((s) => ({
           ...s,
           error: ERRORS[e.error] ?? "La dictée a échoué.",
         }));
       }),
       m.addListener("end", () => {
+        if (!listeningRef.current) return;
         listeningRef.current = false;
         const text = transcriptText(transcriptRef.current);
         setState((s) => ({ ...s, phase: "idle", level: 0, transcript: text }));

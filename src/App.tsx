@@ -121,16 +121,26 @@ import { dropHeldConv } from "@/lib/convStore";
 import { isBlankShell } from "@/lib/blankShell";
 import {
   chatActivity,
+  chatCommand,
   chatReplaying,
   closeChat,
   IDLE_CHAT,
 } from "@/lib/chat/chatEvents";
 import { dropDraft, moveDraft } from "@/lib/chat/chatDrafts";
 import {
+  attachLiveChat,
   dropLiveChat,
   liveChatState,
   liveSessionId,
+  markPhoneWithdrawal,
+  startLiveChat,
 } from "@/lib/chat/chatLive";
+import {
+  phoneChatCommand,
+  phonePromptButton,
+  phoneTarget,
+} from "@/lib/chat/phoneChat";
+import { isListed } from "@/lib/chat/chatSlash";
 import { dropSheet, openRoundSheet } from "@/lib/chat/chatSheetAnswers";
 import { useChatLimitSwitch } from "@/lib/chat/useChatLimitSwitch";
 import { PromptButtonsContext } from "@/lib/chat/promptButtonsContext";
@@ -1337,6 +1347,8 @@ export function App() {
       session: ClaudeSession,
       /** False from the phone: the desktop view stays where it is. */
       activate = true,
+      /** False for a client that reads terminals only (the old web page). */
+      asChat = true,
     ) => {
       // Never two Claude Code on one session (/resume's rule, `paneHolding`).
       const chats = chatResumeRef.current;
@@ -1349,8 +1361,6 @@ export function App() {
           return { tabId: heldTab, paneId: held };
         }
       }
-      // As a chat, except from the phone: it reads terminals only.
-      const asChat = activate ? chats : null;
       const target = resolveProjectTarget(projects, session.cwd);
       let project: Project | undefined;
       if (target.kind === "existing") {
@@ -1368,19 +1378,20 @@ export function App() {
         setProjects((prev) => [...prev, project as Project]);
       }
       if (!project) return null;
+      const chat = asChat ? chats : null;
       // `ccd` is the user's pwsh alias for Claude (skip-permissions + effort)
       // and forwards its args, so --resume passes straight through.
       const spawned = await spawnTabFor(
         project,
-        asChat ? undefined : `ccd --resume ${session.id}`,
+        chat ? undefined : `ccd --resume ${session.id}`,
         session.cwd,
         undefined,
         activate,
       );
       if (!spawned) return null;
       // The pane's shell stays under the chat, for a later switch.
-      if (asChat)
-        asChat.start(spawned.paneId, { cwd: session.cwd, resume: session.id });
+      if (chat)
+        chat.start(spawned.paneId, { cwd: session.cwd, resume: session.id });
       if (activate) setActiveProjectId(project.id);
       // The project is where the user is about to work: surface it in the
       // sidebar's "Active" list now, not on the first keystroke.
@@ -2899,18 +2910,20 @@ export function App() {
   const runToolbarAction = useCallback(
     async (
       button: ActionButton,
-      /** From the phone: its project and pane; the desktop view stays put. */
-      remote?: { project: Project; paneId: string | null },
+      /** From the phone: its project and pane; the desktop view stays put.
+       *  `chat`: it shows chats (the iPhone app, not the old web page). */
+      remote?: { project: Project; paneId: string | null; chat?: boolean },
     ): Promise<string | null> => {
       const project = remote?.project ?? activeProject;
       if (!project) return null;
       const sendCommand = async (paneId: string) => {
-        // Claude opens as a chat rather than in the terminal, except from
-        // the phone: it reads terminals only.
+        // Claude opens as a chat rather than in the terminal, for a client
+        // that shows chats (the iPhone app since 02/11/2026).
         const pane = tabsRef.current.map((t) => t.panes[paneId]).find(Boolean);
-        const chat = remote
-          ? null
-          : chatForCommand(button.command, pane?.cwd ?? project.path);
+        const chat =
+          remote && !remote.chat
+            ? null
+            : chatForCommand(button.command, pane?.cwd ?? project.path);
         if (chat) {
           startChat(paneId, chat);
           return;
@@ -3007,7 +3020,10 @@ export function App() {
   // Phone companion: actions relayed by the Rust server, run with the same
   // functions as the desktop UI. The desktop view never jumps to their tab.
   const handleRemoteAction = useCallback(
-    async (action: RemoteAction): Promise<RemoteActionResult> => {
+    async (
+      action: RemoteAction,
+      client: number,
+    ): Promise<RemoteActionResult> => {
       switch (action.kind) {
         case "newTab": {
           const project = projects.find((p) => p.id === action.projectId);
@@ -3033,23 +3049,48 @@ export function App() {
           const tabId = await runToolbarAction(button, {
             project,
             paneId: action.paneId,
+            chat: action.chat === true,
           });
           return tabId ? { tabId } : {};
         }
         case "promptButton": {
           const button = actionButton(promptButtons, action.buttonId);
           if (!button) return { error: "bouton introuvable" };
+          // A chat's input is the phone's own: a button that only types
+          // gives its text back, one that submits runs as the desktop's
+          // « Commandes » runs it (`phonePromptButton`).
+          const pane = tabsRef.current
+            .map((t) => t.panes[action.paneId])
+            .find(Boolean);
+          if (pane?.chat) {
+            const live = liveChatState(pane.id);
+            const run = phonePromptButton(button, (name) =>
+              isListed(live.commands, live.slashCommands, name),
+            );
+            if (run.kind === "refuse") return { error: run.reason };
+            if (run.kind === "type") return { text: run.text };
+            await chatCommand(
+              pane.accountId,
+              run.kind === "bash"
+                ? {
+                    type: "bash",
+                    chatId: pane.id,
+                    id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+                    command: run.command,
+                  }
+                : { type: "send", chatId: pane.id, text: run.text },
+              "phone",
+            );
+            return {};
+          }
           await runPromptAction(button, action.paneId);
           return {};
         }
         case "resume": {
-          // Open as a chat on the PC: the phone reads terminals only.
-          const held = await chatResumeRef.current?.holding(action.session.id);
-          if (held && tabsRef.current.some((t) => t.panes[held]?.chat))
-            return { error: "conversation ouverte en chat sur le PC" };
           // Already running in a tab: show that one, never a second Claude
           // on the same transcript (the desktop overlay does the same). A
-          // chat's pane map names its old terminal's session, not its own.
+          // chat's pane map names its old terminal's session, not its own:
+          // `resumeSession` finds a chat by its own session.
           const panes = tabs.flatMap((t) =>
             Object.values(t.panes)
               .filter((p) => !p.chat)
@@ -3064,7 +3105,11 @@ export function App() {
           );
           const live = panes.find((_, i) => owners[i] === action.session.id);
           if (live) return { tabId: live.tabId };
-          const spawned = await resumeSession(action.session, false);
+          const spawned = await resumeSession(
+            action.session,
+            false,
+            action.chat === true,
+          );
           return spawned
             ? { tabId: spawned.tabId }
             : { error: "session non reprise" };
@@ -3081,6 +3126,49 @@ export function App() {
         case "autoSwitch":
           setAutoSwitchOnLimit(action.on);
           return {};
+        case "chatOpen": {
+          const pane = tabsRef.current
+            .map((t) => t.panes[action.chatId])
+            .find(Boolean);
+          if (!pane?.chat) return { error: "Ce volet n’est plus un chat" };
+          // Opened from the phone as from the desktop: one never started
+          // (another project's) or ended starts on its session. A mere
+          // catch-up never starts it: the desktop pane would then think it
+          // runs (`attachLiveChat`).
+          if (action.restart && attachLiveChat(pane.id, pane.accountId))
+            await startLiveChat(pane.id, pane.accountId, pane.chat);
+          // A catch-up of a chat whose server isn't running fails with
+          // `SERVER_GONE`: Rust never starts a server for it (`chat.rs`).
+          await chatCommand(
+            pane.accountId,
+            { type: "phone_replay", chatId: pane.id, to: phoneTarget(client) },
+            "phone",
+          );
+          return {};
+        }
+        case "chatCommand": {
+          const pane = tabsRef.current
+            .map((t) => t.panes[action.chatId])
+            .find(Boolean);
+          if (!pane?.chat) return { error: "Ce volet n’est plus un chat" };
+          const command = phoneChatCommand(
+            pane.id,
+            action.command,
+            phoneTarget(client),
+            pane.chat.cwd,
+          );
+          if (!command)
+            return { error: "commande refusée depuis le téléphone" };
+          // Withdrawn from the phone: its text goes back there, not here.
+          if (command.type === "cancel_queued")
+            markPhoneWithdrawal(pane.id, command.uuid);
+          await chatCommand(pane.accountId, command, "phone");
+          return {};
+        }
+        case "chatToggle": {
+          const refused = await chatHandlers.onToggle(action.paneId);
+          return refused ? { error: refused } : {};
+        }
       }
     },
     [
@@ -3095,6 +3183,7 @@ export function App() {
       runPromptAction,
       resumeSession,
       accounts,
+      chatHandlers,
     ],
   );
   useRemoteActions(handleRemoteAction);
@@ -3226,7 +3315,7 @@ export function App() {
               <ChatModeToggle
                 mode={activeModePane.chat ? "chat" : "terminal"}
                 busy={chatHandlers.switching.has(activeModePane.id)}
-                onSwitch={() => chatHandlers.onToggle(activeModePane.id)}
+                onSwitch={() => void chatHandlers.onToggle(activeModePane.id)}
               />
             ) : null
           }

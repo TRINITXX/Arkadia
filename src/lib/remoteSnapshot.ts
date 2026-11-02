@@ -40,6 +40,8 @@ export interface RemotePane {
   badge: RemoteBadge;
   /** Has run Claude: the phone shows the prompt bar buttons for it. */
   claude: boolean;
+  /** Claude as a chat, not in the terminal: the phone shows its chat. */
+  chat: boolean;
 }
 
 export interface RemoteTab {
@@ -74,6 +76,8 @@ export interface RemoteButton {
   icon: string;
   /** Folders only, in display order. */
   children?: RemoteButton[];
+  /** A keyboard shortcut (`mode: "keys"`): a terminal's, never a chat's. */
+  keys?: true;
 }
 
 export interface RemoteSnapshot {
@@ -137,6 +141,9 @@ function remoteButtons(buttons: ToolbarButton[]): RemoteButton[] {
       label: b.label,
       icon: b.icon,
       ...(b.kind === "folder" ? { children: remoteButtons(b.children) } : {}),
+      ...(b.kind === "action" && b.mode === "keys"
+        ? { keys: true as const }
+        : {}),
     }));
 }
 
@@ -157,6 +164,7 @@ function remoteTab(
       title: plainTitle(tab.panes[id].title),
       badge: badgeOf(paneStates[id]),
       claude: claudePaneIds.has(id),
+      chat: !!tab.panes[id].chat,
     })),
     account: accountMarks[tab.id] ?? null,
   };

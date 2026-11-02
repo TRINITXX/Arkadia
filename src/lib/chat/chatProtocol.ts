@@ -360,6 +360,7 @@ export type ChatCommand =
       cwd: string;
       limit: number;
       agentId: string;
+      to?: string;
     }
   | { type: "sessions"; chatId: string; requestId: string }
   | { type: "rewind_points"; chatId: string; requestId: string }
@@ -382,9 +383,15 @@ export type ChatCommand =
   /** Stops one background task (« Arrêter le workflow »). */
   | { type: "stop_task"; chatId: string; taskId: string }
   /** The end of a background shell's output, answered by `task_output`. */
-  | { type: "task_output"; chatId: string; taskId: string }
+  | { type: "task_output"; chatId: string; taskId: string; to?: string }
   /** The `limit` messages of the session just before the message `before`. */
-  | { type: "older"; chatId: string; before: string; limit: number }
+  | {
+      type: "older";
+      chatId: string;
+      before: string;
+      limit: number;
+      to?: string;
+    }
   /** The session's effort, for this session only (never saved). */
   | { type: "set_effort"; chatId: string; effort: EffortLevel }
   /** Withdraws a message Claude hasn't taken yet (`queued_removed`). */
@@ -424,7 +431,13 @@ export type ChatCommand =
   /** What the page's offscreen render of a visual found (`chatVisualProbe`). */
   | { type: "visual_report"; chatId: string; checkId: string; report: unknown }
   /** A past visual's page with its images in (answered by `visual_html`). */
-  | { type: "visual_html"; chatId: string; toolUseId: string }
+  | { type: "visual_html"; chatId: string; toolUseId: string; to?: string }
+  /**
+   * The phone opened the chat: its life replayed to that phone alone
+   * (`to`: `phone:<client>`), never to this page. `to` on a read above: its
+   * answer goes to that phone alone too (`RemoteHub::chat_line`).
+   */
+  | { type: "phone_replay"; chatId: string; to: string }
   /** « Ouvrir dans le navigateur »: the page as the card shows it. */
   | { type: "visual_open"; chatId: string; html: string; title: string }
   | { type: "close"; chatId: string };

@@ -114,6 +114,15 @@ impl PhoneFollow {
         }
     }
 
+    /// The phone left `pane`, if it still shows it: a screen it opened
+    /// meanwhile (its next `watch` or chat) keeps its place.
+    pub fn stop_watching(&self, client: u64, pane: &str) {
+        let mut inner = self.inner.lock();
+        if inner.watching.get(&client).is_some_and(|p| p == pane) {
+            inner.watching.remove(&client);
+        }
+    }
+
     /// The desktop relaunched `old` as `new` (another account): the phone
     /// still drives the same tab.
     pub fn replace(&self, old: &str, new: &str) {

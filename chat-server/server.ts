@@ -125,7 +125,7 @@ export type Command =
   | { type: "set_mode"; chatId: string; mode: PermissionMode }
   | { type: "set_model"; chatId: string; model: string }
   /** A subagent's conversation (its sheet): never the session's, whatever comes. */
-  | { type: "agent_history"; chatId: string; sessionId: string; cwd: string; limit: number; agentId: string }
+  | { type: "agent_history"; chatId: string; sessionId: string; cwd: string; limit: number; agentId: string; to?: string }
   | {
       type: "history";
       chatId: string;
@@ -135,6 +135,8 @@ export type Command =
       limit: number;
       /** A subagent's own conversation instead of the session's. */
       agentId?: string;
+      /** The phone that asked (`phone:<client>`): the answer goes to it alone. */
+      to?: string;
     }
   /** /resume's list: the folder's sessions. */
   | { type: "sessions"; chatId: string; requestId: string }
@@ -158,9 +160,9 @@ export type Command =
   /** Stops one background task (« Arrêter le workflow »). */
   | { type: "stop_task"; chatId: string; taskId: string }
   /** The end of a background shell's output, answered by `task_output`. */
-  | { type: "task_output"; chatId: string; taskId: string }
+  | { type: "task_output"; chatId: string; taskId: string; to?: string }
   /** « Charger les messages plus anciens »: the page before `before`. */
-  | { type: "older"; chatId: string; before: string; limit: number }
+  | { type: "older"; chatId: string; before: string; limit: number; to?: string }
   /** The session's effort, for this session only: never saved. */
   | { type: "set_effort"; chatId: string; effort: EffortLevel }
   /** Withdraws a message Claude hasn't taken yet. */
@@ -196,7 +198,12 @@ export type Command =
   /** The page rendered a visual (`visual_check`): what broke, for the tool's result. */
   | { type: "visual_report"; chatId: string; checkId: string; report: unknown }
   /** A past visual's page with its images in (`storedVisual`), for a resumed chat. */
-  | { type: "visual_html"; chatId: string; toolUseId: string }
+  | { type: "visual_html"; chatId: string; toolUseId: string; to?: string }
+  /**
+   * The phone opened the chat: its life replayed to that phone alone (`to`,
+   * `phone:<client>`), never to the page, which shows it already.
+   */
+  | { type: "phone_replay"; chatId: string; to: string }
   /** « Ouvrir dans le navigateur »: the page as the column shows it, theme in. */
   | { type: "visual_open"; chatId: string; html: string; title: string }
   | { type: "close"; chatId: string };
@@ -480,10 +487,15 @@ export type ServerEvent =
   | { type: "closed"; chatId: string; error?: string }
   | { type: "error"; chatId?: string; message: string };
 
-function emit(event: ServerEvent): void {
+/**
+ * Writes an event for Arkadia. With `to` (`phone:<client>`), Rust hands it to
+ * that phone alone, never to the page: a phone's replay, or the answer to a
+ * phone's own read (`RemoteHub::chat_line`).
+ */
+function emit(event: ServerEvent, to?: string): void {
   let line: string;
   try {
-    line = JSON.stringify(event);
+    line = JSON.stringify(to ? { ...event, to } : event);
   } catch (e) {
     // An event that won't serialize ends nothing: its chat hears why.
     line = JSON.stringify({
@@ -493,6 +505,11 @@ function emit(event: ServerEvent): void {
     });
   }
   process.stdout.write(`${line}\n`);
+}
+
+/** The phone a command came from (`to` of its reads), for its error too. */
+function replyTo(cmd: Command): string | undefined {
+  return "to" in cmd && typeof cmd.to === "string" ? cmd.to : undefined;
 }
 
 /** The user's Claude Code, so the chat runs the same version as the terminal. */
@@ -1109,8 +1126,28 @@ class Chat {
     // The visuals still being checked, page and all: the page checks them.
     for (const page of this.visualPages.values()) emit(page);
     emit({ type: "replayed", chatId: this.chatId });
-    // The status bar's figures again: a long turn may have pushed them out of
-    // the log, and the quotas replayed may date from long ago.
+    this.refreshFigures();
+  }
+
+  /**
+   * The same life for one phone (`to`): the page shows it already. Not the
+   * visuals being checked: the page checks them, the phone only shows them.
+   */
+  replayTo(to: string): void {
+    emit({ type: "attached", chatId: this.chatId }, to);
+    if (this.commands) emit({ type: "commands", chatId: this.chatId, commands: this.commands }, to);
+    for (const event of this.log) emit(event, to);
+    for (const { latest } of this.workflows.values()) if (latest) emit(latest, to);
+    emit({ type: "replayed", chatId: this.chatId }, to);
+    this.refreshFigures();
+  }
+
+  /**
+   * The status bar's figures again, for everyone (the same values change
+   * nothing for one who has them): a long turn may have pushed them out of
+   * the log, and the quotas replayed may date from long ago.
+   */
+  private refreshFigures(): void {
     this.branch = undefined;
     void this.reportBranch();
     void this.ready
@@ -1772,9 +1809,9 @@ class Chat {
    * Claude Code decodes it as UTF-8: an output in the console's code page
    * (Windows' own programs) is read again from its file (`readConsoleTail`).
    */
-  async taskOutput(taskId: string): Promise<void> {
+  async taskOutput(taskId: string, to?: string): Promise<void> {
     if (this.asleep) {
-      emit({ type: "task_output", chatId: this.chatId, taskId, output: "", truncated: false, error: "Claude est en veille" });
+      emit({ type: "task_output", chatId: this.chatId, taskId, output: "", truncated: false, error: "Claude est en veille" }, to);
       return;
     }
     const q = (await this.ready) as Query & {
@@ -1789,9 +1826,9 @@ class Chat {
         const again = await readConsoleTail(file);
         if (again) ({ output, truncated } = again);
       }
-      emit({ type: "task_output", chatId, taskId, output, truncated });
+      emit({ type: "task_output", chatId, taskId, output, truncated }, to);
     } catch (e) {
-      emit({ type: "task_output", chatId, taskId, output: "", truncated: false, error: String(e) });
+      emit({ type: "task_output", chatId, taskId, output: "", truncated: false, error: String(e) }, to);
     }
   }
 
@@ -1948,29 +1985,35 @@ class Chat {
    * 31/10/2026, `includeSystemMessages` too): a page shown from before a
    * compaction has nothing older to reach, and says so (`unreachable`).
    */
-  async older(before: string, limit: number): Promise<void> {
+  async older(before: string, limit: number, to?: string): Promise<void> {
     if (!this.sessionId) throw new Error("Pas encore de conversation à remonter");
     const all = await getSessionMessages(this.sessionId, { dir: this.cwd });
     const at = all.findIndex((m) => m.uuid === before);
     if (at < 0) {
-      emit({
-        type: "history",
-        chatId: this.chatId,
-        messages: [],
-        truncated: false,
-        older: true,
-        unreachable: true,
-      });
+      emit(
+        {
+          type: "history",
+          chatId: this.chatId,
+          messages: [],
+          truncated: false,
+          older: true,
+          unreachable: true,
+        },
+        to,
+      );
       return;
     }
     const from = Math.max(0, at - Math.min(limit, HISTORY_LIMIT));
-    emit({
-      type: "history",
-      chatId: this.chatId,
-      messages: all.slice(from, at),
-      truncated: from > 0,
-      older: true,
-    });
+    emit(
+      {
+        type: "history",
+        chatId: this.chatId,
+        messages: all.slice(from, at),
+        truncated: from > 0,
+        older: true,
+      },
+      to,
+    );
   }
 
   /** /rewind's « code seul »: the files go back, the conversation stays. */
@@ -2072,13 +2115,16 @@ async function history(cmd: Extract<Command, { type: "history" }>) {
     ? await getSubagentMessages(cmd.sessionId, cmd.agentId, { dir: cmd.cwd })
     : await getSessionMessages(cmd.sessionId, { dir: cmd.cwd });
   const messages = all.slice(-cmd.limit);
-  emit({
-    type: "history",
-    chatId: cmd.chatId,
-    agentId: cmd.agentId,
-    messages,
-    truncated: all.length > messages.length,
-  });
+  emit(
+    {
+      type: "history",
+      chatId: cmd.chatId,
+      agentId: cmd.agentId,
+      messages,
+      truncated: all.length > messages.length,
+    },
+    cmd.to,
+  );
 }
 
 /** How many of the folder's sessions /resume lists. */
@@ -2087,7 +2133,7 @@ const SESSIONS_LIMIT = 60;
 /** A past visual's page with its images in, if one was kept (`visual.ts`). */
 async function visualHtml(cmd: Extract<Command, { type: "visual_html" }>): Promise<void> {
   const html = await storedVisual(cmd.toolUseId);
-  emit({ type: "visual_html", chatId: cmd.chatId, toolUseId: cmd.toolUseId, html });
+  emit({ type: "visual_html", chatId: cmd.chatId, toolUseId: cmd.toolUseId, html }, cmd.to);
 }
 
 /**
@@ -2234,6 +2280,13 @@ async function handle(cmd: Command): Promise<void> {
     return;
   }
   if (cmd.type === "history") return history(cmd);
+  if (cmd.type === "phone_replay") {
+    const running = chats.get(cmd.chatId);
+    if (running) return running.replayTo(cmd.to);
+    // Not running: the phone shows it ended, with « Reprendre ».
+    emit({ type: "closed", chatId: cmd.chatId }, cmd.to);
+    return;
+  }
   if (cmd.type === "sleep_after") {
     const after = readSleepAfter(cmd.ms);
     if (after !== undefined) sleepAfterMs = after;
@@ -2249,7 +2302,7 @@ async function handle(cmd: Command): Promise<void> {
   if (cmd.type === "agent_history") {
     // An agent's sheet with no agent: an error, never the session's past.
     if (typeof cmd.agentId !== "string" || !cmd.agentId) {
-      emit({ type: "error", chatId: cmd.chatId, message: "Sous-agent inconnu" });
+      emit({ type: "error", chatId: cmd.chatId, message: "Sous-agent inconnu" }, replyTo(cmd));
       return;
     }
     return history({ ...cmd, type: "history" });
@@ -2258,7 +2311,7 @@ async function handle(cmd: Command): Promise<void> {
   // Arkadia closes the chat of every pane it closes, chat or not.
   if (!chat && cmd.type === "close") return;
   if (!chat) {
-    emit({ type: "error", chatId: cmd.chatId, message: "Conversation fermée" });
+    emit({ type: "error", chatId: cmd.chatId, message: "Conversation fermée" }, replyTo(cmd));
     return;
   }
   if (ACTIVE_COMMANDS.has(cmd.type)) chat.touch();
@@ -2283,16 +2336,16 @@ async function handle(cmd: Command): Promise<void> {
       return run;
     }
     case "older":
-      return chat.older(cmd.before, cmd.limit).catch((e: unknown) => {
+      return chat.older(cmd.before, cmd.limit, cmd.to).catch((e: unknown) => {
         const message = e instanceof Error ? e.message : String(e);
-        emit({ type: "error", chatId: cmd.chatId, message });
+        emit({ type: "error", chatId: cmd.chatId, message }, cmd.to);
       });
     case "background":
       return chat.background(cmd.toolUseIds);
     case "stop_task":
       return chat.stopTask(cmd.taskId);
     case "task_output":
-      return chat.taskOutput(cmd.taskId);
+      return chat.taskOutput(cmd.taskId, cmd.to);
     case "restore_code":
       return chat.restoreCode(cmd.before).catch((e: unknown) => {
         const message = e instanceof Error ? e.message : String(e);
@@ -2338,7 +2391,10 @@ lines.on("line", (line) => {
     return;
   }
   handle(cmd).catch((e: unknown) =>
-    emit({ type: "error", chatId: "chatId" in cmd ? cmd.chatId : undefined, message: String(e) }),
+    emit(
+      { type: "error", chatId: "chatId" in cmd ? cmd.chatId : undefined, message: String(e) },
+      replyTo(cmd),
+    ),
   );
 });
 // Arkadia closed our stdin: it is gone, so are the chats.

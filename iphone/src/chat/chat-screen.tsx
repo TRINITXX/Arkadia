@@ -1,0 +1,239 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Alert,
+  KeyboardAvoidingView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { router, Stack } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import type { Subagent } from "@/lib/chat/chatState";
+import type { RemoteAction } from "@/lib/remoteActions";
+import type {
+  RemoteButton,
+  RemotePane,
+  RemoteProject,
+  RemoteSnapshot,
+  RemoteTab,
+} from "@/lib/remoteSnapshot";
+import { useAsksCoverComposer } from "~/chat/asks/use-asks-cover";
+import { ChatAsks } from "~/chat/chat-asks";
+import { ChatComposer } from "~/chat/chat-composer";
+import { ChatFeed } from "~/chat/chat-feed";
+import { ChatLiveLine } from "~/chat/chat-live-line";
+import { C } from "~/chat/chat-theme";
+import { putInComposer } from "~/chat/composer-inbox";
+import { AgentSheet } from "~/chat/feed/agent-sheet";
+import { useChat, useChatLive } from "~/chat/use-chat";
+import { act, type Status } from "~/remote/connection";
+import { sfIcon } from "~/ui/sf-icon";
+import { AccountChip, BadgeDot } from "~/ui/status-dots";
+
+interface ChatScreenProps {
+  snapshot: RemoteSnapshot;
+  project: RemoteProject;
+  tab: RemoteTab;
+  pane: RemotePane;
+  status: Status;
+}
+
+async function run(action: RemoteAction) {
+  try {
+    return await act(action);
+  } catch (e) {
+    Alert.alert(
+      "Action impossible",
+      e instanceof Error ? e.message : String(e),
+    );
+    return null;
+  }
+}
+
+/**
+ * A chat pane, live: the desktop column on the phone (mockup A of
+ * 02/11/2026). The conversation, what waits for an answer, the line that
+ * says Claude works, then the input. The header's menu holds what the
+ * terminal screen's does, and the switch to the terminal.
+ */
+export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
+  const insets = useSafeAreaInsets();
+  const chatId = pane.id;
+  const actions = useChat(chatId);
+  const live = useChatLive(chatId);
+  const { state } = live;
+  // A request, or the ❓ round unfolded, takes the input's place (desktop).
+  const covered = useAsksCoverComposer(chatId, state);
+  // A running subagent's pill opened: its conversation in a sheet.
+  const [agent, setAgent] = useState<Subagent | null>(null);
+  // An action answered after this screen left must not navigate from it.
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
+
+  const onChoose = useCallback(
+    (text: string) => putInComposer(chatId, text, "choice"),
+    [chatId],
+  );
+  const runToolbarButton = (buttonId: string) =>
+    void run({
+      kind: "runButton",
+      projectId: project.id,
+      paneId: null,
+      buttonId,
+      chat: true,
+    });
+  const newTab = async () => {
+    const result = await run({ kind: "newTab", projectId: project.id });
+    if (result?.tabId && mounted.current)
+      router.replace({ pathname: "/tab/[id]", params: { id: result.tabId } });
+  };
+  const closeTab = () =>
+    Alert.alert("Fermer cet onglet ?", "Ce qui y tourne s’arrête.", [
+      { text: "Annuler", style: "cancel" },
+      {
+        text: "Fermer l’onglet",
+        style: "destructive",
+        onPress: () => {
+          void run({ kind: "closeTab", tabId: tab.id });
+          router.back();
+        },
+      },
+    ]);
+  const toTerminal = () =>
+    void actions.toggle().catch((e: unknown) =>
+      Alert.alert(
+        "Bascule impossible",
+        e instanceof Error ? e.message : String(e),
+      ),
+    );
+
+  return (
+    <>
+      <Stack.Screen
+        options={{
+          headerStyle: { backgroundColor: C.bg },
+          headerTitle: () => (
+            <View style={styles.title}>
+              <Text style={styles.titleText} numberOfLines={1}>
+                {state.title ?? tab.title}
+              </Text>
+              <View style={styles.subtitle}>
+                <View
+                  style={[styles.projectDot, { backgroundColor: project.color }]}
+                />
+                <Text style={styles.subtitleText}>{project.name}</Text>
+                <AccountChip account={tab.account} />
+                <BadgeDot badge={pane.badge ?? tab.badge} />
+              </View>
+            </View>
+          ),
+        }}
+      />
+      <Stack.Toolbar placement="right">
+        <Stack.Toolbar.Menu icon="ellipsis">
+          {tab.panes.length > 1 && (
+            <Stack.Toolbar.Menu inline title="Volets">
+              {tab.panes.map((p, i) => (
+                <Stack.Toolbar.MenuAction
+                  key={p.id}
+                  isOn={p.id === pane.id}
+                  onPress={() => {
+                    if (p.id !== pane.id)
+                      router.setParams({ id: tab.id, pane: p.id });
+                  }}
+                >
+                  {`${i + 1}. ${p.title}`}
+                </Stack.Toolbar.MenuAction>
+              ))}
+            </Stack.Toolbar.Menu>
+          )}
+          <Stack.Toolbar.MenuAction icon="terminal" onPress={toTerminal}>
+            Passer en terminal
+          </Stack.Toolbar.MenuAction>
+          <Stack.Toolbar.Menu inline title={project.name}>
+            <Stack.Toolbar.MenuAction icon="plus" onPress={() => void newTab()}>
+              Nouvel onglet
+            </Stack.Toolbar.MenuAction>
+            {toolbarItems(snapshot.toolbar, runToolbarButton)}
+          </Stack.Toolbar.Menu>
+          <Stack.Toolbar.MenuAction icon="xmark" destructive onPress={closeTab}>
+            Fermer l’onglet
+          </Stack.Toolbar.MenuAction>
+        </Stack.Toolbar.Menu>
+      </Stack.Toolbar>
+
+      <KeyboardAvoidingView
+        style={styles.screen}
+        behavior="padding"
+        keyboardVerticalOffset={insets.top + 44}
+      >
+        <ChatFeed
+          chatId={chatId}
+          live={live}
+          actions={actions}
+          onChoose={onChoose}
+        />
+        <ChatLiveLine state={state} cwd={null} onOpenAgent={setAgent} />
+        <ChatAsks chatId={chatId} state={state} actions={actions} />
+        {/* Hidden, not unmounted, under an ask: its draft stays. */}
+        <View style={covered ? styles.hidden : null}>
+          <ChatComposer
+            chatId={chatId}
+            state={state}
+            actions={actions}
+            promptButtons={snapshot.promptButtons}
+            bottomInset={insets.bottom}
+            covered={covered}
+          />
+        </View>
+        {covered && <View style={{ height: insets.bottom }} />}
+      </KeyboardAvoidingView>
+      <AgentSheet
+        agent={agent}
+        visible={agent !== null}
+        chatId={chatId}
+        live={live}
+        actions={actions}
+        onChoose={onChoose}
+        onClose={() => setAgent(null)}
+      />
+    </>
+  );
+}
+
+/** The desktop toolbar, folders as submenus (as the terminal screen's). */
+function toolbarItems(
+  buttons: RemoteButton[],
+  onPick: (id: string) => void,
+): React.ReactNode[] {
+  return buttons.map((b) =>
+    b.kind === "folder" ? (
+      <Stack.Toolbar.Menu key={b.id} title={b.label} icon={sfIcon(b.icon)}>
+        {toolbarItems(b.children ?? [], onPick)}
+      </Stack.Toolbar.Menu>
+    ) : (
+      <Stack.Toolbar.MenuAction
+        key={b.id}
+        icon={sfIcon(b.icon)}
+        onPress={() => onPick(b.id)}
+      >
+        {b.label}
+      </Stack.Toolbar.MenuAction>
+    ),
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: C.bg },
+  hidden: { display: "none" },
+  title: { alignItems: "center", maxWidth: 230 },
+  titleText: { color: "#ffffff", fontSize: 15, fontWeight: "600" },
+  subtitle: { flexDirection: "row", alignItems: "center", gap: 5 },
+  subtitleText: { color: "#8e8e93", fontSize: 12 },
+  projectDot: { width: 8, height: 8, borderRadius: 4 },
+});

@@ -35,6 +35,12 @@ const BUSY_TITLE_CHAR = "·";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const bytes = (text: string) => Array.from(new TextEncoder().encode(text));
 
+/** Why a switch between chat and terminal did not happen, and its toast's tone. */
+interface Refusal {
+  tone: "info" | "error";
+  text: string;
+}
+
 /**
  * A toolbar command that starts Claude: Arkadia opens it as a chat instead.
  * `ccd` (and `cc`, `claude`) starts a new session, `ccdr` / `--continue`
@@ -305,15 +311,12 @@ export function usePaneChats({
 
   /** Chat → terminal: the chat ends, the pane's shell resumes its session. */
   const toTerminal = useCallback(
-    async (pane: PaneState, chat: PaneChat) => {
+    async (pane: PaneState, chat: PaneChat): Promise<Refusal | null> => {
       const busy = chatBusyReason(
         chatActivity(pane.id),
         chatReplaying(pane.id),
       );
-      if (busy) {
-        onToast("info", busy);
-        return;
-      }
+      if (busy) return { tone: "info", text: busy };
       await closeChat(pane.accountId, pane.id);
       labelsRef.current.delete(pane.id);
       // The full path, as a shell titles itself: a folder named `.claude`
@@ -327,8 +330,9 @@ export function usePaneChats({
         sessionId: pane.id,
         bytes: bytes(`${launch}\r`),
       });
+      return null;
     },
-    [patchPane, onToast],
+    [patchPane],
   );
 
   /**
@@ -337,24 +341,18 @@ export function usePaneChats({
    * session; a bare shell gets a new chat.
    */
   const toChat = useCallback(
-    async (pane: PaneState) => {
+    async (pane: PaneState): Promise<Refusal | null> => {
       const cwd = pane.cwd ?? projectPathOf(pane.id);
-      if (!cwd) {
-        onToast("error", "Dossier du volet inconnu");
-        return;
-      }
+      if (!cwd) return { tone: "error", text: "Dossier du volet inconnu" };
       if (!stateFromTitle(pane.title)) {
         startChat(pane.id, { cwd });
-        return;
+        return null;
       }
       const busy = terminalBusyReason(
         paneState(pane.id),
         isPromptField(getFrame(pane.id)),
       );
-      if (busy) {
-        onToast("info", busy);
-        return;
-      }
+      if (busy) return { tone: "info", text: busy };
       const sessionId = await invoke<string | null>("pane_session_id", {
         paneId: pane.id,
       }).catch(() => null);
@@ -372,25 +370,39 @@ export function usePaneChats({
         if (!now || !stateFromTitle(now.title)) break;
       }
       const still = findPane(tabsRef.current ?? [], pane.id);
-      if (still && stateFromTitle(still.title)) {
-        onToast("error", "Claude n'a pas quitté le terminal : bascule annulée");
-        return;
-      }
+      if (still && stateFromTitle(still.title))
+        return {
+          tone: "error",
+          text: "Claude n'a pas quitté le terminal : bascule annulée",
+        };
       startChat(pane.id, sessionId ? { cwd, resume: sessionId } : { cwd });
+      return null;
     },
-    [projectPathOf, paneState, onToast, startChat, tabsRef],
+    [projectPathOf, paneState, startChat, tabsRef],
   );
 
+  /**
+   * Chat ⇄ terminal. A refusal is said on the PC and given back: the phone
+   * that asked (`chatToggle`) says it too.
+   */
   const onToggle = useCallback(
-    (paneId: string) => {
-      if (switchingRef.current.has(paneId)) return;
+    async (paneId: string): Promise<string | null> => {
+      if (switchingRef.current.has(paneId)) return "Bascule déjà en cours";
       const pane = findPane(tabsRef.current ?? [], paneId);
-      if (!pane) return;
+      if (!pane) return "Volet introuvable";
       mark(paneId, true);
-      const run = pane.chat ? toTerminal(pane, pane.chat) : toChat(pane);
-      void run
-        .catch((e: unknown) => onToast("error", String(e)))
-        .finally(() => mark(paneId, false));
+      try {
+        const refused = await (pane.chat
+          ? toTerminal(pane, pane.chat)
+          : toChat(pane));
+        if (refused) onToast(refused.tone, refused.text);
+        return refused?.text ?? null;
+      } catch (e) {
+        onToast("error", String(e));
+        return String(e);
+      } finally {
+        mark(paneId, false);
+      }
     },
     [tabsRef, toTerminal, toChat, onToast],
   );

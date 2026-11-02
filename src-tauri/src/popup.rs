@@ -499,14 +499,20 @@ fn show_signal(
     }
 
     // The iPhone rings for the panes Alexis drives from it, whatever the PC
-    // shows (`remote::phone`): he is away from the PC then. Not for a chat.
-    if chat_tab.is_none() && crate::remote::phone::FOLLOW.should_notify(&pane_id) {
+    // shows (`remote::phone`): he is away from the PC then. A chat names its
+    // tab itself: its shell's title is the idle shell's.
+    if crate::remote::phone::FOLLOW.should_notify(&pane_id) {
         let project = uuid::Uuid::parse_str(&pane_id)
             .ok()
             .and_then(|u| registry.project_name_for_pane(u))
             .unwrap_or_default();
-        let sessions = app.state::<crate::terminal::SessionMap>();
-        let tab = crate::terminal::session_title(sessions.inner(), &pane_id).unwrap_or_default();
+        let tab = match &chat_tab {
+            Some(tab) => tab.clone(),
+            None => {
+                let sessions = app.state::<crate::terminal::SessionMap>();
+                crate::terminal::session_title(sessions.inner(), &pane_id).unwrap_or_default()
+            }
+        };
         crate::remote::phone::notify(&pane_id, &kind, self_woken, &project, &tab);
     }
 

@@ -130,7 +130,7 @@ export function SessionsScreen() {
   const resume = async (session: ClaudeSession) => {
     setResuming(session.id);
     try {
-      const { tabId } = await act({ kind: "resume", session });
+      const { tabId } = await act({ kind: "resume", session, chat: true });
       if (tabId) router.push({ pathname: "/tab/[id]", params: { id: tabId } });
     } catch (e) {
       Alert.alert(

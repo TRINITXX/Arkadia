@@ -4,6 +4,7 @@
  * (`iphone/`), so both speak exactly what the server reads.
  */
 
+import type { ChatEvent } from "@/lib/chat/chatProtocol";
 import type { RemoteAction } from "@/lib/remoteActions";
 import type { RemoteSnapshot } from "@/lib/remoteSnapshot";
 import type { WakeRelay } from "@/mobile/wake";
@@ -11,6 +12,9 @@ import type { RenderPayload } from "@/types";
 
 export type ClientMsg =
   | { t: "watch"; pane: string | null }
+  /** The chat pane shown (null: none): its chat's events follow (`chat`).
+   *  Its past comes from the `chatOpen` action. */
+  | { t: "chat"; pane: string | null }
   | { t: "input"; pane: string; data: string }
   /** Writes spaced on the PC itself, so the PTY never merges them into a
    *  paste (REVIEW.md « Rafale de touches »). */
@@ -57,4 +61,9 @@ export type ServerMsg =
   | ({ t: "wake" } & WakeRelay)
   /** The panes the iPhone drives (src-tauri `remote::phone`). */
   | { t: "follow"; panes: string[] }
+  /**
+   * An event of the chat shown, as the desktop page gets it, or one for this
+   * phone alone (`to`: its replay, the answer to its own read).
+   */
+  | { t: "chat"; event: ChatEvent & { to?: string } }
   | { t: "error"; message: string };

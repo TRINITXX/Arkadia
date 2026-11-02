@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { RemoteAction } from "@/lib/remoteActions";
 import type {
   RemoteButton,
+  RemotePane,
   RemoteProject,
   RemoteSnapshot,
   RemoteTab,
@@ -55,6 +56,8 @@ interface TerminalScreenProps {
   snapshot: RemoteSnapshot;
   project: RemoteProject;
   tab: RemoteTab;
+  /** The pane shown: the route's (`tab/[id]`), « Volets » changes it there. */
+  pane: RemotePane;
   status: Status;
 }
 
@@ -81,16 +84,11 @@ export function TerminalScreen({
   snapshot,
   project,
   tab,
+  pane,
   status,
 }: TerminalScreenProps) {
   const insets = useSafeAreaInsets();
-  const [chosenPaneId, setChosenPaneId] = useState(tab.activePaneId);
-  // A pane closed on the desktop: fall back to the tab's active one.
-  const pane =
-    tab.panes.find((p) => p.id === chosenPaneId) ??
-    tab.panes.find((p) => p.id === tab.activePaneId) ??
-    tab.panes[0];
-  const paneId = pane?.id ?? null;
+  const paneId = pane.id;
 
   useEffect(() => acquireWatch(paneId), [paneId]);
   // An action answered after this screen left must not navigate from it.
@@ -207,7 +205,15 @@ export function TerminalScreen({
     toggleKeyboard();
   }, [paneId, reclaim, toggleKeyboard]);
   const runToolbarButton = (buttonId: string) =>
-    void run({ kind: "runButton", projectId: project.id, paneId, buttonId });
+    void run({
+      kind: "runButton",
+      projectId: project.id,
+      paneId,
+      buttonId,
+      chat: true,
+    });
+  // Claude leaves the terminal and goes on as a chat: the route then shows it.
+  const toChat = () => void run({ kind: "chatToggle", paneId });
   const newTab = async () => {
     const result = await run({ kind: "newTab", projectId: project.id });
     if (result?.tabId && mounted.current)
@@ -258,12 +264,18 @@ export function TerminalScreen({
                 <Stack.Toolbar.MenuAction
                   key={p.id}
                   isOn={p.id === paneId}
-                  onPress={() => setChosenPaneId(p.id)}
+                  // The route holds the pane shown: a chat pane gets its own screen.
+                  onPress={() => router.setParams({ id: tab.id, pane: p.id })}
                 >
                   {`${i + 1}. ${p.title}`}
                 </Stack.Toolbar.MenuAction>
               ))}
             </Stack.Toolbar.Menu>
+          )}
+          {pane.claude && (
+            <Stack.Toolbar.MenuAction icon="text.bubble" onPress={toChat}>
+              Passer en chat
+            </Stack.Toolbar.MenuAction>
           )}
           <Stack.Toolbar.Menu inline title={project.name}>
             <Stack.Toolbar.MenuAction icon="plus" onPress={() => void newTab()}>

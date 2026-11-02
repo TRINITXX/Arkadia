@@ -5,16 +5,9 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ConvBlock } from "@/components/ModernConversationView";
 import { imageCaptions } from "@/lib/imageCaption";
 import { findImagePaths, imagePathKey } from "@/lib/imagePaths";
+import type { ImageRef } from "@/lib/imageRef";
 
-/** One displayable image: a transcript image or an on-disk path. */
-export interface ImageRef {
-  path: string;
-  mediaType?: string;
-  /** The prose the message writes around the path, shown in the lightbox. */
-  caption?: string;
-  /** Already in memory (an image pasted in the chat): shown, never fetched. */
-  url?: string;
-}
+export type { ImageRef };
 
 /**
  * A message's images: the ones pasted in the turn, else the on-disk image

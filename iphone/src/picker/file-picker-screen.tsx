@@ -14,6 +14,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { quotePathsForPrompt } from "@/lib/pickerPrompt";
 import type { FileSource, RemoteFile } from "@/lib/remoteProtocol";
+import { putInComposer } from "~/chat/composer-inbox";
 import { ARKADIA_HOST } from "~/remote/config";
 import { listFiles, send } from "~/remote/connection";
 import { showNotice } from "~/ui/notice";
@@ -34,7 +35,11 @@ const GAP = 3;
  * is uploaded: the photos are on the PC already.
  */
 export function FilePickerScreen() {
-  const { pane } = useLocalSearchParams<{ pane: string }>();
+  // `chat`: a chat pane, its paths go into its composer, not a shell.
+  const { pane, chat } = useLocalSearchParams<{
+    pane: string;
+    chat?: string;
+  }>();
   const { width } = useWindowDimensions();
   const tile = Math.floor((width - GAP * 4) / 3);
   const [source, setSource] = useState<FileSource>("photos");
@@ -70,7 +75,9 @@ export function FilePickerScreen() {
   );
   const insert = () => {
     if (!pane || picked.length === 0) return;
-    send({ t: "input", pane, data: quotePathsForPrompt(picked) });
+    const paths = quotePathsForPrompt(picked);
+    if (chat) putInComposer(pane, paths);
+    else send({ t: "input", pane, data: paths });
     router.back();
   };
 

@@ -296,12 +296,12 @@ export function useChatLimitSwitch({
           const account = here.pane.accountId;
           if (attachLiveChat(chatId, account))
             await startLiveChat(chatId, account, here.chat);
-          await chatCommand(account, {
-            type: "send",
-            chatId,
-            text: "continue",
-            images: [],
-          }).catch(() => {});
+          // Arkadia's own « continue »: not the user, the phone keeps its tab.
+          await chatCommand(
+            account,
+            { type: "send", chatId, text: "continue", images: [] },
+            "auto",
+          ).catch(() => {});
           logSwitch(`${chatId} on ${from}: continued after its reset`);
           return;
         }
@@ -359,12 +359,11 @@ export function useChatLimitSwitch({
       moves.current.set(key, [...recent, Date.now()]);
       // Started here, its pane shown or not: « continue » waits in its input.
       await startLiveChat(next.id, next.account, next.chat);
-      await chatCommand(next.account, {
-        type: "send",
-        chatId: next.id,
-        text: "continue",
-        images: [],
-      }).catch(() => {});
+      await chatCommand(
+        next.account,
+        { type: "send", chatId: next.id, text: "continue", images: [] },
+        "auto",
+      ).catch(() => {});
       onSwitched(to);
       logSwitch(`${chatId} on ${from}: moved to ${to}`);
       onToast(

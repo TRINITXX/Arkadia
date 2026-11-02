@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::remote::RemoteHub;
 
 use crate::popup::log_line;
 
@@ -191,12 +193,18 @@ fn spawn_server(app: &AppHandle, account_id: Option<&str>) -> Result<Server, Str
     let out_app = app.clone();
     let out_account = account.clone();
     std::thread::spawn(move || {
+        // The phones showing a chat get its events too; a line addressed to
+        // one phone (its replay, its own reads) never reaches the page.
+        let hub = out_app.state::<Arc<RemoteHub>>().inner().clone();
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            let _ = out_app.emit("chat-event", line);
+            if hub.chat_line(&line) {
+                let _ = out_app.emit("chat-event", line);
+            }
         }
-        let exit = json!({ "type": "server_exit", "account": out_account });
-        let _ = out_app.emit("chat-event", exit.to_string());
+        let exit = json!({ "type": "server_exit", "account": out_account }).to_string();
+        hub.chat_server_exit(&exit);
+        let _ = out_app.emit("chat-event", exit);
     });
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines() {
@@ -224,6 +232,17 @@ impl ChatServers {
     }
 }
 
+/// The page's words for a chat whose server is gone (`SERVER_GONE`): a
+/// phone's catch-up of such a chat gets them, and shows it ended.
+const SERVER_GONE: &str = "Le serveur du chat s'est arrêté";
+
+/// Whether a command may start its account's server. A phone's catch-up
+/// (`phone_replay`) never does: no server, no chat to replay, and starting
+/// one that dies at once would loop with the phone's next catch-up.
+fn starts_server(command: &Value) -> bool {
+    command["type"] != "phone_replay"
+}
+
 /// Sends one command to the chat server of `account_id`, started on first
 /// use and again if it ended.
 // Off the main thread: it may start a process and sync an account's files.
@@ -234,6 +253,7 @@ pub fn chat_command(
     servers: State<'_, ChatServers>,
     app: AppHandle,
 ) -> Result<(), String> {
+    let starts = starts_server(&command);
     let mut line = serde_json::to_string(&with_chat_env(command)).map_err(|e| e.to_string())?;
     line.push('\n');
     let key = account_key(account_id.as_deref());
@@ -242,6 +262,9 @@ pub fn chat_command(
         .get_mut(&key)
         .is_some_and(|s| matches!(s.child.try_wait(), Ok(None)));
     if !alive {
+        if !starts {
+            return Err(SERVER_GONE.into());
+        }
         map.insert(key.clone(), spawn_server(&app, account_id.as_deref())?);
     }
     let server = map.get_mut(&key).ok_or("chat : serveur absent")?;
@@ -255,6 +278,13 @@ pub fn chat_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_phone_catch_up_never_starts_a_server() {
+        assert!(!starts_server(&json!({ "type": "phone_replay", "chatId": "c" })));
+        assert!(starts_server(&json!({ "type": "start", "chatId": "c" })));
+        assert!(starts_server(&json!({ "type": "send", "chatId": "c" })));
+    }
 
     #[test]
     fn a_start_gets_the_pane_id_and_nothing_else_changes() {

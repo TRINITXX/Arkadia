@@ -31,13 +31,37 @@ pub const PORT: u16 = if cfg!(debug_assertions) { 47601 } else { 47600 };
 
 type Latest = watch::Sender<Option<Arc<str>>>;
 
+/// A connected phone's chat: the one it shows, and the queue of its events.
+/// Unbounded: a chat's events build its state, none may be dropped, and the
+/// chat servers' reader must never wait on a slow phone.
+struct PhoneChat {
+    chat: Option<String>,
+    out: mpsc::UnboundedSender<Message>,
+}
+
+/// What `chat_line` reads of a chat server's line: the rest is the phone's.
+#[derive(serde::Deserialize)]
+struct ChatHead {
+    #[serde(rename = "chatId")]
+    chat_id: Option<String>,
+    to: Option<String>,
+}
+
+/// Prefix of `to` on a line for one phone (`chat-server/server.ts` `emit`).
+const PHONE_PREFIX: &str = "phone:";
+
+fn chat_message(line: &str) -> Message {
+    Message::Text(format!(r#"{{"t":"chat","event":{line}}}"#).into())
+}
+
 /// Latest-value channels between the app and the connected phones (the
-/// desktop snapshot, the frames of each watched pane), and each phone's
-/// outbox for the window's replies.
+/// desktop snapshot, the frames of each watched pane), each phone's outbox
+/// for the window's replies, and the chat each phone shows.
 pub struct RemoteHub {
     state: Latest,
     frames: Mutex<HashMap<String, Latest>>,
     clients: Mutex<HashMap<u64, mpsc::Sender<Message>>>,
+    chats: Mutex<HashMap<u64, PhoneChat>>,
     next_client: AtomicU64,
 }
 
@@ -47,6 +71,7 @@ impl Default for RemoteHub {
             state: watch::channel(None).0,
             frames: Mutex::default(),
             clients: Mutex::default(),
+            chats: Mutex::default(),
             next_client: AtomicU64::new(1),
         }
     }
@@ -98,6 +123,64 @@ impl RemoteHub {
 
     fn remove_client(&self, id: u64) {
         self.clients.lock().remove(&id);
+        self.chats.lock().remove(&id);
+    }
+
+    /// A connected phone's queue for chat events (`chat_line`).
+    fn add_chat_outbox(&self, client: u64, out: mpsc::UnboundedSender<Message>) {
+        self.chats
+            .lock()
+            .insert(client, PhoneChat { chat: None, out });
+    }
+
+    /// The chat a phone shows now (`None`: none); returns the one it left.
+    fn show_chat(&self, client: u64, chat: Option<String>) -> Option<String> {
+        let mut chats = self.chats.lock();
+        let phone = chats.get_mut(&client)?;
+        std::mem::replace(&mut phone.chat, chat)
+    }
+
+    /// A line of a chat server, for the phones: an event of a chat a phone
+    /// shows goes to it too, and one addressed to a phone (`to`: its replay,
+    /// its own reads) to that phone alone. Returns whether the page gets the
+    /// line as well. Read only when a phone shows a chat or the line names one.
+    pub fn chat_line(&self, line: &str) -> bool {
+        let addressed = line.contains(r#""to":"phone:"#);
+        if !addressed && !self.chats.lock().values().any(|p| p.chat.is_some()) {
+            return true;
+        }
+        let Ok(head) = serde_json::from_str::<ChatHead>(line) else {
+            return true;
+        };
+        let chats = self.chats.lock();
+        if let Some(to) = head.to {
+            let phone = to
+                .strip_prefix(PHONE_PREFIX)
+                .and_then(|id| id.parse::<u64>().ok())
+                .and_then(|id| chats.get(&id));
+            if let Some(phone) = phone {
+                let _ = phone.out.send(chat_message(line));
+            }
+            return false;
+        }
+        if let Some(chat) = head.chat_id {
+            for phone in chats.values() {
+                if phone.chat.as_deref() == Some(chat.as_str()) {
+                    let _ = phone.out.send(chat_message(line));
+                }
+            }
+        }
+        true
+    }
+
+    /// A chat server stopped (`server_exit`): every phone showing a chat
+    /// hears it, and opens its chat again once the page resumed it.
+    pub fn chat_server_exit(&self, line: &str) {
+        for phone in self.chats.lock().values() {
+            if phone.chat.is_some() {
+                let _ = phone.out.send(chat_message(line));
+            }
+        }
     }
 
     /// Tells every connected phone about a desktop event (the modern view
@@ -116,6 +199,13 @@ impl RemoteHub {
 #[tauri::command]
 pub fn remote_pane_replaced(old_id: String, new_id: String) {
     phone::FOLLOW.replace(&old_id, &new_id);
+}
+
+/// Alexis wrote in a chat on the PC (a message, an answer, a stop): a chat the
+/// phone drove goes back to the PC, as a terminal does on a key (`send_input`).
+#[tauri::command]
+pub fn remote_desktop_chat_input(pane: String) {
+    phone::FOLLOW.desktop_input(&pane, std::time::Instant::now());
 }
 
 /// The desktop window's snapshot (JSON built by `buildRemoteSnapshot`).
@@ -174,7 +264,54 @@ pub fn spawn(app: AppHandle, hub: Arc<RemoteHub>) {
 
 #[cfg(test)]
 mod tests {
-    use super::keep_to_self;
+    use super::{keep_to_self, RemoteHub};
+    use axum::extract::ws::Message;
+    use tokio::sync::mpsc;
+
+    fn texts(rx: &mut mpsc::UnboundedReceiver<Message>) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(Message::Text(t)) = rx.try_recv() {
+            out.push(t.to_string());
+        }
+        out
+    }
+
+    /// A chat's events reach the phone that shows it; a phone's own replay
+    /// reaches that phone alone, never the page nor another phone.
+    #[test]
+    fn chat_lines_go_to_the_phone_that_shows_the_chat() {
+        let hub = RemoteHub::default();
+        let (a_tx, mut a) = mpsc::unbounded_channel();
+        let (b_tx, mut b) = mpsc::unbounded_channel();
+        hub.add_chat_outbox(1, a_tx);
+        hub.add_chat_outbox(2, b_tx);
+        let live = r#"{"type":"sdk","chatId":"c1","message":{"type":"assistant"}}"#;
+        // No phone shows a chat: the page alone, nothing read.
+        assert!(hub.chat_line(live));
+        assert!(texts(&mut a).is_empty());
+
+        hub.show_chat(1, Some("c1".into()));
+        hub.show_chat(2, Some("c2".into()));
+        assert!(hub.chat_line(live), "the page still gets it");
+        assert_eq!(texts(&mut a), [format!(r#"{{"t":"chat","event":{live}}}"#)]);
+        assert!(texts(&mut b).is_empty(), "phone 2 shows another chat");
+
+        let replay = r#"{"type":"attached","chatId":"c1","to":"phone:2"}"#;
+        assert!(!hub.chat_line(replay), "never the page");
+        assert!(texts(&mut a).is_empty(), "phone 1 shows c1 but didn't ask");
+        assert_eq!(texts(&mut b).len(), 1);
+
+        // A `to` nested in a tool's input is no address.
+        let nested = r#"{"type":"sdk","chatId":"c1","message":{"input":{"to":"phone:2"}}}"#;
+        assert!(hub.chat_line(nested));
+        assert_eq!(texts(&mut a).len(), 1);
+        assert!(texts(&mut b).is_empty());
+
+        // Left the chat: nothing more.
+        assert_eq!(hub.show_chat(1, None).as_deref(), Some("c1"));
+        assert!(hub.chat_line(live));
+        assert!(texts(&mut a).is_empty());
+    }
 
     /// The 11/10 bug: the gate, started by Arkadia, kept Arkadia's port after
     /// it closed, so the next Arkadia could not serve the phone.

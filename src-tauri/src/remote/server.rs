@@ -348,6 +348,11 @@ enum ClientMsg {
     Watch {
         pane: Option<String>,
     },
+    /// The chat pane the phone shows (`None`: none): its chat's events follow
+    /// (`RemoteHub::chat_line`). Its past comes from the window's `chatOpen`.
+    Chat {
+        pane: Option<String>,
+    },
     Input {
         pane: String,
         data: String,
@@ -452,11 +457,14 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
     // which the writer always sends first.
     let (out, mut out_rx) = mpsc::channel::<Message>(64);
     let (frames_out, mut frames_rx) = mpsc::channel::<Message>(2);
+    // A chat's events: every one counts (its state is built from them all).
+    let (chat_out, mut chat_rx) = mpsc::unbounded_channel::<Message>();
     let writer = tokio::spawn(async move {
         loop {
             let msg = tokio::select! {
                 biased;
                 Some(msg) = out_rx.recv() => msg,
+                Some(event) = chat_rx.recv() => event,
                 Some(frame) = frames_rx.recv() => frame,
                 else => break,
             };
@@ -472,6 +480,7 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
         let _ = out.send(text(msg.to_string())).await;
     }
     let client = ctx.hub.add_client(out.clone());
+    ctx.hub.add_chat_outbox(client, chat_out);
     let mut state_rx = ctx.hub.watch_state();
     state_rx.mark_changed();
     // The tabs it drives: the app shows their dots in its Live Activity.
@@ -503,6 +512,18 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
                         }
                         if let Some(pane) = pane {
                             frames = Some(stream_frames(&ctx, &pane, frames_out.clone()));
+                        }
+                    }
+                    ClientMsg::Chat { pane } => {
+                        // Shown: no ring for it (`PhoneFollow::should_notify`).
+                        let left = ctx.hub.show_chat(client, pane.clone());
+                        match pane {
+                            Some(p) => FOLLOW.set_watching(client, Some(p)),
+                            None => {
+                                if let Some(left) = left {
+                                    FOLLOW.stop_watching(client, &left);
+                                }
+                            }
                         }
                     }
                     ClientMsg::Action { id, action } => {
@@ -653,6 +674,7 @@ fn run(app: &AppHandle, msg: ClientMsg) -> Result<(), String> {
     let sessions = app.state::<SessionMap>();
     match msg {
         ClientMsg::Watch { .. }
+        | ClientMsg::Chat { .. }
         | ClientMsg::Action { .. }
         | ClientMsg::Sessions { .. }
         | ClientMsg::Search { .. }

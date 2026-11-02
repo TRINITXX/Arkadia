@@ -355,6 +355,7 @@ pub fn run() {
             popup::popup_chat_signal,
             remote::remote_publish_state,
             remote::remote_pane_replaced,
+            remote::remote_desktop_chat_input,
             remote::remote_reply,
         ]))
         .build(tauri::generate_context!())
@@ -985,6 +986,7 @@ mod tests {
             "popup_set_fullscreen",
             "popup_set_notif_width",
             "popup_set_style",
+            "remote_desktop_chat_input",
             "remote_pane_replaced",
             "remote_publish_state",
             "remote_reply",

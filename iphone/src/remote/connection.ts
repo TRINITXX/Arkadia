@@ -15,6 +15,7 @@ import type {
   RemoteFile,
   ServerMsg,
 } from "@/lib/remoteProtocol";
+import { topStreams, type PhoneScreen } from "@/lib/phoneScreens";
 import type { RemoteSnapshot } from "@/lib/remoteSnapshot";
 import type { ClaudeSession, SessionMatch } from "@/lib/sessionsIndex";
 import type { RenderPayload } from "@/types";
@@ -67,6 +68,12 @@ let pushToken: string | null = null;
 let activityToken: string | null | undefined;
 /** Null until the PC said which panes the iPhone drives. */
 let followed: string[] | null = null;
+/** The chat pane on screen: the PC streams its chat's events (`chat`). */
+let shownChat: string | null = null;
+type ChatMsg = Extract<ServerMsg, { t: "chat" }>["event"];
+const chatSubs = new Set<(event: ChatMsg) => void>();
+/** Told the chat shown when it must catch up: back online, in front, on top. */
+const chatCatchUpSubs = new Set<(chatId: string) => void>();
 const followSubs = new Set<() => void>();
 const viewSubs = new Set<() => void>();
 const frameSubs = new Set<() => void>();
@@ -116,6 +123,11 @@ function connect() {
     onConnected();
     setView({ status: "open" });
     if (watched && inFront) send({ t: "watch", pane: watched });
+    if (shownChat && inFront) {
+      const chat = shownChat;
+      send({ t: "chat", pane: chat });
+      for (const cb of chatCatchUpSubs) cb(chat);
+    }
     if (pushToken) send({ t: "push", token: pushToken });
     if (activityToken !== undefined)
       send({ t: "activity", token: activityToken });
@@ -139,6 +151,8 @@ function connect() {
     else if (msg.t === "follow") {
       followed = msg.panes;
       for (const cb of followSubs) cb();
+    } else if (msg.t === "chat") {
+      for (const cb of chatSubs) cb(msg.event);
     } else if (msg.t === "error") console.warn("[arkadia]", msg.message);
   };
   ws.onclose = () => {
@@ -184,6 +198,7 @@ export function startRemote() {
       if (state === "background" && inFront) {
         inFront = false;
         send({ t: "watch", pane: null });
+        if (shownChat) send({ t: "chat", pane: null });
       }
       return;
     }
@@ -192,6 +207,10 @@ export function startRemote() {
     if (!inFront) {
       inFront = true;
       if (watched) send({ t: "watch", pane: watched });
+      // Its events stopped meanwhile: shown again, it catches up.
+      const chat = shownChat;
+      if (chat && send({ t: "chat", pane: chat }))
+        for (const cb of chatCatchUpSubs) cb(chat);
     }
     // After a while in the background, iOS may have cut a socket that still
     // reads as open: start over rather than show a frozen terminal.
@@ -333,23 +352,88 @@ function setWatched(paneId: string | null) {
   if (inFront) send({ t: "watch", pane: paneId });
 }
 
-/** Every terminal screen in the stack, the topmost last. */
-const watchers: { pane: string }[] = [];
+function setShownChat(paneId: string | null) {
+  if (paneId === shownChat) return;
+  shownChat = paneId;
+  if (inFront) send({ t: "chat", pane: paneId });
+}
+
+/**
+ * Every terminal and chat screen in the stack, the topmost last. Only the
+ * topmost gets its stream (frames or chat events): the PC counts one pane
+ * per phone as on screen (`PhoneFollow::watching`), and a screen buried
+ * under another is not seen.
+ */
+const screens: PhoneScreen[] = [];
+
+/**
+ * The topmost screen's stream on, the others' off (`topStreams`): the one
+ * going off first, so the PC never holds the buried pane as the one shown.
+ * `uncovered`: the screen above left, and a chat back on top catches up.
+ */
+function streamTop(uncovered: boolean) {
+  const { frames, chat, catchUp } = topStreams(screens, shownChat, uncovered);
+  if (!frames) setWatched(null);
+  if (!chat) setShownChat(null);
+  setWatched(frames);
+  setShownChat(chat);
+  if (catchUp) for (const cb of chatCatchUpSubs) cb(catchUp);
+}
+
+function acquire(kind: PhoneScreen["kind"], paneId: string): () => void {
+  const entry: PhoneScreen = { kind, pane: paneId };
+  screens.push(entry);
+  streamTop(false);
+  return () => {
+    const i = screens.indexOf(entry);
+    if (i < 0) return;
+    screens.splice(i, 1);
+    // After this commit's mounts: React runs every cleanup before them, and
+    // a screen remounting (chat ⇄ terminal, « Volets ») would otherwise
+    // bring a buried chat on top for an instant, and replay it for nothing.
+    queueMicrotask(() => streamTop(true));
+  };
+}
 
 /**
  * Streams `paneId`'s frames while the screen holding it is the topmost one
  * (one pane at a time); the returned release hands the stream back to the
- * screen below, which a stacked terminal screen would otherwise leave blank.
+ * screen below, which a stacked screen would otherwise leave blank.
  */
 export function acquireWatch(paneId: string | null): () => void {
   if (!paneId) return () => {};
-  const entry = { pane: paneId };
-  watchers.push(entry);
-  setWatched(paneId);
+  return acquire("frames", paneId);
+}
+
+/**
+ * Streams `paneId`'s chat events while the screen holding it is the topmost
+ * one; the release hands the stream back to the screen below.
+ */
+export function acquireChat(paneId: string): () => void {
+  return acquire("chat", paneId);
+}
+
+/** The chat on screen now (the topmost screen's), if any. */
+export function shownChatId(): string | null {
+  return shownChat;
+}
+
+/** Each event of the chat shown (or for this phone alone); returns the unsubscribe. */
+export function onChatEvent(handler: (event: ChatMsg) => void): () => void {
+  chatSubs.add(handler);
   return () => {
-    const i = watchers.indexOf(entry);
-    if (i >= 0) watchers.splice(i, 1);
-    setWatched(watchers[watchers.length - 1]?.pane ?? null);
+    chatSubs.delete(handler);
+  };
+}
+
+/**
+ * Called with the chat shown when it must catch up: back online, back in
+ * front, back on top of the stack.
+ */
+export function onChatCatchUp(handler: (chatId: string) => void): () => void {
+  chatCatchUpSubs.add(handler);
+  return () => {
+    chatCatchUpSubs.delete(handler);
   };
 }
 

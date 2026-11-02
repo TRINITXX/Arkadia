@@ -101,6 +101,17 @@ function notify(chat: LiveChat, before?: ChatState, reset = false): void {
 const isReset = (event: ChatEvent) =>
   event.type === "sdk" && event.message.type === "conversation_reset";
 
+/**
+ * Queued messages the phone withdrew (`chatOpen`'s phone, its ×): their
+ * text goes back to the phone's input, never to this page's (`chat:uuid`).
+ */
+const phoneWithdrawals = new Set<string>();
+
+/** The phone withdraws this queued message: this page leaves its text alone. */
+export function markPhoneWithdrawal(chatId: string, uuid: string): void {
+  phoneWithdrawals.add(`${chatId}:${uuid}`);
+}
+
 /** A message withdrawn as the input had it: a command as typed. */
 function draftOf(item: Extract<ChatItem, { kind: "user" | "command" }>) {
   if (item.kind === "user") return messageDraft(item.text, item.pasted);
@@ -134,9 +145,11 @@ function flush(chat: LiveChat): void {
       }
       continue;
     }
-    // Withdrawn by its × (never in a replay): back in the input.
+    // Withdrawn by its × (never in a replay): back in the input, this
+    // page's unless the phone withdrew it.
     const back =
-      event.type === "queued_removed"
+      event.type === "queued_removed" &&
+      !phoneWithdrawals.delete(`${chat.chatId}:${event.uuid}`)
         ? withdrawnItem(state.items, event.uuid)
         : null;
     state = reduceChat(state, event, now);

@@ -134,12 +134,19 @@ describe("buildRemoteSnapshot", () => {
         badge: "waiting-shell",
         activePaneId: "t1-p1",
         panes: [
-          { id: "t1-p0", title: "Build", badge: "busy", claude: true },
+          {
+            id: "t1-p0",
+            title: "Build",
+            badge: "busy",
+            claude: true,
+            chat: false,
+          },
           {
             id: "t1-p1",
             title: "Review",
             badge: "waiting-shell",
             claude: true,
+            chat: false,
           },
         ],
         account: null,

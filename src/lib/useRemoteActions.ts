@@ -14,7 +14,11 @@ import { subscribeStable } from "@/lib/tauriEvents";
  * with the desktop state, the subscription must not.
  */
 export function useRemoteActions(
-  handle: (action: RemoteAction) => Promise<RemoteActionResult>,
+  handle: (
+    action: RemoteAction,
+    /** The phone that asked: what it alone should get goes to it. */
+    client: number,
+  ) => Promise<RemoteActionResult>,
 ): void {
   const handleRef = useRef(handle);
   useEffect(() => {
@@ -25,7 +29,7 @@ export function useRemoteActions(
     () =>
       subscribeStable<RelayedAction>(listen, "remote-action", (relayed) => {
         void handleRef
-          .current(relayed.action)
+          .current(relayed.action, relayed.client)
           .catch((e: unknown) => ({ error: String(e) }))
           .then((result) =>
             invoke("remote_reply", {

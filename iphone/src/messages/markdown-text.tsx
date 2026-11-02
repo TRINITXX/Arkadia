@@ -1,10 +1,26 @@
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import type { ReactNode } from "react";
+import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 
 type Block =
   | { kind: "code"; text: string }
-  | { kind: "heading"; text: string }
-  | { kind: "item"; text: string; marker: string }
+  | { kind: "heading"; text: string; level: number }
+  | { kind: "item"; text: string; marker: string; depth: number }
+  | { kind: "quote"; text: string }
+  | { kind: "rule" }
+  | { kind: "table"; rows: string[][] }
   | { kind: "para"; text: string };
+
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+
+/** A table line's cells, without its outer pipes. */
+const cells = (line: string) =>
+  line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((c) => c.trim());
 
 /** Claude's markdown, cut into the blocks a phone shows. */
 export function parseBlocks(markdown: string): Block[] {
@@ -29,18 +45,37 @@ export function parseBlocks(markdown: string): Block[] {
       out.push({ kind: "code", text: code.join("\n") });
       continue;
     }
-    const heading = /^#{1,6}\s+(.*)$/.exec(line);
-    const item = /^\s*([-*]|\d+\.)\s+(.*)$/.exec(line);
+    if (TABLE_ROW.test(line) && TABLE_RULE.test(lines[i + 1] ?? "")) {
+      flush();
+      const rows = [cells(line)];
+      for (i += 2; i < lines.length && TABLE_ROW.test(lines[i]); i++)
+        rows.push(cells(lines[i]));
+      i--;
+      out.push({ kind: "table", rows });
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line);
+    const quote = /^\s*>\s?(.*)$/.exec(line);
     if (heading) {
       flush();
-      out.push({ kind: "heading", text: heading[1] });
+      out.push({ kind: "heading", text: heading[2], level: heading[1].length });
+    } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      flush();
+      out.push({ kind: "rule" });
     } else if (item) {
       flush();
       out.push({
         kind: "item",
-        text: item[2],
-        marker: item[1] === "-" || item[1] === "*" ? "•" : item[1],
+        text: item[3],
+        marker: /^[-*+]$/.test(item[2]) ? "•" : item[2],
+        depth: Math.min(3, Math.floor(item[1].replace(/\t/g, "  ").length / 2)),
       });
+    } else if (quote) {
+      flush();
+      const last = out[out.length - 1];
+      if (last?.kind === "quote") last.text += `\n${quote[1]}`;
+      else out.push({ kind: "quote", text: quote[1] });
     } else if (line.trim() === "") flush();
     else para.push(line.trim());
   }
@@ -48,75 +83,235 @@ export function parseBlocks(markdown: string): Block[] {
   return out;
 }
 
-/** `code` and **bold** inside a line. */
-function Inline({ text, style }: { text: string; style: object }) {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).filter(Boolean);
+/** The colours a text is drawn in: the app's (default) or the chat's. */
+export interface MarkdownTone {
+  ink: string;
+  dim: string;
+  link: string;
+  codeBg: string;
+  codeInk: string;
+  line: string;
+}
+
+const APP_TONE: MarkdownTone = {
+  ink: "#ffffff",
+  dim: "#8e8e93",
+  link: "#0a84ff",
+  codeBg: "#141416",
+  codeInk: "#e5e5ea",
+  line: "rgba(255,255,255,0.12)",
+};
+
+const INLINE = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)\s]+\)|(?<![\w*])\*[^*\s][^*]*\*(?!\w)|(?<!\w)_[^_\s][^_]*_(?!\w))/g;
+
+/** `code`, **bold**, *italics* and [links](…) inside a line. */
+function Inline({
+  text,
+  style,
+  tone,
+  trailing,
+}: {
+  text: string;
+  style: object;
+  tone: MarkdownTone;
+  trailing?: ReactNode;
+}) {
+  const parts = text.split(INLINE).filter(Boolean);
   return (
     <Text style={style}>
-      {parts.map((p, i) =>
-        p.startsWith("`") ? (
-          <Text key={i} style={styles.inlineCode}>
-            {p.slice(1, -1)}
-          </Text>
-        ) : p.startsWith("**") ? (
-          <Text key={i} style={styles.bold}>
-            {p.slice(2, -2)}
-          </Text>
-        ) : (
-          p
-        ),
-      )}
+      {parts.map((p, i) => {
+        if (p.startsWith("`") && p.endsWith("`") && p.length > 2)
+          return (
+            <Text
+              key={i}
+              style={[styles.inlineCode, { backgroundColor: tone.codeBg }]}
+            >
+              {p.slice(1, -1)}
+            </Text>
+          );
+        if (p.startsWith("**") && p.endsWith("**") && p.length > 4)
+          return (
+            <Text key={i} style={styles.bold}>
+              {p.slice(2, -2)}
+            </Text>
+          );
+        const link = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(p);
+        if (link) {
+          const url = link[2];
+          const web = /^https?:\/\//i.test(url);
+          return (
+            <Text
+              key={i}
+              style={{ color: tone.link }}
+              onPress={web ? () => void Linking.openURL(url) : undefined}
+            >
+              {link[1]}
+            </Text>
+          );
+        }
+        if (
+          (p.startsWith("*") && p.endsWith("*") && p.length > 2) ||
+          (p.startsWith("_") && p.endsWith("_") && p.length > 2)
+        )
+          return (
+            <Text key={i} style={styles.italic}>
+              {p.slice(1, -1)}
+            </Text>
+          );
+        return p;
+      })}
+      {trailing}
     </Text>
   );
 }
 
-/** Claude's prose at full width, as in the Claude app (choice A). */
-export function MarkdownText({ markdown }: { markdown: string }) {
+/** A table as aligned columns of a monospaced block, scrolled sideways. */
+function Table({ rows, tone }: { rows: string[][]; tone: MarkdownTone }) {
+  const plain = rows.map((r) => r.map((c) => c.replace(/\*\*|`/g, "")));
+  const widths = plain[0].map((_, col) =>
+    Math.max(...plain.map((r) => (r[col] ?? "").length)),
+  );
+  const lines = plain.map((r) =>
+    widths.map((w, col) => (r[col] ?? "").padEnd(w)).join("  "),
+  );
+  return (
+    <ScrollView
+      horizontal
+      style={[styles.codeBox, { backgroundColor: tone.codeBg }]}
+      contentContainerStyle={styles.codePad}
+    >
+      <Text style={[styles.code, { color: tone.codeInk }]} selectable>
+        <Text style={styles.bold}>{lines[0]}</Text>
+        {`\n${widths.map((w) => "─".repeat(w)).join("  ")}\n`}
+        {lines.slice(1).join("\n")}
+      </Text>
+    </ScrollView>
+  );
+}
+
+/**
+ * Claude's prose at full width, as in the Claude app (choice A). The chat
+ * gives its own colours and size (`tone`, `size`); `lead`: the opening line a
+ * little larger when more follows (the desktop's answer frame); `caret`: a
+ * reply still being written ends on the accent's bar.
+ */
+export function MarkdownText({
+  markdown,
+  tone = APP_TONE,
+  size = 15.5,
+  lead = false,
+  caret,
+}: {
+  markdown: string;
+  tone?: MarkdownTone;
+  size?: number;
+  lead?: boolean;
+  /** The caret's colour; none when absent. */
+  caret?: string;
+}) {
+  const blocks = parseBlocks(markdown);
+  const lineHeight = Math.round(size * 1.42);
+  const body = { color: tone.ink, fontSize: size, lineHeight };
+  const end = (i: number) =>
+    caret && i === blocks.length - 1 ? (
+      <Text style={{ color: caret }}> ▍</Text>
+    ) : undefined;
   return (
     <View style={styles.wrap}>
-      {parseBlocks(markdown).map((b, i) => {
+      {blocks.map((b, i) => {
         if (b.kind === "code")
           return (
             <ScrollView
               key={i}
               horizontal
-              style={styles.codeBox}
+              style={[styles.codeBox, { backgroundColor: tone.codeBg }]}
               contentContainerStyle={styles.codePad}
             >
-              <Text style={styles.code} selectable>
+              <Text style={[styles.code, { color: tone.codeInk }]} selectable>
                 {b.text}
               </Text>
             </ScrollView>
           );
+        if (b.kind === "table") return <Table key={i} rows={b.rows} tone={tone} />;
+        if (b.kind === "rule")
+          return (
+            <View key={i} style={[styles.rule, { backgroundColor: tone.line }]} />
+          );
         if (b.kind === "heading")
-          return <Inline key={i} text={b.text} style={styles.heading} />;
+          return (
+            <Inline
+              key={i}
+              text={b.text}
+              tone={tone}
+              trailing={end(i)}
+              style={[
+                body,
+                styles.bold,
+                b.level <= 2 && { fontSize: size + 1.5, lineHeight: lineHeight + 2 },
+              ]}
+            />
+          );
         if (b.kind === "item")
           return (
-            <View key={i} style={styles.item}>
-              <Text style={styles.marker}>{b.marker}</Text>
-              <Inline text={b.text} style={styles.itemText} />
+            <View
+              key={i}
+              style={[styles.item, { paddingLeft: 4 + b.depth * 16 }]}
+            >
+              <Text style={[body, { color: tone.dim }]}>{b.marker}</Text>
+              <Inline
+                text={b.text}
+                tone={tone}
+                trailing={end(i)}
+                style={[body, styles.itemText]}
+              />
             </View>
           );
-        return <Inline key={i} text={b.text} style={styles.para} />;
+        if (b.kind === "quote")
+          return (
+            <View key={i} style={[styles.quote, { borderColor: tone.line }]}>
+              <Inline
+                text={b.text}
+                tone={tone}
+                trailing={end(i)}
+                style={[body, { color: tone.dim }]}
+              />
+            </View>
+          );
+        const leading = lead && i === 0 && blocks.length > 1;
+        return (
+          <Inline
+            key={i}
+            text={b.text}
+            tone={tone}
+            trailing={end(i)}
+            style={[
+              body,
+              leading && {
+                fontSize: size + 1,
+                fontWeight: "600",
+                color: "#f4f4f5",
+              },
+            ]}
+          />
+        );
       })}
+      {blocks.length === 0 && caret ? (
+        <Text style={[body, { color: caret }]}>▍</Text>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: { gap: 8 },
-  para: { color: "#ffffff", fontSize: 15.5, lineHeight: 22 },
-  heading: { color: "#ffffff", fontSize: 17, fontWeight: "700" },
   bold: { fontWeight: "700" },
-  item: { flexDirection: "row", gap: 8, paddingLeft: 4 },
-  marker: { color: "#8e8e93", fontSize: 15.5, lineHeight: 22 },
-  itemText: { flex: 1, color: "#ffffff", fontSize: 15.5, lineHeight: 22 },
-  inlineCode: {
-    fontFamily: "Menlo",
-    fontSize: 13,
-    backgroundColor: "#1c1c1e",
-  },
-  codeBox: { backgroundColor: "#141416", borderRadius: 12 },
+  italic: { fontStyle: "italic" },
+  item: { flexDirection: "row", gap: 8 },
+  itemText: { flex: 1 },
+  quote: { borderLeftWidth: 3, paddingLeft: 10 },
+  rule: { height: StyleSheet.hairlineWidth, marginVertical: 4 },
+  inlineCode: { fontFamily: "Menlo", fontSize: 13 },
+  codeBox: { borderRadius: 12 },
   codePad: { padding: 12 },
-  code: { fontFamily: "Menlo", fontSize: 12.5, color: "#e5e5ea" },
+  code: { fontFamily: "Menlo", fontSize: 12.5 },
 });

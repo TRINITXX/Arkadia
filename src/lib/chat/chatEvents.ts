@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ChatCommand, ChatEvent } from "@/lib/chat/chatProtocol";
+import { desktopTakesBack, SERVER_GONE } from "@/lib/chat/phoneChat";
 
 /**
  * The page's link to the chat servers (`chat.rs`): one `chat-event` listener
@@ -11,8 +12,7 @@ import type { ChatCommand, ChatEvent } from "@/lib/chat/chatProtocol";
 
 type Listener = (event: ChatEvent) => void;
 
-/** A chat's end when its account's server stops. */
-export const SERVER_GONE = "Le serveur du chat s'est arrêté";
+export { SERVER_GONE } from "@/lib/chat/phoneChat";
 
 const byChat = new Map<string, Set<Listener>>();
 const onExit = new Set<(account: string) => void>();
@@ -344,7 +344,18 @@ export function chatCommandFor(
 export function chatCommand(
   accountId: string | undefined,
   command: ChatCommand,
+  /**
+   * Who sends it: the user at the PC by default, the phone (`chatCommand`
+   * action), or Arkadia on its own (a « continue » after a usage limit).
+   */
+  from: "desktop" | "phone" | "auto" = "desktop",
 ): Promise<void> {
+  // The user at the PC: a chat the phone drove goes back to the PC (no more
+  // rings on the phone), as a terminal does on a key (`send_input`).
+  if (from === "desktop" && command.chatId && desktopTakesBack(command.type))
+    void invoke("remote_desktop_chat_input", { pane: command.chatId }).catch(
+      () => {},
+    );
   if (command.type === "start") {
     accountOf.set(command.chatId, accountId ?? "main");
     liveServers.add(accountId ?? "main");

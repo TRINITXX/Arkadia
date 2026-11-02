@@ -1,6 +1,6 @@
 import { messageCards } from "@/lib/chat/chatAttachments";
 import type { ChatItem } from "@/lib/chat/chatState";
-import type { ImageRef } from "@/lib/imageGallery";
+import type { ImageRef } from "@/lib/imageRef";
 import {
   imagePathKey,
   isImagePath,
