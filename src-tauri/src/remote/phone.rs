@@ -1,13 +1,14 @@
-//! Tabs Alexis drives from the iPhone, and the notifications they send it.
+//! Which tabs ring the iPhone, and the notifications they send it.
 //!
-//! He works on the PC most of the time and wants the iPhone to ring only
-//! when he works from it (choice of 25/10/2026): a pane becomes followed as
-//! soon as the phone sends it something (a key, a tap, a prompt button), and
-//! stops being followed as soon as he types in it on the PC. When Claude
-//! finishes or asks in a followed pane, the phone gets a push, unless it is
-//! showing that very pane. As on the PC (REVIEW.md « Notification en
-//! double »), a turn Claude restarts on its own rings it once per tab until
-//! Alexis comes back to that tab on the phone.
+//! Where Alexis is decides first (`presence`, choice of 02/11/2026): away
+//! from home, every tab rings the iPhone; at home, none does. While the box
+//! can't tell, the tabs he drives from the iPhone ring it (choice of
+//! 25/10/2026): a pane becomes followed as soon as the phone sends it
+//! something (a key, a tap, a prompt button), and stops being followed as
+//! soon as he types in it on the PC. Never the pane the phone is showing. As
+//! on the PC (REVIEW.md « Notification en double »), a turn Claude restarts
+//! on its own rings it once per tab until Alexis comes back to that tab on
+//! the phone, or to the PC.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
+use super::presence::{self, Mode};
 use crate::popup::log_line;
 
 /// A prompt or toolbar button pressed on the phone runs on the desktop, which
@@ -139,23 +141,28 @@ impl PhoneFollow {
         }
     }
 
+    /// Alexis is back at the PC (`popup::user_is_back`): he has seen every
+    /// tab, so a turn Claude restarts on its own rings the phone again.
+    pub fn forget_told(&self) {
+        self.inner.lock().told.clear();
+    }
+
     #[cfg(test)]
     fn is_followed(&self, pane: &str) -> bool {
         self.inner.lock().followed.contains(pane)
     }
 
-    /// Whether Claude's finish or question in `pane` should ring the phone.
-    pub fn should_notify(&self, pane: &str) -> bool {
-        let inner = self.inner.lock();
-        inner.followed.contains(pane) && !inner.watching.values().any(|p| p == pane)
+    /// Whether Claude's finish or question in `pane` should ring the phone,
+    /// with Alexis at `mode` (`presence::current`).
+    pub fn should_notify(&self, pane: &str, mode: Mode) -> bool {
+        self.inner.lock().rings(pane, mode)
     }
 
     /// Like `should_notify`, and counts the ring: a `done` of a turn Claude
     /// restarted on its own rings once per tab until Alexis comes back.
-    pub fn claim_notification(&self, pane: &str, kind: &str, self_woken: bool) -> bool {
+    pub fn claim_notification(&self, pane: &str, kind: &str, self_woken: bool, mode: Mode) -> bool {
         let mut inner = self.inner.lock();
-        let shown = inner.watching.values().any(|p| p == pane);
-        if !inner.followed.contains(pane) || shown {
+        if !inner.rings(pane, mode) {
             return false;
         }
         if self_woken && kind == "done" && inner.told.contains(pane) {
@@ -163,6 +170,18 @@ impl PhoneFollow {
         }
         inner.told.insert(pane.to_string());
         true
+    }
+}
+
+impl Inner {
+    fn rings(&self, pane: &str, mode: Mode) -> bool {
+        let shown = self.watching.values().any(|p| p == pane);
+        !shown
+            && match mode {
+                Mode::Away => true,
+                Mode::Home => false,
+                Mode::Unknown => self.followed.contains(pane),
+            }
     }
 }
 
@@ -228,14 +247,14 @@ pub fn message(kind: &str, project: &str, tab: &str) -> (String, String) {
 }
 
 /// Rings the phone for Claude's `kind` ("done" | "question") in `pane`, if
-/// Alexis drives that pane from it. Off the caller's thread: it waits on the
-/// network.
+/// that pane rings it now (`PhoneFollow::should_notify`). Off the caller's
+/// thread: it waits on the network.
 pub fn notify(pane: &str, kind: &str, self_woken: bool, project: &str, tab: &str) {
-    if !FOLLOW.claim_notification(pane, kind, self_woken) {
+    if !FOLLOW.claim_notification(pane, kind, self_woken, presence::current()) {
         return;
     }
     let Some(token) = push_token() else {
-        log_line("[phone] followed pane finished, but no push token yet");
+        log_line("[phone] a tab rang the iPhone, but no push token yet");
         return;
     };
     let (title, body) = message(kind, project, tab);
@@ -300,9 +319,9 @@ mod tests {
     #[test]
     fn a_pane_driven_from_the_phone_rings_it() {
         let f = PhoneFollow::default();
-        assert!(!f.should_notify("p"));
+        assert!(!f.should_notify("p", Mode::Unknown));
         f.phone_input("p");
-        assert!(f.should_notify("p"));
+        assert!(f.should_notify("p", Mode::Unknown));
     }
 
     #[test]
@@ -311,7 +330,7 @@ mod tests {
         let now = Instant::now();
         f.phone_input("p");
         f.desktop_input("p", now);
-        assert!(!f.should_notify("p"));
+        assert!(!f.should_notify("p", Mode::Unknown));
     }
 
     #[test]
@@ -321,10 +340,10 @@ mod tests {
         f.phone_action("p", now);
         // The desktop runs the button and writes to the pane.
         f.desktop_input("p", now + Duration::from_secs(1));
-        assert!(f.should_notify("p"));
+        assert!(f.should_notify("p", Mode::Unknown));
         // Later writes from the desktop are Alexis at the PC.
         f.desktop_input("p", now + PHONE_ACTION_GRACE + Duration::from_secs(1));
-        assert!(!f.should_notify("p"));
+        assert!(!f.should_notify("p", Mode::Unknown));
     }
 
     #[test]
@@ -332,9 +351,9 @@ mod tests {
         let f = PhoneFollow::default();
         f.phone_input("p");
         f.set_watching(1, Some("p".into()));
-        assert!(!f.should_notify("p"));
+        assert!(!f.should_notify("p", Mode::Unknown));
         f.set_watching(1, None);
-        assert!(f.should_notify("p"));
+        assert!(f.should_notify("p", Mode::Unknown));
     }
 
     #[test]
@@ -342,7 +361,7 @@ mod tests {
         let f = PhoneFollow::default();
         f.phone_input("a");
         f.desktop_input("b", Instant::now());
-        assert!(f.should_notify("a"));
+        assert!(f.should_notify("a", Mode::Unknown));
         assert!(!f.is_followed("b"));
     }
 
@@ -350,16 +369,41 @@ mod tests {
     fn a_turn_claude_restarts_alone_rings_once_until_alexis_comes_back() {
         let f = PhoneFollow::default();
         f.phone_input("p");
-        assert!(f.claim_notification("p", "done", false));
+        assert!(f.claim_notification("p", "done", false, Mode::Unknown));
         // Background tasks wake Claude twice: silent.
-        assert!(!f.claim_notification("p", "done", true));
-        assert!(!f.claim_notification("p", "done", true));
+        assert!(!f.claim_notification("p", "done", true, Mode::Unknown));
+        assert!(!f.claim_notification("p", "done", true, Mode::Unknown));
         // A question still rings.
-        assert!(f.claim_notification("p", "question", true));
+        assert!(f.claim_notification("p", "question", true, Mode::Unknown));
         // Back on the tab from the phone: the next restart rings again.
         f.set_watching(1, Some("p".into()));
         f.set_watching(1, None);
-        assert!(f.claim_notification("p", "done", true));
+        assert!(f.claim_notification("p", "done", true, Mode::Unknown));
+    }
+
+    #[test]
+    fn away_from_home_every_tab_rings_but_the_one_on_screen() {
+        let f = PhoneFollow::default();
+        assert!(
+            f.should_notify("p", Mode::Away),
+            "never driven from the phone"
+        );
+        f.set_watching(1, Some("p".into()));
+        assert!(!f.should_notify("p", Mode::Away));
+        assert!(f.claim_notification("q", "done", false, Mode::Away));
+        // A turn Claude restarts on its own still rings once.
+        assert!(!f.claim_notification("q", "done", true, Mode::Away));
+        // Back at the PC since, then out again: it rings again.
+        f.forget_told();
+        assert!(f.claim_notification("q", "done", true, Mode::Away));
+    }
+
+    #[test]
+    fn at_home_no_tab_rings_even_one_driven_from_the_phone() {
+        let f = PhoneFollow::default();
+        f.phone_input("p");
+        assert!(!f.should_notify("p", Mode::Home));
+        assert!(!f.claim_notification("p", "question", false, Mode::Home));
     }
 
     #[test]
@@ -367,8 +411,8 @@ mod tests {
         let f = PhoneFollow::default();
         f.phone_input("old");
         f.replace("old", "new");
-        assert!(f.should_notify("new"));
-        assert!(!f.should_notify("old"));
+        assert!(f.should_notify("new", Mode::Unknown));
+        assert!(!f.should_notify("old", Mode::Unknown));
     }
 
     #[test]

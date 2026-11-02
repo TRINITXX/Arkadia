@@ -12,6 +12,7 @@ pub(crate) mod access;
 mod activity;
 pub(crate) mod peer;
 pub(crate) mod phone;
+pub(crate) mod presence;
 mod server;
 
 use std::collections::HashMap;

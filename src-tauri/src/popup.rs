@@ -472,10 +472,10 @@ fn main_is_foreground(app: &AppHandle) -> bool {
 /// Runs as soon as a signal lands (no grace since 31/10/2026), on a throwaway
 /// thread: the chime blocks it while it plays. The chime plays (debounced)
 /// whatever the focus, style or fullscreen — the user wants an audible cue —
-/// unless `mute_self_woken` silences the whole signal. The POPUP appears only
+/// unless `mute_self_woken` silences the PC's chime and popup. The POPUP appears only
 /// while the user is away and notifications are on/allowed. Every gate reads
 /// the state now. `chat`: a chat pane's signal, from its page: always the
-/// compact toast, never the phone.
+/// compact toast. The phone decides first, with its own once-per-tab rule.
 #[allow(clippy::too_many_arguments)]
 fn show_signal(
     app: &AppHandle,
@@ -489,19 +489,13 @@ fn show_signal(
 ) {
     let round = chat.as_ref().is_some_and(|c| c.round);
     let chat_tab = chat.map(|c| c.tab);
-    let queue = app.state::<PopupQueue>();
-    let already_told = queue.told_while_away.lock().contains(&pane_id);
-    if mute_self_woken(self_woken, main_is_foreground(app), already_told) {
-        log_line(&format!(
-            "pane {pane_id} restarted on its own and already notified while away — silent"
-        ));
-        return;
-    }
 
-    // The iPhone rings for the panes Alexis drives from it, whatever the PC
-    // shows (`remote::phone`): he is away from the PC then. A chat names its
-    // tab itself: its shell's title is the idle shell's.
-    if crate::remote::phone::FOLLOW.should_notify(&pane_id) {
+    // The iPhone rings whatever the PC shows: away from home for every pane,
+    // else for the panes Alexis drives from it (`remote::phone`). Before the
+    // PC's own silence: coming back to a tab on the phone re-arms it there,
+    // not on the PC. A chat names its tab itself: its shell's title is the
+    // idle shell's.
+    if crate::remote::phone::FOLLOW.should_notify(&pane_id, crate::remote::presence::current()) {
         let project = uuid::Uuid::parse_str(&pane_id)
             .ok()
             .and_then(|u| registry.project_name_for_pane(u))
@@ -514,6 +508,15 @@ fn show_signal(
             }
         };
         crate::remote::phone::notify(&pane_id, &kind, self_woken, &project, &tab);
+    }
+
+    let queue = app.state::<PopupQueue>();
+    let already_told = queue.told_while_away.lock().contains(&pane_id);
+    if mute_self_woken(self_woken, main_is_foreground(app), already_told) {
+        log_line(&format!(
+            "pane {pane_id} restarted on its own and already notified while away — silent"
+        ));
+        return;
     }
 
     // Sound first (debounced against the multi-hook double-fire). It ignores
@@ -1146,9 +1149,11 @@ fn close_all_popups(app: &AppHandle, keep_toast: bool) {
 }
 
 /// The user is back in Arkadia (main window or an artifact focused): the next
-/// notification of any pane rings again — see `mute_self_woken`.
+/// notification of any pane rings again — see `mute_self_woken` — on the PC
+/// and on the phone.
 pub fn user_is_back(app: &AppHandle) {
     app.state::<PopupQueue>().told_while_away.lock().clear();
+    crate::remote::phone::FOLLOW.forget_told();
 }
 
 /// Dismiss every notification and clear the queue. Called when Arkadia's main

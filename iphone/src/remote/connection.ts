@@ -295,7 +295,7 @@ export function registerActivityToken(token: string | null) {
   send({ t: "activity", token });
 }
 
-/** The panes the iPhone drives, as the PC tells; null until it did. */
+/** The panes whose tabs the Live Activity lists, as the PC tells; null until it did. */
 export function useFollowedPanes(): string[] | null {
   return useSyncExternalStore(
     (cb) => {

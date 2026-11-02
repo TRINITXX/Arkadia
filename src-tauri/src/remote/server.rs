@@ -76,6 +76,7 @@ impl Ctx {
 }
 
 pub async fn serve(app: AppHandle, hub: Arc<RemoteHub>, access: Arc<Access>) {
+    super::presence::spawn();
     super::activity::spawn(hub.clone());
     // The port may still be held for a moment (a previous Arkadia closing):
     // keep trying rather than leave the phone without a server.
@@ -483,8 +484,8 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
     ctx.hub.add_chat_outbox(client, chat_out);
     let mut state_rx = ctx.hub.watch_state();
     state_rx.mark_changed();
-    // The tabs it drives: the app shows their dots in its Live Activity.
-    let mut follow_rx = FOLLOW.subscribe();
+    // The tabs its Live Activity lists (`activity::live_panes`).
+    let mut follow_rx = super::activity::live();
     follow_rx.mark_changed();
     let mut frames: Option<tokio::task::JoinHandle<()>> = None;
     let mut ping = tokio::time::interval(PING_EVERY);

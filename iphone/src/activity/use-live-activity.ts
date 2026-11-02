@@ -6,8 +6,9 @@ import { claudeDots, type ClaudeDotsProps } from "~/activity/claude-dots";
 import { registerActivityToken, useFollowedPanes } from "~/remote/connection";
 
 /**
- * Keeps the Live Activity in step with the tabs driven from the iPhone: it
- * starts with the first one (iOS starts activities only from an app in
+ * Keeps the Live Activity in step with the tabs the PC lists (away from
+ * home, every tab where Claude works or waits; else the tabs driven from the
+ * iPhone): it starts with the first one (iOS starts activities only from an app in
  * front), follows them while the app is open, and ends with the last. Its
  * push token goes to the PC, which takes over in the background
  * (src-tauri `remote::activity`).

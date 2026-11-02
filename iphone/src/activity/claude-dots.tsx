@@ -9,17 +9,18 @@ import {
 import { createLiveActivity } from "expo-widgets";
 import type { FollowRow } from "@/lib/followRows";
 
-/** The tabs driven from the iPhone (`followRows`, src-tauri `activity`). */
+/** The tabs the PC lists (`followRows`, src-tauri `activity::live_panes`). */
 export interface ClaudeDotsProps {
   tabs: FollowRow[];
 }
 
 /**
- * The Lock Screen and Dynamic Island: a row per tab driven from the iPhone,
- * in the projects' order, its dot (green: Claude waits for you, orange: it
- * works) then its project and tab (Alexis's request of 25/10/2026). The
- * compact island has room for the dots only. Runs in the widget extension:
- * no import or constant from outside this function.
+ * The Lock Screen and Dynamic Island: a row per listed tab, in the
+ * projects' order, its dot (green: Claude waits for you, orange: it works)
+ * then its project and tab (Alexis's request of 25/10/2026). The island
+ * shows a single dot (choice of 02/11/2026), the full list only when
+ * pressed. Runs in the widget extension: no import or constant from outside
+ * this function.
  */
 function ClaudeDots(props: ClaudeDotsProps) {
   "widget";
@@ -67,7 +68,7 @@ function ClaudeDots(props: ClaudeDotsProps) {
       </VStack>
     );
   };
-  // The smallest island shows one dot: green as soon as a tab waits for you.
+  // The island shows one dot: green as soon as a tab waits for you.
   const first = props.tabs.some((t) => t.s === "w")
     ? "w"
     : (props.tabs[0]?.s ?? "i");
@@ -78,11 +79,7 @@ function ClaudeDots(props: ClaudeDotsProps) {
         {list(4)}
       </HStack>
     ),
-    compactLeading: (
-      <HStack spacing={4}>
-        {props.tabs.slice(0, 6).map((tab, i) => dot(tab.s, 8, i))}
-      </HStack>
-    ),
+    compactLeading: dot(first, 8),
     minimal: dot(first, 10),
     expandedBottom: list(3),
   };
