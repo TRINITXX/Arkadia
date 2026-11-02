@@ -61,6 +61,13 @@ export const CHAT_CSS = `
 .chat-activity-detail { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 0 7px; padding-left: 14px; border-left: 1px solid var(--chat-line); }
 /* The question sheet unfolded: the input hides, the sheet takes the bottom (the user's ask of 01/11/2026); folded, the input comes back. */
 .chat-bottom.sheet-open .chat-col > .chat-box:not(.ask) { display: none; }
+/* The sheet unfolded gives way to what stacks under it (the agents' pills, an open workflow card): the bottom fits the pane, and the sheet alone shrinks, then scrolls (02/11/2026). */
+.chat-bottom.sheet-open { flex-shrink: 1; min-height: 0; }
+/* The bottom rises 24px over the conversation: kept that tall, its top never passes the pane's. */
+.chat-root:has(> .chat-bottom.sheet-open) > .chat-scroll { min-height: 32px; }
+.chat-bottom.sheet-open > .chat-col { display: flex; flex-direction: column; min-height: 0; }
+.chat-bottom.sheet-open > .chat-col > * { flex-shrink: 0; }
+.chat-bottom.sheet-open > .chat-col > .chat-sheet-q { flex-shrink: 1; min-height: 120px; }
 .chat-tools { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 0 7px; padding-left: 14px; border-left: 1px solid var(--chat-line); }
 .chat-tool .row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--chat-dim); cursor: pointer; padding: 2px 4px; border-radius: 6px; min-width: 0; }
 .chat-tool .row:hover { background: #202327; }
