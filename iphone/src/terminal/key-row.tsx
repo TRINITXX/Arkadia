@@ -1,9 +1,9 @@
 import { memo, useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { MenuView, type MenuAction } from "@expo/ui/community/menu";
-import * as Haptics from "expo-haptics";
 import { SymbolView } from "expo-symbols";
 import type { RemoteButton } from "@/lib/remoteSnapshot";
+import { tap, tick } from "~/ui/haptics";
 import { sfIcon } from "~/ui/sf-icon";
 
 /**
@@ -73,10 +73,13 @@ export const KeyRow = memo(function KeyRow({
   onPickFiles,
   onCopyCode,
 }: KeyRowProps) {
-  const tap = (run: () => void) => () => {
-    void Haptics.selectionAsync();
-    run();
-  };
+  // Each key ticks as a keyboard's does; the mic, an action, taps.
+  const press =
+    (run: () => void, feel = tick) =>
+    () => {
+      feel();
+      run();
+    };
   const actions = useMemo<MenuAction[]>(
     () => [
       ...(promptButtons
@@ -121,7 +124,7 @@ export const KeyRow = memo(function KeyRow({
     [promptButtons],
   );
   const onMenu = (id: string) => {
-    void Haptics.selectionAsync();
+    tick();
     if (id.startsWith("button:"))
       return onPromptButton(id.slice("button:".length));
     if (id === CLEAR_ID) return onClearPrompt();
@@ -138,7 +141,7 @@ export const KeyRow = memo(function KeyRow({
       {KEYS.map((k) => (
         <Pressable
           key={k.label}
-          onPress={tap(() => onKey(k.data))}
+          onPress={press(() => onKey(k.data))}
           style={({ pressed }) => [styles.key, pressed && styles.pressed]}
         >
           <Text style={styles.label}>{k.label}</Text>
@@ -146,7 +149,7 @@ export const KeyRow = memo(function KeyRow({
       ))}
       <Pressable
         accessibilityLabel={dictating ? "Arrêter la dictée" : "Dictée"}
-        onPress={tap(onDictation)}
+        onPress={press(onDictation, tap)}
         style={({ pressed }) => [
           styles.key,
           styles.icon,
@@ -173,7 +176,7 @@ export const KeyRow = memo(function KeyRow({
         accessibilityLabel={
           keyboardOpen ? "Fermer le clavier" : "Ouvrir le clavier"
         }
-        onPress={tap(onToggleKeyboard)}
+        onPress={press(onToggleKeyboard)}
         style={({ pressed }) => [
           styles.key,
           styles.icon,

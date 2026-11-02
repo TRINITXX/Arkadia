@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
 import { SymbolView } from "expo-symbols";
 import { messageTime } from "@/lib/messageTime";
 import { C, T } from "~/chat/chat-theme";
 import { F } from "~/chat/feed/feed-style";
+import { success } from "~/ui/haptics";
 
 /** How long « Copié » stays in the frame's corner. */
 const COPIED_MS = 1200;
@@ -59,7 +59,7 @@ export function MessageFrame({
   const copy = () => {
     if (!text) return;
     void Clipboard.setStringAsync(text).then(() => {
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      success();
       setCopied(true);
       clearTimeout(timer.current);
       timer.current = setTimeout(() => setCopied(false), COPIED_MS);

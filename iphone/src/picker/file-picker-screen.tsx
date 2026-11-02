@@ -17,7 +17,8 @@ import type { FileSource, RemoteFile } from "@/lib/remoteProtocol";
 import { putInComposer } from "~/chat/composer-inbox";
 import { ARKADIA_HOST } from "~/remote/config";
 import { listFiles, send } from "~/remote/connection";
-import { showNotice } from "~/ui/notice";
+import { tap, tick } from "~/ui/haptics";
+import { showFailure } from "~/ui/notice";
 
 const SOURCES: { id: FileSource; label: string }[] = [
   { id: "photos", label: "Photos" },
@@ -54,7 +55,7 @@ export function FilePickerScreen() {
       .catch((e) => {
         if (!live) return;
         setFiles([]);
-        showNotice(e instanceof Error ? e.message : String(e));
+        showFailure(e instanceof Error ? e.message : String(e));
       });
     return () => {
       live = false;
@@ -62,19 +63,20 @@ export function FilePickerScreen() {
   }, [source, limit]);
 
   const switchSource = (next: FileSource) => {
+    tick();
     setSource(next);
     setFiles(null);
     setLimit(PAGE);
   };
-  const toggle = useCallback(
-    (path: string) =>
-      setPicked((p) =>
-        p.includes(path) ? p.filter((x) => x !== path) : [...p, path],
-      ),
-    [],
-  );
+  const toggle = useCallback((path: string) => {
+    tick();
+    setPicked((p) =>
+      p.includes(path) ? p.filter((x) => x !== path) : [...p, path],
+    );
+  }, []);
   const insert = () => {
     if (!pane || picked.length === 0) return;
+    tap();
     const paths = quotePathsForPrompt(picked);
     if (chat) putInComposer(pane, paths);
     else send({ t: "input", pane, data: paths });
@@ -86,7 +88,10 @@ export function FilePickerScreen() {
       <View style={styles.head}>
         <Text style={styles.title}>Insérer dans l’invite</Text>
         <Pressable
-          onPress={() => router.back()}
+          onPress={() => {
+            tap();
+            router.back();
+          }}
           hitSlop={10}
           style={styles.close}
         >

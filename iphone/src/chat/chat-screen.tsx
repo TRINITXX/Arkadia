@@ -28,6 +28,8 @@ import { AgentSheet } from "~/chat/feed/agent-sheet";
 import { useChat, useChatLive } from "~/chat/use-chat";
 import { useMessageEdit } from "~/chat/use-message-edit";
 import { act, type Status } from "~/remote/connection";
+import { headerBadge } from "~/remote/snapshot";
+import { failure, tap, tick } from "~/ui/haptics";
 import { sfIcon } from "~/ui/sf-icon";
 import { AccountChip, BadgeDot } from "~/ui/status-dots";
 
@@ -46,6 +48,7 @@ async function run(action: RemoteAction) {
   try {
     return await act(action);
   } catch (e) {
+    failure();
     Alert.alert(
       "Action impossible",
       e instanceof Error ? e.message : String(e),
@@ -66,6 +69,9 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
   const actions = useChat(chatId);
   const live = useChatLive(chatId);
   const { state } = live;
+  // Files named from the chat's folder, as the desktop's (`shortPath`);
+  // an older desktop doesn't send it: from the home folder then.
+  const cwd = pane.cwd ?? null;
   // A request, or the ❓ round unfolded, takes the input's place (desktop).
   const covered = useAsksCoverComposer(chatId, state);
   // The pencil on the user's messages: back before one, its text to edit.
@@ -77,6 +83,7 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
     MESSAGES_ONLY.has(chatId),
   );
   const toggleMessagesOnly = () => {
+    tick();
     const next = !messagesOnly;
     if (next) MESSAGES_ONLY.add(chatId);
     else MESSAGES_ONLY.delete(chatId);
@@ -91,11 +98,22 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
     [],
   );
 
+  // A visual's button picks a text for the input: a pick, as a menu's.
   const onChoose = useCallback(
-    (text: string) => putInComposer(chatId, text, "choice"),
+    (text: string) => {
+      tick();
+      putInComposer(chatId, text, "choice");
+    },
     [chatId],
   );
-  const runToolbarButton = (buttonId: string) =>
+  // A running subagent's pill opens its sheet.
+  const openAgent = useCallback((a: Subagent) => {
+    tap();
+    setAgent(a);
+  }, []);
+  // A menu's item ticks as it's picked; what it sets off says how it went.
+  const runToolbarButton = (buttonId: string) => {
+    tick();
     void run({
       kind: "runButton",
       projectId: project.id,
@@ -103,30 +121,38 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
       buttonId,
       chat: true,
     });
+  };
   const newTab = async () => {
+    tick();
     const result = await run({ kind: "newTab", projectId: project.id });
     if (result?.tabId && mounted.current)
       router.replace({ pathname: "/tab/[id]", params: { id: result.tabId } });
   };
-  const closeTab = () =>
+  const closeTab = () => {
+    tick();
     Alert.alert("Fermer cet onglet ?", "Ce qui y tourne s’arrête.", [
       { text: "Annuler", style: "cancel" },
       {
         text: "Fermer l’onglet",
         style: "destructive",
         onPress: () => {
+          tap();
           void run({ kind: "closeTab", tabId: tab.id });
           router.back();
         },
       },
     ]);
-  const toTerminal = () =>
-    void actions.toggle().catch((e: unknown) =>
+  };
+  const toTerminal = () => {
+    tick();
+    void actions.toggle().catch((e: unknown) => {
+      failure();
       Alert.alert(
         "Bascule impossible",
         e instanceof Error ? e.message : String(e),
-      ),
-    );
+      );
+    });
+  };
 
   return (
     <>
@@ -140,11 +166,14 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
               </Text>
               <View style={styles.subtitle}>
                 <View
-                  style={[styles.projectDot, { backgroundColor: project.color }]}
+                  style={[
+                    styles.projectDot,
+                    { backgroundColor: project.color },
+                  ]}
                 />
                 <Text style={styles.subtitleText}>{project.name}</Text>
                 <AccountChip account={tab.account} />
-                <BadgeDot badge={pane.badge ?? tab.badge} />
+                <BadgeDot {...headerBadge(tab, pane)} />
               </View>
             </View>
           ),
@@ -159,6 +188,7 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
                   key={p.id}
                   isOn={p.id === pane.id}
                   onPress={() => {
+                    tick();
                     if (p.id !== pane.id)
                       router.setParams({ id: tab.id, pane: p.id });
                   }}
@@ -198,13 +228,14 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
         <ChatFeed
           chatId={chatId}
           live={live}
+          cwd={cwd}
           actions={actions}
           onChoose={onChoose}
           messagesOnly={messagesOnly}
           onEdit={edit.onEdit}
           editBlocked={edit.blocked !== null}
         />
-        <ChatLiveLine state={state} cwd={null} onOpenAgent={setAgent} />
+        <ChatLiveLine state={state} cwd={cwd} onOpenAgent={openAgent} />
         <ChatAsks chatId={chatId} state={state} actions={actions} />
         {/* Hidden, not unmounted, under an ask: its draft stays. */}
         <View style={covered ? styles.hidden : null}>
@@ -224,6 +255,7 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
         visible={agent !== null}
         chatId={chatId}
         live={live}
+        cwd={cwd}
         actions={actions}
         onChoose={onChoose}
         onClose={() => setAgent(null)}

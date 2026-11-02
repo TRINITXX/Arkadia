@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import * as Haptics from "expo-haptics";
 import { editBlocked, laterMessages, rewindPointOf } from "@/lib/chat/chatEdit";
 import type { ChatItem, ChatState } from "@/lib/chat/chatState";
 import {
@@ -10,7 +9,8 @@ import { foldNextRound } from "~/chat/asks/round-store";
 import { putInComposer } from "~/chat/composer-inbox";
 import { confirmEdit } from "~/chat/edit-confirm";
 import type { ChatActions } from "~/chat/use-chat";
-import { showNotice } from "~/ui/notice";
+import { success, tap } from "~/ui/haptics";
+import { showFailure } from "~/ui/notice";
 
 export type UserItem = Extract<ChatItem, { kind: "user" }>;
 
@@ -61,17 +61,15 @@ export function useMessageEdit(
           await actions.rewindPoints(),
         );
         // The SDK reads the session from its last compaction on.
-        if (!point) return showNotice(EDIT_BEFORE_COMPACTION);
+        if (!point) return showFailure(EDIT_BEFORE_COMPACTION);
         // Left meanwhile: no rewind whose text would land nowhere.
         if (!mounted.current) return;
         foldNextRound(chatId, stateRef.current);
         await actions.rewind(point.uuid, "conversation");
         putInComposer(chatId, point.text, "message");
-        void Haptics.notificationAsync(
-          Haptics.NotificationFeedbackType.Success,
-        );
+        success();
       } catch (e) {
-        showNotice(e instanceof Error ? e.message : String(e));
+        showFailure(e instanceof Error ? e.message : String(e));
       } finally {
         goingRef.current = false;
         setGoing(false);
@@ -83,15 +81,17 @@ export function useMessageEdit(
   const onEdit = useCallback(
     (item: UserItem) => {
       const blocked = why();
-      if (blocked) return showNotice(blocked);
+      if (blocked) return showFailure(blocked);
       // The phone's input takes no image: its pasted ones would be lost.
-      if (item.pasted?.length) return showNotice(EDIT_WITH_IMAGES);
+      if (item.pasted?.length) return showFailure(EDIT_WITH_IMAGES);
+      // Taken: a tap now, the success once the message is back in the input.
+      tap();
       const later = laterMessages(stateRef.current.items, item);
       if (later === 0) return void go(item);
       confirmEdit(later, () => {
         // Claude may have started meanwhile: the desktop's confirm hides then.
         const now = why();
-        if (now) showNotice(now);
+        if (now) showFailure(now);
         else void go(item);
       });
     },

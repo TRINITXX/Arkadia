@@ -10,6 +10,7 @@ import { retryLabel } from "@/lib/chat/chatErrors";
 import { elapsedLabel, tokensLabel } from "@/lib/chat/chatLabels";
 import { tasksOf, type ChatState, type Subagent } from "@/lib/chat/chatState";
 import { liveElapsed, liveStep, timedCall } from "@/lib/chat/chatSteps";
+import { useRunningHook } from "@/lib/chat/useRunningHook";
 import { C, T } from "~/chat/chat-theme";
 
 /**
@@ -37,7 +38,8 @@ export function ChatLiveLine({
   }, [working]);
 
   const agents = state.subagents.filter((a) => a.status === "running");
-  const hook = state.sdk.hooks[0]?.name ?? null;
+  // Named once it lasts: a quick one would only flash (`HOOK_SHOW_MS`).
+  const hook = useRunningHook(state.sdk.hooks);
   if (!working && !hook && agents.length === 0) return null;
 
   const request = state.requests[0] ?? state.sdk.elicitations[0];
@@ -63,15 +65,18 @@ export function ChatLiveLine({
 
   return (
     <View style={styles.line}>
-      {working && (
+      {/* A hook may run outside a turn: named then too, as on the desktop. */}
+      {(working || hook) && (
         <View style={styles.now}>
           <ActivityIndicator size="small" color={C.accent} />
           <Text style={styles.doing} numberOfLines={1}>
             {doing}
-            <Text style={styles.figures}>
-              {elapsed ? ` · ${elapsedLabel(elapsed.ms)}` : ""}
-              {tokens > 0 ? ` · ↓ ${tokensLabel(tokens)} jetons` : ""}
-            </Text>
+            {working && (
+              <Text style={styles.figures}>
+                {elapsed ? ` · ${elapsedLabel(elapsed.ms)}` : ""}
+                {tokens > 0 ? ` · ↓ ${tokensLabel(tokens)} tokens` : ""}
+              </Text>
+            )}
           </Text>
         </View>
       )}

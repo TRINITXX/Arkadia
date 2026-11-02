@@ -22,6 +22,7 @@ import {
   updateChat,
 } from "~/chat/chat-store";
 import { acquireChat, act } from "~/remote/connection";
+import { failure } from "~/ui/haptics";
 
 /** How many older messages « Charger les messages plus anciens » brings. */
 const OLDER_PAGE = 200;
@@ -73,8 +74,13 @@ export function useChat(chatId: string) {
   });
 
   return useMemo(() => {
+    // What the user did failed: the error buzz with its notice. A read the
+    // app asks on its own (a visual's page, the MCP list) fails quietly.
     const run = (command: PhoneChatCommand) =>
-      chatDo(chatId, command).catch((e: unknown) => fail(chatId, e));
+      chatDo(chatId, command).catch((e: unknown) => {
+        if (phoneDrives(command.type)) failure();
+        fail(chatId, e);
+      });
     return {
       /** `now`: Ctrl+Entrée on the desktop, the turn under way stops for it. */
       send(text: string, now = false) {
@@ -140,9 +146,10 @@ export function useChat(chatId: string) {
       },
       /** « Reprendre »: an ended chat starts again on its session. */
       restart: () =>
-        act({ kind: "chatOpen", chatId, restart: true }).catch((e: unknown) =>
-          fail(chatId, e),
-        ),
+        act({ kind: "chatOpen", chatId, restart: true }).catch((e: unknown) => {
+          failure();
+          fail(chatId, e);
+        }),
       /** Chat ⇄ terminal, as the desktop toolbar's switch. */
       toggle: () => act({ kind: "chatToggle", paneId: chatId }),
       /**

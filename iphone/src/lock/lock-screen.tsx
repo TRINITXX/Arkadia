@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SymbolView } from "expo-symbols";
+import { tap } from "~/ui/haptics";
 
 /** Covers the app until Face ID passes; the button asks again. */
 export function LockScreen({ onUnlock }: { onUnlock: () => void }) {
@@ -8,7 +9,10 @@ export function LockScreen({ onUnlock }: { onUnlock: () => void }) {
       <SymbolView name="lock.fill" size={44} tintColor="#8e8e93" />
       <Text style={styles.title}>Arkadia verrouillé</Text>
       <Pressable
-        onPress={onUnlock}
+        onPress={() => {
+          tap();
+          onUnlock();
+        }}
         style={({ pressed }) => [styles.button, pressed && styles.pressed]}
       >
         <SymbolView name="faceid" size={20} tintColor="#ffffff" />

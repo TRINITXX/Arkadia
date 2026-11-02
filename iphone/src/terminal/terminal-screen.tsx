@@ -9,9 +9,9 @@ import {
 } from "react-native";
 import { SegmentedControl } from "@expo/ui/community/segmented-control";
 import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
 import { router, Stack } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { FILTER_LABELS, filtersHideAny } from "@/lib/convFilters";
 import type { RemoteAction } from "@/lib/remoteActions";
 import type {
   RemoteButton,
@@ -21,6 +21,7 @@ import type {
   RemoteTab,
 } from "@/lib/remoteSnapshot";
 import { pasteData } from "@/mobile/typing";
+import { DEFAULT_TOOL_DENSITY } from "@/types";
 import {
   act,
   latestFrame,
@@ -30,17 +31,20 @@ import {
   sendInputs,
   type Status,
 } from "~/remote/connection";
+import { headerBadge } from "~/remote/snapshot";
 import { DictationBubble } from "~/dictation/dictation-bubble";
 import { useDictation } from "~/dictation/use-dictation";
 import { ConversationView } from "~/messages/conversation-view";
+import { useConvFilters } from "~/messages/use-conv-filters";
 import { clearPrompt } from "~/terminal/clear-prompt";
 import { KeyRow } from "~/terminal/key-row";
 import { LiveTerminal } from "~/terminal/live-terminal";
 import { usePaneFit } from "~/terminal/use-pane-fit";
 import { useTerminalGestures } from "~/terminal/use-terminal-gestures";
 import { useTypingInput } from "~/terminal/use-typing-input";
+import { failure, success, tap, tick } from "~/ui/haptics";
 import { sfIcon } from "~/ui/sf-icon";
-import { showNotice } from "~/ui/notice";
+import { showFailure, showNotice } from "~/ui/notice";
 import { AccountChip, BadgeDot } from "~/ui/status-dots";
 
 /** Between a dictation and its Enter, on the PC: two writes, never one paste. */
@@ -65,6 +69,7 @@ async function run(action: RemoteAction) {
   try {
     return await act(action);
   } catch (e) {
+    failure();
     Alert.alert(
       "Action impossible",
       e instanceof Error ? e.message : String(e),
@@ -76,7 +81,8 @@ async function run(action: RemoteAction) {
 /**
  * One tab, live: the real terminal at the screen's width. Typing goes
  * straight into Claude's prompt, which stays visible above the keyboard.
- * The header's menu runs the toolbar's buttons and closes the tab; the keys
+ * The header's menu runs the toolbar's buttons and closes the tab; on
+ * « Messages », a filter button beside it picks the types shown. The keys
  * below carry Claude's prompt buttons in their + menu. Only `LiveTerminal`
  * follows the frames.
  */
@@ -126,7 +132,7 @@ export function TerminalScreen({
   const dictating = dictationPhase !== "idle";
   useEffect(() => {
     if (!dictation.error) return;
-    showNotice(dictation.error);
+    showFailure(dictation.error);
     dictation.clearError();
   }, [dictation]);
   /** Ends the dictation and writes it into the prompt; Entrée then sends. */
@@ -164,9 +170,8 @@ export function TerminalScreen({
   const onClearPrompt = useCallback(() => {
     reset();
     if (paneId) reclaim(latestFrame(paneId));
-    if (clearPrompt(paneId))
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    else showNotice("L’invite de Claude n’est pas affichée.");
+    if (clearPrompt(paneId)) success();
+    else showFailure("L’invite de Claude n’est pas affichée.");
   }, [paneId, reset, reclaim]);
   const onPickFiles = useCallback(() => {
     if (paneId) router.push({ pathname: "/pick", params: { pane: paneId } });
@@ -176,16 +181,17 @@ export function TerminalScreen({
     readCodeBlock(paneId)
       .then(async (code) => {
         if (!code)
-          return showNotice("Aucun bloc de code dans cette conversation.");
+          return showFailure("Aucun bloc de code dans cette conversation.");
         await Clipboard.setStringAsync(code);
-        void Haptics.notificationAsync(
-          Haptics.NotificationFeedbackType.Success,
-        );
+        success();
         showNotice(`Copié : ${code.split(/\r?\n/)[0].slice(0, 60)}`);
       })
-      .catch((e) => showNotice(e instanceof Error ? e.message : String(e)));
+      .catch((e) => showFailure(e instanceof Error ? e.message : String(e)));
   }, [paneId]);
   const [view, setView] = useState<PaneView>("terminal");
+  // « Messages » reads as the desktop's reading view: its filters, its density.
+  const { filters, toggle: toggleFilter } = useConvFilters();
+  const density = snapshot.toolDensity ?? DEFAULT_TOOL_DENSITY;
   const onPaste = useCallback(() => {
     void Clipboard.getStringAsync().then((text) => {
       const bracketed = !!latestFrame(paneId)?.bracketed_paste;
@@ -204,7 +210,9 @@ export function TerminalScreen({
     reclaim(latestFrame(paneId));
     toggleKeyboard();
   }, [paneId, reclaim, toggleKeyboard]);
-  const runToolbarButton = (buttonId: string) =>
+  // A menu's item ticks as it's picked; what it sets off says how it went.
+  const runToolbarButton = (buttonId: string) => {
+    tick();
     void run({
       kind: "runButton",
       projectId: project.id,
@@ -212,25 +220,33 @@ export function TerminalScreen({
       buttonId,
       chat: true,
     });
+  };
   // Claude leaves the terminal and goes on as a chat: the route then shows it.
-  const toChat = () => void run({ kind: "chatToggle", paneId });
+  const toChat = () => {
+    tick();
+    void run({ kind: "chatToggle", paneId });
+  };
   const newTab = async () => {
+    tick();
     const result = await run({ kind: "newTab", projectId: project.id });
     if (result?.tabId && mounted.current)
       router.replace({ pathname: "/tab/[id]", params: { id: result.tabId } });
   };
-  const closeTab = () =>
+  const closeTab = () => {
+    tick();
     Alert.alert("Fermer cet onglet ?", "Ce qui y tourne s’arrête.", [
       { text: "Annuler", style: "cancel" },
       {
         text: "Fermer l’onglet",
         style: "destructive",
         onPress: () => {
+          tap();
           void run({ kind: "closeTab", tabId: tab.id });
           router.back();
         },
       },
     ]);
+  };
 
   return (
     <>
@@ -250,13 +266,38 @@ export function TerminalScreen({
                 />
                 <Text style={styles.subtitleText}>{project.name}</Text>
                 <AccountChip account={tab.account} />
-                <BadgeDot badge={pane?.badge ?? tab.badge} />
+                <BadgeDot {...headerBadge(tab, pane)} />
               </View>
             </View>
           ),
         }}
       />
       <Stack.Toolbar placement="right">
+        {/* The desktop's filter button, on its reading view only. */}
+        <Stack.Toolbar.Menu
+          icon={
+            filtersHideAny(filters)
+              ? "line.3.horizontal.decrease.circle.fill"
+              : "line.3.horizontal.decrease.circle"
+          }
+          accessibilityLabel="Filtrer les messages"
+          hidden={view !== "messages"}
+        >
+          {FILTER_LABELS.map((f) => (
+            <Stack.Toolbar.MenuAction
+              key={f.key}
+              isOn={filters[f.key]}
+              // Several types in one go, as the desktop's popover.
+              unstable_keepPresented
+              onPress={() => {
+                tick();
+                toggleFilter(f.key);
+              }}
+            >
+              {f.label}
+            </Stack.Toolbar.MenuAction>
+          ))}
+        </Stack.Toolbar.Menu>
         <Stack.Toolbar.Menu icon="ellipsis">
           {tab.panes.length > 1 && (
             <Stack.Toolbar.Menu inline title="Volets">
@@ -265,7 +306,10 @@ export function TerminalScreen({
                   key={p.id}
                   isOn={p.id === paneId}
                   // The route holds the pane shown: a chat pane gets its own screen.
-                  onPress={() => router.setParams({ id: tab.id, pane: p.id })}
+                  onPress={() => {
+                    tick();
+                    router.setParams({ id: tab.id, pane: p.id });
+                  }}
                 >
                   {`${i + 1}. ${p.title}`}
                 </Stack.Toolbar.MenuAction>
@@ -293,9 +337,12 @@ export function TerminalScreen({
         <SegmentedControl
           values={VIEWS.map((v) => v.label)}
           selectedIndex={VIEWS.findIndex((v) => v.id === view)}
-          onChange={(e) =>
-            setView(VIEWS[e.nativeEvent.selectedSegmentIndex]?.id ?? "terminal")
-          }
+          onChange={(e) => {
+            tick();
+            setView(
+              VIEWS[e.nativeEvent.selectedSegmentIndex]?.id ?? "terminal",
+            );
+          }}
           appearance="dark"
           style={styles.segment}
         />
@@ -311,7 +358,11 @@ export function TerminalScreen({
           reclaim={reclaim}
           overlay={
             view === "messages" && paneId ? (
-              <ConversationView paneId={paneId} />
+              <ConversationView
+                paneId={paneId}
+                filters={filters}
+                density={density}
+              />
             ) : null
           }
         />

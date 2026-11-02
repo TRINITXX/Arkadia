@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { failure } from "~/ui/haptics";
 
 const SHOWN_MS = 2600;
 
@@ -16,6 +17,12 @@ export function showNotice(message: string) {
   if (timer) clearTimeout(timer);
   set(message);
   timer = setTimeout(() => set(null), SHOWN_MS);
+}
+
+/** The same for what failed or was refused, with the error buzz. */
+export function showFailure(message: string) {
+  failure();
+  showNotice(message);
 }
 
 export function useNotice(): string | null {

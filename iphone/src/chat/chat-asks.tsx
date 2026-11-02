@@ -5,7 +5,6 @@ import type {
   PermissionResult,
 } from "@/lib/chat/chatProtocol";
 import { latestPlan, type ChatState } from "@/lib/chat/chatState";
-import { phoneAsk } from "@/lib/chat/phoneAsks";
 import { A } from "~/chat/asks/ask-colors";
 import { ElicitationAsk } from "~/chat/asks/elicitation-ask";
 import { PermissionAsk } from "~/chat/asks/permission-ask";
@@ -13,10 +12,12 @@ import { PlanAsk } from "~/chat/asks/plan-ask";
 import { QuestionAsk } from "~/chat/asks/question-ask";
 import { RoundSheet } from "~/chat/asks/round-sheet";
 import { useRoundSheet } from "~/chat/asks/round-store";
+import { phoneAsk } from "@/lib/chat/phoneAsks";
 import { useAsksMaxHeight } from "~/chat/asks/use-asks-max-height";
 import { useSentHold } from "~/chat/asks/use-sent-hold";
 import { C } from "~/chat/chat-theme";
 import type { ChatActions } from "~/chat/use-chat";
+import { tap } from "~/ui/haptics";
 
 export interface ChatAsksProps {
   chatId: string;
@@ -36,10 +37,10 @@ export interface ChatAsksProps {
  * input card does.
  */
 export function ChatAsks({ chatId, state, actions }: ChatAsksProps) {
-  const { closed, requests, sdk, working, items } = state;
+  const { closed, requests, sdk, working, items, restRound } = state;
   const ask = useMemo(
-    () => phoneAsk({ closed, requests, sdk, working, items }),
-    [closed, requests, sdk, working, items],
+    () => phoneAsk({ closed, requests, sdk, working, items, restRound }),
+    [closed, requests, sdk, working, items, restRound],
   );
   const maxHeight = useAsksMaxHeight();
   const round = useRoundSheet(
@@ -62,17 +63,22 @@ export function ChatAsks({ chatId, state, actions }: ChatAsksProps) {
           key={ask.round.id}
           chatId={chatId}
           round={ask.round}
+          working={state.working}
           onSend={(text) => void actions.send(text)}
+          onStop={() => void actions.interrupt()}
         />
       </View>
     );
 
   const id = ask.request.requestId;
+  // Every answer of a panel comes here, its tap grace passed: one tap each.
   const answer = (result: PermissionResult) => {
+    tap();
     hold(id);
     void actions.answer(id, result);
   };
   const elicitAnswer = (result: ElicitationAnswer) => {
+    tap();
     hold(id);
     void actions.elicitAnswer(id, result);
   };

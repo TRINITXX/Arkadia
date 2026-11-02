@@ -1,6 +1,5 @@
 import { useMemo, useRef, useState } from "react";
 import { ActionSheetIOS, Alert, FlatList } from "react-native";
-import * as Haptics from "expo-haptics";
 import type { RewindPoint } from "@/lib/chat/chatProtocol";
 import { rewindRows, type PickerRow } from "@/lib/chat/chatSlash";
 import { REWIND_CHOICES } from "@/lib/chat/phoneSlash";
@@ -9,6 +8,7 @@ import { PickerRowView } from "~/chat/slash/picker-row";
 import { SlashSheet } from "~/chat/slash/slash-sheet";
 import { usePanelList } from "~/chat/slash/use-panel-list";
 import type { ChatActions } from "~/chat/use-chat";
+import { failure, success, tap, tick } from "~/ui/haptics";
 
 /**
  * /rewind: the user's messages, newest first (`rewindRows`). A tap asks how
@@ -53,18 +53,18 @@ export function RewindSheet({
       .rewind(point.uuid, mode)
       .then(
         () => {
-          void Haptics.notificationAsync(
-            Haptics.NotificationFeedbackType.Success,
-          );
+          success();
           // The code alone: the conversation goes on, nothing to retype.
           if (mode !== "code") onRewound(point.text);
           onClose();
         },
-        (e: unknown) =>
+        (e: unknown) => {
+          failure();
           Alert.alert(
             "Retour impossible",
             e instanceof Error ? e.message : String(e),
-          ),
+          );
+        },
       )
       .finally(() => {
         picking.current = false;
@@ -75,6 +75,8 @@ export function RewindSheet({
   const pick = (row: PickerRow) => {
     const point = list.data?.find((p) => p.uuid === row.id);
     if (!point || picking.current) return;
+    // A tap for the list of choices, a tick for the one picked in it.
+    tap();
     ActionSheetIOS.showActionSheetWithOptions(
       {
         title: "Revenir avant ce message",
@@ -85,7 +87,9 @@ export function RewindSheet({
       },
       (i) => {
         const choice = REWIND_CHOICES[i];
-        if (choice) go(point, choice.mode);
+        if (!choice) return;
+        tick();
+        go(point, choice.mode);
       },
     );
   };

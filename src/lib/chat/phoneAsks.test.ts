@@ -10,6 +10,7 @@ import {
 } from "@/lib/chat/phoneAsks";
 import { EMPTY_CHAT, type PendingRequest } from "@/lib/chat/chatState";
 import type { ChatItem } from "@/lib/chat/chatState";
+import { startTurn } from "@/lib/chat/chatTurn";
 
 const request = (toolName: string, input = {}): PendingRequest => ({
   requestId: `r-${toolName}`,
@@ -55,13 +56,18 @@ describe("phoneAsk", () => {
     });
   });
 
-  it("shows Claude's round once his turn ended, nothing in a closed chat", () => {
+  it("shows Claude's round, kept while he works again, nothing in a closed chat", () => {
     const idle = { ...EMPTY_CHAT, items: ROUND };
     expect(phoneAsk(idle)).toMatchObject({
       kind: "round",
       round: { id: "m1", questions: [{ id: "Q1", recommendedKey: "b" }] },
     });
-    expect(phoneAsk({ ...idle, working: true })).toBeNull();
+    // 02/11/2026: a subagent's report woke Claude, the sheet vanished. The
+    // round up when the turn starts stays, whoever shows the chat...
+    expect(phoneAsk(startTurn(idle, 1))?.kind).toBe("round");
+    // ...one born mid-turn waits for the turn's end.
+    const born = { ...startTurn(EMPTY_CHAT, 1), items: ROUND };
+    expect(phoneAsk(born)).toBeNull();
     expect(
       phoneAsk({ ...idle, closed: {}, requests: [request("Bash")] }),
     ).toBeNull();
@@ -161,7 +167,10 @@ describe("roundSheetBorn", () => {
     const born = { at: 0, except: "R2" };
     const r2 = { replyId: "R2", answers: {}, closed: false, folded: false };
     // Read again before the rewind lands: R2 keeps its sheet, the ask waits.
-    expect(roundSheetBorn(r2, born, "R2", 1)).toEqual({ sheet: r2, consumed: false });
+    expect(roundSheetBorn(r2, born, "R2", 1)).toEqual({
+      sheet: r2,
+      consumed: false,
+    });
     // Even if its sheet went meanwhile.
     expect(roundSheetBorn(undefined, born, "R2", 1).consumed).toBe(false);
     // The rewind lands: R1 comes back folded, the ask is spent.
@@ -171,7 +180,12 @@ describe("roundSheetBorn", () => {
   });
 
   it("opens unfolded once the ask is too old", () => {
-    const late = roundSheetBorn(undefined, { at: 0, except: null }, "R1", 31_000);
+    const late = roundSheetBorn(
+      undefined,
+      { at: 0, except: null },
+      "R1",
+      31_000,
+    );
     expect(late.sheet.folded).toBe(false);
   });
 });

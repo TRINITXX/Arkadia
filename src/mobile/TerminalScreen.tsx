@@ -227,7 +227,7 @@ export function TerminalScreen({
             title={`Compte : ${tab.account.label}`}
           />
         )}
-        <RemoteBadgeDot badge={tab.badge} />
+        <RemoteBadgeDot badge={tab.badge} question={tab.question} />
         <button
           type="button"
           aria-label="Vue moderne"
@@ -272,7 +272,7 @@ export function TerminalScreen({
             >
               <span className="font-semibold">{i + 1}</span>
               <span className="truncate">{p.title}</span>
-              <RemoteBadgeDot badge={p.badge} />
+              <RemoteBadgeDot badge={p.badge} question={p.question} />
             </button>
           ))}
         </div>

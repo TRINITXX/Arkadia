@@ -3,6 +3,7 @@ import { SymbolView } from "expo-symbols";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { C, T } from "~/chat/chat-theme";
 import { VisualPage } from "~/chat/feed/visual/visual-page";
+import { tap } from "~/ui/haptics";
 
 interface VisualZoomProps {
   visible: boolean;
@@ -45,7 +46,10 @@ export function VisualZoom({
             {title}
           </Text>
           <Pressable
-            onPress={onClose}
+            onPress={() => {
+              tap();
+              onClose();
+            }}
             accessibilityRole="button"
             hitSlop={8}
             style={({ pressed }) => [styles.btn, pressed && styles.pressed]}

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SymbolView, type SFSymbol } from "expo-symbols";
 import { C, T } from "~/chat/chat-theme";
+import { tap } from "~/ui/haptics";
 
 /**
  * A row's whole content over the feed, as an iOS page sheet: a swipe down or
@@ -39,7 +40,10 @@ export function FeedSheet({
             {title}
           </Text>
           <Pressable
-            onPress={onClose}
+            onPress={() => {
+              tap();
+              onClose();
+            }}
             hitSlop={10}
             accessibilityRole="button"
             style={({ pressed }) => [styles.close, pressed && styles.pressed]}

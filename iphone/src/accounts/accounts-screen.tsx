@@ -16,11 +16,13 @@ import {
 } from "@/lib/accounts";
 import type { RemoteAction } from "@/lib/remoteActions";
 import { act, useRemoteView } from "~/remote/connection";
+import { failure, tick } from "~/ui/haptics";
 
 async function run(action: RemoteAction) {
   try {
     await act(action);
   } catch (e) {
+    failure();
     Alert.alert(
       "Action impossible",
       e instanceof Error ? e.message : String(e),
@@ -97,9 +99,11 @@ function AccountRow({
   const countdown = formatCountdown(u?.fiveHour?.resetsAt, now);
   return (
     <Pressable
-      onPress={() =>
-        !current && void run({ kind: "setAccount", accountId: account.id })
-      }
+      onPress={() => {
+        if (current) return;
+        tick();
+        void run({ kind: "setAccount", accountId: account.id });
+      }}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
     >
       {!first && <View style={styles.separator} />}

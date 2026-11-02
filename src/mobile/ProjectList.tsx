@@ -176,7 +176,7 @@ function TabRow({
       {tab.panes.length > 1 && (
         <span className="text-[11px] text-zinc-500">{tab.panes.length}</span>
       )}
-      <RemoteBadgeDot badge={tab.badge} />
+      <RemoteBadgeDot badge={tab.badge} question={tab.question} />
     </button>
   );
 }

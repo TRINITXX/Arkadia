@@ -7,13 +7,21 @@ import { shortPath } from "@/lib/chat/chatSteps";
 import { C, MONO } from "~/chat/chat-theme";
 import { DiffRows } from "~/chat/feed/diff-rows";
 import { F } from "~/chat/feed/feed-style";
+import { tick } from "~/ui/haptics";
 
 /**
  * A file change (`chat-edit-card.tsx`): its path and +/- counts, its lines a
  * tap away. The real diff once the result is in (line numbers, context),
  * else what its input states.
  */
-export const EditCard = memo(function EditCard({ tool }: { tool: ToolItem }) {
+export const EditCard = memo(function EditCard({
+  tool,
+  cwd,
+}: {
+  tool: ToolItem;
+  /** The chat's folder: the path named from it. */
+  cwd: string | null;
+}) {
   const patch = tool.result?.detail?.patch;
   const diff = useMemo(
     () => editDiff(tool.name, tool.input, patch),
@@ -27,7 +35,10 @@ export const EditCard = memo(function EditCard({ tool }: { tool: ToolItem }) {
   return (
     <View style={styles.card}>
       <Pressable
-        onPress={() => setOpen((o) => !o)}
+        onPress={() => {
+          tick();
+          setOpen((o) => !o);
+        }}
         style={({ pressed }) => [styles.head, pressed && styles.pressed]}
       >
         <SymbolView
@@ -36,7 +47,7 @@ export const EditCard = memo(function EditCard({ tool }: { tool: ToolItem }) {
           tintColor={F.head}
         />
         <Text style={styles.path} numberOfLines={1} ellipsizeMode="head">
-          {shortPath(path, null)}
+          {shortPath(path, cwd)}
         </Text>
         {diff.added > 0 && <Text style={styles.add}>+{diff.added}</Text>}
         {diff.removed > 0 && <Text style={styles.del}>−{diff.removed}</Text>}

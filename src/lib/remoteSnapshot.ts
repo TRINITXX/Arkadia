@@ -24,7 +24,8 @@ import type {
 } from "@/types";
 
 /** The sidebar badge: amber = working, green = waiting. Rings: a shell runs
- *  (waiting only), an artifact is open in the tab. */
+ *  (waiting only), an artifact is open in the tab. The question ring travels
+ *  apart (`question`): readers parse these strings by prefix and suffix. */
 export type RemoteBadge =
   | "busy"
   | "busy-artifact"
@@ -38,16 +39,26 @@ export interface RemotePane {
   id: string;
   title: string;
   badge: RemoteBadge;
+  /** Claude's questions wait for an answer: the badge's green ring. A desktop
+   *  built before 02/11/2026 leaves it out: read missing as false. */
+  question: boolean;
   /** Has run Claude: the phone shows the prompt bar buttons for it. */
   claude: boolean;
   /** Claude as a chat, not in the terminal: the phone shows its chat. */
   chat: boolean;
+  /** A chat's folder, where Claude runs: its tool lines name files from it,
+   *  as the desktop's. Absent on a terminal pane and from a desktop built
+   *  before 02/11/2026 (paths then read from the home folder). Not the SDK
+   *  init's `cwd`: that one follows Claude's `cd`. */
+  cwd?: string;
 }
 
 export interface RemoteTab {
   id: string;
   title: string;
   badge: RemoteBadge;
+  /** As on a pane, for the tab's badge (missing from older desktops too). */
+  question: boolean;
   activePaneId: string;
   /** In split order (left/top first). */
   panes: RemotePane[];
@@ -124,6 +135,14 @@ export function badgeOf(state: AgentStateValue | undefined): RemoteBadge {
   return null;
 }
 
+/** The green ring: Claude asked questions the user hasn't answered yet. */
+export function questionOf(state: AgentStateValue | undefined): boolean {
+  return (
+    (state?.kind === "busy" || state?.kind === "waiting") &&
+    !!state.questionPending
+  );
+}
+
 /** A pane title without Claude's status glyph (the badge carries it). */
 export function plainTitle(title: string): string {
   const text = stateFromTitle(title)
@@ -152,19 +171,23 @@ function remoteTab(
   { paneStates, claudePaneIds, accountMarks }: RemoteSnapshotInput,
 ): RemoteTab {
   const paneIds = collectPaneIds(tab.tree).filter((id) => tab.panes[id]);
+  const tabState = aggregate(
+    paneIds.map((id) => paneStates[id] ?? { kind: "none" }),
+  );
   return {
     id: tab.id,
     title: plainTitle(tab.panes[tab.activePaneId]?.title ?? ""),
-    badge: badgeOf(
-      aggregate(paneIds.map((id) => paneStates[id] ?? { kind: "none" })),
-    ),
+    badge: badgeOf(tabState),
+    question: questionOf(tabState),
     activePaneId: tab.activePaneId,
     panes: paneIds.map((id) => ({
       id,
       title: plainTitle(tab.panes[id].title),
       badge: badgeOf(paneStates[id]),
+      question: questionOf(paneStates[id]),
       claude: claudePaneIds.has(id),
       chat: !!tab.panes[id].chat,
+      cwd: tab.panes[id].chat?.cwd,
     })),
     account: accountMarks[tab.id] ?? null,
   };

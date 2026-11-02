@@ -10,6 +10,7 @@ import { F } from "~/chat/feed/feed-style";
 import { ImageThumb } from "~/chat/feed/image-thumb";
 import { ToolOutput } from "~/chat/feed/tool-output";
 import { toolIcon } from "~/messages/tool-summary";
+import { tick } from "~/ui/haptics";
 
 /**
  * One tool call of Claude's work (`chat-tool-row.tsx`): its name and what it
@@ -19,18 +20,24 @@ import { toolIcon } from "~/messages/tool-summary";
  */
 export const ToolDetailRow = memo(function ToolDetailRow({
   tool,
+  cwd,
 }: {
   tool: ToolItem;
+  /** The chat's folder: the call's file named from it. */
+  cwd: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const image = readImagePath(tool);
-  const step = image ? "lit" : toolStep(tool.name, tool.input, null);
+  const step = image ? "lit" : toolStep(tool.name, tool.input, cwd);
   const shell = tool.result?.detail?.shell;
   const marks = shell ? shellMarks(shell) : [];
   return (
     <View>
       <Pressable
-        onPress={() => setOpen((o) => !o)}
+        onPress={() => {
+          tick();
+          setOpen((o) => !o);
+        }}
         style={({ pressed }) => [styles.row, pressed && styles.pressed]}
       >
         <SymbolView name={toolIcon(tool.name)} size={12} tintColor={C.mute} />

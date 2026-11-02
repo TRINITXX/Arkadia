@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SymbolView } from "expo-symbols";
+import { tap } from "~/ui/haptics";
 
 const BARS = 22;
 
@@ -48,14 +49,20 @@ export function DictationBubble({
           ))}
         </View>
         <Pressable
-          onPress={onCancel}
+          onPress={() => {
+            tap();
+            onCancel();
+          }}
           style={({ pressed }) => [styles.button, pressed && styles.pressed]}
         >
           <SymbolView name="xmark" size={13} tintColor="#ffffff" />
           <Text style={styles.label}>Annuler</Text>
         </Pressable>
         <Pressable
-          onPress={onWrite}
+          onPress={() => {
+            tap();
+            onWrite();
+          }}
           disabled={stopping}
           style={({ pressed }) => [
             styles.button,

@@ -5,6 +5,7 @@
  * opens again, then catches up.
  */
 
+import { AppState } from "react-native";
 import type { ChatEvent } from "@/lib/chat/chatProtocol";
 import { withdrawnItem } from "@/lib/chat/chatSdkSettings";
 import { SERVER_GONE } from "@/lib/chat/phoneChat";
@@ -14,6 +15,12 @@ import {
   NEW_PHONE_CHAT,
   type PhoneChatLive,
 } from "@/lib/chat/phoneChatFold";
+import {
+  NEW_PHONE_WATCH,
+  watchPhoneChat,
+  type PhoneChatFeel,
+  type PhoneChatWatch,
+} from "@/lib/chat/phoneChatFeel";
 import { putInComposer } from "~/chat/composer-inbox";
 import {
   act,
@@ -21,6 +28,7 @@ import {
   onChatEvent,
   shownChatId,
 } from "~/remote/connection";
+import { failure, success, warning } from "~/ui/haptics";
 
 /**
  * Events come in bursts while Claude writes: folded in at most this often.
@@ -42,6 +50,8 @@ interface Entry {
   catchingUp: number;
   /** Queued messages this phone withdrew: their text comes back to its input. */
   withdrawing: Set<string>;
+  /** Claude's ends and asks already felt, its replays aside (`watchPhoneChat`). */
+  watch: PhoneChatWatch;
 }
 
 const chats = new Map<string, Entry>();
@@ -56,6 +66,7 @@ function entry(chatId: string): Entry {
       subs: new Set(),
       catchingUp: 0,
       withdrawing: new Set(),
+      watch: NEW_PHONE_WATCH,
     };
     chats.set(chatId, e);
   }
@@ -83,11 +94,28 @@ function flush(e: Entry, chatId: string) {
   // The replay asked started, or the chat isn't running: done either way.
   if (batch.some((ev) => ev.type === "attached" || ev.type === "closed"))
     e.catchingUp = 0;
-  const { chat, catchUp: behind } = foldPhoneChat(e.live, batch, Date.now());
+  const now = Date.now();
+  const { watch, feel } = watchPhoneChat(e.watch, batch, now);
+  e.watch = watch;
+  const { chat, catchUp: behind } = foldPhoneChat(e.live, batch, now);
   if (behind) catchUp(chatId);
-  if (chat === e.live) return;
-  e.live = chat;
-  notify(e);
+  if (chat !== e.live) {
+    e.live = chat;
+    notify(e);
+  }
+  // With the screen told: the buzz comes with what it shows.
+  if (feel) feelChat(chatId, feel);
+}
+
+/**
+ * Claude done or asking, felt in the hand (Alexis's choice of 02/11/2026):
+ * only for the chat on screen, the app in front.
+ */
+function feelChat(chatId: string, feel: PhoneChatFeel) {
+  if (chatId !== shownChatId() || AppState.currentState !== "active") return;
+  if (feel === "ask") warning();
+  else if (feel === "failed") failure();
+  else success();
 }
 
 /**

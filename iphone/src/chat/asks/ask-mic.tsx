@@ -3,6 +3,7 @@ import { SymbolView } from "expo-symbols";
 import { A } from "~/chat/asks/ask-colors";
 import { C } from "~/chat/chat-theme";
 import type { AskDictation } from "~/chat/asks/use-ask-dictation";
+import { tap } from "~/ui/haptics";
 
 /**
  * The mic left of an own-words field (the desktop sheet's): listens for that
@@ -27,9 +28,11 @@ export function AskMic({
       accessibilityLabel={listening ? "Arrêter la dictée" : "Dicter ici"}
       disabled={busy || dictation.phase === "stopping"}
       hitSlop={4}
-      onPress={() =>
-        listening ? void dictation.writeOut() : dictation.listen(id, onText)
-      }
+      onPress={() => {
+        tap();
+        if (listening) void dictation.writeOut();
+        else dictation.listen(id, onText);
+      }}
       style={({ pressed }) => [
         styles.mic,
         listening && styles.rec,

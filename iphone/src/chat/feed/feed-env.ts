@@ -22,6 +22,8 @@ export interface FeedSheetRef {
  */
 export interface FeedEnv {
   chatId: string;
+  /** The chat's folder: tool lines name files from it (`shortPath`). */
+  cwd: string | null;
   actions: ChatActions;
   onChoose: (text: string) => void;
   /** The chat's own feed: its marks and stops act; a subagent's only reads. */

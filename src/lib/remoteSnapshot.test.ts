@@ -132,12 +132,14 @@ describe("buildRemoteSnapshot", () => {
         title: "Review",
         // Waiting outranks working: the user has something to answer.
         badge: "waiting-shell",
+        question: false,
         activePaneId: "t1-p1",
         panes: [
           {
             id: "t1-p0",
             title: "Build",
             badge: "busy",
+            question: false,
             claude: true,
             chat: false,
           },
@@ -145,6 +147,7 @@ describe("buildRemoteSnapshot", () => {
             id: "t1-p1",
             title: "Review",
             badge: "waiting-shell",
+            question: false,
             claude: true,
             chat: false,
           },
@@ -157,6 +160,54 @@ describe("buildRemoteSnapshot", () => {
         name: null,
         projects: [{ id: "site", name: "site", color: "#f00", tabs: [] }],
       },
+    ]);
+  });
+
+  it("sends pending questions apart from the badge, per tab like its badge", () => {
+    const asking: AgentStateValue = { kind: "busy", questionPending: true };
+    const snap = buildRemoteSnapshot(
+      input({
+        projects: [project("arkadia")],
+        tabs: [
+          tab("t1", "arkadia", ["⠂ Ask", "⠂ Build"]),
+          tab("t2", "arkadia", ["⠂ Ask", "✳ Review"]),
+        ],
+        paneStates: {
+          "t1-p0": asking,
+          "t1-p1": busy,
+          "t2-p0": asking,
+          "t2-p1": { kind: "waiting", session_id: "" },
+        },
+        activeProjectIds: new Set(["arkadia"]),
+      }),
+    );
+    const [t1, t2] = snap.active[0].tabs;
+    // The badge strings stay as they were: their readers parse them.
+    expect(t1.badge).toBe("busy");
+    expect(t1.panes.map((p) => p.question)).toEqual([true, false]);
+    expect(t1.question).toBe(true);
+    // Waiting outranks working: the tab shows the waiting pane, no question.
+    expect([t2.badge, t2.question]).toEqual(["waiting", false]);
+    expect(agentStateOf(t1.badge, t1.question)).toMatchObject({
+      kind: "busy",
+      questionPending: true,
+    });
+  });
+
+  it("sends a chat's folder, none for a terminal (its shell's isn't Claude's)", () => {
+    const t = tab("t1", "arkadia", ["Chat", "pwsh"]);
+    t.panes["t1-p0"].chat = { cwd: "C:/arkadia" };
+    t.panes["t1-p1"].cwd = "C:/arkadia/src";
+    const snap = buildRemoteSnapshot(
+      input({
+        projects: [project("arkadia")],
+        tabs: [t],
+        activeProjectIds: new Set(["arkadia"]),
+      }),
+    );
+    expect(snap.active[0].tabs[0].panes.map((p) => p.cwd)).toEqual([
+      "C:/arkadia",
+      undefined,
     ]);
   });
 

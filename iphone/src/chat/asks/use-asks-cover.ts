@@ -9,7 +9,10 @@ import { useRoundShown } from "~/chat/asks/round-store";
  */
 export function useAsksCoverComposer(
   chatId: string,
-  state: Pick<ChatState, "closed" | "requests" | "sdk" | "working" | "items">,
+  state: Pick<
+    ChatState,
+    "closed" | "requests" | "sdk" | "working" | "items" | "restRound"
+  >,
 ): boolean {
   const shown = useRoundShown(chatId, state);
   if (state.closed) return false;

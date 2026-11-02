@@ -35,14 +35,17 @@ export const ACTIVITY_ICONS: Record<ActivityKind, SFSymbol> = {
  */
 export function ActivityLine({
   units,
+  cwd,
   onOpen,
 }: {
   units: FoldedUnit[];
+  /** The chat's folder: the last call's file named from it. */
+  cwd: string | null;
   onOpen: () => void;
 }) {
   const counts = useMemo(() => activityCounts(units), [units]);
   const tools = useMemo(() => activityTools(units), [units]);
-  const { last, failed } = useMemo(() => workTail(tools, null), [tools]);
+  const { last, failed } = useMemo(() => workTail(tools, cwd), [tools, cwd]);
   const reads = useMemo(() => readImages(tools), [tools]);
   return (
     <Pressable

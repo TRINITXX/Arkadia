@@ -1,11 +1,11 @@
 import { useMemo, useRef, useState } from "react";
 import { Alert, FlatList } from "react-native";
-import * as Haptics from "expo-haptics";
 import { sessionRows, type PickerRow } from "@/lib/chat/chatSlash";
 import { PickerRowView } from "~/chat/slash/picker-row";
 import { SlashSheet } from "~/chat/slash/slash-sheet";
 import { usePanelList } from "~/chat/slash/use-panel-list";
 import type { ChatActions } from "~/chat/use-chat";
+import { failure, success, tap } from "~/ui/haptics";
 
 /**
  * /resume: the folder's other conversations, newest first (`sessionRows`),
@@ -40,22 +40,23 @@ export function ResumeSheet({
 
   const pick = (row: PickerRow) => {
     if (row.disabled || picking.current) return;
+    tap();
     picking.current = true;
     setBusy(row.id);
     actions
       .resume(row.id)
       .then(
         () => {
-          void Haptics.notificationAsync(
-            Haptics.NotificationFeedbackType.Success,
-          );
+          success();
           onClose();
         },
-        (e: unknown) =>
+        (e: unknown) => {
+          failure();
           Alert.alert(
             "Reprise impossible",
             e instanceof Error ? e.message : String(e),
-          ),
+          );
+        },
       )
       .finally(() => {
         picking.current = false;

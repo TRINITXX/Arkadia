@@ -2,6 +2,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SymbolView } from "expo-symbols";
 import { C, T } from "~/chat/chat-theme";
 import { F } from "~/chat/feed/feed-style";
+import { tap } from "~/ui/haptics";
 
 /**
  * The chat ended (its Claude Code stopped, or failed): said under the last
@@ -21,7 +22,10 @@ export function ClosedLine({
         Conversation arrêtée{error ? ` : ${error}` : ""}
       </Text>
       <Pressable
-        onPress={onRestart}
+        onPress={() => {
+          tap();
+          onRestart();
+        }}
         accessibilityRole="button"
         style={({ pressed }) => [styles.button, pressed && styles.pressed]}
       >

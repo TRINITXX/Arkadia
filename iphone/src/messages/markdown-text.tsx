@@ -8,10 +8,11 @@ import {
   View,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
 import { SymbolView } from "expo-symbols";
+import { endsWithHourglass } from "@/lib/chat/chatHourglass";
 import { copiedCodeMessage } from "@/lib/codeCopy";
-import { showNotice } from "~/ui/notice";
+import { success } from "~/ui/haptics";
+import { showFailure, showNotice } from "~/ui/notice";
 
 type Block =
   | { kind: "code"; text: string }
@@ -182,7 +183,7 @@ const COPIED_MS = 1200;
 
 /**
  * A fenced code block, scrolled sideways, its copy button in its corner (the
- * desktop's): a light tap of the phone and « Copié (n lignes) · … »
+ * desktop's): the success buzz of every copy and « Copié (n lignes) · … »
  * (`copiedCodeMessage`), the button a ✓ for a moment.
  */
 function CodeBlock({ code, tone }: { code: string; tone: MarkdownTone }) {
@@ -192,13 +193,13 @@ function CodeBlock({ code, tone }: { code: string; tone: MarkdownTone }) {
   const copy = () => {
     Clipboard.setStringAsync(code).then(
       () => {
-        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        success();
         showNotice(copiedCodeMessage(code));
         setCopied(true);
         clearTimeout(timer.current);
         timer.current = setTimeout(() => setCopied(false), COPIED_MS);
       },
-      (e: unknown) => showNotice(`Copie impossible : ${String(e)}`),
+      (e: unknown) => showFailure(`Copie impossible : ${String(e)}`),
     );
   };
   return (
@@ -260,8 +261,10 @@ function Table({ rows, tone }: { rows: string[][]; tone: MarkdownTone }) {
 /**
  * Claude's prose at full width, as in the Claude app (choice A). The chat
  * gives its own colours and size (`tone`, `size`); `lead`: the opening line a
- * little larger when more follows (the desktop's answer frame); `caret`: a
- * reply still being written ends on the accent's bar.
+ * little larger when more follows, a lone ⏳ at the end not counting (the
+ * desktop's answer frame, `endsWithHourglass`); `caret`: a reply still being
+ * written ends on the accent's bar; `italic`: Claude's thinking, as the
+ * desktop's reading view sets it.
  */
 export function MarkdownText({
   markdown,
@@ -269,6 +272,7 @@ export function MarkdownText({
   size = 15.5,
   lead = false,
   caret,
+  italic = false,
 }: {
   markdown: string;
   tone?: MarkdownTone;
@@ -276,10 +280,18 @@ export function MarkdownText({
   lead?: boolean;
   /** The caret's colour; none when absent. */
   caret?: string;
+  italic?: boolean;
 }) {
   const blocks = parseBlocks(markdown);
+  // A lone ⏳ paragraph at the end isn't more (the desktop's rule).
+  const opens = lead && blocks.length > (endsWithHourglass(markdown) ? 2 : 1);
   const lineHeight = Math.round(size * 1.42);
-  const body = { color: tone.ink, fontSize: size, lineHeight };
+  const body = {
+    color: tone.ink,
+    fontSize: size,
+    lineHeight,
+    ...(italic ? styles.italic : null),
+  };
   const end = (i: number) =>
     caret && i === blocks.length - 1 ? (
       <Text style={{ color: caret }}> ▍</Text>
@@ -334,7 +346,7 @@ export function MarkdownText({
               />
             </View>
           );
-        const leading = lead && i === 0 && blocks.length > 1;
+        const leading = opens && i === 0;
         return (
           <Inline
             key={i}

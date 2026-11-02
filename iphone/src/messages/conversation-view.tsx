@@ -1,14 +1,16 @@
 import { memo, useMemo } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
+import { blockShown, type ConvFilters } from "@/lib/convFilters";
 import type { ConvBlock } from "@/lib/convStore";
+import type { ToolDensity } from "@/types";
 import { ConvImages } from "~/messages/conv-images";
 import { MarkdownText } from "~/messages/markdown-text";
+import { ThinkingBlock } from "~/messages/thinking-block";
 import { ToolRow } from "~/messages/tool-row";
 import { useConversation } from "~/messages/use-conversation";
 
-/** Thinking stays on the PC: the phone shows what was said and done. */
-function shown(block: ConvBlock): boolean {
-  if (block.kind === "thinking") return false;
+/** A block with something to show: a tool call, or text or images. */
+function hasContent(block: ConvBlock): boolean {
   if (block.kind === "tool") return true;
   return !!block.text?.trim() || !!block.images?.length;
 }
@@ -16,29 +18,43 @@ function shown(block: ConvBlock): boolean {
 /**
  * The pane's conversation, newest at the bottom, in the Claude app's style
  * (choice A of 25/10/2026): your messages in a bubble, Claude's prose at full
- * width, each tool call folded to one line. Memoized: the terminal under it
+ * width, each tool call a card. The types shown are the desktop reading
+ * view's filters (`filters`, its default: your messages and Claude's), its
+ * cards open as the desktop's density says. Memoized: the terminal under it
  * redraws 30 times a second.
  */
 export const ConversationView = memo(function ConversationView({
   paneId,
+  filters,
+  density,
 }: {
   paneId: string;
+  filters: ConvFilters;
+  density: ToolDensity;
 }) {
   const { blocks, loaded } = useConversation(paneId);
-  // Inverted list: the newest block is item 0, drawn at the bottom.
-  const items = useMemo(
+  const present = useMemo(
     () =>
       blocks
         .map((block, index) => ({ block, index }))
-        .filter(({ block }) => shown(block))
-        .reverse(),
+        .filter(({ block }) => hasContent(block)),
     [blocks],
+  );
+  // Inverted list: the newest block is item 0, drawn at the bottom.
+  const items = useMemo(
+    () =>
+      present.filter(({ block }) => blockShown(block.kind, filters)).reverse(),
+    [present, filters],
   );
 
   if (loaded && items.length === 0)
     return (
       <View style={styles.empty}>
-        <Text style={styles.note}>Pas encore de messages.</Text>
+        <Text style={styles.note}>
+          {present.length > 0
+            ? "Tout est masqué par les filtres."
+            : "Pas encore de messages."}
+        </Text>
       </View>
     );
   return (
@@ -47,13 +63,32 @@ export const ConversationView = memo(function ConversationView({
       data={items}
       keyExtractor={(item) => String(item.index)}
       contentContainerStyle={styles.list}
-      renderItem={({ item }) => <BlockItem block={item.block} />}
+      renderItem={({ item }) => (
+        <BlockItem
+          block={item.block}
+          density={density}
+          showResults={filters.results}
+        />
+      )}
     />
   );
 });
 
-function BlockItem({ block }: { block: ConvBlock }) {
-  if (block.kind === "tool") return <ToolRow block={block} />;
+function BlockItem({
+  block,
+  density,
+  showResults,
+}: {
+  block: ConvBlock;
+  density: ToolDensity;
+  showResults: boolean;
+}) {
+  if (block.kind === "tool")
+    return (
+      <ToolRow block={block} density={density} showResults={showResults} />
+    );
+  if (block.kind === "thinking")
+    return <ThinkingBlock text={block.text ?? ""} />;
   if (block.kind === "user")
     return (
       <View style={styles.user}>

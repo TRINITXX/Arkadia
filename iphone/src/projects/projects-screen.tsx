@@ -15,6 +15,7 @@ import {
   useRemoteView,
   type Status,
 } from "~/remote/connection";
+import { failure, tap, tick } from "~/ui/haptics";
 import { AccountChip, BadgeDot } from "~/ui/status-dots";
 
 const STATUS_TEXT: Record<Status, string> = {
@@ -84,10 +85,12 @@ function Section({
 }
 
 async function openNewTab(project: RemoteProject) {
+  tap();
   try {
     const { tabId } = await act({ kind: "newTab", projectId: project.id });
     if (tabId) router.push({ pathname: "/tab/[id]", params: { id: tabId } });
   } catch (e) {
+    failure();
     Alert.alert(
       "Nouvel onglet impossible",
       e instanceof Error ? e.message : String(e),
@@ -117,9 +120,10 @@ function ProjectGroup({ project }: { project: RemoteProject }) {
       {project.tabs.map((t) => (
         <Pressable
           key={t.id}
-          onPress={() =>
-            router.push({ pathname: "/tab/[id]", params: { id: t.id } })
-          }
+          onPress={() => {
+            tick();
+            router.push({ pathname: "/tab/[id]", params: { id: t.id } });
+          }}
           style={({ pressed }) => [
             styles.row,
             styles.tabRow,
@@ -134,7 +138,7 @@ function ProjectGroup({ project }: { project: RemoteProject }) {
           {t.panes.length > 1 && (
             <Text style={styles.paneCount}>{t.panes.length}</Text>
           )}
-          <BadgeDot badge={t.badge} />
+          <BadgeDot badge={t.badge} question={t.question} />
           <SymbolView name="chevron.right" size={13} tintColor="#5a5a5e" />
         </Pressable>
       ))}

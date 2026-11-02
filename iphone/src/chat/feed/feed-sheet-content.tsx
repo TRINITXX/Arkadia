@@ -78,11 +78,14 @@ export function sheetHead(
 export function FeedSheetContent({
   kind,
   row,
+  cwd,
   subagents,
   agentSheet,
 }: {
   kind: FeedSheetKind;
   row: FeedRow;
+  /** The chat's folder: tool lines name files from it. */
+  cwd: string | null;
   subagents: readonly Subagent[];
   agentSheet?: AgentSheetRender;
 }) {
@@ -92,6 +95,7 @@ export function FeedSheetContent({
       return (
         <ActivityDetail
           units={foldedOf(row)}
+          cwd={cwd}
           subagents={subagents}
           agentSheet={agentSheet}
         />

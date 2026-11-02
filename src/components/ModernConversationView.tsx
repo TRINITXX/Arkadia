@@ -43,37 +43,21 @@ import {
   type ConvDelta,
   type HeldConv,
 } from "@/lib/convStore";
+import {
+  blockShown,
+  DEFAULT_CONV_FILTERS,
+  FILTER_LABELS,
+  filtersHideAny,
+  type ConvFilters,
+} from "@/lib/convFilters";
 
 // Defined beside the conversation store, which the iPhone app shares.
 export type { ConvBlock, ConvImage } from "@/lib/convStore";
-
-/** Which message types the modern view shows. */
-export interface ConvFilters {
-  user: boolean;
-  assistant: boolean;
-  thinking: boolean;
-  tools: boolean;
-  /** When false, tool cards render without their output (header/input only). */
-  results: boolean;
-}
-
-// Default to a clean "reading" view — your messages + Claude's prose only. The
-// filter popover reveals thinking / tools / results on demand.
-export const DEFAULT_CONV_FILTERS: ConvFilters = {
-  user: true,
-  assistant: true,
-  thinking: false,
-  tools: false,
-  results: false,
-};
-
-export const FILTER_LABELS: { key: keyof ConvFilters; label: string }[] = [
-  { key: "user", label: "Toi" },
-  { key: "assistant", label: "Claude" },
-  { key: "thinking", label: "Pensées" },
-  { key: "tools", label: "Outils" },
-  { key: "results", label: "Résultats" },
-];
+export {
+  DEFAULT_CONV_FILTERS,
+  FILTER_LABELS,
+  type ConvFilters,
+} from "@/lib/convFilters";
 
 /**
  * Where the blocks come from: a live pane (resolved to its transcript through
@@ -282,7 +266,7 @@ function FilterPopover({
     onChange(next);
   };
 
-  const anyHidden = FILTER_LABELS.some((f) => !filters[f.key]);
+  const anyHidden = filtersHideAny(filters);
 
   return (
     <div
@@ -454,15 +438,7 @@ export const ModernConversationView = memo(function ModernConversationView({
   const visible = useMemo(() => {
     const out: { block: ConvBlock; blockIndex: number }[] = [];
     blocks.forEach((b, i) => {
-      const show =
-        b.kind === "user"
-          ? filters.user
-          : b.kind === "assistant"
-            ? filters.assistant
-            : b.kind === "thinking"
-              ? filters.thinking
-              : filters.tools;
-      if (show) out.push({ block: b, blockIndex: i });
+      if (blockShown(b.kind, filters)) out.push({ block: b, blockIndex: i });
     });
     return out;
   }, [blocks, filters]);

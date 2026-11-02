@@ -20,6 +20,7 @@ import { C, T } from "~/chat/chat-theme";
 import { VisualPage } from "~/chat/feed/visual/visual-page";
 import { VisualZoom } from "~/chat/feed/visual/visual-zoom";
 import type { ChatActions } from "~/chat/use-chat";
+import { tap, tick } from "~/ui/haptics";
 
 export interface ChatVisualCardProps {
   chatId: string;
@@ -84,14 +85,20 @@ export function ChatVisualCard({
         <Text
           style={styles.brokenText}
           numberOfLines={why ? undefined : 1}
-          onPress={() => setWhy(!why)}
+          onPress={() => {
+            tick();
+            setWhy(!why);
+          }}
         >
           <Text style={styles.brokenTitle}>Visuel « {title} » écarté</Text>
           {` · ${why ? (tool.result?.text ?? "") : visualProblem(tool)}`}
         </Text>
         {html ? (
           <Pressable
-            onPress={() => setAnyway(true)}
+            onPress={() => {
+              tap();
+              setAnyway(true);
+            }}
             accessibilityRole="button"
             hitSlop={6}
             style={({ pressed }) => [styles.btn, pressed && styles.pressed]}
@@ -114,7 +121,10 @@ export function ChatVisualCard({
           <ActivityIndicator size="small" color={C.mute} />
         ) : (
           <Pressable
-            onPress={() => setZoom(true)}
+            onPress={() => {
+              tap();
+              setZoom(true);
+            }}
             accessibilityRole="button"
             hitSlop={6}
             style={({ pressed }) => [styles.btn, pressed && styles.pressed]}

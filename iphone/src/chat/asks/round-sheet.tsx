@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import * as Haptics from "expo-haptics";
 import { SymbolView } from "expo-symbols";
 import type { SFSymbol } from "sf-symbols-typescript";
 import {
@@ -23,6 +22,7 @@ import {
 } from "~/chat/asks/round-store";
 import { useAskDictation } from "~/chat/asks/use-ask-dictation";
 import { C, T } from "~/chat/chat-theme";
+import { success, tap, tick } from "~/ui/haptics";
 
 /**
  * Claude's round of ❓ questions written in his last reply (the desktop's
@@ -37,11 +37,17 @@ import { C, T } from "~/chat/chat-theme";
 export function RoundSheet({
   chatId,
   round,
+  working,
   onSend,
+  onStop,
 }: {
   chatId: string;
   round: { id: string; questions: RoundQuestion[] };
+  /** Claude works again under the sheet (it stays, 02/11/2026). */
+  working: boolean;
   onSend: (text: string) => void;
+  /** Unfolded, the sheet hides the composer and its stop: its own one. */
+  onStop: () => void;
 }) {
   const replyId = round.id;
   const sheet = useRoundSheet(chatId, replyId);
@@ -63,11 +69,18 @@ export function RoundSheet({
   const goTo = (i: number) => setView({ step: i, more: false });
   const set = (key: string, patch: RoundAnswer) =>
     updateRound(chatId, replyId, (s) => withRoundAnswer(s, key, patch));
-  const setFolded = (on: boolean) =>
+  const setFolded = (on: boolean) => {
+    tick();
     updateRound(chatId, replyId, (s) => ({ ...s, folded: on }));
+  };
+  // An option picked again lets it go: a pick too.
+  const unpick = (patch: RoundAnswer) => {
+    tick();
+    set(q.key, patch);
+  };
   // Picked: on to the next question left, after this one first.
   const pickAndGo = (patch: RoundAnswer) => {
-    void Haptics.selectionAsync();
+    tick();
     set(q.key, patch);
     const next = nextQuestionLeft(answeredFlags, step);
     if (next !== null) goTo(next);
@@ -79,7 +92,7 @@ export function RoundSheet({
   };
   const send = () => {
     if (!reply) return;
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    success();
     onSend(reply);
     close();
   };
@@ -135,7 +148,10 @@ export function RoundSheet({
                 accessibilityRole="tab"
                 accessibilityState={{ selected: i === step }}
                 accessibilityLabel={`${x.id} : ${x.title}${answeredFlags[i] ? " (répondue)" : ""}`}
-                onPress={() => goTo(i)}
+                onPress={() => {
+                  tick();
+                  goTo(i);
+                }}
                 style={styles.seg}
               >
                 <View
@@ -155,12 +171,21 @@ export function RoundSheet({
             {step + 1} sur {questions.length}
           </Text>
         )}
+        {working &&
+          !folded &&
+          iconButton("stop.fill", "Arrêter Claude", () => {
+            tap();
+            onStop();
+          })}
         {iconButton(
           folded ? "chevron.right" : "chevron.down",
           folded ? "Déplier" : "Replier",
           () => setFolded(!folded),
         )}
-        {iconButton("xmark", "Fermer (répondre dans la saisie)", close)}
+        {iconButton("xmark", "Fermer (répondre dans la saisie)", () => {
+          tap();
+          close();
+        })}
       </View>
       {!folded && (
         <>
@@ -173,7 +198,10 @@ export function RoundSheet({
             {q.body ? (
               <Pressable
                 accessibilityHint={view.more ? "Réduire" : "Tout lire"}
-                onPress={() => setView({ step, more: !view.more })}
+                onPress={() => {
+                  tick();
+                  setView({ step, more: !view.more });
+                }}
               >
                 {/* Claude writes it after « Titre : », in lower case. */}
                 <Text
@@ -197,7 +225,7 @@ export function RoundSheet({
                   on={on}
                   onPress={() =>
                     on
-                      ? set(q.key, { option: undefined })
+                      ? unpick({ option: undefined })
                       : pickAndGo({ option: o.key, reco: false })
                   }
                 />
@@ -210,7 +238,7 @@ export function RoundSheet({
                 on={!!a.reco}
                 onPress={() =>
                   a.reco
-                    ? set(q.key, { reco: false })
+                    ? unpick({ reco: false })
                     : pickAndGo({ reco: true, option: undefined })
                 }
               />

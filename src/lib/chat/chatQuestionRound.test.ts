@@ -253,6 +253,24 @@ describe("question rounds in Claude's reply", () => {
     expect(lastReplyRound([text("a", GRILL), user])).toBeNull();
   });
 
+  it("keeps the round while Claude writes on, his new reply read once done", () => {
+    // 02/11/2026: a subagent's report woke Claude, the sheet vanished.
+    const text = (id: string, t: string, streaming = false): ChatItem => ({
+      kind: "text",
+      id,
+      text: t,
+      streaming,
+    });
+    const writing = text("b", "Le relecteur a fini, je corrige", true);
+    expect(lastReplyRound([text("a", GRILL), writing])?.id).toBe("a");
+    const more =
+      "❓ **Q3** - **Être prévenu** : un email par vente ?\n\n➡️ Oui.";
+    const half = text("b", more, true);
+    expect(lastReplyRound([text("a", GRILL), half])?.questions).toHaveLength(2);
+    const done = text("b", more);
+    expect(lastReplyRound([text("a", GRILL), done])?.questions).toHaveLength(3);
+  });
+
   it("gathers a round asked over several replies, a peer's between", () => {
     // The report of 01/11/2026: questions in one reply, a subagent's
     // report, one more question in another, « J'attends » last.

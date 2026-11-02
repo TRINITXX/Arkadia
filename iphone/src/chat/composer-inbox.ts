@@ -1,3 +1,5 @@
+import { foldRound } from "~/chat/asks/round-store";
+
 /**
  * Text other screens put into a chat's composer, never sent by itself: the
  * PC's photos picked (`/pick?chat=1`), a visual's choice. The composer of
@@ -21,6 +23,8 @@ export function putInComposer(
   text: string,
   kind: ComposerInsert["kind"] = "paths",
 ) {
+  // A choice or files land in a composer the sheet may hide: it folds.
+  if (kind !== "message") foldRound(chatId);
   for (const cb of inboxes.get(chatId) ?? []) cb({ text, kind });
 }
 

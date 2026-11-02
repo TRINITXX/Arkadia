@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { SymbolView, type SFSymbol } from "expo-symbols";
 import { C, T } from "~/chat/chat-theme";
+import { tap } from "~/ui/haptics";
 
 /**
  * A page command's panel (/resume, /rewind, /mcp: the desktop's panel above
@@ -51,7 +52,10 @@ export function SlashSheet({
             {title}
           </Text>
           <Pressable
-            onPress={onClose}
+            onPress={() => {
+              tap();
+              onClose();
+            }}
             hitSlop={10}
             accessibilityRole="button"
             style={({ pressed }) => [styles.close, pressed && styles.pressed]}

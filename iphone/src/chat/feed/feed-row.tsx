@@ -24,6 +24,7 @@ import { QuestionRow } from "~/chat/feed/question-row";
 import { ReplyMessage } from "~/chat/feed/reply-message";
 import { UserMessage } from "~/chat/feed/user-message";
 import { MarkdownText } from "~/messages/markdown-text";
+import { tap } from "~/ui/haptics";
 
 export interface FeedRowProps {
   row: FeedRow;
@@ -92,11 +93,17 @@ export const FeedRowView = memo(function FeedRowView({
       const uuid = unit.item.queued ? sentUuid(unit.item.id) : null;
       const onSendNow =
         unit.item.queued && sendNow
-          ? () => void env.actions.interrupt()
+          ? () => {
+              tap();
+              void env.actions.interrupt();
+            }
           : undefined;
       const onRemove =
         uuid && withdraw
-          ? () => void env.actions.cancelQueued(uuid)
+          ? () => {
+              tap();
+              void env.actions.cancelQueued(uuid);
+            }
           : undefined;
       if (unit.kind === "user") {
         const { item } = unit;
@@ -179,7 +186,14 @@ export const FeedRowView = memo(function FeedRowView({
       return (
         <BashCard
           item={unit.item}
-          onStop={id ? () => void env.actions.stopBash(id) : undefined}
+          onStop={
+            id
+              ? () => {
+                  tap();
+                  void env.actions.stopBash(id);
+                }
+              : undefined
+          }
           onOpen={open("bash")}
         />
       );
@@ -190,13 +204,19 @@ export const FeedRowView = memo(function FeedRowView({
       return row.alone ? (
         <PeekAlone kind="tools" onPress={open("activity")} />
       ) : (
-        <ActivityLine units={unit.units} onOpen={open("activity")} />
+        <ActivityLine
+          units={unit.units}
+          cwd={env.cwd}
+          onOpen={open("activity")}
+        />
       );
     // Gathered into `activity` by `foldActivity`; kept for the switch.
     case "work":
     case "edit":
     case "agent":
-      return <ActivityLine units={[unit]} onOpen={open("activity")} />;
+      return (
+        <ActivityLine units={[unit]} cwd={env.cwd} onOpen={open("activity")} />
+      );
     case "question":
       return <QuestionRow tool={unit.item} pending={pending} />;
     case "visual":

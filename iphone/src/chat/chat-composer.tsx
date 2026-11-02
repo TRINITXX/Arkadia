@@ -10,15 +10,10 @@ import {
   View,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { bashCommand } from "@/lib/chat/chatBash";
-import {
-  MODE_CYCLE,
-  modeLabel,
-  modelLabel,
-} from "@/lib/chat/chatLabels";
+import { MODE_CYCLE, modeLabel, modelLabel } from "@/lib/chat/chatLabels";
 import type { PermissionMode } from "@/lib/chat/chatProtocol";
 import type { PagePanel, SlashEntry } from "@/lib/chat/chatSlash";
 import {
@@ -41,7 +36,8 @@ import type { ChatActions } from "~/chat/use-chat";
 import { DictationBubble } from "~/dictation/dictation-bubble";
 import { useDictation } from "~/dictation/use-dictation";
 import { act } from "~/remote/connection";
-import { showNotice } from "~/ui/notice";
+import { failure, success, tap, tick } from "~/ui/haptics";
+import { showFailure, showNotice } from "~/ui/notice";
 
 /**
  * The chat's input, as the desktop's (`chat-composer.tsx`): the field, then
@@ -69,19 +65,12 @@ export function ChatComposer({
 }) {
   const [text, setText] = useState("");
   const dictation = useDictation();
-  const { phase, finish, cancel, error, clearError } = dictation;
+  const { phase, finish, error, clearError } = dictation;
   useEffect(() => {
     if (!error) return;
-    showNotice(error);
+    showFailure(error);
     clearError();
   }, [error, clearError]);
-  // Hidden, its dictation bubble goes with it: the mic would run with no
-  // button to stop it (REVIEW.md « Micro du chat »).
-  useEffect(() => {
-    if (covered && phase !== "idle") cancel();
-    // Hidden but mounted: its field must not keep the keyboard up.
-    if (covered) Keyboard.dismiss();
-  }, [covered, phase, cancel]);
 
   // A photo picked, a visual's choice: into the field, never sent. A second
   // choice replaces the first, as on the desktop (`withChoice`).
@@ -117,6 +106,7 @@ export function ChatComposer({
   const [slashSheet, setSlashSheet] = useState<OpenPanel | null>(null);
   const [hint, setHint] = useState<{ text: string; for: string } | null>(null);
   const openPanel = useCallback((panel: PagePanel, query: string) => {
+    tap();
     // Its words moved to the sheet's filter: the command is not sent.
     setText("");
     Keyboard.dismiss();
@@ -124,8 +114,9 @@ export function ChatComposer({
   }, []);
   const pickSlash = (entry: SlashEntry) => {
     const pick = slashPick(entry);
-    if (pick.kind === "panel") openPanel(pick.panel, "");
-    else setText(pick.text);
+    if (pick.kind === "panel") return openPanel(pick.panel, "");
+    tick();
+    setText(pick.text);
   };
 
   const submit = useCallback(
@@ -135,13 +126,15 @@ export function ChatComposer({
       const intent = slashIntent(message, state.commands, state.slashCommands);
       if (intent?.kind === "panel")
         return openPanel(intent.panel, intent.query);
-      if (intent?.kind === "notice")
+      if (intent?.kind === "notice") {
+        failure();
         return setHint({ text: intent.text, for: text });
+      }
       const command = bashCommand(message);
       if (command) void actions.bash(command);
       else void actions.send(message, now && state.working);
       setText("");
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      tap();
     },
     [
       text,
@@ -157,9 +150,19 @@ export function ChatComposer({
     const said = await finish();
     if (said) setText((t) => (t ? `${t} ${said}` : said));
   }, [finish]);
+  // Hidden, its dictation bubble goes with it: the mic would run with no
+  // button to stop it, and the words said so far land in the draft
+  // (REVIEW.md « Micro du chat »).
+  useEffect(() => {
+    if (covered && phase === "listening") void writeDictation();
+    // Hidden but mounted: its field must not keep the keyboard up.
+    if (covered) Keyboard.dismiss();
+  }, [covered, phase, writeDictation]);
   const onMic = () => {
+    if (phase === "stopping") return;
+    tap();
     if (phase === "listening") void writeDictation();
-    else if (phase === "idle") void dictation.start();
+    else void dictation.start();
   };
 
   const slash = useMemo(
@@ -173,27 +176,37 @@ export function ChatComposer({
     model: state.model,
     effort: state.sdk.effort,
   });
+  // A value picked in its list ticks, as the chip that opened it.
   const pickModel = () => {
     const rows = latestModels(state.sdk.models);
-    if (rows.length === 0) return showNotice("Modèles pas encore connus.");
+    if (rows.length === 0) return showFailure("Modèles pas encore connus.");
     sheet(
       "Modèle",
       rows.map((m) => m.label),
-      (i) => void actions.setModel(rows[i].value),
+      (i) => {
+        tick();
+        void actions.setModel(rows[i].value);
+      },
     );
   };
   const pickEffort = () =>
-    sheet(
-      "Effort",
-      efforts.map(effortLabel),
-      (i) => void actions.setEffort(efforts[i]),
-    );
+    sheet("Effort", efforts.map(effortLabel), (i) => {
+      tick();
+      void actions.setEffort(efforts[i]);
+    });
   const pickMode = () =>
     sheet(
       "Mode",
       MODE_CYCLE.map((m) => modeLabel(m)),
-      (i) => void actions.setMode(MODE_CYCLE[i] as PermissionMode),
+      (i) => {
+        tick();
+        void actions.setMode(MODE_CYCLE[i] as PermissionMode);
+      },
     );
+  const chip = (open: () => void) => () => {
+    tick();
+    open();
+  };
   const showFigures = () => {
     const lines = [
       state.context && `Contexte : ${Math.round(state.context.percentage)} %`,
@@ -204,9 +217,10 @@ export function ChatComposer({
   };
   const copyCode = async () => {
     const code = lastCodeBlock(state.items);
-    if (!code) return showNotice("Aucun bloc de code dans cette conversation.");
+    if (!code)
+      return showFailure("Aucun bloc de code dans cette conversation.");
     await Clipboard.setStringAsync(code);
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    success();
     showNotice(`Copié : ${code.split(/\r?\n/)[0].slice(0, 60)}`);
   };
   const runPromptButton = async (button: RemoteButton) => {
@@ -217,36 +231,53 @@ export function ChatComposer({
         buttonId: button.id,
       });
       // Typed, not sent: the button's text comes back for the field.
-      if (result.text) setText((t) => (t ? `${t} ${result.text}` : result.text!));
+      if (result.text)
+        setText((t) => (t ? `${t} ${result.text}` : result.text!));
       // /resume, /rewind, /mcp: their sheet, never over a draft (desktop).
       const panel = result.panel;
       if (panel) {
         if (text.trim())
-          showNotice(
+          showFailure(
             `Saisie en cours : envoie-la ou vide-la avant /${panel.name}`,
           );
         else openPanel(panel.name, panel.query);
       }
     } catch (e) {
-      showNotice(e instanceof Error ? e.message : String(e));
+      showFailure(e instanceof Error ? e.message : String(e));
     }
   };
+  // The + menu's entries feel as what they do: a sheet or an action taps,
+  // a list ticks, a copy says how it went.
+  const tapThen = (run: () => void) => () => {
+    tap();
+    run();
+  };
   const openPlus = () => {
+    tap();
     const buttons = flatButtons(promptButtons);
     const entries: { label: string; run: () => void }[] = [
       {
         label: "Photos et téléchargements du PC",
-        run: () =>
-          router.push({ pathname: "/pick", params: { pane: chatId, chat: "1" } }),
+        run: tapThen(() =>
+          router.push({
+            pathname: "/pick",
+            params: { pane: chatId, chat: "1" },
+          }),
+        ),
       },
       { label: "Copier le dernier bloc de code", run: () => void copyCode() },
-      { label: `Mode : ${modeLabel(state.mode)}`, run: pickMode },
+      { label: `Mode : ${modeLabel(state.mode)}`, run: chip(pickMode) },
       ...(state.working
-        ? [{ label: "Tâches en arrière-plan (Ctrl+B)", run: () => void actions.background() }]
+        ? [
+            {
+              label: "Tâches en arrière-plan (Ctrl+B)",
+              run: tapThen(() => void actions.background()),
+            },
+          ]
         : []),
       ...buttons.map((b) => ({
         label: b.label,
-        run: () => void runPromptButton(b),
+        run: tapThen(() => void runPromptButton(b)),
       })),
     ];
     sheet(
@@ -306,22 +337,36 @@ export function ChatComposer({
           selectionColor={C.accent}
         />
         <View style={styles.bar}>
-          <Pressable style={styles.chip} onPress={pickModel} hitSlop={6}>
-            <Text style={styles.chipText}>{modelLabel(model?.model ?? state.model)}</Text>
+          <Pressable style={styles.chip} onPress={chip(pickModel)} hitSlop={6}>
+            <Text style={styles.chipText}>
+              {modelLabel(model?.model ?? state.model)}
+            </Text>
             <SymbolView name="chevron.up" size={10} tintColor={C.mute} />
           </Pressable>
           {efforts.length > 0 && state.sdk.effort && (
-            <Pressable style={styles.chip} onPress={pickEffort} hitSlop={6}>
-              <Text style={styles.chipText}>{effortLabel(state.sdk.effort)}</Text>
+            <Pressable
+              style={styles.chip}
+              onPress={chip(pickEffort)}
+              hitSlop={6}
+            >
+              <Text style={styles.chipText}>
+                {effortLabel(state.sdk.effort)}
+              </Text>
             </Pressable>
           )}
           {state.mode && state.mode !== "default" && (
-            <Pressable style={styles.chip} onPress={pickMode} hitSlop={6}>
-              <Text style={[styles.chipText, styles.mode]}>{modeLabel(state.mode)}</Text>
+            <Pressable style={styles.chip} onPress={chip(pickMode)} hitSlop={6}>
+              <Text style={[styles.chipText, styles.mode]}>
+                {modeLabel(state.mode)}
+              </Text>
             </Pressable>
           )}
           {percent !== null && (
-            <Pressable style={styles.ring} onPress={showFigures} hitSlop={6}>
+            <Pressable
+              style={styles.ring}
+              onPress={chip(showFigures)}
+              hitSlop={6}
+            >
               <Text style={styles.ringText}>{percent}</Text>
             </Pressable>
           )}
@@ -333,7 +378,10 @@ export function ChatComposer({
             on={phase === "listening"}
           />
           {state.working && (
-            <IconButton name="stop.fill" onPress={() => void actions.interrupt()} />
+            <IconButton
+              name="stop.fill"
+              onPress={tapThen(() => void actions.interrupt())}
+            />
           )}
           {(hasText || !state.working) && (
             <Pressable
@@ -343,7 +391,12 @@ export function ChatComposer({
               disabled={!hasText}
               hitSlop={6}
             >
-              <SymbolView name="arrow.up" size={16} tintColor={C.accentInk} weight="bold" />
+              <SymbolView
+                name="arrow.up"
+                size={16}
+                tintColor={C.accentInk}
+                weight="bold"
+              />
             </Pressable>
           )}
         </View>

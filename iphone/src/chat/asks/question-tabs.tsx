@@ -12,6 +12,7 @@ import type { SFSymbol } from "sf-symbols-typescript";
 import { stepBy, type Question } from "@/lib/chat/chatQuestions";
 import { A } from "~/chat/asks/ask-colors";
 import { C, T } from "~/chat/chat-theme";
+import { tick } from "~/ui/haptics";
 
 /**
  * Several questions, one at a time as the terminal asks them (the desktop's
@@ -32,6 +33,11 @@ export function QuestionTabs({
   onStep: (step: number) => void;
 }) {
   const count = questions.length;
+  // A tab or an arrow: another question shown, a pick of where to be.
+  const go = (to: number) => {
+    tick();
+    onStep(to);
+  };
   const scrollRef = useRef<ScrollViewInstance>(null);
   const spots = useRef<Record<number, number>>({});
   useEffect(() => {
@@ -50,7 +56,7 @@ export function QuestionTabs({
         spots.current[i] = e.nativeEvent.layout.x;
       }}
       hitSlop={{ top: 4, bottom: 4 }}
-      onPress={() => onStep(i)}
+      onPress={() => go(i)}
       style={[styles.tab, step === i && styles.on]}
     >
       <SymbolView name={icon} size={13} tintColor={done ? C.accent : C.mute} />
@@ -63,7 +69,7 @@ export function QuestionTabs({
       accessibilityRole="button"
       accessibilityLabel={label}
       disabled={to === step}
-      onPress={() => onStep(to)}
+      onPress={() => go(to)}
       style={({ pressed }) => [
         styles.arrow,
         (pressed || to === step) && styles.dim,

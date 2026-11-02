@@ -341,6 +341,20 @@ export function withoutQuestions(text: string): string {
     .trim();
 }
 
+// Read on each event of a turn now: a finished reply is parsed once.
+const parsed = new WeakMap<
+  object,
+  { text: string; questions: RoundQuestion[] }
+>();
+
+function replyQuestions(item: { id: string; text: string }): RoundQuestion[] {
+  const kept = parsed.get(item);
+  if (kept?.text === item.text) return kept.questions;
+  const questions = parseQuestionRound(item.text, item.id);
+  parsed.set(item, { text: item.text, questions });
+  return questions;
+}
+
 /**
  * The round Claude asks since the user's last message, finished: the
  * questions of every reply since then, in order, a question asked again
@@ -350,6 +364,9 @@ export function withoutQuestions(text: string): string {
  * sheet stay as later replies add questions; `ids` are all those replies.
  * Only Claude's number names a question across replies: one he left
  * unnumbered stays its reply's own, never taking another's place.
+ * A reply still being written counts once finished: the round asked before
+ * it stays meanwhile (the user's choice of 02/11/2026: a subagent's report
+ * woke Claude and the sheet vanished under his finger).
  */
 export function lastReplyRound(
   items: readonly ChatItem[],
@@ -360,11 +377,15 @@ export function lastReplyRound(
     const item = items[i];
     if (item.kind === "user" || item.kind === "command") break;
     if (item.kind !== "text") continue;
-    // Claude still writing, or his last word an error: no sheet yet.
-    if (item.streaming || (latest && item.error)) return null;
+    if (item.streaming) {
+      latest = false;
+      continue;
+    }
+    // His last word an error: no sheet.
+    if (latest && item.error) return null;
     latest = false;
     if (item.error) continue;
-    const questions = parseQuestionRound(item.text, item.id);
+    const questions = replyQuestions(item);
     if (questions.length > 0) replies.unshift({ id: item.id, questions });
   }
   if (replies.length === 0) return null;
@@ -376,6 +397,19 @@ export function lastReplyRound(
     ids: replies.map((r) => r.id),
     questions: [...bySlot.values()],
   };
+}
+
+/**
+ * Whether the round `roundId` shows: always at rest; while Claude works,
+ * only the one up when his turn started (`restRound`, noted by
+ * `startTurn`). The desktop's `sheetUp` and the phone's `phoneAsk` share it.
+ */
+export function roundShowsNow(
+  working: boolean,
+  roundId: string | null,
+  restRound: string | null,
+): boolean {
+  return roundId !== null && (!working || roundId === restRound);
 }
 
 /**

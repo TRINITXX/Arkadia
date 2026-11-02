@@ -13,6 +13,12 @@ import {
 import { highlightHtml, langForPath } from "@/components/modern/highlight";
 import { toolIcon } from "@/components/modern/toolIcons";
 import { toolImages } from "@/lib/imageGallery";
+import {
+  multiEdits,
+  parseToolInput,
+  toolStat,
+  trimmedDiff,
+} from "@/lib/toolCard";
 import type { ConvBlock } from "@/components/ModernConversationView";
 import type { ToolDensity } from "@/types";
 
@@ -30,82 +36,9 @@ function toolSummary(input: Record<string, unknown>): string {
   return s.length > 90 ? `${s.slice(0, 90)}…` : s;
 }
 
-/** Parses the tool input JSON; `{}` on failure or non-object. */
-function parseInput(json?: string): Record<string, unknown> {
-  if (!json) return {};
-  try {
-    const v = JSON.parse(json);
-    return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
-
 function str(input: Record<string, unknown>, key: string): string | undefined {
   const v = input[key];
   return typeof v === "string" ? v : undefined;
-}
-
-/**
- * Trims the common leading/trailing lines between `oldText` and `newText` so a
- * diff shows only what actually changed (+ 2 lines of context), like a terminal
- * unified diff — not the whole block dumped twice.
- */
-function trimmedDiff(oldText: string, newText: string) {
-  const o = oldText.length ? oldText.split("\n") : [];
-  const n = newText.length ? newText.split("\n") : [];
-  let start = 0;
-  while (start < o.length && start < n.length && o[start] === n[start]) start++;
-  let endO = o.length;
-  let endN = n.length;
-  while (endO > start && endN > start && o[endO - 1] === n[endN - 1]) {
-    endO--;
-    endN--;
-  }
-  return {
-    before: o.slice(Math.max(0, start - 2), start),
-    removed: o.slice(start, endO),
-    added: n.slice(start, endN),
-    after: o.slice(endO, endO + 2),
-  };
-}
-
-/** "+5 −1" style change counter for a tool card header. */
-function statStr(removed: number, added: number): string {
-  const parts: string[] = [];
-  if (added) parts.push(`+${added}`);
-  if (removed) parts.push(`−${removed}`);
-  return parts.join(" ");
-}
-
-function toolStat(name: string, input: Record<string, unknown>): string {
-  if (name === "Edit") {
-    const d = trimmedDiff(
-      str(input, "old_string") ?? "",
-      str(input, "new_string") ?? "",
-    );
-    return statStr(d.removed.length, d.added.length);
-  }
-  if (name === "MultiEdit") {
-    const edits = Array.isArray(input.edits) ? input.edits : [];
-    let rem = 0;
-    let add = 0;
-    for (const e of edits) {
-      const eo = (e ?? {}) as Record<string, unknown>;
-      const d = trimmedDiff(
-        typeof eo.old_string === "string" ? eo.old_string : "",
-        typeof eo.new_string === "string" ? eo.new_string : "",
-      );
-      rem += d.removed.length;
-      add += d.added.length;
-    }
-    return statStr(rem, add);
-  }
-  if (name === "Write") {
-    const c = str(input, "content") ?? "";
-    return c ? `+${c.split("\n").length}` : "";
-  }
-  return "";
 }
 
 /** A tight unified diff: a little context (dim) + removed (red) + added (green). */
@@ -201,23 +134,14 @@ function ToolInputView({
           newText={str(input, "new_string")}
         />
       );
-    case "MultiEdit": {
-      const edits = Array.isArray(input.edits) ? input.edits : [];
+    case "MultiEdit":
       return (
         <>
-          {edits.map((e, i) => {
-            const eo = (e ?? {}) as Record<string, unknown>;
-            return (
-              <DiffLines
-                key={i}
-                oldText={typeof eo.old_string === "string" ? eo.old_string : ""}
-                newText={typeof eo.new_string === "string" ? eo.new_string : ""}
-              />
-            );
-          })}
+          {multiEdits(input).map((e, i) => (
+            <DiffLines key={i} oldText={e.oldText} newText={e.newText} />
+          ))}
         </>
       );
-    }
     case "Write":
       return (
         <HighlightedCode
@@ -274,7 +198,10 @@ export const ToolCard = memo(function ToolCard({
   onToast,
 }: ToolCardProps) {
   const [open, setOpen] = useState(density === "full");
-  const input = useMemo(() => parseInput(block.tool_input), [block.tool_input]);
+  const input = useMemo(
+    () => parseToolInput(block.tool_input),
+    [block.tool_input],
+  );
   const summary = toolSummary(input);
   const output = showResults ? (block.tool_output ?? "") : "";
   const name = block.tool_name ?? "tool";

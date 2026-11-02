@@ -28,6 +28,7 @@ import { viewerImages, viewerIndex } from "@/lib/chat/phoneImages";
 import type { ImageRef } from "@/lib/imageRef";
 import { C, T } from "~/chat/chat-theme";
 import { imageSource } from "~/chat/feed/pc-image";
+import { tap } from "~/ui/haptics";
 
 type OpenImage = (image: ImageRef) => void;
 
@@ -68,6 +69,7 @@ export function ImageViewerHost({
   } | null>(null);
   const [shown, setShown] = useState(false);
   const open = useCallback((image: ImageRef) => {
+    tap();
     const all = viewerImages(itemsRef.current);
     const at = viewerIndex(all, image);
     setView((v) => ({
@@ -155,7 +157,10 @@ function ImageViewer({
             </Text>
           )}
           <Pressable
-            onPress={onClose}
+            onPress={() => {
+              tap();
+              onClose();
+            }}
             hitSlop={10}
             accessibilityRole="button"
             style={({ pressed }) => [styles.close, pressed && styles.pressed]}

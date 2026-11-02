@@ -29,6 +29,7 @@ export function AgentSheet({
   visible,
   chatId,
   live,
+  cwd,
   actions,
   onChoose,
   onClose,
@@ -37,6 +38,8 @@ export function AgentSheet({
   visible: boolean;
   chatId: string;
   live: PhoneChatLive;
+  /** The chat's folder: its subagents work in it too. */
+  cwd: string | null;
   actions: ChatActions;
   onChoose: (text: string) => void;
   onClose: () => void;
@@ -81,6 +84,7 @@ export function AgentSheet({
           chatId={chatId}
           state={conversation}
           rows={rows}
+          cwd={cwd}
           actions={actions}
           onChoose={onChoose}
           acts={false}

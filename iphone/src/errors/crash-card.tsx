@@ -1,7 +1,8 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import type { Crash } from "~/errors/crash-store";
-import { showNotice } from "~/ui/notice";
+import { success, tap } from "~/ui/haptics";
+import { showFailure, showNotice } from "~/ui/notice";
 
 /** Stack lines shown: the rest is in the copied report. */
 const STACK_LINES = 14;
@@ -26,8 +27,11 @@ export function CrashCard({
   const stack = crash.stack.split("\n").slice(0, STACK_LINES).join("\n");
   const copy = () =>
     void Clipboard.setStringAsync(crash.report)
-      .then(() => showNotice("Erreur copiée"))
-      .catch(() => showNotice("Copie impossible"));
+      .then(() => {
+        success();
+        showNotice("Erreur copiée");
+      })
+      .catch(() => showFailure("Copie impossible"));
   return (
     <View style={styles.card}>
       <Text style={styles.title}>{title}</Text>
@@ -42,7 +46,7 @@ export function CrashCard({
         </ScrollView>
       ) : null}
       <View style={styles.buttons}>
-        <Button label="Copier l’erreur" onPress={copy} strong />
+        <Button label="Copier l’erreur" onPress={copy} strong feel={false} />
         {onRetry && <Button label="Réessayer" onPress={onRetry} />}
         {onRelaunch && <Button label="Relancer l’app" onPress={onRelaunch} />}
         {onClose && <Button label="Fermer" onPress={onClose} />}
@@ -55,14 +59,20 @@ function Button({
   label,
   onPress,
   strong = false,
+  feel = true,
 }: {
   label: string;
   onPress: () => void;
   strong?: boolean;
+  /** Off: its action says how it went (a copy). */
+  feel?: boolean;
 }) {
   return (
     <Pressable
-      onPress={onPress}
+      onPress={() => {
+        if (feel) tap();
+        onPress();
+      }}
       style={({ pressed }) => [
         styles.button,
         strong && styles.buttonStrong,

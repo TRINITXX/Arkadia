@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SymbolView } from "expo-symbols";
 import { C, T } from "~/chat/chat-theme";
+import { tap } from "~/ui/haptics";
 
 /** A page that never comes (the server's error is in the feed) frees the button. */
 const LOADING_MS = 15_000;
@@ -39,6 +40,7 @@ export function OlderButton({
       <Pressable
         disabled={loading}
         onPress={() => {
+          tap();
           setLoadingFor(cursor);
           onLoad();
         }}

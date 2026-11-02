@@ -1,5 +1,5 @@
 import type { PaneBackground } from "@/lib/agentState";
-import type { ChatActivity } from "@/lib/chat/chatEvents";
+import type { ChatActivity } from "@/lib/chat/chatActivity";
 import { stoppedByUser } from "@/lib/chat/chatErrors";
 import { peerMessages } from "@/lib/chat/chatPeer";
 import type { ChatEvent, JsonObject } from "@/lib/chat/chatProtocol";

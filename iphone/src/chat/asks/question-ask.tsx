@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import * as Haptics from "expo-haptics";
 import type { PermissionResult } from "@/lib/chat/chatProtocol";
 import {
   answerOf,
@@ -21,6 +20,7 @@ import { QuestionTabs } from "~/chat/asks/question-tabs";
 import { useAskDictation } from "~/chat/asks/use-ask-dictation";
 import { useTapGrace } from "~/chat/asks/use-tap-grace";
 import { C, T } from "~/chat/chat-theme";
+import { tick } from "~/ui/haptics";
 
 /**
  * Claude's AskUserQuestion (the desktop's `chat-question-panel.tsx`): options
@@ -68,7 +68,7 @@ export function QuestionAsk({
 
   const pick = (qi: number, label: string) => {
     const { multiSelect } = questions[qi];
-    void Haptics.selectionAsync();
+    tick();
     setDraft((d) => ({
       other: d.other.map((t, i) => (i === qi ? "" : t)),
       picked: d.picked.map((sel, i) => {
@@ -155,7 +155,10 @@ export function QuestionAsk({
                 icon="arrow.right"
                 label="Suivant"
                 disabled={!answers[step]}
-                onPress={() => setStep(stepBy(step, 1, count))}
+                onPress={() => {
+                  tick();
+                  setStep(stepBy(step, 1, count));
+                }}
               />
             ) : (
               <AskButton
@@ -196,7 +199,10 @@ export function QuestionAsk({
             <Pressable
               key={`${i}:${question.question}`}
               accessibilityRole="button"
-              onPress={() => setStep(i)}
+              onPress={() => {
+                tick();
+                setStep(i);
+              }}
               style={({ pressed }) => [
                 styles.review,
                 pressed && styles.pressed,

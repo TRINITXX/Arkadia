@@ -29,6 +29,7 @@ import {
   useRemoteView,
 } from "~/remote/connection";
 import { allProjects } from "~/remote/snapshot";
+import { failure, tap } from "~/ui/haptics";
 
 /** Rows drawn at once: the full history runs into the thousands. */
 const MAX_ROWS = 200;
@@ -128,11 +129,13 @@ export function SessionsScreen() {
   }, [snapshot]);
 
   const resume = async (session: ClaudeSession) => {
+    tap();
     setResuming(session.id);
     try {
       const { tabId } = await act({ kind: "resume", session, chat: true });
       if (tabId) router.push({ pathname: "/tab/[id]", params: { id: tabId } });
     } catch (e) {
+      failure();
       Alert.alert(
         "Reprise impossible",
         e instanceof Error ? e.message : String(e),

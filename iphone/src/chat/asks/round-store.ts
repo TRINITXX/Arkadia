@@ -35,6 +35,24 @@ export function updateRound(
   for (const cb of listeners.get(chatId) ?? []) cb();
 }
 
+type AskState = Pick<
+  ChatState,
+  "closed" | "requests" | "sdk" | "working" | "items" | "restRound"
+>;
+
+/**
+ * Something writes into the composer the unfolded sheet may hide (a
+ * visual's choice, the PC's files): the chat's sheet folds first, so the
+ * words show, as the desktop's `foldSheet` (REVIEW.md « Saisie cachée sous
+ * la fiche de questions »). Kept under a request, it comes back folded.
+ */
+export function foldRound(chatId: string): void {
+  const kept = sheets.get(chatId);
+  if (!kept || kept.closed || kept.folded) return;
+  sheets.set(chatId, { ...kept, folded: true });
+  for (const cb of listeners.get(chatId) ?? []) cb();
+}
+
 /** Chats whose next round opens folded (`foldNextRound`, `roundSheetBorn`). */
 const bornFolded = new Map<string, BornFolded>();
 
@@ -44,10 +62,7 @@ const bornFolded = new Map<string, BornFolded>();
  * message (the unfolded sheet hides it). The desktop's `foldNextSheet`. The
  * round shown now keeps its sheet: it is read again before the rewind lands.
  */
-export function foldNextRound(
-  chatId: string,
-  state: Pick<ChatState, "closed" | "requests" | "sdk" | "working" | "items">,
-): void {
+export function foldNextRound(chatId: string, state: AskState): void {
   const ask = phoneAsk(state);
   bornFolded.set(chatId, {
     at: Date.now(),
@@ -113,13 +128,13 @@ export function useRoundSheet(chatId: string, replyId: string): RoundSheet {
  */
 export function useRoundShown(
   chatId: string,
-  state: Pick<ChatState, "closed" | "requests" | "sdk" | "working" | "items">,
+  state: AskState,
 ): readonly string[] {
-  const { closed, requests, sdk, working, items } = state;
+  const { closed, requests, sdk, working, items, restRound } = state;
   const round = useMemo(() => {
-    const ask = phoneAsk({ closed, requests, sdk, working, items });
+    const ask = phoneAsk({ closed, requests, sdk, working, items, restRound });
     return ask?.kind === "round" ? ask.round : null;
-  }, [closed, requests, sdk, working, items]);
+  }, [closed, requests, sdk, working, items, restRound]);
   const sheet = useRoundSheet(chatId, round?.id ?? "");
   return round && !sheet.closed && !sheet.folded ? round.ids : NO_IDS;
 }

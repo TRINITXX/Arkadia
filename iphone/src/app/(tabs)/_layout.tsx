@@ -1,4 +1,5 @@
 import { NativeTabs } from "expo-router/native-tabs";
+import { tick } from "~/ui/haptics";
 
 // Apple's tab bar: Projets, Sessions, Comptes (choice of 25/10/2026). Only
 // Projets has an `index`: the app opens on the list that owns "/", and with
@@ -6,8 +7,9 @@ import { NativeTabs } from "expo-router/native-tabs";
 // change that, checked on 28/10/2026).
 // Expo Router needs the layout as the module's default export.
 export default function TabsLayout() {
+  // A tab picked ticks, as a segment does (Alexis's haptics of 02/11/2026).
   return (
-    <NativeTabs>
+    <NativeTabs screenListeners={{ tabPress: () => tick() }}>
       <NativeTabs.Trigger name="(projects)">
         <NativeTabs.Trigger.Icon sf="list.bullet.rectangle" />
         <NativeTabs.Trigger.Label>Projets</NativeTabs.Trigger.Label>

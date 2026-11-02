@@ -23,6 +23,7 @@ import { AskHead } from "~/chat/asks/ask-head";
 import { ElicitField } from "~/chat/asks/elicit-field";
 import { useTapGrace } from "~/chat/asks/use-tap-grace";
 import { C, T } from "~/chat/chat-theme";
+import { failure } from "~/ui/haptics";
 
 /**
  * An MCP server asks the user something (the desktop's
@@ -74,6 +75,7 @@ export function ElicitationAsk({
     }
     const answer = elicitContent(fields, values);
     if ("error" in answer) {
+      failure();
       setError(answer.error);
       return;
     }

@@ -47,7 +47,9 @@ export function ChatQuestionSheet({
   items,
   voice,
   active,
+  working,
   onSend,
+  onStop,
   onDictating,
 }: {
   /** The pane: answers and « closed » outlive its unmounts. */
@@ -56,7 +58,11 @@ export function ChatQuestionSheet({
   active: boolean;
   items: ChatItem[];
   voice: ChatVoice;
+  /** Claude works again under the sheet (it stays, 02/11/2026). */
+  working: boolean;
   onSend: (text: string) => void;
+  /** Unfolded, the sheet hides the input and its stop: its own one. */
+  onStop: () => void;
   /** A field of the sheet takes the dictation under way (or no longer). */
   onDictating?: (on: boolean) => void;
 }) {
@@ -229,6 +235,16 @@ export function ChatQuestionSheet({
           <span className="pos">
             {step + 1} sur {questions.length}
           </span>
+        )}
+        {working && !folded && (
+          <button
+            type="button"
+            className="x"
+            title="Arrêter Claude"
+            onClick={onStop}
+          >
+            <Square />
+          </button>
         )}
         <button
           type="button"

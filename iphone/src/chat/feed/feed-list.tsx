@@ -22,6 +22,7 @@ import { FeedSheet } from "~/chat/feed/feed-sheet";
 import { FeedSheetContent, sheetHead } from "~/chat/feed/feed-sheet-content";
 import { ImageViewerHost } from "~/chat/feed/image-viewer";
 import type { ChatActions } from "~/chat/use-chat";
+import { tap } from "~/ui/haptics";
 
 type UserItem = Extract<ChatItem, { kind: "user" }>;
 
@@ -44,6 +45,7 @@ export function FeedList({
   chatId,
   state,
   rows,
+  cwd,
   actions,
   onChoose,
   acts,
@@ -59,6 +61,8 @@ export function FeedList({
   state: ChatState;
   /** Newest first (`feedRows`). */
   rows: FeedRow[];
+  /** The chat's folder: tool lines name files from it; null: from home. */
+  cwd: string | null;
   actions: ChatActions;
   onChoose: (text: string) => void;
   acts: boolean;
@@ -77,7 +81,9 @@ export function FeedList({
   // The sheet keeps its row while it slides away: it doesn't empty as it goes.
   const [sheet, setSheet] = useState<FeedSheetRef | null>(null);
   const [shown, setShown] = useState(false);
+  // Every row's sheet opens here: one tap, whatever row asked.
   const open = useCallback((ref: FeedSheetRef) => {
+    tap();
     setSheet(ref);
     setShown(true);
   }, []);
@@ -99,13 +105,14 @@ export function FeedList({
   const env = useMemo<FeedEnv>(
     () => ({
       chatId,
+      cwd,
       actions,
       onChoose: choose,
       acts,
       open,
       edit: canEdit ? edit : undefined,
     }),
-    [chatId, actions, choose, acts, open, canEdit, edit],
+    [chatId, cwd, actions, choose, acts, open, canEdit, edit],
   );
 
   const closed = state.closed !== null;
@@ -190,6 +197,7 @@ export function FeedList({
             <FeedSheetContent
               kind={sheet.kind}
               row={row}
+              cwd={cwd}
               subagents={state.subagents}
               agentSheet={agentSheet}
             />

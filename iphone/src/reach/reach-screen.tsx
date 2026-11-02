@@ -10,6 +10,7 @@ import { SymbolView, type SFSymbol } from "expo-symbols";
 import { isLate, type WakeProgress } from "@/mobile/wake";
 import { reconnectNow } from "~/remote/connection";
 import { hasRelay, openArkadia, wakePc, type Reach } from "~/remote/reach";
+import { tap } from "~/ui/haptics";
 
 type StepState = "done" | "now" | "fail" | "todo";
 
@@ -87,7 +88,10 @@ function Panel({
       {spinner && <ActivityIndicator color="#8e8e93" style={styles.gap} />}
       {action && (
         <Pressable
-          onPress={action.onPress}
+          onPress={() => {
+            tap();
+            action.onPress();
+          }}
           style={({ pressed }) => [
             styles.button,
             action.plain && styles.plainButton,
@@ -168,7 +172,10 @@ function WakeSteps({ wake, reach }: { wake: WakeProgress; reach: Reach }) {
             Si le PC s’allume quand même, cet écran changera tout seul.
           </Text>
           <Pressable
-            onPress={() => void wakePc(reconnectNow)}
+            onPress={() => {
+              tap();
+              void wakePc(reconnectNow);
+            }}
             style={({ pressed }) => [
               styles.button,
               styles.plainButton,
@@ -182,7 +189,10 @@ function WakeSteps({ wake, reach }: { wake: WakeProgress; reach: Reach }) {
       {up &&
         (reach === "closed" ? (
           <Pressable
-            onPress={() => void openArkadia()}
+            onPress={() => {
+              tap();
+              void openArkadia();
+            }}
             style={({ pressed }) => [styles.button, pressed && styles.pressed]}
           >
             <Text style={styles.buttonText}>Ouvrir Arkadia</Text>

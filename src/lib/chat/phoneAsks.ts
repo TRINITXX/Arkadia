@@ -1,6 +1,10 @@
 import { editDiff, type DiffRow } from "@/lib/chat/chatDiff";
 import { toolSummary } from "@/lib/chat/chatGroups";
-import { lastReplyRound, type RoundAnswer } from "@/lib/chat/chatQuestionRound";
+import {
+  lastReplyRound,
+  roundShowsNow,
+  type RoundAnswer,
+} from "@/lib/chat/chatQuestionRound";
 import type { PendingElicitation } from "@/lib/chat/chatSdkSettings";
 import type { ChatState, PendingRequest } from "@/lib/chat/chatState";
 
@@ -20,11 +24,18 @@ export type PhoneAsk =
 /**
  * The desktop's order: Claude Code's request first (AskUserQuestion, a plan,
  * any other tool), then an MCP server's, then the round of questions Claude
- * wrote, once his turn ended. A closed chat waits for nothing. The round is
- * read only then: never on each event of a turn.
+ * wrote. A closed chat waits for nothing. The round up at rest stays while
+ * Claude works again (the user's choice of 02/11/2026: a subagent's report
+ * woke Claude and the sheet vanished under his finger), an answer sent
+ * meanwhile queued like any message; a round born mid-turn waits for its
+ * end, never covering an input in use (`restRound`, noted when the turn
+ * started).
  */
 export function phoneAsk(
-  state: Pick<ChatState, "closed" | "requests" | "sdk" | "working" | "items">,
+  state: Pick<
+    ChatState,
+    "closed" | "requests" | "sdk" | "working" | "items" | "restRound"
+  >,
 ): PhoneAsk | null {
   if (state.closed) return null;
   const request = state.requests[0];
@@ -36,9 +47,10 @@ export function phoneAsk(
   }
   const elicitation = state.sdk.elicitations[0];
   if (elicitation) return { kind: "elicitation", request: elicitation };
-  if (state.working) return null;
   const round = lastReplyRound(state.items);
-  return round ? { kind: "round", round } : null;
+  if (!round || !roundShowsNow(state.working, round.id, state.restRound))
+    return null;
+  return { kind: "round", round };
 }
 
 /** Rows past this are left out of a permission's diff, counted. */
@@ -145,7 +157,8 @@ export function roundSheetBorn(
 ): { sheet: RoundSheet; consumed: boolean } {
   if (kept?.replyId === replyId) return { sheet: kept, consumed: false };
   const fresh = roundSheetFor(undefined, replyId);
-  if (!born || born.except === replyId) return { sheet: fresh, consumed: false };
+  if (!born || born.except === replyId)
+    return { sheet: fresh, consumed: false };
   const folded = now - born.at < BORN_FOLDED_MS;
   return { sheet: folded ? { ...fresh, folded } : fresh, consumed: true };
 }

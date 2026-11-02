@@ -1,3 +1,4 @@
+import { lastReplyRound } from "@/lib/chat/chatQuestionRound";
 import type { ChatState } from "@/lib/chat/chatState";
 
 /**
@@ -6,9 +7,17 @@ import type { ChatState } from "@/lib/chat/chatState";
  * message, a message held behind a `!` command): its clock and its token
  * count from zero. Mid-turn (a message queued behind it), nothing changes.
  * Every path that starts a turn goes through here, or the live line's
- * « ↓ N tokens » would add the last turn's.
+ * « ↓ N tokens » would add the last turn's. The ❓ round up at rest is
+ * noted: it stays while Claude works (`roundShowsNow`), on every view of
+ * the chat, shown at rest or not.
  */
 export function startTurn(state: ChatState, now: number): ChatState {
   if (state.working) return state;
-  return { ...state, working: true, turnStartedAt: now, turnTokens: 0 };
+  return {
+    ...state,
+    working: true,
+    turnStartedAt: now,
+    turnTokens: 0,
+    restRound: lastReplyRound(state.items)?.id ?? null,
+  };
 }

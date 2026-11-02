@@ -38,6 +38,7 @@ import { glideBy, scrollsItself, wheelPixels } from "@/lib/chat/glideScroll";
 import { ChatEditConfirm } from "@/components/chat/chat-edit-confirm";
 import { ChatOlderButton } from "@/components/chat/chat-older-button";
 import { ChatQuestionSheet } from "@/components/chat/chat-question-sheet";
+import { lastReplyRound, roundShowsNow } from "@/lib/chat/chatQuestionRound";
 import { ChatStartup } from "@/components/chat/chat-startup";
 import type { StartupPhase } from "@/lib/chat/chatStartup";
 import { recallColumn } from "@/lib/chat/chatLive";
@@ -300,7 +301,18 @@ function ChatViewBody({
     onToast,
   });
   // The question sheet up and open: Claude's message drops its questions.
-  const sheetUp = !state.closed && !request && !state.working;
+  // The one up at rest stays while Claude works again, its send queued like
+  // any message (the user's choice of 02/11/2026: a subagent's report woke
+  // Claude and the sheet vanished under his finger); one born mid-turn
+  // waits for its end, never covering an input in use (`roundShowsNow`).
+  const roundId = useMemo(
+    () => lastReplyRound(state.items)?.id ?? null,
+    [state.items],
+  );
+  const sheetUp =
+    !state.closed &&
+    !request &&
+    (!state.working || roundShowsNow(true, roundId, state.restRound));
   const sheetReply = useSheetReply(memoryKey, state.items, sheetUp);
   // The question sheet unfolded takes the input's place (`sheet-open`).
   const sheetOpen = sheetReply.length > 0;
@@ -771,11 +783,13 @@ function ChatViewBody({
               items={state.items}
               voice={voice}
               active={isActive && shown}
+              working={state.working}
               onDictating={setSheetDictates}
               onSend={(text) => {
                 stuckRef.current = true;
                 onSend(text, []);
               }}
+              onStop={onInterrupt}
             />
           )}
           <ChatAgentCards

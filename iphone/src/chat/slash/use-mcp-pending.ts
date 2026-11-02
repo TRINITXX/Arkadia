@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import * as Haptics from "expo-haptics";
 import type { McpServerInfo } from "@/lib/chat/chatProtocol";
 import {
   settleMcpPending,
@@ -8,6 +7,7 @@ import {
   type McpRow,
 } from "@/lib/chat/chatSlash";
 import { mcpTapAction } from "@/lib/chat/phoneSlash";
+import { failure, success, tap } from "~/ui/haptics";
 import { showNotice } from "~/ui/notice";
 
 /** A sign-in left open this long is let go: the chat server stops looking then. */
@@ -41,7 +41,8 @@ export function useMcpPending(
   const pick = (row: McpRow, toggle: boolean) => {
     const action = mcpTapAction(row, toggle, pending[row.id]);
     if (!action) return;
-    void Haptics.selectionAsync();
+    // Its button taps; its switch plays iOS's own.
+    if (!toggle) tap();
     const server = row.id;
     const { status } = row;
     const set = (p: McpPending | null) =>
@@ -59,6 +60,7 @@ export function useMcpPending(
         // sees it, or lets go when the chat stops looking.
         const signin: McpPending = { state: "signin", status };
         set(signin);
+        success();
         showNotice("Page de connexion ouverte sur le PC");
         const timer = setTimeout(() => {
           timers.current.delete(timer);
@@ -71,8 +73,10 @@ export function useMcpPending(
         }, MCP_SIGNIN_MS);
         timers.current.add(timer);
       },
-      (e: unknown) =>
-        set({ error: e instanceof Error ? e.message : String(e), status }),
+      (e: unknown) => {
+        failure();
+        set({ error: e instanceof Error ? e.message : String(e), status });
+      },
     );
   };
 

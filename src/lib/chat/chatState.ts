@@ -227,6 +227,9 @@ export interface ChatState {
   commands: SlashCommandInfo[];
   working: boolean;
   turnStartedAt: number | null;
+  /** The ❓ round up when the turn started (`startTurn`): the one that
+   *  stays while Claude works, never one born mid-turn (02/11/2026). */
+  restRound: string | null;
   /** Output tokens of the current turn, thinking included. */
   turnTokens: number;
   status: "requesting" | "compacting" | null;
@@ -299,6 +302,7 @@ export const EMPTY_CHAT: ChatState = {
   commands: [],
   working: false,
   turnStartedAt: null,
+  restRound: null,
   turnTokens: 0,
   status: null,
   requests: [],

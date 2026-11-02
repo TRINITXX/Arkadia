@@ -13,6 +13,7 @@ import type {
 import { A } from "~/chat/asks/ask-colors";
 import { AskField } from "~/chat/asks/ask-field";
 import { C, T } from "~/chat/chat-theme";
+import { tick } from "~/ui/haptics";
 
 /**
  * One field of an MCP server's form, as its schema says (the desktop's
@@ -84,15 +85,19 @@ export function ElicitField({
                 }
                 accessibilityState={{ checked: on }}
                 hitSlop={{ top: 4, bottom: 4 }}
-                onPress={() =>
-                  field.kind === "multi"
-                    ? onChange(
-                        on
-                          ? picked.filter((v) => v !== o.value)
-                          : [...picked, o.value],
-                      )
-                    : onChange(on ? "" : o.value)
-                }
+                onPress={() => {
+                  // The switch above gets none: iOS plays its own.
+                  tick();
+                  onChange(
+                    field.kind === "multi"
+                      ? on
+                        ? picked.filter((v) => v !== o.value)
+                        : [...picked, o.value]
+                      : on
+                        ? ""
+                        : o.value,
+                  );
+                }}
                 style={({ pressed }) => [
                   styles.chip,
                   on && styles.chipOn,

@@ -16,6 +16,8 @@ export interface ChatFeedProps {
   chatId: string;
   /** The chat's state, and the subagent conversations asked for. */
   live: PhoneChatLive;
+  /** The chat's folder: tool lines name files from it; null: from home. */
+  cwd: string | null;
   actions: ChatActions;
   /** A visual's button chose a text: it goes into the composer (not sent). */
   onChoose: (text: string) => void;
@@ -36,6 +38,7 @@ export interface ChatFeedProps {
 export function ChatFeed({
   chatId,
   live,
+  cwd,
   actions,
   onChoose,
   messagesOnly,
@@ -62,12 +65,13 @@ export function ChatFeed({
         visible={visible}
         chatId={chatId}
         live={live}
+        cwd={cwd}
         actions={actions}
         onChoose={onChoose}
         onClose={onClose}
       />
     ),
-    [chatId, live, actions, onChoose],
+    [chatId, live, cwd, actions, onChoose],
   );
   const { closed, historyTruncated, historyCursor } = state;
   const { loadOlder, restart } = actions;
@@ -112,6 +116,7 @@ export function ChatFeed({
         chatId={chatId}
         state={state}
         rows={rows}
+        cwd={cwd}
         actions={actions}
         onChoose={onChoose}
         acts
