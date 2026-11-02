@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  enterLeadsTo,
   lastReplyRound,
   parseQuestionRound,
   recoReason,
@@ -256,6 +257,18 @@ describe("question rounds in Claude's reply", () => {
       }),
     ).toBe("Q1 : a) Le store de l'app, plus sûr\nQ2 : OK pour ta reco");
     expect(roundReply([q1, q2], { [q2.key]: { text: "  " } })).toBe("");
+  });
+
+  it("goes on to the next question left on Enter, and sends only once all are answered", () => {
+    // Words typed in Q1, Q2 and Q3 left: Q2, never the round sent.
+    expect(enterLeadsTo([true, false, false], 0)).toBe(1);
+    // An empty field skips its question.
+    expect(enterLeadsTo([false, false], 0)).toBe(1);
+    // After the last one, back to one left before it.
+    expect(enterLeadsTo([false, true, true], 2)).toBe(0);
+    expect(enterLeadsTo([true, true, true], 1)).toBe("send");
+    // The only one left, still unanswered: nowhere to go, nothing sent.
+    expect(enterLeadsTo([true, false], 1)).toBeNull();
   });
 
   it("keeps an unnumbered question its reply's own, and a question asked again unanswered", () => {

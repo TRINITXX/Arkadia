@@ -24,6 +24,7 @@ import {
   longLog,
   olderPage,
   olderStart,
+  TALL_ROUND,
 } from "@/chat-preview-ideas";
 import type { StartupPhase } from "@/lib/chat/chatStartup";
 import content from "../chat-server/fixtures/content.jsonl?raw";
@@ -407,6 +408,7 @@ const SCENARIOS: Record<string, () => ChatState> = {
   // Ideas of 31/10: the answer sheet, day marks and cards, older messages,
   // an empty column (`&startup=starting|resuming|welcome`), a long chat.
   grill: () => replay(grillEvents()),
+  grilltall: () => replay(grillEvents(TALL_ROUND)),
   days: () => replay(dayEvents()),
   older: () => replay([...olderStart(), ...dayEvents()]),
   empty: () => EMPTY_CHAT,

@@ -52,14 +52,32 @@ export const GRILL_ROUND = [
   "➡️ Une semaine.",
 ].join("\n");
 
-export function grillEvents(): ChatEvent[] {
+export function grillEvents(round = GRILL_ROUND): ChatEvent[] {
   const now = Date.now();
   return [
     said("Prépare la reprise des chats après un rechargement.", now - 60_000),
-    reply("grill-a1", GRILL_ROUND, now - 40_000),
+    reply("grill-a1", round, now - 40_000),
     done(now - 39_000),
   ];
 }
+
+/** Options that wrap on several lines: the sheet grows, no scroll (02/11/2026). */
+export const TALL_ROUND = [
+  "❓ **Q1** - **Où garder le brouillon** : il doit survivre à un rechargement d'Arkadia, même au milieu d'une dictée ou d'un collage d'images.",
+  "",
+  "a) Le fichier de réglages de l'app, écrit à chaque frappe : il survit à un plantage complet, mais chaque lettre tapée coûte une écriture sur le disque et ralentit les gros volets",
+  "b) Le stockage de la page, lu tout de suite au démarrage : rien à attendre au rechargement, mais il disparaît si on vide les données du navigateur intégré ou si on change de compte",
+  "c) Les deux à la fois, le stockage de la page d'abord puis le fichier de réglages toutes les dix secondes, pour ne rien perdre même après un plantage",
+  "d) Nulle part",
+  "",
+  "➡️ b) Le stockage de la page : lu tout de suite, et un plantage complet reste rare.",
+  "",
+  "---",
+  "",
+  "❓ **Q2** - **Expiration** : un brouillon oublié reste combien de temps ?",
+  "",
+  "➡️ Une semaine.",
+].join("\n");
 
 /** Three days of one conversation: the day marks, an edit card, artifact cards. */
 export function dayEvents(): ChatEvent[] {

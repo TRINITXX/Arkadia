@@ -11,7 +11,9 @@ import {
 import type { ChatVoice } from "@/components/chat/chat-composer";
 import { redirectDictation } from "@/lib/chat/chatDrafts";
 import {
+  enterLeadsTo,
   lastReplyRound,
+  nextQuestionLeft,
   recoReason,
   roundReply,
   type RoundAnswer,
@@ -36,9 +38,9 @@ import { useTypeToInput } from "@/lib/chat/useTypeToInput";
  * field that shows only a caret (dictation lands in the field that started
  * it, its words dim as they come). A pick moves on to a question left.
  * While it shows, Claude's message drops its questions (`useSheetReply`).
- * « Précédente », « Suivante », and one « Envoyer n/N » that answers them
- * all, « Q1 : … » per line. Folds (Esc: the questions come back in the
- * message) and closes.
+ * Enter in the field goes on to a question left, and sends once all are
+ * answered; the send button answers them all, « Q1 : … » per line. Folds
+ * (Esc: the questions come back in the message) and closes.
  */
 export function ChatQuestionSheet({
   paneKey,
@@ -142,17 +144,15 @@ export function ChatQuestionSheet({
       ...s,
       answers: { ...s.answers, [id]: { ...s.answers[id], ...patch } },
     }));
+  const answeredFlags = questions.map(isAnswered);
   // Picked: on to the next question left, after this one first.
   const pickAndGo = (patch: RoundAnswer) => {
     set(q.key, patch);
-    const left = (i: number) => i !== step && !isAnswered(questions[i]);
-    const order = questions.map((_, i) => i);
-    const next =
-      order.find((i) => i > step && left(i)) ?? order.find((i) => left(i));
-    if (next !== undefined) goTo(next);
+    const next = nextQuestionLeft(answeredFlags, step);
+    if (next !== null) goTo(next);
   };
   const reply = roundReply(questions, sheet.answers);
-  const answered = questions.filter(isAnswered).length;
+  const answered = answeredFlags.filter(Boolean).length;
 
   const dictate = (id: string) => {
     if (voice.status === "idle") {
@@ -350,7 +350,13 @@ export function ChatQuestionSheet({
                       !e.nativeEvent.isComposing
                     ) {
                       e.preventDefault();
-                      send();
+                      // Held down: one step, not a spin through the round.
+                      if (e.repeat) return;
+                      // On to the next question left; sent only once all
+                      // are answered (the button sends a part).
+                      const to = enterLeadsTo(answeredFlags, step);
+                      if (to === "send") send();
+                      else if (to !== null) goTo(to);
                     }
                   }}
                 />

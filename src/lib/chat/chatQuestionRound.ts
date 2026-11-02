@@ -387,6 +387,34 @@ export function recoReason(
 }
 
 /**
+ * The next question left, `answered[i]` telling question i has an answer:
+ * after `step` first, then from the start; never `step` itself. Null when
+ * every other question has its answer.
+ */
+export function nextQuestionLeft(
+  answered: readonly boolean[],
+  step: number,
+): number | null {
+  const left = (i: number) => i !== step && !answered[i];
+  const order = answered.map((_, i) => i);
+  return order.find((i) => i > step && left(i)) ?? order.find(left) ?? null;
+}
+
+/**
+ * Where Enter in a question's own-words field leads: on to the next question
+ * left, never the round sent before (the user's ask of 02/11/2026). With
+ * every question answered, it sends; else, nothing left to go to, it stays.
+ */
+export function enterLeadsTo(
+  answered: readonly boolean[],
+  step: number,
+): number | "send" | null {
+  const next = nextQuestionLeft(answered, step);
+  if (next !== null) return next;
+  return answered.every(Boolean) ? "send" : null;
+}
+
+/**
  * One line per answered question, `answers` by `key`: `Q1 : b) Label, mes
  * mots`. A question Claude left unnumbered goes by its title: its place
  * in its reply could name another reply's question.

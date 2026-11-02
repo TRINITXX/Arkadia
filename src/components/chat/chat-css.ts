@@ -655,8 +655,8 @@ export const CHAT_CSS = `
 .chat-edit-confirm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; padding: 8px 10px 8px 14px; border: 1px solid #5a3a2c; border-radius: 14px; background: #241f1c; font-size: 13px; color: #e4e4e7; }
 .chat-edit-confirm > .lucide { width: 15px; height: 15px; color: var(--chat-accent); flex-shrink: 0; }
 .chat-edit-confirm > span { flex: 1; min-width: 200px; }
-/* The question sheet (the user's pick A of 31/10/2026): its progress on top, the options as a list with Claude's reco inside its own, the mic left of a field that shows only a caret, then previous / next / send. */
-.chat-sheet-q { display: flex; flex-direction: column; max-height: min(46vh, 420px); margin-bottom: 8px; border: 1px solid #5a3a2c; border-radius: 16px; background: #1d2024; box-shadow: 0 2px 6px rgba(0,0,0,.3); overflow: hidden; }
+/* The question sheet (the user's pick A of 31/10/2026): its progress on top, the options as a list with Claude's reco inside its own, the mic left of a field that shows only a caret, then the send. As tall as its question needs: it scrolls only in a pane too short for it, never under 160px (the user's ask of 02/11/2026). */
+.chat-sheet-q { display: flex; flex-direction: column; max-height: max(160px, calc(100cqh - 140px)); margin-bottom: 8px; border: 1px solid #5a3a2c; border-radius: 16px; background: #1d2024; box-shadow: 0 2px 6px rgba(0,0,0,.3); overflow: hidden; }
 .chat-sheet-q .hd { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 8px; border-bottom: 1px solid #2b2e33; flex-shrink: 0; }
 .chat-sheet-q.folded .hd { border-bottom: 0; }
 .chat-sheet-q .hd .fold { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; color: #f4f4f5; font: inherit; font-size: 13.5px; padding: 3px 6px; border-radius: 8px; cursor: pointer; text-align: left; }
@@ -741,7 +741,8 @@ export const CHAT_CSS = `
 .chat-voice-wave .words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--chat-dim); font-style: italic; }
 .chat-voice-wave .hint { margin-left: auto; flex-shrink: 0; }
 .chat-paste-twin .interim { color: #8b8f97; font-style: italic; }
-.chat-root { container-type: inline-size; }
+/* Size, not inline-size: the question sheet grows to the pane's height (100cqh) before it scrolls. */
+.chat-root { container-type: size; }
 @container (max-width: 640px) { .chat-minimap { display: none; } }
 @container (max-width: 500px) {
   .chat-sheet-q:not(.folded) .hd .fold b { display: none; }
