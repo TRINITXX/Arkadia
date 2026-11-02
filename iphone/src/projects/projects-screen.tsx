@@ -84,10 +84,19 @@ function Section({
   );
 }
 
+/**
+ * A chat asleep, as a project opened on the desktop: its latest sessions to
+ * resume, Claude Code at the first letter, ⋯ « Passer en terminal » for the
+ * terminal (the user's choice of 02/11/2026). An older desktop: a shell.
+ */
 async function openNewTab(project: RemoteProject) {
   tap();
   try {
-    const { tabId } = await act({ kind: "newTab", projectId: project.id });
+    const { tabId } = await act({
+      kind: "newTab",
+      projectId: project.id,
+      chat: true,
+    });
     if (tabId) router.push({ pathname: "/tab/[id]", params: { id: tabId } });
   } catch (e) {
     failure();

@@ -1,9 +1,11 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import type { ChatItem, Subagent } from "@/lib/chat/chatState";
 import type { PhoneChatLive } from "@/lib/chat/phoneChatFold";
+import { startupPhase } from "@/lib/chat/chatStartup";
 import { feedRows } from "@/lib/chat/phoneFeed";
 import { useRoundShown } from "~/chat/asks/round-store";
+import { ChatWelcome } from "~/chat/chat-welcome";
 import { AgentSheet } from "~/chat/feed/agent-sheet";
 import { ClosedLine } from "~/chat/feed/closed-line";
 import type { AgentSheetRender } from "~/chat/feed/feed-env";
@@ -57,6 +59,10 @@ export function ChatFeed({
   );
   // The ❓ round's sheet unfolded: its questions leave those replies.
   const bareIds = useRoundShown(chatId, state);
+  // Seen asleep: a new chat keeps its welcome while it wakes (a letter
+  // typed, Claude Code booting), as the desktop's (`chat-pane.tsx`).
+  const [seenAsleep, setSeenAsleep] = useState(state.asleep);
+  if (state.asleep && !seenAsleep) setSeenAsleep(true);
   // A subagent's conversation over the activity sheet that opened it.
   const agentSheet = useCallback<AgentSheetRender>(
     (agent: Subagent | null, visible: boolean, onClose: () => void) => (
@@ -91,6 +97,21 @@ export function ChatFeed({
   );
 
   if (rows.length === 0) {
+    // A new chat asleep, waking, or booted with nothing said: the folder's
+    // sessions to resume (`startupPhase` « welcome », as the desktop's,
+    // 02/11/2026). Read from the chat's state, not only from this screen's
+    // memory: a screen left and opened again has none.
+    if (
+      live.replay === null &&
+      !closed &&
+      state.items.length === 0 &&
+      (state.asleep || seenAsleep || startupPhase(state, false) === "welcome")
+    )
+      return (
+        <View style={styles.feed}>
+          <ChatWelcome actions={actions} sessionId={state.sessionId} />
+        </View>
+      );
     // Before its first replay, or a chat that never said anything yet.
     const loading =
       live.replay !== null ||
@@ -103,7 +124,9 @@ export function ChatFeed({
       <View style={styles.feed}>
         <QuietNote
           text={
-            loading ? "Chargement de la conversation…" : "Pas encore de messages."
+            loading
+              ? "Chargement de la conversation…"
+              : "Pas encore de messages."
           }
         />
         {bottom}

@@ -2,11 +2,9 @@ import { useEffect, useState } from "react";
 import { History, Search } from "lucide-react";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import type { SessionChoice } from "@/lib/chat/chatProtocol";
-import { sessionRows, type PickerRow } from "@/lib/chat/chatSlash";
+import type { PickerRow } from "@/lib/chat/chatSlash";
+import { welcomeRows } from "@/lib/chat/chatStartup";
 import type { SlashActions } from "@/lib/chat/useSlashActions";
-
-/** How many of the folder's sessions a new chat offers, or finds. */
-const WELCOME_SESSIONS = 5;
 
 /**
  * The folder's latest sessions, as /resume lists them (and with its guards:
@@ -42,10 +40,7 @@ export function ChatWelcome({
   }, [actions]);
 
   if (!loaded || loaded.sessions.length === 0) return null;
-  // No branch here: the user always works on main (01/11/2026).
-  const rows = sessionRows(loaded.sessions, query, null, loaded.at, {
-    branch: false,
-  }).slice(0, WELCOME_SESSIONS);
+  const rows = welcomeRows(loaded.sessions, query, loaded.at);
   const resume = (row: PickerRow) => {
     if (row.disabled || resuming) return;
     setResuming(row.id);

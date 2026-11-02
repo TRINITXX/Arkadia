@@ -26,6 +26,7 @@ import type { ChatState } from "@/lib/chat/chatState";
 import { withChoice } from "@/lib/chat/chatVisual";
 import { lastCodeBlock } from "@/lib/chat/phoneCode";
 import { phoneSlashMenu, slashIntent, slashPick } from "@/lib/chat/phoneSlash";
+import { useWakeOnInput } from "@/lib/chat/useWakeOnInput";
 import type { RemoteButton } from "@/lib/remoteSnapshot";
 import { C, T } from "~/chat/chat-theme";
 import { foldNextRound } from "~/chat/asks/round-store";
@@ -95,11 +96,9 @@ export function ChatComposer({
     [chatId],
   );
 
-  const onChange = (next: string) => {
-    // A chat asleep wakes at the first key, as on the desktop.
-    if (state.asleep && !text && next) void actions.wake();
-    setText(next);
-  };
+  // A chat asleep wakes at the first change to the field, as on the desktop:
+  // a key, a paste, a dictation or a choice that lands.
+  useWakeOnInput(state.asleep, text, actions.wake);
 
   // A page command's sheet (/resume, /rewind, /mcp), and a notice in the
   // menu's place kept while its text stays (a terminal-only command).
@@ -325,7 +324,7 @@ export function ChatComposer({
       <View style={styles.card}>
         <TextInput
           value={text}
-          onChangeText={onChange}
+          onChangeText={setText}
           placeholder={placeholder}
           placeholderTextColor={C.mute}
           style={styles.field}

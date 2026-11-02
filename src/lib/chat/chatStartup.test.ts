@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { startupPhase } from "@/lib/chat/chatStartup";
+import { startupPhase, welcomeRows } from "@/lib/chat/chatStartup";
 import { EMPTY_CHAT } from "@/lib/chat/chatState";
 
 describe("an empty chat column", () => {
@@ -37,5 +37,21 @@ describe("an empty chat column", () => {
     // Woken by a letter, Claude Code booting: still its sessions, not
     // « Claude démarre… ».
     expect(startupPhase(EMPTY_CHAT, false, true)).toBe("welcome");
+  });
+
+  it("offers the folder's 5 latest sessions, branch left out, its search finding older ones", () => {
+    const now = Date.parse("2026-11-02T12:00:00");
+    const sessions = Array.from({ length: 7 }, (_, i) => ({
+      sessionId: `s${i}`,
+      title: `Session ${i}`,
+      lastModified: now - i * 3_600_000,
+      gitBranch: "main",
+    }));
+    const rows = welcomeRows(sessions, "", now);
+    expect(rows.map((r) => r.id)).toEqual(["s0", "s1", "s2", "s3", "s4"]);
+    expect(rows.some((r) => r.meta.includes("main"))).toBe(false);
+    expect(welcomeRows(sessions, "Session 6", now).map((r) => r.id)).toEqual([
+      "s6",
+    ]);
   });
 });

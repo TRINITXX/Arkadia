@@ -28,7 +28,8 @@ export type PhoneChatCommand = ChatCommand extends infer C
   : never;
 
 export type RemoteAction =
-  | { kind: "newTab"; projectId: string }
+  /** `chat`: as `runButton`'s, the new tab opens on a chat asleep. */
+  | { kind: "newTab"; projectId: string; chat?: boolean }
   | { kind: "closeTab"; tabId: string }
   /** Toolbar button, in `paneId` when it sits on a bare prompt, else a new tab. */
   | {

@@ -1,4 +1,26 @@
+import type { SessionChoice } from "@/lib/chat/chatProtocol";
+import { sessionRows, type PickerRow } from "@/lib/chat/chatSlash";
 import type { ChatState } from "@/lib/chat/chatState";
+
+/** How many of the folder's sessions a new chat offers, or finds. */
+export const WELCOME_SESSIONS = 5;
+
+/**
+ * A new chat's welcome, on the desktop and the iPhone: the folder's latest
+ * sessions as /resume lists them (one open elsewhere can't be taken), at
+ * most `WELCOME_SESSIONS`, `query` finding an older one. No branch: the
+ * user always works on main (01/11/2026).
+ */
+export function welcomeRows(
+  sessions: SessionChoice[],
+  query: string,
+  now: number,
+): PickerRow[] {
+  return sessionRows(sessions, query, null, now, { branch: false }).slice(
+    0,
+    WELCOME_SESSIONS,
+  );
+}
 
 /**
  * What an empty column shows: « Claude démarre… » until Claude Code answers,

@@ -3085,6 +3085,13 @@ export function App() {
             false,
           );
           if (!spawned) return { error: "onglet non créé" };
+          // A client that shows chats (the iPhone app) gets a chat asleep, as
+          // a project opened on the desktop: its sessions to resume, no
+          // Claude Code until the first letter, the pane's shell idle under
+          // it for a later switch (the user's choice of 02/11/2026). The old
+          // web page reads terminals only: its shell, as before.
+          if (action.chat === true)
+            startChat(spawned.paneId, { cwd: project.path, asleep: true });
           markProjectInput(project.id);
           return { tabId: spawned.tabId };
         }
@@ -3274,6 +3281,7 @@ export function App() {
       projects,
       tabs,
       spawnTabFor,
+      startChat,
       markProjectInput,
       closeTab,
       toolbarButtons,

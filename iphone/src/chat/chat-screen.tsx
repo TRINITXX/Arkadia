@@ -122,9 +122,14 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
       chat: true,
     });
   };
+  // A chat asleep, as from the project list (`openNewTab`).
   const newTab = async () => {
     tick();
-    const result = await run({ kind: "newTab", projectId: project.id });
+    const result = await run({
+      kind: "newTab",
+      projectId: project.id,
+      chat: true,
+    });
     if (result?.tabId && mounted.current)
       router.replace({ pathname: "/tab/[id]", params: { id: result.tabId } });
   };

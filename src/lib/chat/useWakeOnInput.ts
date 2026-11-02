@@ -1,21 +1,21 @@
 import { useEffect, useRef } from "react";
-import type { ChatDraft } from "@/lib/chat/chatDrafts";
 
 /**
  * A chat asleep wakes on the first change to its input (a key, a paste, a
  * dictation that lands): its Claude Code starts while the user goes on
- * typing, and is up by the time the message goes. The draft found at mount
- * (kept on disk, another pane's) wakes nothing.
+ * typing, and is up by the time the message goes. The input found at mount
+ * (a draft kept on disk, another pane's) wakes nothing. `input`: the
+ * desktop's draft, the iPhone's text, compared by identity.
  */
 export function useWakeOnInput(
   asleep: boolean,
-  draft: ChatDraft,
+  input: unknown,
   onWake?: () => void,
 ): void {
-  const seen = useRef(draft);
+  const seen = useRef(input);
   useEffect(() => {
-    if (draft === seen.current) return;
-    seen.current = draft;
+    if (input === seen.current) return;
+    seen.current = input;
     if (asleep) onWake?.();
-  }, [asleep, draft, onWake]);
+  }, [asleep, input, onWake]);
 }
