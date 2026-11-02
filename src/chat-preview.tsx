@@ -6,8 +6,13 @@ import { flushSync } from "react-dom";
 import { ChatView } from "@/components/chat/chat-view";
 import { setBridge } from "@/lib/bridge";
 import { EMPTY_DRAFT, type ChatDraft } from "@/lib/chat/chatDrafts";
-import type { ChatEvent } from "@/lib/chat/chatProtocol";
-import { EMPTY_CHAT, reduceChat, type ChatState } from "@/lib/chat/chatState";
+import type { ChatEvent, JsonObject } from "@/lib/chat/chatProtocol";
+import {
+  EMPTY_CHAT,
+  reduceChat,
+  type ChatItem,
+  type ChatState,
+} from "@/lib/chat/chatState";
 import type { DictationEnd, VoiceStatus } from "@/lib/useHiddenVoice";
 import "@/styles/app.css";
 import {
@@ -236,6 +241,93 @@ function imageEvents(): ChatEvent[] {
   ];
 }
 
+/** The « Récit » scenario: two exchanges, the second under way. */
+function recitState(): ChatState {
+  const now = Date.now();
+  let n = 0;
+  const id = (p: string) => `recit-${p}-${n++}`;
+  const user = (text: string): ChatItem => ({
+    kind: "user",
+    id: id("u"),
+    text,
+    images: 0,
+    at: now - 300_000 + n * 1000,
+  });
+  const say = (text: string): ChatItem => ({
+    kind: "text",
+    id: id("t"),
+    text,
+    streaming: false,
+  });
+  const think = (text: string): ChatItem => ({
+    kind: "thinking",
+    id: id("th"),
+    text,
+    streaming: false,
+  });
+  const run = (name: string, input: JsonObject, done = true): ChatItem => ({
+    kind: "tool",
+    id: id("tool"),
+    name,
+    input,
+    ...(done ? { result: { text: "ok", isError: false } } : {}),
+  });
+  const items: ChatItem[] = [
+    user("Les chemins de fichiers prennent toute la ligne, mets juste le nom."),
+    think(
+      "The paths come from MarkdownContent. I'll look for where it draws them before touching anything.",
+    ),
+    run("Grep", { pattern: "modern-path" }),
+    run("Read", { file_path: "src/components/modern/MarkdownContent.tsx" }),
+    say("Je cherche où le chat dessine les chemins de fichiers."),
+    run("Read", { file_path: "src/lib/filePaths.ts" }),
+    think(
+      "I'll wrap each one found on disk in a tag and keep the folder hidden, so copying the sentence still gives the full path.",
+    ),
+    say("Je remplace chaque chemin par une étiquette avec le nom du fichier."),
+    run("Edit", {
+      file_path: "src/components/modern/MarkdownContent.tsx",
+      old_string: "a",
+      new_string: "b",
+    }),
+    run("Bash", { command: "npx vitest run", description: "lancer les tests" }),
+    say(
+      "✅ Les chemins de fichiers s'affichent en étiquette avec leur nom. Un clic ouvre le fichier.",
+    ),
+    { kind: "turn", id: id("turn"), durationMs: 252_000, tools: 5, files: 1 },
+    user("… la question suivante. Donc, il faut changer ça."),
+    think(
+      'I\'m checking which sheet the user means: the one capped at max-height with a scroll, which holds the questions I ask in text, with multi-line options and "why" descriptions. The user said two answers wrapped over several lines so they had to scroll in the menu.',
+    ),
+    run("Grep", { pattern: "chat-sheet" }),
+    run("Read", { file_path: "src/components/chat/chat-css.ts" }),
+    say(
+      "Je regarde le panneau de questions du chat (celui qui s'ouvre au-dessus de la saisie) pour corriger la hauteur et la touche Entrée.",
+    ),
+    think(
+      "I'm switching chat-root to size containment, which looks fine for its absolute inset-0 layout. But size containment also brings in layout containment, which makes the element the containing block for absolute and fixed descendants.",
+    ),
+    run("Grep", { pattern: "chat-root" }),
+    run("Bash", { command: "git diff", description: "relire le diff" }),
+    say(
+      "Je corrige deux choses dans le panneau « Questions de Claude » : sa hauteur plafonnée à 420 px et la touche Entrée du champ libre.",
+    ),
+    think(
+      "The earlier diagnostic might be out of date since it predates the Enter key change. Next I'll write tests for it, adding them to chatQuestionRound.test.ts.",
+    ),
+    run(
+      "Edit",
+      {
+        file_path: "src/lib/chat/chatQuestionRound.test.ts",
+        old_string: "a",
+        new_string: "b",
+      },
+      false,
+    ),
+  ];
+  return { ...EMPTY_CHAT, items, working: true, turnStartedAt: now - 120_000 };
+}
+
 /** A request of mine on top of a recorded state: the inputs' panels. */
 const withRequest = (
   state: ChatState,
@@ -282,6 +374,10 @@ const SCENARIOS: Record<string, () => ChatState> = {
     return { ...s, items };
   },
   live: () => replay(parse(tools), firstTextDelta),
+  // « Récit » (02/11/2026): a past exchange, its thinking and tools behind
+  // the icons of Claude's replies; the one under way with its tool lines and
+  // its latest thought in full (the texts of the user's screenshot).
+  recit: () => recitState(),
   // Claude at work on a task list (TodoWrite): its steps in the live line.
   tasks: () => {
     const s = replay(parse(tools), firstTextDelta);

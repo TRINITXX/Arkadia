@@ -52,12 +52,27 @@ export const CHAT_CSS = `
 .chat-counts { display: inline-flex; align-items: center; gap: 10px; }
 .chat-counts .n { display: inline-flex; align-items: center; gap: 3px; color: var(--chat-dim); font-variant-numeric: tabular-nums; }
 .chat-line .chat-counts .lucide { width: 14px; height: 14px; }
-/* Claude's thinking between two messages: its text alone, in indigo italics, never read as the grey work line (ChatThoughts). */
-.chat-thoughts { display: flex; flex-direction: column; gap: 6px; padding: 0 4px; font-size: 13px; line-height: 1.55; color: #8b93c9; font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
-/* Two lines at most; when cut, a click reads it all (the user's pick of 01/11/2026). */
-.chat-thoughts p { margin: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.chat-thoughts.cut { cursor: pointer; }
-.chat-thoughts.open p { display: block; }
+/* « Récit » (the user's picks of 02/11/2026): Claude's latest thought in full while it works, plain, under its last sentence (ChatLiveThought)… */
+.chat-live-thought { display: flex; gap: 8px; margin-left: 20px; padding: 2px 0 2px 12px; border-left: 2px solid #3a3d44; font-size: 13px; line-height: 1.55; color: #a9adbd; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-live-thought .lucide { width: 14px; height: 14px; margin-top: 3px; flex-shrink: 0; color: #c9a85a; }
+.chat-live-thought p { margin: 0; min-width: 0; }
+/* …the rest behind small icons on its replies: a bulb, a wrench (ChatHoverCard). The card goes to the page's top layer, out of .chat-root: it brings the column's colours. */
+.chat-peeks { display: inline-flex; align-items: center; gap: 2px; align-self: flex-end; flex-shrink: 0; }
+.chat-peek { position: relative; display: inline-grid; place-items: center; width: 24px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #6f727a; cursor: pointer; flex-shrink: 0; }
+.chat-peek:hover, .chat-peek.on { background: #25282c; color: #e2c26b; }
+.chat-peek .lucide { width: 14px; height: 14px; }
+.chat-peek-alone { padding: 0 2px; }
+.chat-peek-card { --chat-bg: ${T.bg}; --chat-ink: ${T.ink}; --chat-dim: ${T.dim}; --chat-mute: ${T.mute}; --chat-line: ${T.line}; --chat-card: ${T.card}; --chat-accent: ${T.accent}; --chat-accent-ink: ${T.accentInk};
+  position: fixed; z-index: 35; box-sizing: border-box; overflow: hidden; background: ${T.raised}; border: 1px solid ${T.lineStrong}; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.45); padding: 10px 12px;
+  font: 12.5px/1.55 "Segoe UI", system-ui, sans-serif; color: #c4c4cb; text-align: left; pointer-events: none; }
+.chat-peek-card *, .chat-peek-card *::before, .chat-peek-card *::after { box-sizing: border-box; }
+.chat-peek-card.cut { -webkit-mask-image: linear-gradient(#000 78%, transparent); mask-image: linear-gradient(#000 78%, transparent); }
+/* Clicked: it stays, scrolls and takes clicks. */
+.chat-peek-card.pinned { overflow-y: auto; pointer-events: auto; scrollbar-width: thin; scrollbar-color: #3a3e45 transparent; }
+.chat-peek-thoughts { white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-peek-thoughts p { margin: 0; }
+.chat-peek-thoughts p + p { margin-top: 8px; padding-top: 8px; border-top: 1px solid #2b2e33; }
+.chat-peek-tools { display: flex; flex-direction: column; gap: 6px; }
 .chat-activity-detail { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 0 7px; padding-left: 14px; border-left: 1px solid var(--chat-line); }
 /* The question sheet unfolded: the input hides, the sheet takes the bottom (the user's ask of 01/11/2026); folded, the input comes back. */
 .chat-bottom.sheet-open .chat-col > .chat-box:not(.ask) { display: none; }
@@ -257,8 +272,12 @@ export const CHAT_CSS = `
 .chat-frame.user { --frame-end: rgb(21,31,34); border-color: #1f9f50; background: linear-gradient(rgb(25,36,40), var(--frame-end)); }
 /* A reply that only says what Claude does next: a quiet line with a violet dot, so the turn's answer stands out (the user's pick 1 of 01/11/2026). */
 .chat-step-reply { display: flex; gap: 10px; padding: 0 4px; }
-.chat-step-reply::before { content: ""; width: 6px; height: 6px; margin-top: 9px; border-radius: 50%; background: #6b4a99; flex-shrink: 0; }
-.chat-step-reply .reading-md { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.6; color: var(--chat-dim); }
+/* « Récit »: the sentences of the exchange under way in full ink, the older ones dim (the user's pick 1 of 02/11/2026). */
+.chat-step-reply::before { content: ""; width: 6px; height: 6px; margin-top: 10px; border-radius: 50%; background: #9d6ef0; flex-shrink: 0; }
+.chat-step-reply .reading-md { flex: 0 1 auto; min-width: 0; font-size: 14.5px; line-height: 1.6; color: var(--chat-ink); }
+.chat-step-reply.past::before { background: #6b4a99; }
+.chat-step-reply.past .reading-md { color: var(--chat-dim); }
+.chat-step-reply > .chat-peeks { margin-left: -4px; }
 .chat-step-reply .reading-md p { margin: 0 0 4px; }
 .chat-step-reply .reading-md > :last-child { margin-bottom: 0; }
 /* The turn's answer: its opening line a little larger when more follows. */
@@ -285,6 +304,8 @@ export const CHAT_CSS = `
 .chat-frame-foot .tools { display: flex; gap: 2px; }
 .chat-frame-foot .copy { width: 26px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #77708c; cursor: pointer; transition: color .12s, background .12s; }
 .chat-frame-foot .copy:hover { color: var(--chat-ink); background: rgba(255,255,255,.08); }
+.chat-frame-foot .chat-peek { width: 26px; color: #77708c; }
+.chat-frame-foot .chat-peek:hover, .chat-frame-foot .chat-peek.on { color: #e2c26b; }
 .chat-frame-foot .lucide { width: 14px; height: 14px; }
 .chat-frame .copy.copied { opacity: 1; color: #86efac; }
 .chat-frame.streaming .chat-frame-foot { visibility: hidden; }

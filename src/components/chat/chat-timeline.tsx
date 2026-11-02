@@ -17,11 +17,14 @@ import { ChatPluginErrors } from "@/components/chat/chat-plugin-errors";
 import { ChatProseContexts } from "@/components/chat/chat-prose-contexts";
 import { ChatQueuedMark } from "@/components/chat/chat-queued-mark";
 import { ChatReplyText } from "@/components/chat/chat-reply-text";
+import { ChatStepReply } from "@/components/chat/chat-step-reply";
+import { ChatThoughtBulb } from "@/components/chat/chat-thought-bulb";
+import { ChatWorkIcon } from "@/components/chat/chat-work-icon";
+import { ChatActivityLine } from "@/components/chat/chat-activity-line";
 import { ChatUserBody } from "@/components/chat/chat-user-body";
 import { ChatVisualCard } from "@/components/chat/chat-visual-card";
 import { ChatWorkGroup } from "@/components/chat/chat-work-group";
-import { ChatActivityLine } from "@/components/chat/chat-activity-line";
-import { ChatThoughts } from "@/components/chat/chat-thoughts";
+import { ChatLiveThought } from "@/components/chat/chat-live-thought";
 import {
   foldActivity,
   groupChatItems,
@@ -34,6 +37,7 @@ import { withDayBreaks } from "@/lib/chat/chatDays";
 import { chatGallery } from "@/lib/chat/chatImages";
 import { peerLabel } from "@/lib/chat/chatPeer";
 import { latestPlan, type ChatItem, type Subagent } from "@/lib/chat/chatState";
+import { placeWork } from "@/lib/chat/chatWorkPlaces";
 import type { VisualEntry } from "@/lib/chat/chatVisual";
 import { turnDoneLine } from "@/lib/chat/chatSteps";
 import { copiedCodeMessage } from "@/lib/codeCopy";
@@ -132,7 +136,7 @@ export const ChatTimeline = memo(function ChatTimeline({
     const uuid = item.queued ? sentUuid(item.id) : null;
     return uuid && onRemoveQueued ? () => onRemoveQueued(uuid) : undefined;
   };
-  const { units, steps } = useMemo(() => {
+  const { units, steps, places } = useMemo(() => {
     const all = groupChatItems(items);
     const shown = foldActivity(
       messagesOnly ? onlyMessages(all, pendingToolIds) : all,
@@ -142,6 +146,8 @@ export const ChatTimeline = memo(function ChatTimeline({
       units: withDayBreaks(shown, unitAt),
       // Read on the whole column: « Messages seuls » hides the work.
       steps: stepReplyIds(foldActivity(all), working),
+      // Thinking and tools behind Claude's replies (« Récit »).
+      places: placeWork(shown, working),
     };
   }, [items, messagesOnly, pendingToolIds, working]);
   const [whole, setWhole] = useState(!tailFirst);
@@ -158,6 +164,18 @@ export const ChatTimeline = memo(function ChatTimeline({
     }),
     [onToast],
   );
+  // A reply's icons: its thinking, and its tools once its exchange is past.
+  const peeks = (id: string): React.ReactNode => {
+    const thoughts = places.thoughts.get(id);
+    const tools = places.current.has(id) ? undefined : places.tools.get(id);
+    if (!thoughts && !tools) return null;
+    return (
+      <>
+        {thoughts && <ChatThoughtBulb items={thoughts} />}
+        {tools && <ChatWorkIcon units={tools} render={renderUnit} />}
+      </>
+    );
+  };
   const renderUnit = (unit: (typeof drawn)[number]): React.ReactNode => {
     switch (unit.kind) {
       case "day":
@@ -225,16 +243,16 @@ export const ChatTimeline = memo(function ChatTimeline({
         // the one that ends the turn stands out (`stepReplyIds`).
         if (steps.has(unit.item.id))
           return (
-            <div key={unit.item.id} className="chat-unit chat-step-reply">
-              <ChatReplyText
-                text={unit.item.text}
-                bare={bareReplyIds.includes(unit.item.id)}
-                cwd={cwd}
-                refs={NO_IMAGES}
-                onOpen={onOpen}
-                onToast={onToast}
-              />
-            </div>
+            <ChatStepReply
+              key={unit.item.id}
+              text={unit.item.text}
+              bare={bareReplyIds.includes(unit.item.id)}
+              past={!places.current.has(unit.item.id)}
+              peeks={peeks(unit.item.id)}
+              cwd={cwd}
+              onOpen={onOpen}
+              onToast={onToast}
+            />
           );
         return (
           <ChatMessageFrame
@@ -246,6 +264,7 @@ export const ChatTimeline = memo(function ChatTimeline({
             cut={unit.item.aborted}
             className={`chat-text${unit.item.streaming ? " streaming" : ""}`}
             onToast={onToast}
+            peeks={peeks(unit.item.id)}
           >
             <ChatReplyText
               text={unit.item.text}
@@ -276,9 +295,18 @@ export const ChatTimeline = memo(function ChatTimeline({
       // Never at the top since `foldActivity` gathers it into `thoughts`;
       // kept for the switch to stay whole.
       case "thinking":
-        return <ChatThoughts key={unit.item.id} items={[unit.item]} />;
+        return null;
+      // « Récit » (the user's picks of 02/11/2026): the latest thought in
+      // full while Claude works, the others behind the bulb of the reply
+      // they led to (`placeWork`), or a bulb of their own.
       case "thoughts":
-        return <ChatThoughts key={unit.id} items={unit.items} />;
+        if (unit.id === places.live)
+          return <ChatLiveThought key={unit.id} items={unit.items} />;
+        return places.alone.has(unit.id) ? (
+          <div key={unit.id} className="chat-unit chat-peek-alone">
+            <ChatThoughtBulb items={unit.items} />
+          </div>
+        ) : null;
       case "notice":
         return unit.item.action === "reload_plugins" ? (
           <ChatPluginErrors
@@ -385,15 +413,24 @@ export const ChatTimeline = memo(function ChatTimeline({
           />
         );
       }
+      // Claude's tools in the exchange under way, behind the wrench of the
+      // reply that announced them once it's past (« Récit », the user's
+      // picks of 02/11/2026), or a wrench of their own.
       case "activity":
-        return (
-          <ChatActivityLine
-            key={unit.id}
-            units={unit.units}
-            cwd={cwd}
-            render={renderUnit}
-          />
-        );
+        if (places.current.has(unit.id))
+          return (
+            <ChatActivityLine
+              key={unit.id}
+              units={unit.units}
+              cwd={cwd}
+              render={renderUnit}
+            />
+          );
+        return places.alone.has(unit.id) ? (
+          <div key={unit.id} className="chat-unit chat-peek-alone">
+            <ChatWorkIcon units={unit.units} render={renderUnit} />
+          </div>
+        ) : null;
     }
   };
   return (

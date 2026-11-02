@@ -126,8 +126,9 @@ const plural = (n: number, one: string, many: string) =>
   `${n} ${n > 1 ? many : one}`;
 
 /**
- * « ✻ Terminé en 16 min 02 s · 21:56 · 5 outils · 2 fichiers modifiés », the
- * mod's rule: a long turn only, and none while « Messages seuls » is on.
+ * « ✻ Terminé en 16 min 02 s · 21:56 · 2 fichiers modifiés », the mod's
+ * rule: a long turn only, and none while « Messages seuls » is on. No count
+ * of tools: they stay out of the column (the user's ask of 02/11/2026).
  */
 export function turnDoneLine(
   turn: TurnDone,
@@ -138,7 +139,6 @@ export function turnDoneLine(
     `✻ Terminé en ${duration(turn.durationMs)}`,
     clock(turn.endedAt),
   ];
-  if (turn.tools) parts.push(plural(turn.tools, "outil", "outils"));
   if (turn.files)
     parts.push(plural(turn.files, "fichier modifié", "fichiers modifiés"));
   return parts.join(" · ");

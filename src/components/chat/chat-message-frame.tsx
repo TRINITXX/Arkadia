@@ -36,6 +36,7 @@ export function ChatMessageFrame({
   onToast,
   onEdit,
   editBlocked = null,
+  peeks,
   children,
 }: {
   role: "user" | "claude" | "peer";
@@ -55,6 +56,8 @@ export function ChatMessageFrame({
   onEdit?: () => void;
   /** Why the pencil can't act now: it stays, dim, saying so on hover. */
   editBlocked?: string | null;
+  /** Claude's reply: the bulb of its thinking, the wrench of its tools, with its time (`placeWork`). */
+  peeks?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const label = ownLabel ?? PEER_LABEL;
@@ -118,6 +121,7 @@ export function ChatMessageFrame({
           </time>
         )}
         <span className="tools">
+          {peeks}
           {role === "user" && onEdit && (
             <button
               type="button"

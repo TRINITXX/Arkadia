@@ -147,16 +147,16 @@ describe("live line's time", () => {
 describe("turnDoneLine", () => {
   const endedAt = new Date(2026, 9, 31, 21, 56).getTime();
 
-  it("closes a long turn with its time, its tools and the files it changed", () => {
+  it("closes a long turn with its time and the files it changed, never its tools", () => {
     expect(
       turnDoneLine({ durationMs: 962_000, endedAt, tools: 5, files: 2 }, false),
-    ).toBe("✻ Terminé en 16 min 02 s · 21:56 · 5 outils · 2 fichiers modifiés");
+    ).toBe("✻ Terminé en 16 min 02 s · 21:56 · 2 fichiers modifiés");
     expect(
       turnDoneLine(
         { durationMs: LONG_TURN_MS, endedAt, tools: 1, files: 0 },
         false,
       ),
-    ).toBe("✻ Terminé en 10 min 00 s · 21:56 · 1 outil");
+    ).toBe("✻ Terminé en 10 min 00 s · 21:56");
   });
 
   it("draws nothing for a short turn, nor with « Messages seuls » on", () => {
