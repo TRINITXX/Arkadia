@@ -7,6 +7,7 @@ import {
 } from "@/components/modern/MarkdownContent";
 import { ChatGallery } from "@/components/chat/chat-gallery";
 import { drawnImageKeys, stripRefs } from "@/lib/chat/chatImages";
+import { endsWithHourglass } from "@/lib/chat/chatHourglass";
 import { withoutQuestions } from "@/lib/chat/chatQuestionRound";
 import type { ImageRef } from "@/lib/imageGallery";
 
@@ -44,7 +45,11 @@ export function ChatReplyText({
   return (
     <>
       {(!bare || shown) && (
-        <div className="reading-md" data-chat-prose="">
+        <div
+          className="reading-md"
+          data-chat-prose=""
+          data-hourglass={endsWithHourglass(shown) ? "" : undefined}
+        >
           <MarkdownContent
             text={shown || " "}
             baseDir={cwd}

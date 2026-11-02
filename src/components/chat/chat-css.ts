@@ -280,8 +280,9 @@ export const CHAT_CSS = `
 .chat-step-reply > .chat-peeks { margin-left: -4px; }
 .chat-step-reply .reading-md p { margin: 0 0 4px; }
 .chat-step-reply .reading-md > :last-child { margin-bottom: 0; }
-/* The turn's answer: its opening line a little larger when more follows. */
-.chat-frame.claude .reading-md > p:first-child:not(:last-child) { font-size: 15.5px; font-weight: 600; color: #f4f4f5; }
+/* The turn's answer: its opening line a little larger when more follows. A lone ⏳ at its end isn't more (the user's ask of 02/11/2026, \`endsWithHourglass\`). */
+.chat-frame.claude .reading-md:not([data-hourglass]) > p:first-child:not(:last-child),
+.chat-frame.claude .reading-md[data-hourglass] > p:first-child:not(:nth-last-child(-n + 2)) { font-size: 15.5px; font-weight: 600; color: #f4f4f5; }
 /* The user's words: a green bubble on the right, its time and buttons on its left on hover (the user's pick of 01/11/2026). */
 .chat-root .chat-frame.user { --frame-end: #1f3a2b; align-self: flex-end; width: fit-content; max-width: 78%; border: 0; border-radius: 16px 16px 4px 16px; background: #1f3a2b; padding: 8px 14px; }
 .chat-frame.user .chat-frame-foot { right: calc(100% + 6px); bottom: 0; background: none; box-shadow: none; padding: 0; }

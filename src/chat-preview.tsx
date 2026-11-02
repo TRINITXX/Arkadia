@@ -292,7 +292,7 @@ function recitState(): ChatState {
     }),
     run("Bash", { command: "npx vitest run", description: "lancer les tests" }),
     say(
-      "✅ Les chemins de fichiers s'affichent en étiquette avec leur nom. Un clic ouvre le fichier.",
+      "✅ Les chemins de fichiers s'affichent en étiquette avec leur nom. Un clic ouvre le fichier.\n\n⏳",
     ),
     { kind: "turn", id: id("turn"), durationMs: 252_000, tools: 5, files: 1 },
     user("… la question suivante. Donc, il faut changer ça."),
