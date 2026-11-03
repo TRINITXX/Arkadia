@@ -80,40 +80,49 @@ const isBoundary = (e: Entry) => e.type === "system" && e.subtype === "compact_b
  * asked for 5 min; never seen, 1 h (the later handoff, when unsure).
  */
 export function coldFacts(entries: readonly Entry[]): ColdFacts | null {
-  let facts: ColdFacts | null = null;
-  let ttlMs = TTL_1H;
+  // Cast, not annotated: assigned in the loop alone, TS would narrow it to never.
+  let facts = null as ColdFacts | null;
   for (const e of entries) {
     if (e.isSidechain) continue;
     const at = Date.parse(e.timestamp ?? "");
     if (Number.isNaN(at)) continue;
     if (isBoundary(e)) {
-      facts = { tokens: e.compactMetadata?.postTokens ?? 0, at, ttlMs };
+      facts = { tokens: e.compactMetadata?.postTokens ?? 0, at, ttlMs: facts?.ttlMs ?? TTL_1H };
       continue;
     }
     const usage = e.type === "assistant" ? e.message?.usage : undefined;
-    if (!usage) continue;
-    const written = usage.cache_creation;
-    if ((written?.ephemeral_1h_input_tokens ?? 0) > 0) ttlMs = TTL_1H;
-    else if ((written?.ephemeral_5m_input_tokens ?? 0) > 0) ttlMs = TTL_5M;
-    const tokens =
-      (usage.input_tokens ?? 0) +
-      (usage.cache_read_input_tokens ?? 0) +
-      (usage.cache_creation_input_tokens ?? 0);
-    facts = { tokens, at, ttlMs };
+    if (usage) facts = nextFacts(facts, usage, at);
   }
   return facts;
 }
 
-/** A transcript written within this is warm: the shortest cache lives 5 min. */
-export const COLD_MIN_IDLE_MS = 5 * MINUTE;
+/**
+ * The facts after one more request of the session (its usage, at `at`): the
+ * chat server keeps them so as its requests go, the transcript read only for
+ * a session it never saw work (a chat restored at Arkadia's start).
+ */
+export function nextFacts(prev: ColdFacts | null, usage: Usage, at: number): ColdFacts | null {
+  const tokens =
+    (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+  // No request read anything: Claude Code's own answer (/usage, /context, an
+  // API error, the 5-hour limit: a « <synthetic> » message, usage all zero).
+  if (tokens === 0) return prev;
+  const written = usage.cache_creation;
+  let ttlMs = prev?.ttlMs ?? TTL_1H;
+  if ((written?.ephemeral_1h_input_tokens ?? 0) > 0) ttlMs = TTL_1H;
+  else if ((written?.ephemeral_5m_input_tokens ?? 0) > 0) ttlMs = TTL_5M;
+  return { tokens, at, ttlMs };
+}
 
 /**
- * What may open a handoff, known without reading the transcript: a message
- * (a slash command, /compact or /usage, runs on the session as it is), not
- * resumed « en entier », no rewind's cut, the transcript left 5 min.
+ * What may open a handoff, known without reading anything: a message (a
+ * slash command, /compact or /usage, runs on the session as it is), not
+ * resumed « en entier », no rewind's cut. Never the transcript's date: Claude
+ * Code writes its bookkeeping there as it starts, with no request (a cold
+ * session woken by a key looked warm, 03/11/2026).
  */
-export function mayHandOff(text: string, whole: boolean, rewound: boolean, idleMs: number): boolean {
-  return !whole && !rewound && !text.trimStart().startsWith("/") && idleMs >= COLD_MIN_IDLE_MS;
+export function mayHandOff(text: string, whole: boolean, rewound: boolean): boolean {
+  return !whole && !rewound && !text.trimStart().startsWith("/");
 }
 
 /** A big session whose cache expired: its next message goes to a handoff. */

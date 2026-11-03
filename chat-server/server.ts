@@ -35,8 +35,10 @@ import {
   conversationWords,
   handoffBlock,
   handoffDue,
+  HANDOFF_MIN_TOKENS,
   handoffSummary,
   mayHandOff,
+  nextFacts,
   parseEntries,
   projectFolder,
   readHandoffBlock,
@@ -46,6 +48,7 @@ import {
   WRITER_SYSTEM,
   type ColdFacts,
   type HandoffEvent,
+  type Usage,
 } from "./handoff.ts";
 import {
   atRest,
@@ -569,6 +572,11 @@ function transcriptFile(cwd: string, sessionId: string, env: Record<string, stri
   return existsSync(path) ? path : null;
 }
 
+/** A handoff's decision, in Arkadia's log (`popup.log`, through `chat.rs`): why one ran or didn't. */
+function noteHandoff(chatId: string, text: string): void {
+  console.error(`[handoff] ${chatId.slice(0, 8)} ${text}`);
+}
+
 /** A file's last write, or -1 when it can't be read. */
 function mtimeOf(path: string): number {
   try {
@@ -705,6 +713,13 @@ class Chat {
    * (`wakeFromInput`), before its message is sent: `send` takes it.
    */
   private prepared: { cold: ColdSession; summary: Promise<string>; mtimeMs: number; failed: boolean } | null = null;
+  /**
+   * The session's size and last request (`handoffDue`): kept as its requests
+   * go, read once from its transcript when this server never saw it work.
+   */
+  private knownFacts: ColdFacts | null = null;
+  /** The transcript's date when the facts were last true: asleep, a change means another Claude Code. */
+  private knownMtime = -1;
   /** What keeps it awake (`SleepFacts`), from its messages and the page's commands. */
   private turn = false;
   private tasks: readonly string[] = [];
@@ -1271,6 +1286,12 @@ class Chat {
         if (this.ownEnd(message)) continue;
         this.turn = turnAfter(this.turn, message);
         this.tasks = tasksAfter(this.tasks, message);
+        // The main thread's requests, as they go: a later handoff knows the
+        // session's size and age without reading its transcript.
+        if (message.type === "assistant" && message.parent_tool_use_id === null) {
+          const { usage } = message.message as { usage?: Usage };
+          if (usage) this.knownFacts = nextFacts(this.knownFacts, usage, Date.now());
+        }
         this.queued = queuedAfter(this.queued, message);
         // /clear: a reattach replays the new conversation alone. The command
         // list goes first of any replay (`this.commands`): a boot list kept
@@ -1281,6 +1302,7 @@ class Chat {
           // `new_conversation_id` is not it, seen live on 30/10/2026): a
           // relaunch meanwhile starts fresh, never on the cleared one.
           this.sessionId = undefined;
+          this.knownFacts = null;
         }
         // A hook's progress shows nothing in the page.
         if (message.type === "system" && message.subtype === "hook_progress") continue;
@@ -1300,6 +1322,8 @@ class Chat {
           this.lifecycleWaiters.delete(frame.command_uuid);
         }
         if (message.type === "system" && message.subtype === "init") {
+          // Another session (after a handoff, a /clear): its facts start over.
+          if (message.session_id !== this.sessionId) this.knownFacts = null;
           this.sessionId = message.session_id;
           this.model = message.model;
           this.mode = message.permissionMode;
@@ -1318,6 +1342,8 @@ class Chat {
         // for 83 k of 1 M).
         if (message.type === "system" && message.subtype === "compact_boundary") {
           this.compacted = true;
+          // Small now: the next request says how small.
+          if (this.knownFacts) this.knownFacts = { ...this.knownFacts, tokens: 0, at: Date.now() };
         }
         if (message.type === "result") {
           this.clearCut();
@@ -1803,7 +1829,8 @@ class Chat {
     };
     // A big session gone cold: the message opens a new one from a handoff,
     // shown under the separator while Opus writes it. The look reads the
-    // disk only for a transcript left 5 min: what follows waits for it.
+    // transcript only for a session this server never saw work: what
+    // follows waits for it.
     let opening: string | null = null;
     let handedOff = false;
     const candidate = this.coldCandidate(text);
@@ -1915,30 +1942,43 @@ class Chat {
    * from a handoff; on what is known without reading it: nothing of the chat
    * running nor waiting (a turn, a task, a request, a `!` command, a
    * wakeup, a rewind's cut), not a slash command (/compact, /usage run on
-   * the session as it is), not resumed « en entier », and its transcript
-   * left for 5 min (the shortest cache's life).
+   * the session as it is), not resumed « en entier », and not seen warm or
+   * small by this server (`knownFacts`).
    */
   private coldCandidate(text: string): { sessionId: string; transcript: string } | null {
     const sessionId = this.sessionId;
     if (!sessionId || !atRest(this.sleepFacts())) return null;
+    if (!mayHandOff(text, this.whole, !!this.cutBefore)) return null;
     const transcript = transcriptFile(this.cwd, sessionId, this.start.env);
     if (!transcript) return null;
-    try {
-      const idleMs = Date.now() - statSync(transcript).mtimeMs;
-      return mayHandOff(text, this.whole, !!this.cutBefore, idleMs) ? { sessionId, transcript } : null;
-    } catch {
-      return null;
-    }
+    // Asleep and written since (the same session resumed in a terminal, or
+    // this Claude Code's last words as it stopped): read again.
+    if (this.knownFacts && this.asleep && mtimeOf(transcript) !== this.knownMtime) this.knownFacts = null;
+    if (this.knownFacts && !handoffDue(this.knownFacts, Date.now())) return null;
+    return { sessionId, transcript };
   }
 
   /** The candidate, if its transcript says big and cold: its next message goes to a handoff. */
   private async coldSession({ sessionId, transcript }: { sessionId: string; transcript: string }): Promise<ColdSession | null> {
     try {
-      const tail = await readTail(transcript, COLD_TAIL_BYTES);
-      let cold = coldFacts(parseEntries(tail.text));
-      // No request in its end (a long tool output): the whole file.
-      if (!cold && !tail.whole) cold = coldFacts(parseEntries(await readFile(transcript, "utf8")));
-      return handoffDue(cold, Date.now()) && cold ? { sessionId, transcript, facts: cold } : null;
+      let cold = this.knownFacts;
+      if (!cold) {
+        const tail = await readTail(transcript, COLD_TAIL_BYTES);
+        cold = coldFacts(parseEntries(tail.text));
+        // No request in its end (a long tool output): the whole file.
+        if (!cold && !tail.whole) cold = coldFacts(parseEntries(await readFile(transcript, "utf8")));
+        // Read once: its requests keep them up to date from now on.
+        if (this.sessionId === sessionId) {
+          this.knownFacts = cold;
+          this.knownMtime = mtimeOf(transcript);
+        }
+      }
+      const due = handoffDue(cold, Date.now());
+      if (cold && cold.tokens >= HANDOFF_MIN_TOKENS) {
+        const idle = Math.round((Date.now() - cold.at) / 60_000);
+        noteHandoff(this.chatId, `${Math.round(cold.tokens / 1000)} k, last request ${idle} min ago: ${due ? "handoff" : "warm"}`);
+      }
+      return due && cold ? { sessionId, transcript, facts: cold } : null;
     } catch {
       // Unreadable: the message goes to the session as it is.
       return null;
@@ -1964,10 +2004,13 @@ class Chat {
       // Woken meanwhile (another pane's command): its Claude Code goes now.
       if (!this.asleep && !this.sleepIfDue(Date.now(), 0)) throw new Error("la conversation s'est remise au travail");
       this.sessionId = undefined;
+      this.knownFacts = null;
+      noteHandoff(this.chatId, `done: ${tokensOf(opening)} tokens`);
       this.out({ type: "handoff", chatId: this.chatId, id, phase: "done", ...info, after: tokensOf(opening) });
       return opening;
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
+      noteHandoff(this.chatId, `failed: ${error}`);
       if (!this.ended && !this.silent) this.out({ type: "handoff", chatId: this.chatId, id, phase: "failed", error });
       return null;
     }

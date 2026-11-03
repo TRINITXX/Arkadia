@@ -7,6 +7,7 @@ import {
   handoffDue,
   handoffSummary,
   mayHandOff,
+  nextFacts,
   readHandoffBlock,
   recentExchanges,
   writtenHandoff,
@@ -268,15 +269,54 @@ describe("what Opus answered", () => {
 });
 
 describe("what may open a handoff, before the transcript is read", () => {
-  it("a message after 5 min, never a slash command, a resume « en entier » nor a rewind", () => {
-    expect(mayHandOff("On attaque l'export", false, false, 6 * MIN)).toBe(true);
-    expect(mayHandOff("On attaque l'export", false, false, 4 * MIN)).toBe(
-      false,
+  it("a message, never a slash command, a resume « en entier » nor a rewind", () => {
+    expect(mayHandOff("On attaque l'export", false, false)).toBe(true);
+    expect(mayHandOff("  /compact", false, false)).toBe(false);
+    expect(mayHandOff("/usage", false, false)).toBe(false);
+    expect(mayHandOff("suite", true, false)).toBe(false);
+    expect(mayHandOff("suite", false, true)).toBe(false);
+  });
+
+  it("ignores Claude Code's own answers (/usage, an API error): no request read anything", () => {
+    const facts = { tokens: 930_000, at: T0, ttlMs: 60 * MIN };
+    const zero = {
+      input_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    };
+    expect(nextFacts(facts, zero, T0 + 120 * MIN)).toBe(facts);
+    expect(
+      coldFacts([
+        request(0, 930_000),
+        {
+          type: "assistant",
+          timestamp: at(120 * MIN),
+          message: { usage: zero },
+        },
+      ])?.tokens,
+    ).toBe(930_000);
+  });
+
+  it("follows the session's requests as they go, its cache's life kept", () => {
+    const first = nextFacts(
+      null,
+      {
+        input_tokens: 10,
+        cache_read_input_tokens: 499_990,
+        cache_creation: {
+          ephemeral_5m_input_tokens: 0,
+          ephemeral_1h_input_tokens: 0,
+        },
+      },
+      T0,
     );
-    expect(mayHandOff("  /compact", false, false, 90 * MIN)).toBe(false);
-    expect(mayHandOff("/usage", false, false, 90 * MIN)).toBe(false);
-    expect(mayHandOff("suite", true, false, 90 * MIN)).toBe(false);
-    expect(mayHandOff("suite", false, true, 90 * MIN)).toBe(false);
+    expect(first).toEqual({ tokens: 500_000, at: T0, ttlMs: 60 * MIN });
+    const later = nextFacts(
+      { ...first, ttlMs: 5 * MIN },
+      { cache_read_input_tokens: 510_000 },
+      T0 + MIN,
+    );
+    expect(later).toEqual({ tokens: 510_000, at: T0 + MIN, ttlMs: 5 * MIN });
   });
 });
 
