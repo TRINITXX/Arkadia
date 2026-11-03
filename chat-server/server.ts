@@ -40,6 +40,7 @@ import {
   type SleepFacts,
 } from "./sleep.ts";
 import { needsReread, outputFiles, readConsoleTail } from "./taskOutput.ts";
+import { sessionTitle, TITLE_LOOKS_MS } from "./title.ts";
 import { storedVisual, visualServer, VISUAL_RULE, type PreparedVisual } from "./visual.ts";
 import { readVisualReport, VISUAL_SERVER, VISUAL_TOOL_NAME, type VisualReport } from "./visualHtml.ts";
 import { WorkflowWatch, type WorkflowLiveAgent } from "./workflowWatch.ts";
@@ -666,6 +667,9 @@ class Chat {
   /** Everything sent to the page, for a page that comes back. */
   private log: ServerEvent[] = [];
   private sessionId: string | undefined;
+  /** The session whose real title was sent: no more looks for it (`watchTitle`). */
+  private titled: string | undefined;
+  private titleTimers: ReturnType<typeof setTimeout>[] = [];
   /**
    * The branch last sent; undefined before the first look. Looked at when
    * the chat starts, at each turn's end, and when its pane shows again
@@ -746,6 +750,7 @@ class Chat {
     for (const held of this.outbox) if (held.kind === "message") held.sent(false);
     this.outbox = [];
     this.writing.clear();
+    for (const timer of this.titleTimers) clearTimeout(timer);
   }
 
   /**
@@ -1211,6 +1216,9 @@ class Chat {
           this.sessionId = message.session_id;
           this.model = message.model;
           this.mode = message.permissionMode;
+          // A session no message named yet: a slow start (wake, many MCP),
+          // or a plan approved with its context cleared, opened by no `send`.
+          this.watchTitle();
         }
         if (message.type === "system" && message.subtype === "status") {
           this.mode = message.permissionMode ?? this.mode;
@@ -1575,25 +1583,40 @@ class Chat {
     }
   }
 
-  /** Only the title: the transcript's branch is the one of its last message. */
-  private async reportInfo(): Promise<void> {
+  /**
+   * Only the title: the transcript's branch is the one of its last message.
+   * `named`: sent only once Claude Code (or /rename) named the session.
+   */
+  private async reportInfo(named = false): Promise<void> {
     const sessionId = this.sessionId;
     if (!sessionId) return;
     try {
       const info = await getSessionInfo(sessionId, { dir: this.cwd });
-      // A /clear meanwhile: that session is no longer this chat's.
-      if (!info || sessionId !== this.sessionId) return;
-      // A session opened by a command (/clear) is no title yet.
-      const summary = info.summary.startsWith("/") ? undefined : info.summary;
-      this.out({
-        type: "info",
-        chatId: this.chatId,
-        title: info.customTitle ?? summary,
-        sessionId,
-      });
+      // A /clear meanwhile: that session is no longer this chat's. Ended:
+      // nothing after its `closed`.
+      if (!info || sessionId !== this.sessionId || this.ended) return;
+      const title = sessionTitle(info, named);
+      if (named && !title) return;
+      if (info.customTitle) this.titled = sessionId;
+      this.out({ type: "info", chatId: this.chatId, title, sessionId });
     } catch {
       // No transcript yet.
     }
+  }
+
+  /**
+   * A message sent: its session's title, as soon as Claude Code writes it
+   * (`title.ts`), not at the turn's end. A named session costs nothing.
+   */
+  private watchTitle(): void {
+    if (this.sessionId && this.titled === this.sessionId) return;
+    for (const timer of this.titleTimers) clearTimeout(timer);
+    this.titleTimers = TITLE_LOOKS_MS.map((ms) =>
+      setTimeout(() => {
+        // A new chat's session comes with its first reply's init.
+        if (this.sessionId && this.titled !== this.sessionId) void this.reportInfo(true);
+      }, ms),
+    );
   }
 
   /** The live branch, sent only when it changes; a failed look keeps it. */
@@ -1682,6 +1705,7 @@ class Chat {
     const uuid = randomUUID();
     // Not taken yet: its lifecycle frames, then the turn's replies, say when.
     this.queued = [...this.queued, uuid];
+    this.watchTitle();
     this.out({
       type: "user_sent",
       chatId: this.chatId,
