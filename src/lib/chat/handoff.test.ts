@@ -10,6 +10,7 @@ import {
   nextFacts,
   readHandoffBlock,
   recentExchanges,
+  writerPrompt,
   writtenHandoff,
   type Entry,
 } from "../../../chat-server/handoff.ts";
@@ -312,7 +313,7 @@ describe("what may open a handoff, before the transcript is read", () => {
     );
     expect(first).toEqual({ tokens: 500_000, at: T0, ttlMs: 60 * MIN });
     const later = nextFacts(
-      { ...first, ttlMs: 5 * MIN },
+      { tokens: 500_000, at: T0, ttlMs: 5 * MIN },
       { cache_read_input_tokens: 510_000 },
       T0 + MIN,
     );
@@ -360,5 +361,17 @@ describe("odd texts around a handoff (review of 03/11/2026)", () => {
     expect(said).toEqual([
       { who: "user", text: "première partie\nseconde partie" },
     ]);
+  });
+});
+
+describe("what Opus is asked to write", () => {
+  it("quotes each of the user's messages whole, never merged with « … »", () => {
+    const prompt = writerPrompt("### Alexis\nq11 oui q12 non");
+    expect(prompt).toContain(
+      "chacun recopié en entier entre guillemets, sans « … »",
+    );
+    expect(prompt).toContain(
+      "<conversation>\n### Alexis\nq11 oui q12 non\n</conversation>",
+    );
   });
 });

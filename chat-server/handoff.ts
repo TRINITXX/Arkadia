@@ -339,7 +339,9 @@ export function writerPrompt(digest: string): string {
     "3. Fichiers et code : chaque fichier examiné, modifié ou créé, pourquoi il compte, les extraits utiles",
     "4. Erreurs et corrections",
     "5. Problèmes résolus et recherches en cours",
-    "6. Tous les messages d'Alexis (hors résultats d'outils), fidèles, ses consignes et contraintes mot pour mot",
+    // Opus at `low` merged short answers (« q11 oui … q17 oui »), losing
+    // q12 to q16 (03/11/2026): each message whole, in order.
+    "6. Tous les messages d'Alexis (hors résultats d'outils), dans l'ordre, chacun recopié en entier entre guillemets, sans « … » ni regroupement de plusieurs messages. Seul un message de plus de 500 caractères se résume, alors sans guillemets.",
     "7. Tâches en attente",
     "8. Travail en cours juste avant la coupure, précisément",
     "9. Prochaine étape, avec des citations du dernier échange",
