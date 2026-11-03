@@ -2,10 +2,10 @@
 // cache expired) with a big context would send that whole context again at
 // its next message, written to the cache at twice the input price. That
 // message goes instead to a new session that starts from a handoff: Opus
-// writes it from the old conversation's words alone (prompts and replies, no
-// tool output nor file content: 1/4 to 1/14 of the context on 8 big sessions,
-// measured 03/11/2026), and `transcript.ts` reads the rest of the old
-// transcript on demand. Pure: the chat server reads the file and calls Opus.
+// writes it as Claude Code's own compaction would (its 9 sections, the
+// latest exchanges kept as is), from the old conversation without its tool
+// outputs (a fraction of the context), and `transcript.ts` reads the rest
+// of the old transcript on demand. Pure: the chat server reads the file and calls Opus.
 
 /** Below this, a cold session is resumed as it is (Alexis, 03/11/2026). */
 export const HANDOFF_MIN_TOKENS = 300_000;
@@ -13,12 +13,15 @@ const MINUTE = 60_000;
 /** The prompt cache's two lives: what a session's last write asked for. */
 const TTL_1H = 60 * MINUTE;
 const TTL_5M = 5 * MINUTE;
-/** The words handed to the writer at most (~115 k tokens): their start and end kept. */
-export const WORDS_MAX_CHARS = 400_000;
-/** The last exchange, quoted as is in the handoff: each side at most this long. */
+/** The digest handed to the writer at most (~120 k tokens): its start and end kept. */
+export const DIGEST_MAX_CHARS = 240_000;
+/** A code change or a tool's error, at most this long in the digest. */
+const EDIT_MAX_CHARS = 2_500;
+const ERROR_MAX_CHARS = 600;
+/** The latest exchanges quoted as is after the summary: how many, each message and all at most this long. */
+const RECENT_EXCHANGES = 10;
 const LAST_MAX_CHARS = 4_000;
-/** The files listed for the writer at most, the latest touched kept. */
-const FILES_MAX = 60;
+const RECENT_MAX_CHARS = 40_000;
 
 export interface Usage {
   input_tokens?: number;
@@ -133,18 +136,25 @@ const isNote = (text: string) =>
 
 /** The user's words in an entry, or null: a tool result, a note of Claude Code's. */
 function userWords(content: unknown): Said[] | null {
-  if (typeof content === "string") return isNote(content) ? null : [{ who: "user", text: content }];
+  if (typeof content === "string") return isNote(content) || isMark(content) ? null : [{ who: "user", text: content }];
   const blocks = blocksOf(content);
   if (blocks.some((b) => b.type === "tool_result")) return null;
   const said: Said[] = [];
+  const typed: string[] = [];
   for (const b of blocks) {
     const text = typeof b.text === "string" ? b.text.trim() : "";
-    if (b.type !== "text" || !text || isNote(text) || /^\[Image #\d+\]$/.test(text)) continue;
+    if (b.type !== "text" || !text || isNote(text) || isMark(text) || /^\[Image #\d+\]$/.test(text)) continue;
     // A handoff this session started from: the summary of what came before.
-    said.push({ who: text.startsWith(HANDOFF_OPEN) ? "summary" : "user", text });
+    if (text.startsWith(HANDOFF_OPEN)) said.push({ who: "summary", text });
+    else typed.push(text);
   }
+  // One message, however many blocks: one exchange.
+  if (typed.length > 0) said.push({ who: "user", text: typed.join("\n") });
   return said.length > 0 ? said : null;
 }
+
+/** Claude Code's marks in the user's turn (« [Request interrupted by user] »): not the user's words. */
+const isMark = (text: string) => text.startsWith("[Request interrupted");
 
 /**
  * What was said since the last compaction (its summary first): the user's
@@ -186,12 +196,13 @@ const HEADINGS: Record<Said["who"], string> = {
   summary: "### Résumé de ce qui précédait",
 };
 
+const clip = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max)} […]`);
+
 /**
- * The words as the writer reads them. Past `max`, the first turn (the
- * goal, most often) and the latest ones are kept, the middle said cut.
+ * Parts past `max` characters: the first (the goal, most often) and the
+ * latest ones kept, the middle said cut.
  */
-export function wordsText(said: readonly Said[], max = WORDS_MAX_CHARS): string {
-  const parts = said.map((s) => `${HEADINGS[s.who]}\n${s.text}`);
+function withinBudget(parts: readonly string[], max: number): string {
   const whole = parts.join("\n\n");
   if (whole.length <= max || parts.length === 0) return whole.slice(-max);
   const head = parts[0].slice(0, Math.floor(max / 4));
@@ -199,72 +210,161 @@ export function wordsText(said: readonly Said[], max = WORDS_MAX_CHARS): string 
   let tail = "";
   for (let i = parts.length - 1; i > 0; i--) {
     const next = tail ? `${parts[i]}\n\n${tail}` : parts[i];
-    if (head.length + cut.length + next.length > max) break;
+    if (head.length + cut.length + next.length > max) {
+      // A part too long for what is left (a long log pasted): its start, not nothing.
+      const room = max - head.length - cut.length - tail.length - 10;
+      if (room > 200) tail = tail ? `${clip(parts[i], room)}\n\n${tail}` : clip(parts[i], room);
+      break;
+    }
     tail = next;
   }
   return `${head}${cut}${tail}`;
 }
 
-const EDITING_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+/** What a call was about, in a few words: its command, file, pattern or task. */
+function subjectOf(input: Record<string, unknown>): string {
+  const subject =
+    input.command ?? input.file_path ?? input.notebook_path ?? input.pattern ?? input.description ?? input.url ?? input.query;
+  return (typeof subject === "string" ? subject : JSON.stringify(input)).replace(/\s+/g, " ").slice(0, 200);
+}
 
-/** The files Claude wrote, the latest touched last, at most `FILES_MAX`. */
-export function filesTouched(entries: readonly Entry[]): string[] {
-  const files = new Map<string, true>();
+/** The new code of a code change, or undefined for any other call. */
+function newCode(name: string, input: Record<string, unknown>): string | undefined {
+  if (name === "Edit" && typeof input.new_string === "string") return input.new_string;
+  if (name === "Write" && typeof input.content === "string") return input.content;
+  if (name === "MultiEdit" && Array.isArray(input.edits)) {
+    return input.edits.map((edit) => String((edit as { new_string?: unknown }).new_string ?? "")).join("\n…\n");
+  }
+  return undefined;
+}
+
+const FENCE = "```";
+
+/** A tool call in the digest: one line, a code change with its new code. */
+function callPart(block: Record<string, unknown>): string {
+  const name = String(block.name ?? "?");
+  const input = (block.input ?? {}) as Record<string, unknown>;
+  const line = `→ ${name} · ${subjectOf(input)}`;
+  const code = newCode(name, input);
+  return code ? `${line}\n${FENCE}\n${clip(code, EDIT_MAX_CHARS)}\n${FENCE}` : line;
+}
+
+/** A tool result's text, its text blocks joined. */
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  return blocksOf(content)
+    .map((b) => (b.type === "text" ? String(b.text ?? "") : ""))
+    .join("\n");
+}
+
+/**
+ * The old conversation as the writer reads it, since its last compaction
+ * (that summary first): the user's messages and Claude's replies whole,
+ * each tool call in a line, a code change with its new code, a tool's
+ * error, never a tool's output (a file read, a command's output): what
+ * Claude Code's own compaction reads, without what can be read again.
+ */
+export function conversationDigest(entries: readonly Entry[], max = DIGEST_MAX_CHARS): string {
+  let parts: string[] = [];
+  let claudeAt = -1;
   for (const e of entries) {
-    if (e.isSidechain || e.type !== "assistant") continue;
-    for (const b of blocksOf(e.message?.content)) {
-      if (b.type !== "tool_use" || !EDITING_TOOLS.has(String(b.name))) continue;
-      const input = (b.input ?? {}) as { file_path?: unknown; notebook_path?: unknown };
-      const path = input.file_path ?? input.notebook_path;
-      if (typeof path !== "string") continue;
-      files.delete(path);
-      files.set(path, true);
+    if (e.isSidechain) continue;
+    if (isBoundary(e)) {
+      parts = [];
+      claudeAt = -1;
+      continue;
+    }
+    const content = e.message?.content;
+    if (e.type === "user" && e.isCompactSummary) {
+      const text = typeof content === "string" ? content : blocksOf(content).map((b) => b.text ?? "").join("\n");
+      parts.push(`${HEADINGS.summary}\n${text}`);
+      claudeAt = -1;
+    } else if (e.type === "user" && !e.isMeta) {
+      for (const b of blocksOf(content)) {
+        if (b.type === "tool_result" && b.is_error === true) {
+          parts.push(`  ✗ erreur : ${clip(resultText(b.content).trim(), ERROR_MAX_CHARS)}`);
+        }
+      }
+      for (const s of userWords(content) ?? []) {
+        parts.push(`${HEADINGS[s.who]}\n${s.text}`);
+        claudeAt = -1;
+      }
+    } else if (e.type === "assistant") {
+      for (const b of blocksOf(content)) {
+        const text = typeof b.text === "string" ? b.text.trim() : "";
+        if (b.type === "text" && text) {
+          // One reply comes in several entries: one turn of Claude's.
+          if (claudeAt >= 0 && claudeAt === parts.length - 1) parts[claudeAt] += `\n\n${text}`;
+          else {
+            parts.push(`${HEADINGS.claude}\n${text}`);
+            claudeAt = parts.length - 1;
+          }
+        } else if (b.type === "tool_use") {
+          parts.push(callPart(b));
+        }
+      }
     }
   }
-  return [...files.keys()].slice(-FILES_MAX);
+  return withinBudget(parts, max);
 }
 
 /** The writer's instructions: its system prompt replaces Claude Code's. */
 export const WRITER_SYSTEM =
-  "Tu rédiges des passations entre deux conversations de Claude Code. Tu écris en français, " +
-  "court et précis, sans rien inventer : ce qui n'est pas dans la conversation n'existe pas.";
+  "Tu résumes une conversation de Claude Code pour qu'elle continue dans une nouvelle, comme le fait la compaction de Claude Code. " +
+  "Tu écris en français, sans rien inventer : ce qui n'est pas dans la conversation n'existe pas.";
 
-/** What the writer gets: the words, the files touched, what to write. */
-export function writerPrompt(words: string, files: readonly string[]): string {
+/**
+ * What the writer gets: the digest, and what to write: the sections and
+ * the rules of Claude Code's own compaction (2.1.317), in French.
+ */
+export function writerPrompt(digest: string): string {
   return [
-    "Voici une conversation entre Alexis et Claude, texte seul : les sorties d'outils et le contenu des fichiers en sont retirés.",
-    "Elle continue dans une nouvelle conversation qui ne la voit pas. Écris la passation qui permet à Claude d'y reprendre exactement où elle s'est arrêtée.",
+    "Voici une conversation entre Alexis et Claude. Ses messages et les réponses de Claude sont entiers ; chaque appel d'outil tient en une ligne, une modification de code montre le nouveau code (tronqué), une erreur d'outil son message ; les sorties d'outils (fichiers lus, résultats de commandes) sont retirées.",
+    "Elle continue dans une nouvelle conversation qui ne la voit pas. Écris le résumé qui permet d'y reprendre le travail sans rien refaire ni rien redemander à Alexis.",
     "",
-    "Sections, dans cet ordre, en puces courtes :",
-    "## But",
-    "## Décisions prises (avec leur raison quand elle est dite : elles ne se rouvrent pas)",
-    "## Fait",
-    "## Reste à faire (dans l'ordre)",
-    "## Questions ouvertes et attentes d'Alexis",
-    "## Détails techniques utiles (chemins, commandes, pièges rencontrés, chiffres)",
+    "Préserve, quitte à être long : (1) les difficultés rencontrées et comment elles ont été traitées ; (2) les options proposées, essayées ou écartées, et pourquoi ; (3) tout ce qu'Alexis a demandé, décidé, accepté, exclu ou posé comme préférence ou contrainte, au plus près de ses mots ; (4) où en est exactement le travail ; (5) ce qui reste ouvert, promis ou attendu ; (6) les détails difficiles à retrouver : noms, chiffres, dates, formulations exactes, liens, chemins, noms de fonctions, messages d'erreur. Complet sur ces six points, concis sur le reste. Garde les mots d'Alexis au plus près ; condense les explications de Claude à ce qu'elles ont conclu ou produit.",
     "",
-    "Ne recopie pas le dernier échange : il est ajouté tel quel après ta passation. Réponds avec la passation seule.",
+    "Sections, dans cet ordre :",
+    "1. Demande principale et intention",
+    "2. Notions techniques clés",
+    "3. Fichiers et code : chaque fichier examiné, modifié ou créé, pourquoi il compte, les extraits utiles",
+    "4. Erreurs et corrections",
+    "5. Problèmes résolus et recherches en cours",
+    "6. Tous les messages d'Alexis (hors résultats d'outils), fidèles, ses consignes et contraintes mot pour mot",
+    "7. Tâches en attente",
+    "8. Travail en cours juste avant la coupure, précisément",
+    "9. Prochaine étape, avec des citations du dernier échange",
     "",
-    "<fichiers_modifies>",
-    files.length > 0 ? files.join("\n") : "(aucun)",
-    "</fichiers_modifies>",
+    "Les derniers échanges sont ajoutés mot pour mot après ton résumé. Écris le résumé dans <summary></summary>, rien d'autre.",
     "",
     "<conversation>",
-    words,
+    digest,
     "</conversation>",
   ].join("\n");
 }
 
-const clip = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max)} […]`);
-
-/** The last thing the user said and Claude's reply to it, quoted as is. */
-export function lastExchange(said: readonly Said[]): string {
-  const userAt = said.map((s) => s.who).lastIndexOf("user");
-  if (userAt < 0) return "";
-  const reply = said.slice(userAt + 1).find((s) => s.who === "claude");
-  const lines = [`**Alexis** : ${clip(said[userAt].text, LAST_MAX_CHARS)}`];
-  if (reply) lines.push(`**Claude** : ${clip(reply.text, LAST_MAX_CHARS)}`);
-  return lines.join("\n\n");
+/**
+ * The last `n` exchanges (the user's messages and Claude's replies), quoted
+ * as is, as Claude Code's compaction keeps its latest messages. Each message
+ * at most `LAST_MAX_CHARS`, all of them at most `RECENT_MAX_CHARS`, the
+ * latest kept.
+ */
+export function recentExchanges(said: readonly Said[], n = RECENT_EXCHANGES): string {
+  const users = said.flatMap((s, i) => (s.who === "user" ? [i] : []));
+  if (users.length === 0) return "";
+  const from = users[Math.max(0, users.length - n)];
+  const parts = said
+    .slice(from)
+    .filter((s) => s.who !== "summary")
+    .map((s) => `**${s.who === "user" ? "Alexis" : "Claude"}** : ${clip(s.text, LAST_MAX_CHARS)}`);
+  const kept: string[] = [];
+  let size = 0;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (size + parts[i].length > RECENT_MAX_CHARS) break;
+    kept.unshift(parts[i]);
+    size += parts[i].length + 2;
+  }
+  return kept.join("\n\n");
 }
 
 /** What the page keeps of a handoff: the old session, its size, what Claude knows of it. */
@@ -290,8 +390,8 @@ export type HandoffEvent =
 /** Claude Code's folder for a working folder's sessions: every other character a dash. */
 export const projectFolder = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, "-");
 
-/** About 3.5 characters a token, in French with code. */
-export const tokensOf = (text: string) => Math.round(text.length / 3.5);
+/** About 2 characters a token, in French with code (measured 03/11/2026: 126 k characters, 65 k tokens). */
+export const tokensOf = (text: string) => Math.round(text.length / 2);
 
 const k = (tokens: number) => `${Math.round(tokens / 1000)} k`;
 
@@ -326,7 +426,8 @@ export function handoffBlock(
 export function readHandoffBlock(text: string): HandoffInfo | null {
   const head = /^<arkadia-handoff from="([^"]*)" tokens="(\d+)">/.exec(text);
   if (!head) return null;
-  const summary = /<passation>\n?([\s\S]*?)\n?<\/passation>/.exec(text)?.[1] ?? "";
+  // To the last closing tag: the summary may quote the tag itself (a session on this code).
+  const summary = /<passation>\n?([\s\S]*)<\/passation>/.exec(text)?.[1].replace(/\n$/, "") ?? "";
   return { from: head[1], before: Number(head[2]), summary };
 }
 
@@ -339,11 +440,16 @@ export function writtenHandoff(result: { subtype: string; is_error?: boolean; re
   const text = result.result?.trim() ?? "";
   if (result.is_error || result.subtype !== "success") throw new Error(text || result.subtype);
   if (!text) throw new Error("passation vide");
-  return text;
+  // From the first opening tag to the last closing one: the summary may quote the tags.
+  const open = text.indexOf("<summary>");
+  if (open < 0) return text;
+  const close = text.lastIndexOf("</summary>");
+  const inner = text.slice(open + "<summary>".length, close > open ? close : undefined).trim();
+  return inner || text;
 }
 
-/** The handoff's summary: what Opus wrote, then the last exchange as is. */
+/** The handoff's summary: what Opus wrote, then the latest exchanges as is. */
 export function handoffSummary(written: string, said: readonly Said[]): string {
-  const last = lastExchange(said);
-  return last ? `${written.trim()}\n\n## Dernier échange (mot pour mot)\n\n${last}` : written.trim();
+  const recent = recentExchanges(said);
+  return recent ? `${written.trim()}\n\n## Derniers échanges (mot pour mot)\n\n${recent}` : written.trim();
 }

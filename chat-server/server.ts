@@ -31,8 +31,8 @@ import {
 import { pipeGone, strayVerdict } from "./guard.ts";
 import {
   coldFacts,
+  conversationDigest,
   conversationWords,
-  filesTouched,
   handoffBlock,
   handoffDue,
   handoffSummary,
@@ -41,7 +41,6 @@ import {
   projectFolder,
   readHandoffBlock,
   tokensOf,
-  wordsText,
   writerPrompt,
   writtenHandoff,
   WRITER_SYSTEM,
@@ -559,8 +558,8 @@ const TRANSCRIPT_TOOL = fileURLToPath(new URL("./transcript.ts", import.meta.url
 const COLD_TAIL_BYTES = 8 * 1024 * 1024;
 /** A Stop during a handoff waits this long for the new Claude Code to have the message. */
 const HANDOFF_STOP_WAIT_MS = 60_000;
-/** Opus writes a handoff in about a minute: past this, the chat resumes as it is. */
-const HANDOFF_WRITE_MS = 4 * 60_000;
+/** Opus writes a handoff in one to three minutes: past this, the chat resumes as it is. */
+const HANDOFF_WRITE_MS = 6 * 60_000;
 
 /** A session's transcript, or null where Claude Code keeps it under another name. */
 function transcriptFile(cwd: string, sessionId: string, env: Record<string, string> | undefined): string | null {
@@ -1926,7 +1925,7 @@ class Chat {
     try {
       const entries = parseEntries(await readFile(cold.transcript, "utf8"));
       const said = conversationWords(entries);
-      const written = await this.writeHandoff(writerPrompt(wordsText(said), filesTouched(entries)));
+      const written = await this.writeHandoff(writerPrompt(conversationDigest(entries)));
       // Closed or relaunched while Opus wrote: nothing more of this chat.
       if (this.ended || this.silent) return null;
       const info = { from: cold.sessionId, before: cold.facts.tokens, summary: handoffSummary(written, said) };
@@ -1944,7 +1943,7 @@ class Chat {
   }
 
   /**
-   * Opus writes the handoff from the old conversation's words: one turn, no
+   * Opus writes the handoff from the old conversation's digest: one turn, no
    * tool, none of the user's settings, MCP servers nor CLAUDE.md (a system
    * prompt of its own), not saved as a session. The chat's account pays.
    */
@@ -1963,7 +1962,8 @@ class Chat {
         persistSession: false,
         maxTurns: 1,
         pathToClaudeCodeExecutable: claudeExecutable(),
-        // One request, never read again: its prompt written to the cache
+          // One request, never read again (~65 k tokens in, ~10 k out, 78 s on a
+        // 687 k session, 03/11/2026): its prompt written to the cache
         // would cost twice (1 h) for nothing (seen 03/11/2026: 17.8 k written).
         env: { ...process.env, ...this.start.env, DISABLE_PROMPT_CACHING: "1" } as Record<string, string>,
       },

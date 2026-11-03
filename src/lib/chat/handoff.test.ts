@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   coldFacts,
+  conversationDigest,
   conversationWords,
-  filesTouched,
   handoffBlock,
   handoffDue,
   handoffSummary,
   mayHandOff,
   readHandoffBlock,
-  wordsText,
+  recentExchanges,
   writtenHandoff,
   type Entry,
 } from "../../../chat-server/handoff.ts";
@@ -135,38 +135,75 @@ describe("the words a handoff is written from", () => {
   });
 
   it("past its limit, keeps the first turn and the latest ones", () => {
-    const said = [
-      { who: "user" as const, text: "LE BUT" },
-      ...Array.from({ length: 50 }, (_, i) => ({
-        who: "claude" as const,
-        text: `réponse ${i} `.repeat(20),
-      })),
-      { who: "user" as const, text: "LA FIN" },
-    ];
-    const text = wordsText(said, 2_000);
+    const entries = [
+      user("LE BUT"),
+      ...Array.from(
+        { length: 50 },
+        (_, i) => claude({ type: "text", text: `réponse ${i} `.repeat(20) }),
+        user("relance"),
+      ),
+      user("LA FIN"),
+    ].flat();
+    const text = conversationDigest(entries, 2_000);
     expect(text.length).toBeLessThanOrEqual(2_000);
     expect(text).toContain("LE BUT");
     expect(text).toContain("LA FIN");
     expect(text).toContain("le milieu de la conversation est coupé");
   });
+});
 
-  it("lists each file written once, the latest touched last", () => {
-    const edit = (path: string) =>
-      claude({
-        type: "tool_use",
-        id: path,
-        name: "Edit",
-        input: { file_path: path },
-      });
-    const read = claude({
-      type: "tool_use",
-      id: "r",
-      name: "Read",
-      input: { file_path: "lu.ts" },
-    });
-    expect(
-      filesTouched([edit("a.ts"), edit("b.ts"), read, edit("a.ts")]),
-    ).toEqual(["b.ts", "a.ts"]);
+describe("the digest the handoff is written from (as Claude Code's compaction reads)", () => {
+  it("keeps the words whole, a call in a line, a code change's new code and a tool's error, never an output", () => {
+    const digest = conversationDigest([
+      user("Corrige le prix"),
+      claude(
+        { type: "text", text: "Je corrige." },
+        {
+          type: "tool_use",
+          id: "r",
+          name: "Read",
+          input: { file_path: "src/price.ts" },
+        },
+        {
+          type: "tool_use",
+          id: "e",
+          name: "Edit",
+          input: {
+            file_path: "src/price.ts",
+            old_string: "a",
+            new_string: "const price = 1;",
+          },
+        },
+        {
+          type: "tool_use",
+          id: "b",
+          name: "Bash",
+          input: { command: "npm test" },
+        },
+      ),
+      user([
+        {
+          type: "tool_result",
+          tool_use_id: "r",
+          content: "SECRET FILE CONTENT",
+        },
+        { type: "tool_result", tool_use_id: "e", content: "ok" },
+        {
+          type: "tool_result",
+          tool_use_id: "b",
+          content: "1 test failed: price",
+          is_error: true,
+        },
+      ]),
+    ]);
+    expect(digest).toContain("### Alexis\nCorrige le prix");
+    expect(digest).toContain("### Claude\nJe corrige.");
+    expect(digest).toContain("→ Read · src/price.ts");
+    expect(digest).toContain(
+      "→ Edit · src/price.ts\n```\nconst price = 1;\n```",
+    );
+    expect(digest).toContain("✗ erreur : 1 test failed: price");
+    expect(digest).not.toContain("SECRET FILE CONTENT");
   });
 });
 
@@ -183,13 +220,22 @@ describe("the handoff block", () => {
     expect(readHandoffBlock("un message ordinaire")).toBeNull();
   });
 
-  it("ends with the last exchange, quoted as is", () => {
-    const summary = handoffSummary("## But\n- x", [
-      { who: "user", text: "On commit ?" },
-      { who: "claude", text: "Commit fait." },
-    ]);
-    expect(summary).toContain("**Alexis** : On commit ?");
-    expect(summary).toContain("**Claude** : Commit fait.");
+  it("ends with the 10 latest exchanges, quoted as is", () => {
+    const said = Array.from({ length: 12 }, (_, i) => [
+      { who: "user" as const, text: `question ${i}` },
+      { who: "claude" as const, text: `réponse ${i}` },
+    ]).flat();
+    const summary = handoffSummary("1. Demande principale", said);
+    expect(summary).toContain("## Derniers échanges (mot pour mot)");
+    expect(summary).toContain("**Alexis** : question 2");
+    expect(summary).toContain("**Claude** : réponse 11");
+    expect(summary).not.toContain("question 1\n");
+    expect(summary).not.toContain("**Alexis** : question 1\n");
+  });
+
+  it("keeps a very long message's start only", () => {
+    const recent = recentExchanges([{ who: "user", text: "x".repeat(10_000) }]);
+    expect(recent.length).toBeLessThan(4_100);
   });
 });
 
@@ -198,6 +244,13 @@ describe("what Opus answered", () => {
     expect(writtenHandoff({ subtype: "success", result: " ## But " })).toBe(
       "## But",
     );
+    // Claude Code's compaction format: the summary inside its tags.
+    expect(
+      writtenHandoff({
+        subtype: "success",
+        result: "<summary>\n1. Demande\n</summary>",
+      }),
+    ).toBe("1. Demande");
     // A refused request ends « success » too, its error as the text.
     const limit = {
       subtype: "success",
@@ -224,5 +277,48 @@ describe("what may open a handoff, before the transcript is read", () => {
     expect(mayHandOff("/usage", false, false, 90 * MIN)).toBe(false);
     expect(mayHandOff("suite", true, false, 90 * MIN)).toBe(false);
     expect(mayHandOff("suite", false, true, 90 * MIN)).toBe(false);
+  });
+});
+
+describe("odd texts around a handoff (review of 03/11/2026)", () => {
+  it("keeps a summary that quotes its own tags whole", () => {
+    const result =
+      "<summary>\n3. Fichiers : `writerPrompt` demande <summary></summary>.\n9. Suite\n</summary>";
+    expect(writtenHandoff({ subtype: "success", result })).toContain(
+      "9. Suite",
+    );
+    const info = {
+      from: "o",
+      before: 400_000,
+      summary: "cite </passation> puis la suite",
+    };
+    expect(
+      readHandoffBlock(handoffBlock(info, "t.jsonl", "tool.ts"))?.summary,
+    ).toBe(info.summary);
+  });
+
+  it("keeps the start of a last message too long for the budget", () => {
+    const digest = conversationDigest(
+      [
+        user("LE BUT"),
+        claude({ type: "text", text: "ok" }),
+        user(`LOG ${"x".repeat(5_000)}`),
+      ],
+      2_000,
+    );
+    expect(digest).toContain("LOG xxx");
+  });
+
+  it("counts a message of two blocks once, never Claude Code's interruption mark", () => {
+    const said = conversationWords([
+      user([
+        { type: "text", text: "première partie" },
+        { type: "text", text: "seconde partie" },
+      ]),
+      user("[Request interrupted by user]"),
+    ]);
+    expect(said).toEqual([
+      { who: "user", text: "première partie\nseconde partie" },
+    ]);
   });
 });
