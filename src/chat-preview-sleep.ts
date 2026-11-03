@@ -8,6 +8,9 @@ import { cutTurn, reduceChat, type ChatState } from "@/lib/chat/chatState";
  * - `bash`: `!` commands in the column: done, failed, cut for Claude, and
  *   one running (`&draft=!git log` puts the input in shell mode).
  * - `restarted`: the server stopped mid-turn and the chat resumed by itself.
+ * - `handoff-running` / `handoff`: a big session gone cold continues in a
+ *   new one: the separator while Opus writes, then written, the old session
+ *   greyed above it (`chatHandoff`).
  */
 
 const fold = (state: ChatState, events: ChatEvent[]): ChatState =>
@@ -110,6 +113,8 @@ export function sleepScenarios(
   return {
     asleep: () => fold(tools(), [{ type: "asleep", chatId }]),
     bash: () => fold(tools(), bashEvents()),
+    "handoff-running": () => fold(tools(), handoffEvents(false)),
+    handoff: () => fold(tools(), handoffEvents(true)),
     restarted: () =>
       fold(cutTurn(live(), Date.now()), [
         {
@@ -120,4 +125,55 @@ export function sleepScenarios(
         },
       ]),
   };
+}
+
+const HANDOFF_SUMMARY = [
+  "## But",
+  "- Factures PDF de VTC Planner : gabarit, export, facture vide.",
+  "",
+  "## Décisions prises",
+  "- Le gabarit reprend la charte dorée (choix d'Alexis : maquette B).",
+  "",
+  "## Fait",
+  "- Gabarit de facture, commit `a1b2c3d`.",
+  "",
+  "## Reste à faire",
+  "1. Export PDF.",
+  "2. Test de la facture vide.",
+  "",
+  "## Dernier échange (mot pour mot)",
+  "",
+  "**Alexis** : Le build passe, on commit ?",
+  "",
+  "**Claude** : Commit fait sur master. Il reste l'export PDF et le test de la facture vide.",
+].join("\n");
+
+/** A handoff's events: the separator, the message under it, the separator written. */
+function handoffEvents(written: boolean): ChatEvent[] {
+  const id = "handoff:preview";
+  return [
+    { type: "handoff", chatId, id, phase: "running", before: 512_000 },
+    {
+      type: "user_sent",
+      chatId,
+      text: "On attaque l'export PDF",
+      images: 0,
+      pasted: [],
+      uuid: "handoff-u1",
+    },
+    ...(written
+      ? [
+          {
+            type: "handoff",
+            chatId,
+            id,
+            phase: "done",
+            before: 512_000,
+            after: 2_800,
+            from: "old-session",
+            summary: HANDOFF_SUMMARY,
+          } satisfies ChatEvent,
+        ]
+      : []),
+  ];
 }

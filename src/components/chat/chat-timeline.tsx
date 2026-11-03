@@ -12,6 +12,7 @@ import { ChatCommandCard } from "@/components/chat/chat-command-card";
 import { ChatEditCard } from "@/components/chat/chat-edit-card";
 import { ChatMessageFrame } from "@/components/chat/chat-message-frame";
 import { ChatNoticeRow } from "@/components/chat/chat-notice-row";
+import { ChatHandoffRow } from "@/components/chat/chat-handoff-row";
 import { ChatPlanCard } from "@/components/chat/chat-plan-card";
 import { ChatPluginErrors } from "@/components/chat/chat-plugin-errors";
 import { ChatProseContexts } from "@/components/chat/chat-prose-contexts";
@@ -92,6 +93,8 @@ interface ChatTimelineProps {
   onStopBash?: (id: string) => void;
   /** Claude's turn under way: its last reply is a step until it ends. */
   working?: boolean;
+  /** A handoff's « Reprendre l'ancienne en entier »: the old session resumed. */
+  onResumeOld?: (sessionId: string) => void;
 }
 
 /** A unit's time for the day breaks; a gathered one's, its first known. */
@@ -131,6 +134,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   onOpenVisual,
   onStopBash,
   working = false,
+  onResumeOld,
 }: ChatTimelineProps) {
   const remover = (item: { id: string; queued?: boolean }) => {
     const uuid = item.queued ? sentUuid(item.id) : null;
@@ -313,6 +317,15 @@ export const ChatTimeline = memo(function ChatTimeline({
             key={unit.item.id}
             item={unit.item}
             onReload={onReloadPlugins}
+          />
+        ) : unit.item.handoff ? (
+          <ChatHandoffRow
+            key={unit.item.id}
+            item={unit.item}
+            cwd={cwd}
+            onOpen={onOpen}
+            onToast={onToast}
+            onResumeOld={onResumeOld}
           />
         ) : (
           <ChatNoticeRow key={unit.item.id} item={unit.item} />

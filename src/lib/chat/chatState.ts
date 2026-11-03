@@ -27,6 +27,11 @@ import { resultNotice, type RetryInfo } from "@/lib/chat/chatErrors";
 import { startTurn } from "@/lib/chat/chatTurn";
 import { peerMessages, type PeerMessage } from "@/lib/chat/chatPeer";
 import { addSdkContent, compactNotice } from "@/lib/chat/chatSdkContent";
+import {
+  addHandoff,
+  historyHandoff,
+  type NoticeHandoff,
+} from "@/lib/chat/chatHandoff";
 import { toolDetail, type ToolDetail } from "@/lib/chat/chatToolResult";
 import type { VisualEntry } from "@/lib/chat/chatVisual";
 import {
@@ -118,6 +123,11 @@ export type ChatItem = (
       command?: boolean;
       /** A button under it: plugins that failed load again (`chatSdkSettings`). */
       action?: "reload_plugins";
+      /**
+       * The separator of a handoff (`chatHandoff`): what is above it, the old
+       * session, is greyed. The phone shows its text alone.
+       */
+      handoff?: NoticeHandoff;
     }
   /** A `!` command of the user and its output (`chat-server/bash.ts`). */
   | {
@@ -632,6 +642,16 @@ function addUser(
       fromHistory &&
       !IMAGE_LABEL.test(str(block.text) ?? "")
     ) {
+      // A session started from a handoff: its block is the separator.
+      const handoff = historyHandoff(
+        str(block.text) ?? "",
+        str(m.uuid) ?? `${items.length}`,
+        messageTime(m),
+      );
+      if (handoff) {
+        items = [...items, handoff];
+        continue;
+      }
       const text = visibleUserText(str(block.text) ?? "");
       if (text !== null) texts = [...texts, text];
     } else if (block.type === "image" && fromHistory) {
@@ -1419,6 +1439,8 @@ export function reduceChat(
       return { ...state, commands: commandList(event.commands) };
     case "notice":
       return addServerNotice(state, event, now);
+    case "handoff":
+      return addHandoff(state, event, now);
     case "info":
       return {
         ...state,

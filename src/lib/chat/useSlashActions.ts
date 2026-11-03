@@ -24,8 +24,15 @@ export type RewindMode = "conversation" | "both" | "code";
 export interface SlashActions {
   sessions: () => Promise<SessionChoice[]>;
   rewindPoints: () => Promise<RewindPoint[]>;
-  /** Async: the panes are looked at again at the moment of the choice. */
-  resume: (sessionId: string) => Promise<string | null>;
+  /**
+   * Async: the panes are looked at again at the moment of the choice.
+   * `whole`: a handoff's « Reprendre l'ancienne en entier », its next
+   * message goes to it as is, never to another handoff.
+   */
+  resume: (
+    sessionId: string,
+    options?: { whole?: boolean },
+  ) => Promise<string | null>;
   rewind: (point: RewindPoint, mode: RewindMode) => string | null;
   /**
    * The last pick's sending to the chat's server: rejects if it failed. The
@@ -126,13 +133,18 @@ export function slashActions(
         e.type === "rewind_points" ? e.points : [],
       ),
     // The panel's list may date: a session may have opened elsewhere since.
-    resume: async (sessionId) => {
+    resume: async (sessionId, options) => {
       const why = busy();
       if (why) return why;
       const { sessions, live } = await lists();
       return (
         resumeRefusal(sessions, live, sessionId) ??
-        run({ type: "relaunch", chatId, resume: sessionId })
+        run({
+          type: "relaunch",
+          chatId,
+          resume: sessionId,
+          ...(options?.whole ? { whole: true } : {}),
+        })
       );
     },
     rewind: (point, mode) =>

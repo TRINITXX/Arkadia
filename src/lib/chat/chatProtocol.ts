@@ -4,6 +4,8 @@
  * typed here: the page reads the few fields it shows and ignores the rest.
  */
 
+import type { HandoffEvent } from "@chat-server/handoff";
+
 export type JsonObject = Record<string, unknown>;
 
 /** An agent of a running workflow, as its journal and transcript say. */
@@ -86,6 +88,8 @@ export type ChatEvent =
   | { type: "commands"; chatId: string; commands: SlashCommandInfo[] }
   /** A line of the server's own in the column (files of /rewind restored). */
   | { type: "notice"; chatId: string; text: string; tone: "info" | "error" }
+  /** A big session gone cold continues in a new one (`chat-server/handoff.ts`). */
+  | HandoffEvent
   /** Answers to `sessions` and `rewind_points` (not kept for a replay). */
   | {
       type: "sessions";
@@ -379,6 +383,8 @@ export type ChatCommand =
       chatId: string;
       resume?: string;
       rewind?: { before: string; code: boolean };
+      /** A handoff's « Reprendre l'ancienne en entier »: its next message resumes it, no handoff. */
+      whole?: boolean;
     }
   /** /rewind's « code seul »: the files as they were before the message. */
   | { type: "restore_code"; chatId: string; before: string }

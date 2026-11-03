@@ -10,10 +10,11 @@
 
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync, statSync } from "node:fs";
+import { mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import {
   bangBlocks,
@@ -29,6 +30,26 @@ import {
 } from "./bash.ts";
 import { pipeGone, strayVerdict } from "./guard.ts";
 import {
+  coldFacts,
+  conversationWords,
+  filesTouched,
+  handoffBlock,
+  handoffDue,
+  handoffSummary,
+  mayHandOff,
+  parseEntries,
+  projectFolder,
+  readHandoffBlock,
+  tokensOf,
+  wordsText,
+  writerPrompt,
+  writtenHandoff,
+  WRITER_SYSTEM,
+  type ColdFacts,
+  type HandoffEvent,
+} from "./handoff.ts";
+import {
+  atRest,
   cronCount,
   DEFAULT_SLEEP_MS,
   queuedAfter,
@@ -154,6 +175,8 @@ export type Command =
       chatId: string;
       resume?: string;
       rewind?: { before: string; code: boolean };
+      /** A handoff's « Reprendre l'ancienne en entier »: its next message resumes it, no handoff. */
+      whole?: boolean;
     }
   /** /rewind's « code seul »: the files as they were before the message. */
   | { type: "restore_code"; chatId: string; before: string }
@@ -218,7 +241,7 @@ type StartCommand = Extract<Command, { type: "start" }>;
  * (`resumeSessionAt`, `historyBefore`, a start's own fields too) and what
  * the new column says first (the files restored).
  */
-type Boot = StartCommand & { notice?: string };
+type Boot = StartCommand & { notice?: string; whole?: boolean };
 
 type SlashCommandInfo = Awaited<ReturnType<Query["supportedCommands"]>>[number];
 
@@ -390,6 +413,8 @@ export type ServerEvent =
   | { type: "commands"; chatId: string; commands: SlashCommandInfo[] }
   /** A line of the server's own in the column (files of /rewind restored). */
   | { type: "notice"; chatId: string; text: string; tone: "info" | "error" }
+  /** A handoff to a new session (`handoff.ts`), by its separator's id. */
+  | HandoffEvent
   | {
       type: "sessions";
       chatId: string;
@@ -528,6 +553,43 @@ function claudeExecutable(): string | undefined {
   return undefined;
 }
 
+/** The handoff's reader of the old transcript, run by Claude with Node (`transcript.ts`). */
+const TRANSCRIPT_TOOL = fileURLToPath(new URL("./transcript.ts", import.meta.url));
+/** A session's last usage is near its end: this much of the file says if it went cold. */
+const COLD_TAIL_BYTES = 8 * 1024 * 1024;
+/** A Stop during a handoff waits this long for the new Claude Code to have the message. */
+const HANDOFF_STOP_WAIT_MS = 60_000;
+/** Opus writes a handoff in about a minute: past this, the chat resumes as it is. */
+const HANDOFF_WRITE_MS = 4 * 60_000;
+
+/** A session's transcript, or null where Claude Code keeps it under another name. */
+function transcriptFile(cwd: string, sessionId: string, env: Record<string, string> | undefined): string | null {
+  const config = env?.CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
+  const path = join(config, "projects", projectFolder(cwd), `${sessionId}.jsonl`);
+  return existsSync(path) ? path : null;
+}
+
+/** The end of a file (its first line may be cut: `parseEntries` skips it). */
+async function readTail(path: string, bytes: number): Promise<{ text: string; whole: boolean }> {
+  const file = await open(path, "r");
+  try {
+    const { size } = await file.stat();
+    const start = Math.max(0, size - bytes);
+    const buffer = Buffer.alloc(size - start);
+    await file.read(buffer, 0, buffer.length, start);
+    return { text: buffer.toString("utf8"), whole: start === 0 };
+  } finally {
+    await file.close();
+  }
+}
+
+/** A session that went cold with a big context: its next message goes to a handoff. */
+interface ColdSession {
+  sessionId: string;
+  transcript: string;
+  facts: ColdFacts;
+}
+
 /**
  * The folder's branch as the status line reads it: null when detached or no
  * repo (git exits 128), undefined when git failed otherwise (timeout, spawn).
@@ -621,6 +683,14 @@ class Chat {
   private asleep = false;
   /** A compaction since the last turn's end: the ring counts again then. */
   private compacted = false;
+  /** A message's look for a cold session, then its handoff: what is sent meanwhile waits (`send`). */
+  private handingOff: Promise<void> | null = null;
+  /** Opus writing a handoff: a close stops it. */
+  private writer: Query | null = null;
+  /** Esc or Stop during a handoff: the turn it opens stops at once. */
+  private interruptAfterHandoff = false;
+  /** Resumed « en entier » from a handoff: its next message goes to it as is. */
+  private whole = false;
   /** What keeps it awake (`SleepFacts`), from its messages and the page's commands. */
   private turn = false;
   private tasks: readonly string[] = [];
@@ -713,6 +783,7 @@ class Chat {
     this.model = start.model;
     this.effort = start.effort;
     this.cutBefore = start.historyBefore;
+    this.whole = start.whole === true;
     if (start.notice) this.out({ type: "notice", chatId, text: start.notice, tone: "info" });
     if (start.cut) this.out({ type: "notice", chatId, text: RESTART_CUT, tone: "error" });
     // The page keeps the cut: a restart after the server stopped resumes at it.
@@ -943,7 +1014,9 @@ class Chat {
    * message sent meanwhile waits in the new input and goes once it runs.
    */
   wake(): void {
-    if (!this.asleep) return;
+    // Closed or stopped for a relaunch: a late wake would start a Claude Code
+    // no one ever closes (a `send` that waited through a handoff).
+    if (!this.asleep || this.ended || this.silent) return;
     this.asleep = false;
     this.touch();
     this.input = new InputQueue();
@@ -1700,13 +1773,11 @@ class Chat {
     spare: string[] = [],
     pastes: string[] = [],
   ): Promise<void> {
-    // Asleep: Claude Code starts again, the message waits in its input.
-    this.wake();
+    // A handoff being written: this message goes to the new session too.
+    while (this.handingOff) await this.handingOff;
+    if (this.ended || this.silent) return;
     const uuid = randomUUID();
-    // Not taken yet: its lifecycle frames, then the turn's replies, say when.
-    this.queued = [...this.queued, uuid];
-    this.watchTitle();
-    this.out({
+    const shown: ServerEvent = {
       type: "user_sent",
       chatId: this.chatId,
       text,
@@ -1715,7 +1786,44 @@ class Chat {
       // Display only: Claude gets `text`, the pastes in it.
       ...(pastes.length > 0 ? { pastes } : {}),
       uuid,
-    });
+    };
+    // A big session gone cold: the message opens a new one from a handoff,
+    // shown under the separator while Opus writes it. The look reads the
+    // disk only for a transcript left 5 min: what follows waits for it.
+    let opening: string | null = null;
+    let handedOff = false;
+    const candidate = this.coldCandidate(text);
+    if (candidate) {
+      let release = () => {};
+      this.handingOff = new Promise<void>((resolve) => (release = resolve));
+      try {
+        const cold = await this.coldSession(candidate);
+        if (cold && !this.ended && !this.silent) {
+          handedOff = true;
+          const id = `handoff:${uuid}`;
+          this.out({ type: "handoff", chatId: this.chatId, id, phase: "running", before: cold.facts.tokens });
+          this.out(shown);
+          opening = await this.handOff(cold, id);
+        }
+      } finally {
+        this.handingOff = null;
+        release();
+      }
+      // Closed or relaunched meanwhile: no Claude Code may start for it.
+      if (this.ended || this.silent) return;
+    }
+    // A Stop during this message's look alone: no turn ran, nothing to stop
+    // later (a message that waited behind a handoff leaves its Stop to it).
+    if (candidate && !handedOff) this.interruptAfterHandoff = false;
+    // « Reprendre l'ancienne en entier » holds for its first message (a
+    // slash command, /usage, isn't one).
+    if (!text.trimStart().startsWith("/")) this.whole = false;
+    // Asleep: Claude Code starts again, the message waits in its input.
+    this.wake();
+    // Not taken yet: its lifecycle frames, then the turn's replies, say when.
+    this.queued = [...this.queued, uuid];
+    this.watchTitle();
+    if (!handedOff) this.out(shown);
     const message: SDKUserMessage = {
       type: "user",
       uuid,
@@ -1724,6 +1832,8 @@ class Chat {
       message: {
         role: "user",
         content: [
+          // The handoff first: the page reads it back from the history.
+          ...(opening ? [{ type: "text" as const, text: opening }] : []),
           // Each image named first (« [Image #2] »), as its tag names it
           // in the text where the user pasted it: Claude knows which is which.
           ...images.flatMap((img) => [
@@ -1750,6 +1860,16 @@ class Chat {
       this.outbox.push({ kind: "message", uuid, message, sent });
       this.flushOutbox();
     });
+    // Esc or Stop while the handoff was written: its turn stops once taken,
+    // the message kept, as a Stop right after a send.
+    if (pushed && handedOff && this.interruptAfterHandoff) {
+      this.interruptAfterHandoff = false;
+      // A Claude Code just started takes seconds to have it: an interrupt
+      // before would leave the message to run next.
+      await this.lifecycleSeen(uuid, HANDOFF_STOP_WAIT_MS);
+      await (await this.ready).interrupt();
+      return;
+    }
     if (!pushed || spare.length === 0) return;
     // Sent now while foreground agents run: a `now` would end them with the
     // turn. Queued once Claude Code has it, their backgrounding hands the
@@ -1762,13 +1882,113 @@ class Chat {
     if (!(await this.spare(q, spare))) await q.interrupt();
   }
 
-  /** Resolves at the message's first lifecycle frame, or after 2 s (older CLI). */
-  private lifecycleSeen(uuid: string): Promise<void> {
+  /**
+   * The session and its transcript, if this message may open a new session
+   * from a handoff; on what is known without reading it: nothing of the chat
+   * running nor waiting (a turn, a task, a request, a `!` command, a
+   * wakeup, a rewind's cut), not a slash command (/compact, /usage run on
+   * the session as it is), not resumed « en entier », and its transcript
+   * left for 5 min (the shortest cache's life).
+   */
+  private coldCandidate(text: string): { sessionId: string; transcript: string } | null {
+    const sessionId = this.sessionId;
+    if (!sessionId || !atRest(this.sleepFacts())) return null;
+    const transcript = transcriptFile(this.cwd, sessionId, this.start.env);
+    if (!transcript) return null;
+    try {
+      const idleMs = Date.now() - statSync(transcript).mtimeMs;
+      return mayHandOff(text, this.whole, !!this.cutBefore, idleMs) ? { sessionId, transcript } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The candidate, if its transcript says big and cold: its next message goes to a handoff. */
+  private async coldSession({ sessionId, transcript }: { sessionId: string; transcript: string }): Promise<ColdSession | null> {
+    try {
+      const tail = await readTail(transcript, COLD_TAIL_BYTES);
+      let cold = coldFacts(parseEntries(tail.text));
+      // No request in its end (a long tool output): the whole file.
+      if (!cold && !tail.whole) cold = coldFacts(parseEntries(await readFile(transcript, "utf8")));
+      return handoffDue(cold, Date.now()) && cold ? { sessionId, transcript, facts: cold } : null;
+    } catch {
+      // Unreadable: the message goes to the session as it is.
+      return null;
+    }
+  }
+
+  /**
+   * Writes the handoff and leaves the old session: its Claude Code put to
+   * sleep, the next one starts a new session. The text that opens it, or
+   * null when it failed (said under the separator): the session resumes.
+   */
+  private async handOff(cold: ColdSession, id: string): Promise<string | null> {
+    try {
+      const entries = parseEntries(await readFile(cold.transcript, "utf8"));
+      const said = conversationWords(entries);
+      const written = await this.writeHandoff(writerPrompt(wordsText(said), filesTouched(entries)));
+      // Closed or relaunched while Opus wrote: nothing more of this chat.
+      if (this.ended || this.silent) return null;
+      const info = { from: cold.sessionId, before: cold.facts.tokens, summary: handoffSummary(written, said) };
+      const opening = handoffBlock(info, cold.transcript, TRANSCRIPT_TOOL);
+      // Woken meanwhile (another pane's command): its Claude Code goes now.
+      if (!this.asleep && !this.sleepIfDue(Date.now(), 0)) throw new Error("la conversation s'est remise au travail");
+      this.sessionId = undefined;
+      this.out({ type: "handoff", chatId: this.chatId, id, phase: "done", ...info, after: tokensOf(opening) });
+      return opening;
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      if (!this.ended && !this.silent) this.out({ type: "handoff", chatId: this.chatId, id, phase: "failed", error });
+      return null;
+    }
+  }
+
+  /**
+   * Opus writes the handoff from the old conversation's words: one turn, no
+   * tool, none of the user's settings, MCP servers nor CLAUDE.md (a system
+   * prompt of its own), not saved as a session. The chat's account pays.
+   */
+  private async writeHandoff(prompt: string): Promise<string> {
+    const q = query({
+      prompt,
+      options: {
+        cwd: this.cwd,
+        model: "opus",
+        effort: "medium",
+        systemPrompt: WRITER_SYSTEM,
+        tools: [],
+        settingSources: [],
+        mcpServers: {},
+        strictMcpConfig: true,
+        persistSession: false,
+        maxTurns: 1,
+        pathToClaudeCodeExecutable: claudeExecutable(),
+        // One request, never read again: its prompt written to the cache
+        // would cost twice (1 h) for nothing (seen 03/11/2026: 17.8 k written).
+        env: { ...process.env, ...this.start.env, DISABLE_PROMPT_CACHING: "1" } as Record<string, string>,
+      },
+    });
+    const late = setTimeout(() => q.close(), HANDOFF_WRITE_MS);
+    this.writer = q;
+    try {
+      for await (const message of q) {
+        if (message.type === "result") return writtenHandoff(message);
+      }
+      throw new Error("pas de réponse d'Opus");
+    } finally {
+      clearTimeout(late);
+      this.writer = null;
+      q.close();
+    }
+  }
+
+  /** Resolves at the message's first lifecycle frame, or after `limitMs` (older CLI). */
+  private lifecycleSeen(uuid: string, limitMs = LIFECYCLE_WAIT_MS): Promise<void> {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.lifecycleWaiters.delete(uuid);
         resolve();
-      }, LIFECYCLE_WAIT_MS);
+      }, limitMs);
       this.lifecycleWaiters.set(uuid, () => {
         clearTimeout(timer);
         resolve();
@@ -1784,6 +2004,11 @@ class Chat {
    * page then sends `background` alone (`stopTurnPlan`).
    */
   async interrupt(spare: string[] = []): Promise<void> {
+    // A handoff being written: the turn its message opens stops once taken.
+    if (this.handingOff) {
+      this.interruptAfterHandoff = true;
+      return;
+    }
     // Asleep: no turn to stop.
     if (this.asleep) return;
     const q = await this.ready;
@@ -1967,6 +2192,7 @@ class Chat {
       cut: undefined,
       asleep: undefined,
       notice: undefined,
+      whole: undefined,
       permissionMode: this.mode,
       model: this.model,
       effort: this.effort,
@@ -1978,7 +2204,7 @@ class Chat {
       // Never two Claude Code on one session (the page checks its panes).
       const held = [...chats.values()].some((c) => c !== this && c.sessionId === cmd.resume);
       if (held) throw new Error("Cette conversation est ouverte dans un autre volet");
-      return { ...base, resume: cmd.resume };
+      return { ...base, resume: cmd.resume, whole: cmd.whole };
     }
     if (!cmd.rewind || !this.sessionId) throw new Error("Rien à reprendre");
     const { before, code } = cmd.rewind;
@@ -2080,6 +2306,8 @@ class Chat {
 
   close(): void {
     this.finish();
+    // Opus writing a handoff for it: nobody will read it.
+    this.writer?.close();
     for (const { watch } of this.workflows.values()) watch.stop();
     this.workflows.clear();
     for (const resolve of this.pending.values()) {
@@ -2218,8 +2446,14 @@ function promptText(message: unknown): string | null {
     const blocks = content as { type?: string; text?: string }[];
     if (blocks.some((b) => b?.type === "tool_result")) return null;
     text = blocks
-      // An image's label (« [Image #2] ») is no line of the prompt.
-      .filter((b) => b?.type === "text" && !/^\[Image #\d+\]$/.test(b.text ?? ""))
+      // An image's label (« [Image #2] ») is no line of the prompt, nor a
+      // handoff the message opened its session with (`handoff.ts`).
+      .filter(
+        (b) =>
+          b?.type === "text" &&
+          !/^\[Image #\d+\]$/.test(b.text ?? "") &&
+          !readHandoffBlock(b.text ?? ""),
+      )
       .map((b) => b.text ?? "")
       .join("\n");
   }

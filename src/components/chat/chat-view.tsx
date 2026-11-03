@@ -733,6 +733,14 @@ function ChatViewBody({
             onChoose={choose}
             onOpenVisual={sdkActions?.openVisual}
             onStopBash={onStopBash}
+            onResumeOld={
+              slashActions
+                ? (id) =>
+                    void slashActions
+                      .resume(id, { whole: true })
+                      .then((why) => why && onToast?.("error", why))
+                : undefined
+            }
           />
         </div>
       </div>

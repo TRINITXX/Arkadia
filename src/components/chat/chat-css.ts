@@ -608,6 +608,15 @@ export const CHAT_CSS = `
 .chat-tool .out .chat-out-note { margin-top: 8px; font-family: "Segoe UI", system-ui, sans-serif; font-size: 11.5px; color: var(--chat-mute); font-style: italic; }
 .chat-box textarea.suggest::placeholder { color: #8b8f97; font-style: italic; }
 .chat-notice.warning { color: #e7c27a; border-color: rgba(231,194,122,.32); }
+.chat-past-row { opacity: .45; }
+.chat-handoff { align-self: stretch; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 6px 0; }
+.chat-handoff-rule { align-self: stretch; display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--chat-mute); }
+.chat-handoff-rule::before, .chat-handoff-rule::after { content: ""; flex: 1; border-top: 1px solid #3a3e45; }
+.chat-handoff-rule .spin { width: 11px; height: 11px; border-radius: 50%; border: 2px solid #464a51; border-top-color: var(--chat-accent); animation: chat-spin .8s linear infinite; }
+.chat-handoff-links { display: flex; gap: 8px; font-size: 12px; color: var(--chat-mute); }
+.chat-handoff-links button { font: inherit; color: var(--chat-accent); background: none; border: 0; padding: 0; cursor: pointer; }
+.chat-handoff-links button:hover { text-decoration: underline; }
+.chat-handoff-text { align-self: stretch; margin-top: 6px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--chat-line); background: #1b1d21; max-height: 420px; overflow: auto; scrollbar-width: thin; }
 .chat-notice-block { align-self: center; max-width: min(100%, 640px); font-size: 12px; color: var(--chat-dim); padding: 6px 12px; border-radius: 10px; border: 1px solid var(--chat-line); background: #1b1d21; }
 .chat-notice-block .text { color: #d4d4d8; }
 .chat-notice-block .detail { margin-top: 3px; color: var(--chat-mute); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9.6em; overflow: auto; scrollbar-width: thin; }
