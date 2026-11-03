@@ -301,15 +301,14 @@ export function sizeLabel(bytes: number | undefined): string | null {
 
 /**
  * /resume: the folder's sessions, newest first; this one and those open
- * elsewhere can't be taken. `branch`: false leaves the git branch out of
- * the meta (the new chat's list: the user always works on main).
+ * elsewhere can't be taken. Their date and size, never the git branch
+ * (Alexis, 03/11/2026: he always works on the same one).
  */
 export function sessionRows(
   sessions: SessionChoice[],
   query: string,
   current: string | null,
   now: number,
-  { branch = true }: { branch?: boolean } = {},
 ): PickerRow[] {
   return sessions
     .filter((s) => matches(query, s.title, s.sessionId))
@@ -317,11 +316,7 @@ export function sessionRows(
     .map((s) => ({
       id: s.sessionId,
       title: s.title || "Sans titre",
-      meta: [
-        whenLabel(s.lastModified, now),
-        sizeLabel(s.size),
-        branch && s.gitBranch,
-      ]
+      meta: [whenLabel(s.lastModified, now), sizeLabel(s.size)]
         .filter(Boolean)
         .join(" · "),
       disabled:

@@ -163,10 +163,8 @@ describe("the /resume and /rewind panels", () => {
       lastModified: now,
       gitBranch: "main",
     };
-    expect(sessionRows([onMain], "", null, now)[0].meta).toContain("main");
-    expect(
-      sessionRows([onMain], "", null, now, { branch: false })[0].meta,
-    ).not.toContain("main");
+    // Never the git branch (Alexis, 03/11/2026).
+    expect(sessionRows([onMain], "", null, now)[0].meta).not.toContain("main");
     // A search at each letter: every word, accents aside.
     const found = (query: string) =>
       sessionRows(

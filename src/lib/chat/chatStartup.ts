@@ -8,18 +8,14 @@ export const WELCOME_SESSIONS = 5;
 /**
  * A new chat's welcome, on the desktop and the iPhone: the folder's latest
  * sessions as /resume lists them (one open elsewhere can't be taken), at
- * most `WELCOME_SESSIONS`, `query` finding an older one. No branch: the
- * user always works on main (01/11/2026).
+ * most `WELCOME_SESSIONS`, `query` finding an older one.
  */
 export function welcomeRows(
   sessions: SessionChoice[],
   query: string,
   now: number,
 ): PickerRow[] {
-  return sessionRows(sessions, query, null, now, { branch: false }).slice(
-    0,
-    WELCOME_SESSIONS,
-  );
+  return sessionRows(sessions, query, null, now).slice(0, WELCOME_SESSIONS);
 }
 
 /**
