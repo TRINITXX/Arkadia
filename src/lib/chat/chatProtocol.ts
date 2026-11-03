@@ -251,6 +251,8 @@ export interface SessionChoice {
   gitBranch?: string;
   /** Open in another chat of the same server. */
   open?: boolean;
+  /** Its transcript's size, in bytes (« 12,4 Mo » in /resume). */
+  size?: number;
 }
 
 /** A message the user wrote in the conversation, for `/rewind`. */

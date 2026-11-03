@@ -429,6 +429,8 @@ export type ServerEvent =
         gitBranch?: string;
         /** Open in another chat of this server. */
         open?: boolean;
+        /** Its transcript's size, in bytes. */
+        size?: number;
       }[];
       error?: string;
     }
@@ -2269,6 +2271,7 @@ class Chat {
       lastModified: s.lastModified,
       gitBranch: s.gitBranch,
       open: open.has(s.sessionId) || undefined,
+      size: s.fileSize,
     }));
   }
 

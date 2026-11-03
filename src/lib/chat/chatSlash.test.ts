@@ -11,6 +11,7 @@ import {
   resumeRefusal,
   rewindRows,
   sessionRows,
+  sizeLabel,
   settleMcpPending,
   slashEntries,
   slashHead,
@@ -323,5 +324,32 @@ describe("the /mcp panel", () => {
       "posthog",
       "exa",
     ]);
+  });
+});
+
+describe("a session's size in /resume", () => {
+  it("is in megabytes, one decimal under 10", () => {
+    expect(sizeLabel(153_000_000)).toBe("153 Mo");
+    expect(sizeLabel(12_449_000)).toBe("12 Mo");
+    expect(sizeLabel(8_560_000)).toBe("8,6 Mo");
+    expect(sizeLabel(20_000)).toBe("0,1 Mo");
+    expect(sizeLabel(undefined)).toBeNull();
+  });
+
+  it("shows after the date in each row", () => {
+    const row = sessionRows(
+      [
+        {
+          sessionId: "s",
+          title: "Factures",
+          lastModified: Date.now(),
+          size: 8_560_000,
+        },
+      ],
+      "",
+      null,
+      Date.now(),
+    )[0];
+    expect(row.meta).toMatch(/· 8,6 Mo/);
   });
 });

@@ -288,6 +288,17 @@ export function resumeRefusal(
   return held ? OPEN_ELSEWHERE : null;
 }
 
+/** A transcript's size in megabytes, French: « 0,4 Mo », « 12,4 Mo », « 153 Mo ». */
+export function sizeLabel(bytes: number | undefined): string | null {
+  if (bytes === undefined) return null;
+  const mb = bytes / 1_000_000;
+  const shown =
+    mb >= 10
+      ? String(Math.round(mb))
+      : Math.max(mb, 0.1).toFixed(1).replace(".", ",");
+  return `${shown} Mo`;
+}
+
 /**
  * /resume: the folder's sessions, newest first; this one and those open
  * elsewhere can't be taken. `branch`: false leaves the git branch out of
@@ -306,7 +317,11 @@ export function sessionRows(
     .map((s) => ({
       id: s.sessionId,
       title: s.title || "Sans titre",
-      meta: [whenLabel(s.lastModified, now), branch && s.gitBranch]
+      meta: [
+        whenLabel(s.lastModified, now),
+        sizeLabel(s.size),
+        branch && s.gitBranch,
+      ]
         .filter(Boolean)
         .join(" · "),
       disabled:

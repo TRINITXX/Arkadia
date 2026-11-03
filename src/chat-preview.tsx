@@ -584,18 +584,21 @@ const PREVIEW_SLASH: SlashActions = {
       title: state.title ?? "",
       lastModified: ago(1),
       gitBranch: "master-lab",
+      size: 2_340_000,
     },
     {
       sessionId: "s2",
       title: "Menu des commandes du chat",
       lastModified: ago(48),
       gitBranch: "master-lab",
+      size: 18_700_000,
     },
     {
       sessionId: "s3",
       title: "Gel au survol du terminal",
       lastModified: ago(60 * 20),
       gitBranch: "master",
+      size: 153_000_000,
       open: true,
     },
     {
@@ -603,18 +606,21 @@ const PREVIEW_SLASH: SlashActions = {
       title: "Notifications compactes « projet · onglet »",
       lastModified: ago(60 * 26),
       gitBranch: "master",
+      size: 640_000,
     },
     {
       sessionId: "s5",
       title: "App iPhone : reprise du dernier onglet",
       lastModified: ago(60 * 24 * 3),
       gitBranch: "master",
+      size: 8_560_000,
     },
     {
       sessionId: "s6",
       title: "Recherche IA des sessions",
       lastModified: ago(60 * 24 * 12),
       gitBranch: "master",
+      size: 31_200_000,
     },
   ],
   rewindPoints: async () =>
