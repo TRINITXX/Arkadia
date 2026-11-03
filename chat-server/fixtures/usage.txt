@@ -1,0 +1,25 @@
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 24% used · resets Nov 3, 8:10am (Europe/Paris)
+Current week (all models): 14% used · resets Nov 9, 1pm (Europe/Paris)
+Current week (Fable): 0% used · resets Nov 9, 1pm (Europe/Paris)
+
+What's contributing to your usage?
+Approximate · sessions on this machine only · shares overlap
+
+Last 24h · 20080 requests · 21 sessions
+  98%  Give simple subagents a cheaper model
+  79%  Save workflows for big tasks · 682 agents ran
+  40%  Start fresh when you switch tasks · run /clear
+  Top subagents: workflow-subagent 73%, general-purpose 9%, workflow-authoring 7%
+  Top MCP servers: exa 2%, claude-in-chrome 1%
+
+Last 7d · 113274 requests · 295 sessions
+  97%  Give "general-purpose" subagents a cheaper model
+  68%  Start fresh when you switch tasks · run /clear
+  57%  Stop sessions you no longer need · some ran 8 hours or more
+  38%  Save workflows for big tasks · 2676 agents ran
+  31%  Run fewer sessions at once · up to 17 at once
+  Top skills: /chrome-browser 1%
+  Top subagents: workflow-subagent 28%, general-purpose 28%, workflow-authoring 8%, controle-niches 2%, fork 1%
+  Top MCP servers: claude-in-chrome 4%, exa 1%, playwright 1%

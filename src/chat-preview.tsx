@@ -44,6 +44,7 @@ import {
   PREVIEW_SHELL_OUTPUTS,
 } from "@/chat-preview-activity";
 import tools from "../chat-server/fixtures/tools.jsonl?raw";
+import usageText from "../chat-server/fixtures/usage.txt?raw";
 import pastedPng from "../src-tauri/icons/128x128@2x.png?inline";
 import { attachDraft, attachEvents } from "@/chat-preview-attach";
 import { tallEvents, visualNext, visualStart } from "@/chat-preview-visuals";
@@ -375,6 +376,24 @@ const SCENARIOS: Record<string, () => ChatState> = {
     return { ...s, items };
   },
   live: () => replay(parse(tools), firstTextDelta),
+  // /usage's real answer (03/11/2026) as its card shows it.
+  usage: () => {
+    const s = replay(parse(tools));
+    return {
+      ...s,
+      items: [
+        ...s.items,
+        {
+          kind: "command",
+          id: "preview-usage",
+          name: "usage",
+          args: "",
+          absorbed: [],
+          output: usageText.trim(),
+        },
+      ],
+    };
+  },
   // « Récit » (02/11/2026): a past exchange, its thinking and tools behind
   // the icons of Claude's replies; the one under way with its tool lines and
   // its latest thought in full (the texts of the user's screenshot).

@@ -455,6 +455,35 @@ export const CHAT_CSS = `
 .chat-cmd .body h1, .chat-cmd .body h2, .chat-cmd .body h3 { font-size: 13.5px; color: #d4d4d8; margin: 8px 0 4px; }
 .chat-cmd.queued .head .name { color: #8f8f9a; }
 .chat-cmd .head .chat-queued-mark { margin: 0 0 0 auto; font-family: "Segoe UI", system-ui, sans-serif; }
+.chat-cmd .head .plan { margin-left: auto; align-self: center; font-family: "Segoe UI", system-ui, sans-serif; font-size: 11px; color: var(--chat-mute); }
+.chat-cmd .head .plan + .chat-queued-mark { margin-left: 8px; }
+
+/* /usage as the terminal shows it (the user's pick A of 03/11/2026): a bar
+   per window, then what weighs on them, 24 h or 7 days by tab. */
+.chat-cmd .body.chat-usage { max-height: none; overflow: visible; display: flex; flex-direction: column; gap: 9px; padding: 10px 14px 12px; font-size: 12.5px; }
+.chat-usage .pc { font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.chat-usage .win .top { display: flex; justify-content: space-between; gap: 8px; color: #d4d4d8; }
+.chat-usage .bar { height: 6px; margin: 5px 0 3px; border-radius: 99px; background: #2f3238; overflow: hidden; }
+.chat-usage .bar i { display: block; height: 100%; border-radius: 99px; background: var(--chat-accent); transition: width .4s ease-out; }
+.chat-usage .win.hot .bar i { background: #fcd34d; }
+.chat-usage .win.hot .top .pc { color: #fcd34d; }
+.chat-usage .sub { font-size: 11px; color: var(--chat-mute); }
+.chat-usage .sect { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; padding-top: 10px; border-top: 1px solid #26292e; }
+.chat-usage .sect b { font-size: 12px; font-weight: 600; color: #d4d4d8; }
+.chat-usage .seg { display: inline-flex; gap: 1px; padding: 1px; border: 1px solid var(--chat-line); border-radius: 999px; }
+.chat-usage .seg button { padding: 1px 10px; border: 0; border-radius: 999px; background: transparent; font: inherit; font-size: 11px; color: var(--chat-mute); cursor: pointer; }
+.chat-usage .seg button:hover { color: #d4d4d8; }
+.chat-usage .seg button.on { background: #2b2e33; color: #e4e4e7; }
+.chat-usage .tip { display: grid; grid-template-columns: 38px 1fr; gap: 1px 10px; align-items: baseline; }
+.chat-usage .tip .pc { text-align: right; font-size: 12px; color: var(--chat-accent); }
+.chat-usage .tip .t { color: #d4d4d8; line-height: 1.35; }
+.chat-usage .tip .d { grid-column: 2; font-size: 11px; color: var(--chat-mute); }
+.chat-usage .tops { display: flex; flex-direction: column; gap: 4px; }
+.chat-usage .lbl { font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; color: #6b6e76; }
+.chat-usage .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chat-usage .chip { padding: 1px 8px; border: 1px solid var(--chat-line); border-radius: 999px; font-size: 11px; color: var(--chat-mute); }
+.chat-usage .chip b { font-weight: 500; color: #d4d4d8; }
+.chat-usage .rest { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; color: var(--chat-mute); overflow-wrap: anywhere; }
 
 /* A \`!\` command of the user: the shell's words, its output, how it ended. */
 /* Drawn at its real size, never the 60px estimate: several of them at the end
