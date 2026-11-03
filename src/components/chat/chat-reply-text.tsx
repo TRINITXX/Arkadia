@@ -9,6 +9,7 @@ import { ChatGallery } from "@/components/chat/chat-gallery";
 import { drawnImageKeys, stripRefs } from "@/lib/chat/chatImages";
 import { endsWithHourglass } from "@/lib/chat/chatHourglass";
 import { withoutQuestions } from "@/lib/chat/chatQuestionRound";
+import { splitTechDetail } from "@/lib/chat/chatTechDetail";
 import type { ImageRef } from "@/lib/imageGallery";
 
 /**
@@ -42,6 +43,8 @@ export function ChatReplyText({
     () => stripRefs(refs, drawnImageKeys(shown, cwd)),
     [refs, shown, cwd],
   );
+  // « Détail technique » after the last rule: greyed, apart (03/11/2026).
+  const parts = useMemo(() => splitTechDetail(shown), [shown]);
   return (
     <>
       {(!bare || shown) && (
@@ -51,12 +54,23 @@ export function ChatReplyText({
           data-hourglass={endsWithHourglass(shown) ? "" : undefined}
         >
           <MarkdownContent
-            text={shown || " "}
+            text={(parts ? parts.main : shown) || " "}
             baseDir={cwd}
             onOpen={onOpen}
             onToast={onToast}
             inlineImages={false}
           />
+          {parts && (
+            <div className="chat-tech">
+              <MarkdownContent
+                text={parts.tech}
+                baseDir={cwd}
+                onOpen={onOpen}
+                onToast={onToast}
+                inlineImages={false}
+              />
+            </div>
+          )}
         </div>
       )}
       {bare && (

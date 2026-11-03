@@ -262,3 +262,42 @@ export function peerEvents(): ChatEvent[] {
     }),
   ];
 }
+
+/** A report with its « Détail technique » after the rule, greyed (`chatTechDetail`). */
+export function techReply(): ChatEvent[] {
+  const text = [
+    "✅ La taille des sessions s'affiche dans /resume.",
+    "",
+    "| Quoi | État |",
+    "|---|---|",
+    "| Taille en Mo | ✅ |",
+    "| Branche retirée | ✅ |",
+    "",
+    "---",
+    "Détail technique : `src/lib/chat/chatSlash.ts`, `chat-server/server.ts`.",
+  ].join("\n");
+  return [
+    {
+      type: "user_sent",
+      chatId: "preview",
+      text: "Ajoute la taille des sessions.",
+      images: 0,
+    },
+    sdk({
+      type: "assistant",
+      uuid: "tech-a1",
+      message: { id: "tech-m1", content: [{ type: "text", text }] },
+    }),
+    sdk({
+      type: "result",
+      uuid: "tech-r1",
+      subtype: "success",
+      is_error: false,
+      result: text,
+      num_turns: 1,
+      duration_ms: 1200,
+      total_cost_usd: 0,
+      usage: {},
+    }),
+  ];
+}

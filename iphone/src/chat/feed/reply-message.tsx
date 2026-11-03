@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { SymbolView } from "expo-symbols";
 import { withoutQuestions } from "@/lib/chat/chatQuestionRound";
+import { splitTechDetail } from "@/lib/chat/chatTechDetail";
 import type { ChatItem } from "@/lib/chat/chatState";
 import { itemImagePaths } from "@/lib/chat/phoneImages";
 import { C, T } from "~/chat/chat-theme";
@@ -42,6 +43,8 @@ export function ReplyMessage({
     () => (bare ? withoutQuestions(item.text) : item.text),
     [bare, item.text],
   );
+  // « Détail technique » after the last rule: dim, apart (03/11/2026).
+  const parts = useMemo(() => splitTechDetail(text), [text]);
   const images = itemImagePaths(item);
   const note = bare && (
     <View style={styles.bare}>
@@ -82,12 +85,22 @@ export function ReplyMessage({
     >
       {!bare || text ? (
         <MarkdownText
-          markdown={text}
+          markdown={parts ? parts.main : text}
           tone={CHAT_TONE}
           size={T.body}
           lead
-          caret={caret}
+          caret={parts ? undefined : caret}
         />
+      ) : null}
+      {parts ? (
+        <View style={styles.tech}>
+          <MarkdownText
+            markdown={parts.tech}
+            tone={DIM_TONE}
+            size={T.small}
+            caret={caret}
+          />
+        </View>
       ) : null}
       {note}
       <ImageStrip paths={images} />
@@ -113,5 +126,11 @@ const styles = StyleSheet.create({
     marginRight: -4,
   },
   bare: { flexDirection: "row", alignItems: "center", gap: 6 },
+  tech: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: C.line,
+  },
   bareText: { flex: 1, color: C.mute, fontSize: T.small },
 });

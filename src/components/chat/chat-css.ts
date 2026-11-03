@@ -609,6 +609,8 @@ export const CHAT_CSS = `
 .chat-box textarea.suggest::placeholder { color: #8b8f97; font-style: italic; }
 .chat-notice.warning { color: #e7c27a; border-color: rgba(231,194,122,.32); }
 .chat-past-row { opacity: .45; }
+.chat-tech { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--chat-line); font-size: .9em; }
+.chat-tech, .chat-tech :is(p, li, strong, em, a, code) { color: var(--chat-mute) !important; }
 .chat-handoff { align-self: stretch; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 6px 0; }
 .chat-handoff-rule { align-self: stretch; display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--chat-mute); }
 .chat-handoff-rule::before, .chat-handoff-rule::after { content: ""; flex: 1; border-top: 1px solid #3a3e45; }

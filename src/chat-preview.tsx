@@ -17,6 +17,7 @@ import type { DictationEnd, VoiceStatus } from "@/lib/useHiddenVoice";
 import "@/styles/app.css";
 import {
   contentNotices,
+  techReply,
   errorEvents,
   peerEvents,
   retryEvents,
@@ -548,6 +549,8 @@ const SCENARIOS: Record<string, () => ChatState> = {
   long: () => replay(longLog(parse(tools), 40)),
   // Real diffs, a command's marks, a cut reply and Claude Code's notices.
   content: () => replay([...parse(content), ...contentNotices()]),
+  // A report's « Détail technique », greyed under the reply.
+  tech: () => replay(techReply()),
   errors: () => replay(errorEvents()),
   // The live line's « Claude réessaie », its wait counted from now.
   retry: () => {
