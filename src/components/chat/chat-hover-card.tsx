@@ -7,6 +7,12 @@ const MAX_PX = 360;
 /** The gap between the icon and its card, and the window's edge it keeps off. */
 const GAP_PX = 6;
 const EDGE_PX = 8;
+/**
+ * The pointer rests this long on the icon before its card shows: one
+ * crossing it on the way up the conversation opens nothing (the user's ask
+ * of 03/11/2026). A click shows it at once.
+ */
+const HOVER_DELAY_MS = 500;
 
 /**
  * Where the card goes: above its icon when there's room for its tallest,
@@ -35,8 +41,8 @@ function cardPlace(icon: DOMRect, width: number): React.CSSProperties {
 
 /**
  * A small icon on Claude's reply with what it hides in a card (« Récit », the
- * user's picks of 02/11/2026): hovered, the card shows in the page's top
- * layer (a frame clips what overflows it); clicked, it stays and scrolls,
+ * user's picks of 02/11/2026): hovered half a second, the card shows in the
+ * page's top layer (a frame clips what overflows it); clicked, it stays and scrolls,
  * until a click or a wheel elsewhere, or Esc (a layer of the pane: never
  * Claude stopped with it). The column moving, even on its own as Claude
  * writes, carries the card along with its icon; the icon gone out of
@@ -63,7 +69,22 @@ export function ChatHoverCard({
     const button = iconRef.current;
     if (button) setAt(cardPlace(button.getBoundingClientRect(), width));
   };
+  // The card on its way while the pointer rests on the icon.
+  const pending = useRef<number | undefined>(undefined);
+  const cancelHover = () => {
+    window.clearTimeout(pending.current);
+    pending.current = undefined;
+  };
+  useEffect(() => () => window.clearTimeout(pending.current), []);
+  const placeLater = () => {
+    cancelHover();
+    pending.current = window.setTimeout(() => {
+      pending.current = undefined;
+      place();
+    }, HOVER_DELAY_MS);
+  };
   const close = () => {
+    cancelHover();
     setAt(null);
     setPinned(false);
   };
@@ -114,19 +135,26 @@ export function ChatHoverCard({
       ref={iconRef}
       type="button"
       className={`chat-peek${at ? " on" : ""}`}
+      // No `title`: the browser's tooltip would come with the card, after
+      // the same half second, and stay over it.
       aria-label={label}
-      title={at ? undefined : label}
       aria-expanded={pinned}
       onMouseEnter={() => {
-        if (!pinned) place();
+        if (!pinned) placeLater();
+      }}
+      // The conversation still scrolling under the pointer: the wait starts over.
+      onWheel={() => {
+        if (pending.current !== undefined) placeLater();
       }}
       onMouseLeave={() => {
+        cancelHover();
         if (!pinned) setAt(null);
       }}
       onClick={(e) => {
         e.stopPropagation();
         if (pinned) close();
         else {
+          cancelHover();
           place();
           setPinned(true);
         }

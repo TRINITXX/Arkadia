@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  ArrowRight,
   ChevronDown,
   CircleHelp,
   Mic,
@@ -11,6 +19,7 @@ import {
 import type { ChatVoice } from "@/components/chat/chat-composer";
 import { redirectDictation } from "@/lib/chat/chatDrafts";
 import {
+  buttonLeadsTo,
   enterLeadsTo,
   lastReplyRound,
   nextQuestionLeft,
@@ -28,6 +37,10 @@ import type { ChatItem } from "@/lib/chat/chatState";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 import { useTypeToInput } from "@/lib/chat/useTypeToInput";
 
+/** A plain Space, as push-to-talk takes it (`ChatComposer`'s). */
+const plainSpace = (e: React.KeyboardEvent) =>
+  e.key === " " && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
+
 /**
  * A sheet above the input when Claude's last reply asks a round of questions
  * in its text (`chatQuestionRound`), kept low so the conversation stays in
@@ -35,12 +48,14 @@ import { useTypeToInput } from "@/lib/chat/useTypeToInput";
  * in a bar of segments on top (green once answered). Per question, its
  * options as a list, Claude's reco inside the one it names with its reason
  * (a reco naming none is a choice of its own), then the mic left of a free
- * field that shows only a caret (dictation lands in the field that started
- * it, its words dim as they come). A pick moves on to a question left.
+ * field that shows only a caret. Dictation (the mic, Ctrl+Space, or Space
+ * held as in the input) lands in the field that started it, its words dim
+ * in the field as they come. A pick moves on to a question left.
  * While it shows, Claude's message drops its questions (`useSheetReply`).
  * Enter in the field goes on to a question left, and sends once all are
- * answered; the send button answers them all, « Q1 : … » per line. Folds
- * (Esc: the questions come back in the message) and closes.
+ * answered; the button at its end steps forward and sends from the last
+ * question left, « Q1 : … » per line. Folds (Esc: the questions come back
+ * in the message) and closes.
  */
 export function ChatQuestionSheet({
   paneKey,
@@ -138,6 +153,50 @@ export function ChatQuestionSheet({
   );
   useTypeToInput(areaRef, typeKey, active && open && !folded);
 
+  // Space held talks into the field, as in the input: the tap's space typed
+  // a moment ago goes, the release stops it (`ChatComposer`).
+  const talkRef = useRef<{ talking: boolean; at: number } | null>(null);
+  // The field gone under the held Space (Esc folds, Enter sends, the round
+  // goes): no blur nor keyup reaches it any more, the dictation stops here.
+  const voiceRef = useRef(voice);
+  useEffect(() => {
+    voiceRef.current = voice;
+  });
+  const fieldShown = open && !folded;
+  useEffect(() => {
+    if (!fieldShown) return;
+    return () => {
+      if (!talkRef.current?.talking) return;
+      talkRef.current = null;
+      const { status, stop } = voiceRef.current;
+      if (status !== "idle" && status !== "transcribing") void stop();
+    };
+  }, [fieldShown]);
+  // The words dictated into the field shown, in grey after its text as they
+  // come, never under it (the user's ask of 03/11/2026). A twin of the field
+  // draws them, scrolled to the newest: the field's own text hides meanwhile.
+  const liveWords =
+    !folded &&
+    dictating !== null &&
+    dictating === shownKey &&
+    voice.status !== "idle"
+      ? (voice.interim ?? "")
+      : "";
+  const wordsRef = useRef<HTMLDivElement>(null);
+  const shownText = (shownKey && sheet.answers[shownKey]?.text) || "";
+  // The field grows with those words too: its own sizing reads its text only.
+  useLayoutEffect(() => {
+    const area = areaRef.current;
+    if (!area) return;
+    area.style.minHeight = "";
+    const twin = wordsRef.current;
+    if (!twin) return;
+    const max = parseFloat(window.getComputedStyle(area).maxHeight) || Infinity;
+    const borders = area.offsetHeight - area.clientHeight;
+    area.style.minHeight = `${Math.min(twin.scrollHeight + borders, max)}px`;
+    twin.scrollTop = twin.scrollHeight;
+  }, [liveWords, shownText]);
+
   if (!round || sheet.closed) return null;
   const { questions } = round;
   const isAnswered = (q: RoundQuestion) => !!roundReply([q], sheet.answers);
@@ -159,6 +218,7 @@ export function ChatQuestionSheet({
   };
   const reply = roundReply(questions, sheet.answers);
   const answered = answeredFlags.filter(Boolean).length;
+  const next = buttonLeadsTo(answeredFlags, step);
 
   const dictate = (id: string) => {
     if (voice.status === "idle") {
@@ -179,6 +239,14 @@ export function ChatQuestionSheet({
     } else if (voice.status !== "transcribing") {
       void voice.stop();
     }
+    // The mic clicked: Enter goes on from the field, never clicks it again.
+    areaRef.current?.focus();
+  };
+  const stopTalk = () => {
+    const talking = talkRef.current?.talking;
+    talkRef.current = null;
+    if (talking && voice.status !== "idle" && voice.status !== "transcribing")
+      void voice.stop();
   };
   const close = () =>
     updateSheet(paneKey, replyId, (s) => ({ ...s, closed: true }));
@@ -356,10 +424,39 @@ export function ChatQuestionSheet({
                   value={a.text ?? ""}
                   aria-label={`Ta réponse à ${q.id}`}
                   onChange={(e) => set(q.key, { text: e.target.value })}
+                  onKeyUp={(e) => {
+                    if (e.key === " " && talkRef.current) stopTalk();
+                  }}
+                  // Space released elsewhere: the dictation still stops.
+                  onBlur={stopTalk}
                   onKeyDown={(e) => {
                     if (e.key === " " && e.ctrlKey) {
                       e.preventDefault();
                       if (!e.repeat) dictate(q.key);
+                    } else if (plainSpace(e)) {
+                      const area = e.currentTarget;
+                      if (!e.repeat) {
+                        // A selection the space replaced can't come back:
+                        // no talk.
+                        talkRef.current =
+                          area.selectionStart === area.selectionEnd
+                            ? { talking: false, at: area.selectionStart }
+                            : null;
+                        return;
+                      }
+                      const talk = talkRef.current;
+                      if (!talk) return;
+                      e.preventDefault();
+                      if (talk.talking || voice.status !== "idle") return;
+                      talk.talking = true;
+                      // The tap's space, typed a moment ago, goes.
+                      const text = a.text ?? "";
+                      if (text[talk.at] === " ")
+                        set(q.key, {
+                          text:
+                            text.slice(0, talk.at) + text.slice(talk.at + 1),
+                        });
+                      dictate(q.key);
                     } else if (
                       e.key === "Enter" &&
                       !e.shiftKey &&
@@ -376,29 +473,53 @@ export function ChatQuestionSheet({
                     }
                   }}
                 />
+                {liveWords && (
+                  <div className="words" ref={wordsRef} aria-hidden="true">
+                    {a.text ?? ""}
+                    <i>
+                      {a.text && !/\s$/.test(a.text) ? " " : ""}
+                      {liveWords}
+                    </i>
+                  </div>
+                )}
                 {/* No words in it: a caret says it takes some. */}
-                {!a.text && <span className="caret" aria-hidden="true" />}
+                {!a.text && !liveWords && (
+                  <span className="caret" aria-hidden="true" />
+                )}
               </div>
-              {/* One send for the round, at the field's end; the bars above
-                  step between questions (the user's ask of 01/11/2026). */}
-              <button
-                type="button"
-                className="send"
-                disabled={!reply}
-                title={
-                  reply
-                    ? `Envoyer ${answered} réponse${answered > 1 ? "s" : ""} sur ${questions.length}`
-                    : "Choisis ou écris au moins une réponse"
-                }
-                aria-label="Envoyer les réponses"
-                onClick={send}
-              >
-                <Send />
-              </button>
+              {/* At the field's end: on to the next question left, and the
+                  round sent from the last one (the user's asks of 01/11 and
+                  03/11/2026); the bars above step anywhere. */}
+              {next === "send" ? (
+                <button
+                  type="button"
+                  className="send"
+                  disabled={!reply}
+                  title={
+                    reply
+                      ? `Envoyer ${answered} réponse${answered > 1 ? "s" : ""} sur ${questions.length}`
+                      : "Choisis ou écris au moins une réponse"
+                  }
+                  aria-label="Envoyer les réponses"
+                  onClick={send}
+                >
+                  <Send />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="send"
+                  title="Question suivante (Entrée)"
+                  aria-label="Question suivante"
+                  onClick={() => {
+                    goTo(next);
+                    areaRef.current?.focus();
+                  }}
+                >
+                  <ArrowRight />
+                </button>
+              )}
             </div>
-            {listening && voice.interim && (
-              <div className="chat-voice-live">{voice.interim}</div>
-            )}
           </div>
         </div>
       )}

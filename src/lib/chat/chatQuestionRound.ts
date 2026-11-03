@@ -460,6 +460,20 @@ export function enterLeadsTo(
 }
 
 /**
+ * Where the button at the field's end leads: on to the next question left
+ * after this one; with none after it, the answers go, a part if one was
+ * skipped (the user's report of 03/11/2026: it sent from the 3rd question
+ * of 5, the last two never answered).
+ */
+export function buttonLeadsTo(
+  answered: readonly boolean[],
+  step: number,
+): number | "send" {
+  const next = answered.findIndex((done, i) => i > step && !done);
+  return next >= 0 ? next : "send";
+}
+
+/**
  * One line per answered question, `answers` by `key`: `Q1 : b) Label, mes
  * mots`. A question Claude left unnumbered goes by its title: its place
  * in its reply could name another reply's question.

@@ -54,7 +54,7 @@ import { bashCommand } from "@/lib/chat/chatBash";
 /** Claude's dictation (`useHiddenVoice`): its text lands in the draft. */
 export interface ChatVoice {
   status: VoiceStatus;
-  /** True once listening (`useHiddenVoice`); the preview's says nothing. */
+  /** True once listening (`useHiddenVoice`, the preview's too). */
   start: () => unknown;
   /** Resolves once the dictated text is in the draft, or with why not
    *  (`quiet`: true while the caller is there to show the failure). */

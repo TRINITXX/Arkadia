@@ -709,9 +709,13 @@ function Preview() {
       status === "idle"
         ? ""
         : PREVIEW_DICTATION.split(" ").slice(0, heard).join(" "),
+    // Listening at once, as `useHiddenVoice` says: the question sheet's
+    // field shows the words as they come (its text still lands in the
+    // input: `stop` below writes the draft, no `redirectDictation`).
     start: () => {
       setHeard(0);
       setStatus("listening");
+      return true;
     },
     stop: () => {
       setStatus("transcribing");

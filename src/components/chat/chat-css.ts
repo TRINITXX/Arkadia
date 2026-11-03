@@ -768,7 +768,9 @@ export const CHAT_CSS = `
 @keyframes chat-caret-blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .chat-sheet-q .free .caret { animation: none; } }
 .chat-sheet-q .chat-voice-live { padding: 0 16px 4px; font-size: 13px; }
-.chat-sheet-q .q .chat-voice-live { padding: 0 2px; }
+/* Words dictated into the field as they come: a twin over its inside draws its text, then them in grey, scrolled to the newest. */
+.chat-sheet-q .free .words { position: absolute; inset: 1px; z-index: 1; box-sizing: border-box; border-radius: 9px; background: #141619; color: var(--chat-ink); font-size: 13px; line-height: 1.5; padding: 5px 10px; white-space: pre-wrap; overflow-wrap: break-word; overflow: hidden; pointer-events: none; }
+.chat-sheet-q .free .words i { color: #8b8f97; }
 /* The round's one send, an icon at the free field's end (no footer: the bars above step between questions). */
 .chat-sheet-q .free .send { width: 32px; height: 32px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 9px; background: var(--chat-accent); color: var(--chat-accent-ink); cursor: pointer; transition: opacity .12s; }
 .chat-sheet-q .free .send:disabled { opacity: .4; cursor: default; }

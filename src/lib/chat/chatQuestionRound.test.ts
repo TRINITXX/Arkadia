@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buttonLeadsTo,
   enterLeadsTo,
   lastReplyRound,
   parseQuestionRound,
@@ -345,6 +346,15 @@ describe("question rounds in Claude's reply", () => {
     expect(enterLeadsTo([true, true, true], 1)).toBe("send");
     // The only one left, still unanswered: nowhere to go, nothing sent.
     expect(enterLeadsTo([true, false], 1)).toBeNull();
+  });
+
+  it("steps forward on the field's button, and sends once no question is left after", () => {
+    // Q3 of 5 answered, Q4 and Q5 left: Q4, never the round sent.
+    expect(buttonLeadsTo([true, true, true, false, false], 2)).toBe(3);
+    // An answered question after it is stepped over.
+    expect(buttonLeadsTo([false, true, false], 0)).toBe(2);
+    // None left after it: the answers go, a skipped one before included.
+    expect(buttonLeadsTo([false, true, true], 2)).toBe("send");
   });
 
   it("keeps an unnumbered question its reply's own, and a question asked again unanswered", () => {
