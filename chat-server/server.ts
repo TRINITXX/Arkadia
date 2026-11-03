@@ -193,7 +193,8 @@ export type Command =
   /** Withdraws a message Claude hasn't taken yet. */
   | { type: "cancel_queued"; chatId: string; uuid: string }
   /** A key typed in the input of a chat asleep: its Claude Code starts again. */
-  | { type: "wake"; chatId: string }
+  /** `slash`: the input starts with « / », a command: Claude Code wakes, no handoff is prepared. */
+  | { type: "wake"; chatId: string; slash?: boolean }
   /** Puts the chat to sleep now if nothing runs nor waits in it (tests, checks). */
   | { type: "sleep"; chatId: string }
   /** The Lab's setting changed: for the whole server; null: never. */
@@ -568,6 +569,15 @@ function transcriptFile(cwd: string, sessionId: string, env: Record<string, stri
   return existsSync(path) ? path : null;
 }
 
+/** A file's last write, or -1 when it can't be read. */
+function mtimeOf(path: string): number {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return -1;
+  }
+}
+
 /** The end of a file (its first line may be cut: `parseEntries` skips it). */
 async function readTail(path: string, bytes: number): Promise<{ text: string; whole: boolean }> {
   const file = await open(path, "r");
@@ -690,6 +700,11 @@ class Chat {
   private interruptAfterHandoff = false;
   /** Resumed « en entier » from a handoff: its next message goes to it as is. */
   private whole = false;
+  /**
+   * A handoff Opus writes from the first key typed in a cold chat
+   * (`wakeFromInput`), before its message is sent: `send` takes it.
+   */
+  private prepared: { cold: ColdSession; summary: Promise<string>; mtimeMs: number; failed: boolean } | null = null;
   /** What keeps it awake (`SleepFacts`), from its messages and the page's commands. */
   private turn = false;
   private tasks: readonly string[] = [];
@@ -1792,17 +1807,31 @@ class Chat {
     let opening: string | null = null;
     let handedOff = false;
     const candidate = this.coldCandidate(text);
+    // Written since the first key: taken by this message, dropped by any
+    // other (a slash command, another session meanwhile).
+    const prepared = this.prepared;
+    this.prepared = null;
+    // Still good: the same session, its transcript untouched since (a `!`
+    // command writes in it without a turn), Opus didn't fail.
+    const ready =
+      prepared &&
+      !prepared.failed &&
+      candidate?.sessionId === prepared.cold.sessionId &&
+      mtimeOf(prepared.cold.transcript) === prepared.mtimeMs
+        ? prepared
+        : null;
+    if (prepared && !ready) this.writer?.close();
     if (candidate) {
       let release = () => {};
       this.handingOff = new Promise<void>((resolve) => (release = resolve));
       try {
-        const cold = await this.coldSession(candidate);
+        const cold = ready?.cold ?? (await this.coldSession(candidate));
         if (cold && !this.ended && !this.silent) {
           handedOff = true;
           const id = `handoff:${uuid}`;
           this.out({ type: "handoff", chatId: this.chatId, id, phase: "running", before: cold.facts.tokens });
           this.out(shown);
-          opening = await this.handOff(cold, id);
+          opening = await this.handOff(cold, id, ready?.summary);
         }
       } finally {
         this.handingOff = null;
@@ -1921,14 +1950,16 @@ class Chat {
    * sleep, the next one starts a new session. The text that opens it, or
    * null when it failed (said under the separator): the session resumes.
    */
-  private async handOff(cold: ColdSession, id: string): Promise<string | null> {
+  private async handOff(
+    cold: ColdSession,
+    id: string,
+    written: Promise<string> = this.summaryOf(cold),
+  ): Promise<string | null> {
     try {
-      const entries = parseEntries(await readFile(cold.transcript, "utf8"));
-      const said = conversationWords(entries);
-      const written = await this.writeHandoff(writerPrompt(conversationDigest(entries)));
+      const summary = await written;
       // Closed or relaunched while Opus wrote: nothing more of this chat.
       if (this.ended || this.silent) return null;
-      const info = { from: cold.sessionId, before: cold.facts.tokens, summary: handoffSummary(written, said) };
+      const info = { from: cold.sessionId, before: cold.facts.tokens, summary };
       const opening = handoffBlock(info, cold.transcript, TRANSCRIPT_TOOL);
       // Woken meanwhile (another pane's command): its Claude Code goes now.
       if (!this.asleep && !this.sleepIfDue(Date.now(), 0)) throw new Error("la conversation s'est remise au travail");
@@ -1939,6 +1970,44 @@ class Chat {
       const error = e instanceof Error ? e.message : String(e);
       if (!this.ended && !this.silent) this.out({ type: "handoff", chatId: this.chatId, id, phase: "failed", error });
       return null;
+    }
+  }
+
+  /** The handoff's summary for a cold session: Opus's, then the latest exchanges as is. */
+  private async summaryOf(cold: ColdSession): Promise<string> {
+    const entries = parseEntries(await readFile(cold.transcript, "utf8"));
+    const written = await this.writeHandoff(writerPrompt(conversationDigest(entries)));
+    return handoffSummary(written, conversationWords(entries));
+  }
+
+  /**
+   * The first change to the input of a chat asleep (`useWakeOnInput`, every
+   * change while it sleeps). A big session gone cold starts its handoff now,
+   * while the user types, and its old Claude Code stays asleep (the message
+   * goes to a new session); any other chat wakes as before.
+   */
+  async wakeFromInput(slash: boolean): Promise<void> {
+    // A command typed: Claude Code wakes (its commands fill the menu), a
+    // handoff already prepared waits for a message.
+    if (slash) return this.wake();
+    if (!this.asleep || this.prepared || this.handingOff || this.ended || this.silent) return;
+    const candidate = this.coldCandidate("");
+    if (!candidate) return this.wake();
+    let release = () => {};
+    this.handingOff = new Promise<void>((resolve) => (release = resolve));
+    try {
+      const cold = await this.coldSession(candidate);
+      if (this.ended || this.silent) return;
+      if (!cold) return this.wake();
+      const summary = this.summaryOf(cold);
+      const prepared = { cold, summary, mtimeMs: mtimeOf(cold.transcript), failed: false };
+      // A failure (the 5-hour limit, the network) is no handoff: the
+      // message writes a new one (`send`), keys typed meanwhile retry nothing.
+      summary.catch(() => (prepared.failed = true));
+      this.prepared = prepared;
+    } finally {
+      this.handingOff = null;
+      release();
     }
   }
 
@@ -1953,7 +2022,9 @@ class Chat {
       options: {
         cwd: this.cwd,
         model: "opus",
-        effort: "medium",
+        // `low`: 49 s instead of 78 s at `medium` on a 687 k session, as
+        // faithful (16 of its messages quoted against 15, 03/11/2026).
+        effort: "low",
         systemPrompt: WRITER_SYSTEM,
         tools: [],
         settingSources: [],
@@ -1977,7 +2048,8 @@ class Chat {
       throw new Error("pas de réponse d'Opus");
     } finally {
       clearTimeout(late);
-      this.writer = null;
+      // A prepared handoff dropped may close after a newer one started.
+      if (this.writer === q) this.writer = null;
       q.close();
     }
   }
@@ -2637,7 +2709,7 @@ async function handle(cmd: Command): Promise<void> {
     case "reload_plugins":
       return chat.reloadPlugins();
     case "wake":
-      return chat.wake();
+      return chat.wakeFromInput(cmd.slash === true);
     case "bash":
       return chat.bash(cmd.id, cmd.command);
     case "bash_stop":

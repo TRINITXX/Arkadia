@@ -129,7 +129,7 @@ export interface ChatViewProps {
    */
   hidden?: boolean;
   /** The chat is asleep and its input changed: Claude Code starts again. */
-  onWake?: () => void;
+  onWake?: (slash: boolean) => void;
   /** `!command` sent: runs in the tab's folder (`chatBash`). */
   onBash?: (command: string) => void;
   /** Esc or the card's stop on a running `!` command. */

@@ -408,7 +408,8 @@ export type ChatCommand =
   /** Withdraws a message Claude hasn't taken yet (`queued_removed`). */
   | { type: "cancel_queued"; chatId: string; uuid: string }
   /** A key typed in an asleep chat's input: its Claude Code starts again. */
-  | { type: "wake"; chatId: string }
+  /** `slash`: the input starts with « / », a command: Claude Code wakes, no handoff is prepared. */
+  | { type: "wake"; chatId: string; slash?: boolean }
   /** To sleep now if nothing runs nor waits (checks only). */
   | { type: "sleep"; chatId: string }
   /** The Lab's sleep delay changed, for the whole server; null: never. */

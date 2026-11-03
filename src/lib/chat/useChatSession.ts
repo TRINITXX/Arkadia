@@ -198,7 +198,11 @@ export function useChatSession(
   );
 
   /** A key typed in the input of a chat asleep: its Claude Code starts again. */
-  const wake = useCallback(() => run({ type: "wake", chatId }), [run, chatId]);
+  const wake = useCallback(
+    (slash = false) =>
+      run({ type: "wake", chatId, ...(slash ? { slash } : {}) }),
+    [run, chatId],
+  );
   /** `!command`: runs in the tab's folder, Claude gets it with the next message. */
   const bash = useCallback(
     (command: string) =>

@@ -124,7 +124,7 @@ export function useChat(chatId: string) {
         markWithdrawing(chatId, uuid);
         return run({ type: "cancel_queued", uuid });
       },
-      wake: () => run({ type: "wake" }),
+      wake: (slash = false) => run({ type: "wake", ...(slash ? { slash } : {}) }),
       bash: (command: string) =>
         run({
           type: "bash",

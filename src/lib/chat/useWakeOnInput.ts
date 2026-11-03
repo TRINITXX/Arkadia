@@ -9,13 +9,20 @@ import { useEffect, useRef } from "react";
  */
 export function useWakeOnInput(
   asleep: boolean,
-  input: unknown,
-  onWake?: () => void,
+  input: string | { text: string },
+  onWake?: (slash: boolean) => void,
 ): void {
   const seen = useRef(input);
   useEffect(() => {
     if (input === seen.current) return;
     seen.current = input;
-    if (asleep) onWake?.();
+    // `slash`: a command typed, the server wakes Claude Code and prepares no handoff.
+    if (asleep) onWake?.(typesCommand(input));
   }, [asleep, input, onWake]);
+}
+
+/** The input starts a slash command (« /compact »): no handoff is prepared for it. */
+export function typesCommand(input: string | { text: string }): boolean {
+  const text = typeof input === "string" ? input : input.text;
+  return text.trimStart().startsWith("/");
 }
