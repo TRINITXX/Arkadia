@@ -294,7 +294,12 @@ export function useSlashMenu({
         .then(
           (why) => {
             if (why) setHint({ text: why, for: at });
-            else setText("");
+            else {
+              // Resumed: « Reprise… » goes with the input, or the same text
+              // typed again later finds it instead of the list (03/11/2026).
+              setHint(null);
+              setText("");
+            }
           },
           (e: unknown) =>
             setHint({
