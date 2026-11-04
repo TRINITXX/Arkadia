@@ -185,8 +185,10 @@ pub(crate) fn launch_window(dir: &str, title: &str) -> bool {
         .is_ok()
 }
 
+/// Dark like Chrome's own pages: no white flash in the panel. No `#` in
+/// it, which would start the URL's fragment.
 fn blank_page(title: &str) -> String {
-    format!("data:text/html,<title>{title}</title>")
+    format!("data:text/html,<title>{title}</title><body style=background:rgb(32,33,36)>")
 }
 
 #[derive(serde::Serialize)]

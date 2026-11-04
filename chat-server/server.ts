@@ -298,6 +298,28 @@ const VISUAL_CHECK_MS = 8_000;
  */
 const ACCOUNT = process.env.ARKADIA_CHAT_ACCOUNT ?? null;
 
+function chromeInbox(local: string, lab: boolean): string {
+  return join(local, "Arkadia", lab ? "chrome-inbox-lab" : "chrome-inbox");
+}
+
+/** A Claude in Chrome call ran: its tab exists in the chat's window, so
+ *  Arkadia closes the window's launch tab (`note_ran`). Never waited on. */
+async function reportChromeCallRan(
+  paneId: string | undefined,
+  lab: boolean,
+): Promise<Record<string, never>> {
+  const local = process.env.LOCALAPPDATA;
+  if (!paneId || !local) return {};
+  const inbox = chromeInbox(local, lab);
+  if (!existsSync(join(inbox, "ready"))) return {};
+  const id = randomUUID().replace(/-/g, "");
+  const tmp = join(inbox, `${id}.tmp`);
+  await writeFile(tmp, JSON.stringify({ id, paneId, ran: true }))
+    .then(() => rename(tmp, join(inbox, `${id}.json`)))
+    .catch(() => {});
+  return {};
+}
+
 /** When each chat last asked for its Chrome window: at most every 20 s. */
 const chromeAskedAt = new Map<string, number>();
 
@@ -316,10 +338,10 @@ async function askChromePanel(
 ): Promise<Record<string, never>> {
   const local = process.env.LOCALAPPDATA;
   if (!paneId || !local) return {};
+  const inbox = chromeInbox(local, lab);
   const last = chromeAskedAt.get(paneId) ?? 0;
   if (Date.now() - last < 20_000) return {};
   chromeAskedAt.set(paneId, Date.now());
-  const inbox = join(local, "Arkadia", lab ? "chrome-inbox-lab" : "chrome-inbox");
   try {
     const pid = Number((await readFile(join(inbox, "ready"), "utf8")).trim());
     // Throws when no such process: an Arkadia gone since.
@@ -1006,6 +1028,18 @@ class Chat {
               hooks: [
                 async () =>
                   askChromePanel(
+                    start.env?.ARKADIA_PANE_ID,
+                    start.env?.ARKADIA_LAB === "1",
+                  ),
+              ],
+            },
+          ],
+          PostToolUse: [
+            {
+              matcher: "mcp__claude-in-chrome__.*",
+              hooks: [
+                async () =>
+                  reportChromeCallRan(
                     start.env?.ARKADIA_PANE_ID,
                     start.env?.ARKADIA_LAB === "1",
                   ),

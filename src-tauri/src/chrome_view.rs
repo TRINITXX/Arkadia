@@ -33,34 +33,39 @@ pub struct Bounds {
     height: f64,
 }
 
-/// A window laid out in screen pixels, with the width its region shows.
+/// A window laid out in screen pixels, with the corner its region cuts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Layout {
     x: i32,
     y: i32,
     width: i32,
     height: i32,
-    /// The visible part, from the window's left edge: the rest holds
-    /// Chrome's caption buttons.
-    shown: i32,
+    /// The top-right corner left out: Chrome's caption buttons.
+    notch_width: i32,
+    notch_height: i32,
 }
 
-/// Width of Chrome's three caption buttons, in device-independent pixels
-/// (46 each, measured on Chrome 156), plus a margin.
-const CAPTION_BUTTONS_DIP: i32 = 3 * 46 + 4;
+/// Chrome's three caption buttons, in device-independent pixels (46 wide
+/// each, measured on Chrome 156), plus a margin. Their height stays inside
+/// the tab strip (41.6 dip measured): the toolbar below, its extensions and
+/// its menu included, stays whole.
+const CAPTION_BUTTONS_DIP: i32 = 3 * 46 + 2;
+const CAPTION_HEIGHT_DIP: i32 = 40;
 
 /// Where `bounds` (relative to main's client origin `origin`) lays a Chrome
-/// window at `dpi`: as wide as the panel plus the caption buttons, which the
-/// region leaves out.
+/// window at `dpi`: exactly the panel body, its caption buttons cut out.
+/// A window wider than the panel pushed the toolbar's right end (menu,
+/// extensions) out of view too (seen 05/11/2026).
 fn layout(origin: (i32, i32), bounds: Bounds, dpi: u32) -> Layout {
-    let shown = bounds.width.round().max(1.0) as i32;
-    let buttons = CAPTION_BUTTONS_DIP * dpi.max(96) as i32 / 96;
+    let scale = |dip: i32| dip * dpi.max(96) as i32 / 96;
+    let width = bounds.width.round().max(1.0) as i32;
     Layout {
         x: origin.0 + bounds.x.round() as i32,
         y: origin.1 + bounds.y.round() as i32,
-        width: shown + buttons,
+        width,
         height: bounds.height.round().max(1.0) as i32,
-        shown,
+        notch_width: scale(CAPTION_BUTTONS_DIP).min(width),
+        notch_height: scale(CAPTION_HEIGHT_DIP),
     }
 }
 
@@ -115,6 +120,28 @@ struct Win {
     profile_dir: String,
     /// Where it was last laid, to tell Chrome's own moves from ours.
     at: Option<Layout>,
+    /// The tab of the page it was launched on, still open.
+    launch: Option<LaunchTab>,
+}
+
+/// Claude in Chrome adds its own tab (in the background) to the window:
+/// the launch page's tab closes once Claude Code reports a call that ran
+/// (PostToolUse), so the window holds Claude's tabs only (Alexis,
+/// 05/11/2026). A guess on timing could close the window's last tab, and
+/// the window with it (third review of 05/11/2026).
+#[derive(Clone, Debug)]
+struct LaunchTab {
+    title: String,
+    /// Claude's group lands in this window: steered there, or the profile's
+    /// only window, when its first call was let through.
+    landed: bool,
+}
+
+/// Whether the launch tab may close after one of Claude's calls ran: its
+/// group is in this window (so is its tab), and the launch page is still
+/// the window's active tab (Chrome closes the active tab).
+fn may_close_launch_tab(landed: bool, window_title: &str, page_title: &str) -> bool {
+    landed && is_launched_window(window_title, page_title)
 }
 
 #[derive(Default)]
@@ -132,6 +159,10 @@ struct Inner {
     /// Panes closed while their window was still launching: it closes as
     /// soon as it appears.
     closed: HashSet<String>,
+    /// Launch tabs just closed: their window going away means it was its
+    /// last tab (Claude's group was elsewhere). Never again for that pane.
+    closing: HashMap<String, std::time::Instant>,
+    no_autoclose: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -170,6 +201,10 @@ struct ChromeClosed {
 struct RequestFile {
     id: String,
     pane_id: String,
+    /// Claude Code's PostToolUse: one of the pane's calls ran, its tab
+    /// exists (`note_ran`). Nothing to answer.
+    #[serde(default)]
+    ran: bool,
 }
 
 fn inbox_dir() -> PathBuf {
@@ -318,6 +353,10 @@ fn ensure(
         std::process::id(),
         NEXT_LAUNCH.fetch_add(1, Ordering::Relaxed),
     );
+    // Chrome puts a window launched from the command line in front, over
+    // whatever Alexis uses: the foreground goes back to it.
+    let before = win::foreground();
+    let _launching = win::Launching::start();
     if !crate::chrome_profile::launch_window(&dir, &title) {
         return Err("Chrome could not be started".into());
     }
@@ -336,10 +375,15 @@ fn ensure(
     };
     win::adopt(hwnd);
     win::park(hwnd);
+    win::hand_back(hwnd, before);
     let win = Win {
         hwnd,
         profile_dir: dir,
         at: None,
+        launch: Some(LaunchTab {
+            title: title.clone(),
+            landed: false,
+        }),
     };
     let pane_gone = state.inner.lock().is_ok_and(|mut inner| {
         if inner.closed.remove(key) {
@@ -440,6 +484,7 @@ pub async fn chrome_view_prepare(
         let state = worker.state::<ChromeView>();
         let (win, created, profile_started) = ensure(&worker, &state, &key, &account)?;
         let steered = steer(&state, &win, created);
+        note_landed(&state, &key, steered);
         Ok::<_, String>(Prepared {
             profile: profile_label(&account),
             steered,
@@ -454,6 +499,58 @@ pub async fn chrome_view_prepare(
     }
     write_ack(&id, result.as_ref().ok());
     result
+}
+
+/// Claude's call in pane `key` is let through: when its group lands in
+/// the pane's window, the launch tab may go once a call ran.
+fn note_landed(state: &ChromeView, key: &str, steered: bool) {
+    if !steered {
+        return;
+    }
+    if let Some(launch) = state
+        .inner
+        .lock()
+        .ok()
+        .as_mut()
+        .and_then(|inner| inner.windows.get_mut(key))
+        .and_then(|win| win.launch.as_mut())
+    {
+        launch.landed = true;
+    }
+}
+
+/// One of Claude's calls in pane `key` ran (PostToolUse): its tab is in the
+/// window, the launch tab closes. Any other tab in front (Alexis clicked
+/// one): the launch tab stays, Chrome would close that other tab.
+fn note_ran(state: &ChromeView, key: &str) {
+    let Ok(mut inner) = state.inner.lock() else {
+        return;
+    };
+    if inner.no_autoclose.contains(key) {
+        return;
+    }
+    let Some(win) = inner.windows.get_mut(key) else {
+        return;
+    };
+    let hwnd = win.hwnd;
+    let Some(launch) = win.launch.take() else {
+        return;
+    };
+    if !launch.landed {
+        // Its group went elsewhere: this window may hold the launch tab
+        // only. Kept for a later call that lands here.
+        win.launch = Some(launch);
+        return;
+    }
+    if may_close_launch_tab(launch.landed, &win::window_title(hwnd), &launch.title) {
+        win::close_active_tab(hwnd);
+        inner
+            .closing
+            .insert(key.to_string(), std::time::Instant::now());
+    } else {
+        // Another tab in front: tried again after the next call.
+        win.launch = Some(launch);
+    }
 }
 
 /// Lays the windows out again on a worker thread: laying a window out may
@@ -599,12 +696,13 @@ pub fn on_exit(app: &AppHandle) {
 /// The foreground went to a Chrome window: one of the panel's (it is now
 /// its profile's last-focused window), or one of Alexis's (its profile is
 /// dirty until the next steer).
-fn on_foreground(app: &AppHandle, hwnd: isize, app_id: Option<String>) {
+/// Returns whether the window is one of the panel's.
+fn on_foreground(app: &AppHandle, hwnd: isize, app_id: Option<String>) -> bool {
     let Some(state) = app.try_state::<ChromeView>() else {
-        return;
+        return false;
     };
     let Ok(mut inner) = state.inner.lock() else {
-        return;
+        return false;
     };
     if let Some(dir) = inner
         .windows
@@ -614,10 +712,10 @@ fn on_foreground(app: &AppHandle, hwnd: isize, app_id: Option<String>) {
     {
         inner.dirty.remove(&dir);
         inner.steered.insert(dir, hwnd);
-        return;
+        return true;
     }
     let Some(app_id) = app_id else {
-        return;
+        return false;
     };
     let dirs: Vec<String> = inner
         .windows
@@ -626,6 +724,7 @@ fn on_foreground(app: &AppHandle, hwnd: isize, app_id: Option<String>) {
         .filter(|d| app_id_of(d) == app_id)
         .collect();
     inner.dirty.extend(dirs);
+    false
 }
 
 /// A panel window moved by itself (the extension resizes it, a drag on its
@@ -666,6 +765,13 @@ fn on_destroyed(app: &AppHandle, hwnd: isize) {
             .find(|(_, w)| w.hwnd == hwnd)
             .map(|(k, _)| k.clone())?;
         inner.windows.remove(&key);
+        let closed_launch_tab = inner
+            .closing
+            .remove(&key)
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(3));
+        if closed_launch_tab {
+            inner.no_autoclose.insert(key.clone());
+        }
         Some(key)
     });
     if let Some(key) = key {
@@ -747,6 +853,20 @@ fn run_inbox(app: AppHandle) -> Result<(), String> {
             if !valid_id(&request.id) || !seen.insert(request.id.clone()) {
                 continue;
             }
+            if request.ran {
+                let state = app.state::<ChromeView>();
+                let key = format!("chrome:{}", request.pane_id);
+                // Taken only by the instance that has the pane's window.
+                if state
+                    .inner
+                    .lock()
+                    .is_ok_and(|inner| inner.windows.contains_key(&key))
+                {
+                    let _ = std::fs::remove_file(&path);
+                    note_ran(&state, &key);
+                }
+                continue;
+            }
             let _ = app.emit_to(
                 "main",
                 "chrome-request",
@@ -764,22 +884,27 @@ fn run_inbox(app: AppHandle) -> Result<(), String> {
 mod win {
     use super::Layout;
     use std::collections::HashSet;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicU64, Ordering};
     use std::sync::{Mutex, OnceLock};
 
     use tauri::AppHandle;
     use windows::core::{w, PCWSTR};
     use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Foundation::POINT;
     use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, PROPERTYKEY, RECT, WPARAM};
-    use windows::Win32::Graphics::Gdi::{CreateRectRgn, SetWindowRgn};
+    use windows::Win32::Graphics::Gdi::{
+        CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_DIFF,
+    };
     use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
     use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::SystemInformation::GetTickCount64;
     use windows::Win32::System::Threading::{
         AttachThreadInput, GetCurrentThreadId, GetExitCodeProcess, OpenProcess,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
     use windows::Win32::UI::Shell::PropertiesSystem::{
         IPropertyStore, SHGetPropertyStoreForWindow,
     };
@@ -795,6 +920,9 @@ mod win {
         SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINEVENT_OUTOFCONTEXT, WM_APP,
         WM_CLOSE, WM_NULL, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
         WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetAncestor, GetCursorPos, WindowFromPoint, GA_ROOT, WM_APPCOMMAND,
     };
 
     fn hwnd(raw: isize) -> HWND {
@@ -975,7 +1103,10 @@ mod win {
                 Ok(prev) if !is_topmost(prev) => (Some(prev), Default::default()),
                 _ => (Some(HWND_TOP), Default::default()),
             };
-            let region = CreateRectRgn(0, 0, at.shown, at.height);
+            let region = CreateRectRgn(0, 0, at.width, at.height);
+            let notch = CreateRectRgn(at.width - at.notch_width, 0, at.width, at.notch_height);
+            let _ = CombineRgn(Some(region), Some(region), Some(notch), RGN_DIFF);
+            let _ = DeleteObject(notch.into());
             let _ = SetWindowRgn(h, Some(region), true);
             let _ = SetWindowPos(
                 h,
@@ -1070,7 +1201,9 @@ mod win {
             if before.0.is_null() || !own_process(before) {
                 return false;
             }
+            STEER_UNTIL.store(now_ms() + 1_000, Ordering::SeqCst);
             if !SetForegroundWindow(hwnd(raw)).as_bool() {
+                STEER_UNTIL.store(0, Ordering::SeqCst);
                 return false;
             }
             std::thread::sleep(std::time::Duration::from_millis(150));
@@ -1113,6 +1246,122 @@ mod win {
             if pid != 0 && pid != std::process::id() && !running(pid) {
                 close(raw);
             }
+        }
+    }
+
+    pub(super) fn window_title(raw: isize) -> String {
+        title(hwnd(raw))
+    }
+
+    /// Closes the window's active tab: Chrome maps APPCOMMAND_CLOSE to
+    /// "close tab", with no foreground nor keyboard needed (verified
+    /// 05/11/2026 on Chrome 156).
+    pub(super) fn close_active_tab(raw: isize) {
+        const APPCOMMAND_CLOSE: isize = 31;
+        // SAFETY: a posted message, never waited on.
+        unsafe {
+            let _ = PostMessageW(
+                Some(hwnd(raw)),
+                WM_APPCOMMAND,
+                WPARAM(raw as usize),
+                LPARAM(APPCOMMAND_CLOSE << 16),
+            );
+        }
+    }
+
+    /// The last foreground window that was none of the panel's: where the
+    /// foreground goes back when Chrome takes it by itself.
+    static LAST_OTHER: AtomicIsize = AtomicIsize::new(0);
+    /// Until when (GetTickCount64) the panel's windows may take the
+    /// foreground: Arkadia steering one (`activate_briefly`).
+    static STEER_UNTIL: AtomicU64 = AtomicU64::new(0);
+    /// Chrome windows taking the foreground during a launch are the new
+    /// window, never a place to go back to.
+    static LAUNCHES: AtomicU32 = AtomicU32::new(0);
+
+    pub(super) struct Launching;
+    impl Launching {
+        pub(super) fn start() -> Self {
+            LAUNCHES.fetch_add(1, Ordering::SeqCst);
+            Launching
+        }
+    }
+    impl Drop for Launching {
+        fn drop(&mut self) {
+            LAUNCHES.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    fn now_ms() -> u64 {
+        // SAFETY: plain read.
+        unsafe { GetTickCount64() }
+    }
+
+    /// Whether Alexis just clicked in the window himself: it is the top
+    /// window under the cursor (a game over it is not), and input just came.
+    fn user_caused(h: HWND) -> bool {
+        // SAFETY: plain reads.
+        unsafe {
+            let mut cursor = POINT::default();
+            if GetCursorPos(&mut cursor).is_err() {
+                return false;
+            }
+            let under = GetAncestor(WindowFromPoint(cursor), GA_ROOT);
+            if under != h {
+                return false;
+            }
+            let mut info = LASTINPUTINFO {
+                cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+                dwTime: 0,
+            };
+            GetLastInputInfo(&mut info).as_bool()
+                && (now_ms() as u32).wrapping_sub(info.dwTime) < 500
+        }
+    }
+
+    /// Gives the foreground to `target`, borrowing the input state of the
+    /// thread that holds it (Arkadia is not the foreground process then).
+    fn force_foreground(target: HWND) {
+        // SAFETY: foreground handover with the holder's input attached.
+        unsafe {
+            if !IsWindow(Some(target)).as_bool() {
+                return;
+            }
+            let holder = GetWindowThreadProcessId(GetForegroundWindow(), None);
+            let ours = GetCurrentThreadId();
+            let attached =
+                holder != 0 && holder != ours && AttachThreadInput(ours, holder, true).as_bool();
+            let _ = SetForegroundWindow(target);
+            if attached {
+                let _ = AttachThreadInput(ours, holder, false);
+            }
+        }
+    }
+
+    /// A window of a panel, this Arkadia's or the other's (daily, Lab).
+    fn is_panel_window(h: HWND) -> bool {
+        // SAFETY: plain reads of window properties.
+        unsafe {
+            !GetPropW(h, w!("ArkadiaChromePanel")).0.is_null()
+                || !GetPropW(h, w!("ArkadiaLabChromePanel")).0.is_null()
+        }
+    }
+
+    /// After a launch: the new window took the foreground, which goes back
+    /// to the window Alexis used last (the launch can take seconds: the one
+    /// in front before it may be stale), else to the one before the launch.
+    pub(super) fn hand_back(raw: isize, before: Option<isize>) {
+        if foreground() != Some(raw) {
+            return;
+        }
+        let last = LAST_OTHER.load(Ordering::SeqCst);
+        let target = if last != 0 && last != raw {
+            Some(last)
+        } else {
+            before
+        };
+        if let Some(target) = target.filter(|t| *t != raw) {
+            force_foreground(hwnd(target));
         }
     }
 
@@ -1198,8 +1447,25 @@ mod win {
         }
         match event {
             EVENT_SYSTEM_FOREGROUND => {
-                if is_chrome_class(h) {
-                    super::on_foreground(app, h.0 as isize, app_id(h));
+                let raw = h.0 as isize;
+                let ours = is_chrome_class(h) && super::on_foreground(app, raw, app_id(h));
+                if !ours {
+                    // Neither a window being launched nor another Arkadia's
+                    // panel window (the daily and the Lab side by side would
+                    // hand the foreground to each other forever).
+                    let chrome = is_chrome_class(h);
+                    if !(chrome && (LAUNCHES.load(Ordering::SeqCst) > 0 || is_panel_window(h))) {
+                        LAST_OTHER.store(raw, Ordering::SeqCst);
+                    }
+                    return;
+                }
+                // Chrome took it by itself (the extension focuses its window):
+                // it goes back, unless Alexis clicked in it or Arkadia steers.
+                let steering = now_ms() < STEER_UNTIL.load(Ordering::SeqCst);
+                let back = LAST_OTHER.load(Ordering::SeqCst);
+                if !steering && back != 0 && !user_caused(h) {
+                    // Off the hook: handing over sends messages.
+                    std::thread::spawn(move || force_foreground(hwnd(back)));
                 }
             }
             EVENT_OBJECT_LOCATIONCHANGE => {
@@ -1228,6 +1494,17 @@ mod win {
     }
     pub(super) fn foreground() -> Option<isize> {
         None
+    }
+    pub(super) fn window_title(_: isize) -> String {
+        String::new()
+    }
+    pub(super) fn close_active_tab(_: isize) {}
+    pub(super) fn hand_back(_: isize, _: Option<isize>) {}
+    pub(super) struct Launching;
+    impl Launching {
+        pub(super) fn start() -> Self {
+            Launching
+        }
     }
     pub(super) fn alive(_: isize) -> bool {
         false
@@ -1265,16 +1542,21 @@ mod tests {
     }
 
     #[test]
-    fn lays_the_window_wider_than_the_panel_by_its_caption_buttons() {
+    fn lays_the_window_on_the_panel_its_caption_buttons_cut_out() {
         let at = layout((-18, 0), b(2227.4, 153.0, 1613.0, 2025.0), 288);
-        assert_eq!((at.x, at.y), (2209, 153));
-        assert_eq!(at.shown, 1613);
-        // 142 dip at 300 %.
-        assert_eq!(at.width, 1613 + 426);
-        assert_eq!(at.height, 2025);
-        // A 96 dpi screen, and a dpi Windows failed to report.
-        assert_eq!(layout((0, 0), b(0.0, 0.0, 500.0, 400.0), 96).width, 642);
-        assert_eq!(layout((0, 0), b(0.0, 0.0, 500.0, 400.0), 0).width, 642);
+        assert_eq!((at.x, at.y, at.width, at.height), (2209, 153, 1613, 2025));
+        // 140 x 40 dip at 300 %: the toolbar row (41.6 dip down) stays whole.
+        assert_eq!((at.notch_width, at.notch_height), (420, 120));
+        // A 96 dpi screen, a dpi Windows failed to report, a tiny panel.
+        assert_eq!(
+            layout((0, 0), b(0.0, 0.0, 500.0, 400.0), 96).notch_width,
+            140
+        );
+        assert_eq!(
+            layout((0, 0), b(0.0, 0.0, 500.0, 400.0), 0).notch_height,
+            40
+        );
+        assert_eq!(layout((0, 0), b(0.0, 0.0, 90.0, 400.0), 96).notch_width, 90);
     }
 
     #[test]
@@ -1307,6 +1589,24 @@ mod tests {
             &title
         ));
         assert!(!is_launched_window("Twitch - Google Chrome", &title));
+    }
+
+    #[test]
+    fn closes_the_launch_tab_only_when_claude_s_tab_is_there() {
+        let page = "Arkadia-1-2";
+        assert!(may_close_launch_tab(
+            true,
+            "Arkadia-1-2 - Google Chrome",
+            page
+        ));
+        // Claude's group went elsewhere: the launch tab is the only one.
+        assert!(!may_close_launch_tab(
+            false,
+            "Arkadia-1-2 - Google Chrome",
+            page
+        ));
+        // Another tab is in front: closing would close that one.
+        assert!(!may_close_launch_tab(true, "Stripe - Google Chrome", page));
     }
 
     #[test]

@@ -68,6 +68,20 @@ instead of popping up in front. Alexis sees Claude browse and can take over (cli
 5. **Lifecycle**: pane closed -> `chrome_view_close(key)` (WM_CLOSE). Arkadia exit -> close all. On start,
    windows still carrying Arkadia's property (crash) are closed.
 
+## After Alexis's first try (05/11/2026)
+
+- Arkadia came in front: Chrome activates a window launched from the command line, and an owned
+  window drags its owner up. Now the foreground goes back to the window that had it, after a launch and
+  whenever a panel window takes it without a click of Alexis inside it (`user_caused`).
+- The toolbar's right end was out of view: the window is now exactly the panel's width, the caption
+  buttons cut out by a notch in the region.
+- The launch page stayed as an extra tab. Alexis kept one window per session (not one per account, where
+  the extension would create its own single-tab window) and asked to close that tab every time: a call that
+  ran (PostToolUse, registered with the same matcher in `~/.claude/settings.json`, shared by every account
+  through symlinks, and in the chat server) closes it with `WM_APPCOMMAND`/`APPCOMMAND_CLOSE` (Chrome's
+  "close tab", no focus needed), only when the group landed there and the launch page is still the active
+  tab. Never on a delay: it could close the window's last tab.
+
 ## Out of scope (v1)
 
 Spare pre-steered windows, tab-group window detection through UI Automation, iPhone.
