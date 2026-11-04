@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch;
 
 use super::presence::{self, Mode};
 use crate::popup::log_line;
@@ -28,20 +27,9 @@ use crate::popup::log_line;
 const PHONE_ACTION_GRACE: Duration = Duration::from_secs(5);
 const EXPO_PUSH_URL: &str = "https://exp.host/--/api/v2/push/send";
 
+#[derive(Default)]
 pub struct PhoneFollow {
     inner: Mutex<Inner>,
-    /// The followed panes, sorted, each time they change: the phones and the
-    /// Live Activity (`activity`) follow them.
-    changes: watch::Sender<Vec<String>>,
-}
-
-impl Default for PhoneFollow {
-    fn default() -> Self {
-        Self {
-            inner: Mutex::default(),
-            changes: watch::channel(Vec::new()).0,
-        }
-    }
 }
 
 #[derive(Default)]
@@ -60,9 +48,7 @@ impl PhoneFollow {
     pub fn phone_input(&self, pane: &str) {
         let mut inner = self.inner.lock();
         inner.told.remove(pane);
-        if inner.followed.insert(pane.to_string()) {
-            self.publish(&inner);
-        }
+        inner.followed.insert(pane.to_string());
     }
 
     /// The phone had the desktop act on the pane (a prompt or toolbar button).
@@ -70,9 +56,7 @@ impl PhoneFollow {
         let mut inner = self.inner.lock();
         inner.acted.insert(pane.to_string(), now);
         inner.told.remove(pane);
-        if inner.followed.insert(pane.to_string()) {
-            self.publish(&inner);
-        }
+        inner.followed.insert(pane.to_string());
     }
 
     /// Something was written to the pane from the desktop: Alexis typing, or
@@ -85,21 +69,8 @@ impl PhoneFollow {
             .is_some_and(|at| now.duration_since(*at) < PHONE_ACTION_GRACE);
         if !by_phone {
             inner.acted.remove(pane);
-            if inner.followed.remove(pane) {
-                self.publish(&inner);
-            }
+            inner.followed.remove(pane);
         }
-    }
-
-    fn publish(&self, inner: &Inner) {
-        let mut panes: Vec<String> = inner.followed.iter().cloned().collect();
-        panes.sort();
-        self.changes.send_replace(panes);
-    }
-
-    /// The followed panes now, then on every change.
-    pub fn subscribe(&self) -> watch::Receiver<Vec<String>> {
-        self.changes.subscribe()
     }
 
     /// What a phone shows: `None` when it shows no pane or left the app.
@@ -137,7 +108,6 @@ impl PhoneFollow {
         }
         if inner.followed.remove(old) {
             inner.followed.insert(new.to_string());
-            self.publish(&inner);
         }
     }
 

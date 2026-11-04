@@ -7,11 +7,9 @@ import {
   padding,
 } from "@expo/ui/swift-ui/modifiers";
 import { createLiveActivity } from "expo-widgets";
-import type { FollowRow } from "@/lib/followRows";
-
-/** The tabs the PC lists (`followRows`, src-tauri `activity::live_panes`). */
+/** The rows the PC used to push: state (`w` | `b` | `i`), project, tab. */
 export interface ClaudeDotsProps {
-  tabs: FollowRow[];
+  tabs: { s: string; p: string; t: string }[];
 }
 
 /**

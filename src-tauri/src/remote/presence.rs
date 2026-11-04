@@ -49,11 +49,6 @@ pub fn current() -> Mode {
     *MODE.borrow()
 }
 
-/// Where Alexis is now, then on every change.
-pub fn subscribe() -> watch::Receiver<Mode> {
-    MODE.subscribe()
-}
-
 #[derive(Default)]
 struct Detector {
     mode: Mode,
@@ -61,8 +56,7 @@ struct Detector {
     /// which says nothing of the iPhone.
     absent_since: Option<Instant>,
     /// Since when the box can't tell. A short failure (a slow answer, the
-    /// box restarting, the PC waking up) keeps the mode: an ended Live
-    /// Activity can't be started again from the PC.
+    /// box restarting, the PC waking up) keeps the mode.
     failing_since: Option<Instant>,
 }
 

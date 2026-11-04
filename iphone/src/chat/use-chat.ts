@@ -40,7 +40,7 @@ const MCP_WAIT_MS = 75_000;
 
 /**
  * Runs a chat command on the PC. What the user does (`phoneDrives`) names the
- * pane: the iPhone drives the tab from then on (notifications, Live Activity).
+ * pane: the iPhone drives the tab from then on (notifications).
  */
 export function chatDo(chatId: string, command: PhoneChatCommand) {
   return act({

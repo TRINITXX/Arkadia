@@ -64,8 +64,6 @@ let openedBefore = false;
 /** In front: the PC counts the watched pane as on screen (no push for it). */
 let inFront = true;
 let pushToken: string | null = null;
-/** Null: no Live Activity (none since 04/11/2026), told on every connection. */
-let activityToken: string | null | undefined;
 /** The chat pane on screen: the PC streams its chat's events (`chat`). */
 let shownChat: string | null = null;
 type ChatMsg = Extract<ServerMsg, { t: "chat" }>["event"];
@@ -128,8 +126,6 @@ function connect() {
       for (const cb of chatCatchUpSubs) cb(chat);
     }
     if (pushToken) send({ t: "push", token: pushToken });
-    if (activityToken !== undefined)
-      send({ t: "activity", token: activityToken });
     // Back after a drop: what changed meanwhile announced itself while we
     // were away. A bare event makes every open message view read again.
     if (openedBefore) emit("agent-state-changed", {});
@@ -283,12 +279,6 @@ export function readCodeBlock(paneId: string): Promise<string | null> {
 export function registerPushToken(token: string) {
   pushToken = token;
   send({ t: "push", token });
-}
-
-/** Hands the PC the Live Activity's token (null: ended), now and later. */
-export function registerActivityToken(token: string | null) {
-  activityToken = token;
-  send({ t: "activity", token });
 }
 
 export function listSessions(): Promise<ClaudeSession[]> {

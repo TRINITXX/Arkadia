@@ -34,9 +34,7 @@ export type ClientMsg =
   /** The last code block Claude wrote in the pane. */
   | { t: "code"; id: number; pane: string }
   /** The iPhone app's push token, for the panes it drives. */
-  | { t: "push"; token: string }
-  /** The Live Activity's push token; null once the app ended it. */
-  | { t: "activity"; token: string | null };
+  | { t: "push"; token: string };
 
 export type FileSource = "photos" | "downloads";
 
@@ -59,8 +57,6 @@ export type ServerMsg =
   | { t: "reply"; id: number; result?: unknown; error?: string }
   | { t: "event"; name: string; payload: unknown }
   | ({ t: "wake" } & WakeRelay)
-  /** The panes the iPhone drives (src-tauri `remote::phone`). */
-  | { t: "follow"; panes: string[] }
   /**
    * An event of the chat shown, as the desktop page gets it, or one for this
    * phone alone (`to`: its replay, the answer to its own read).

@@ -9,7 +9,6 @@
 //! `remote-action` event; it answers with `remote_reply`.
 
 pub(crate) mod access;
-mod activity;
 pub(crate) mod peer;
 pub(crate) mod phone;
 pub(crate) mod presence;
@@ -196,7 +195,7 @@ impl RemoteHub {
 }
 
 /// The desktop relaunched a pane under a new id (another account): a tab the
-/// phone drives keeps its notifications and Live Activity row.
+/// phone drives keeps its notifications.
 #[tauri::command]
 pub fn remote_pane_replaced(old_id: String, new_id: String) {
     phone::FOLLOW.replace(&old_id, &new_id);

@@ -32,8 +32,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // later features ship over the air (Alexis's request of 25/10/2026).
   plugins: [
     ["expo-router", { root: "./src/app" }],
-    // Lock Screen and Dynamic Island: a dot per tab driven from the iPhone,
-    // updated by Arkadia through APNs (`remote::activity`).
+    // The Live Activity's extension, unused since 04/11/2026 (the app only
+    // ends one left running): dropping it takes a new native build.
     ["expo-widgets", { enablePushNotifications: true, frequentUpdates: true }],
     // Ad hoc builds talk to APNs production.
     [

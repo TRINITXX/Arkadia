@@ -77,7 +77,6 @@ impl Ctx {
 
 pub async fn serve(app: AppHandle, hub: Arc<RemoteHub>, access: Arc<Access>) {
     super::presence::spawn();
-    super::activity::spawn(hub.clone());
     // The port may still be held for a moment (a previous Arkadia closing):
     // keep trying rather than leave the phone without a server.
     let mut warned = false;
@@ -430,11 +429,6 @@ enum ClientMsg {
     Push {
         token: String,
     },
-    /// The Live Activity's push token once the app started it; `None` when
-    /// it ended it (`activity`).
-    Activity {
-        token: Option<String>,
-    },
 }
 
 /// `remote-action` payload: which phone asked, its request id, the action.
@@ -484,9 +478,6 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
     ctx.hub.add_chat_outbox(client, chat_out);
     let mut state_rx = ctx.hub.watch_state();
     state_rx.mark_changed();
-    // The tabs its Live Activity lists (`activity::live_panes`).
-    let mut follow_rx = super::activity::live();
-    follow_rx.mark_changed();
     let mut frames: Option<tokio::task::JoinHandle<()>> = None;
     let mut ping = tokio::time::interval(PING_EVERY);
 
@@ -566,7 +557,6 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
                         });
                     }
                     ClientMsg::Push { token } => save_push_token(&token),
-                    ClientMsg::Activity { token } => super::activity::set_token(token),
                     ClientMsg::Sessions { .. } | ClientMsg::Search { .. } => {
                         // A full scan can take seconds: off the socket loop.
                         let app = ctx.app.clone();
@@ -592,16 +582,6 @@ async fn session(socket: WebSocket, ctx: Ctx, device: Option<IpAddr>) {
                     if out.send(text(format!(r#"{{"t":"state","state":{s}}}"#))).await.is_err() {
                         break;
                     }
-                }
-            }
-            changed = follow_rx.changed() => {
-                if changed.is_err() {
-                    break;
-                }
-                let panes = follow_rx.borrow_and_update().clone();
-                let msg = serde_json::json!({ "t": "follow", "panes": panes });
-                if out.send(text(msg.to_string())).await.is_err() {
-                    break;
                 }
             }
             _ = ping.tick() => {
@@ -682,8 +662,7 @@ fn run(app: &AppHandle, msg: ClientMsg) -> Result<(), String> {
         | ClientMsg::Conv { .. }
         | ClientMsg::Files { .. }
         | ClientMsg::Code { .. }
-        | ClientMsg::Push { .. }
-        | ClientMsg::Activity { .. } => Ok(()),
+        | ClientMsg::Push { .. } => Ok(()),
         ClientMsg::Input { pane, data } => {
             FOLLOW.phone_input(&pane);
             terminal::write_input(pane, data.into_bytes(), sessions)
