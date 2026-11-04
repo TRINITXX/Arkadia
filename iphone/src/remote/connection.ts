@@ -64,10 +64,8 @@ let openedBefore = false;
 /** In front: the PC counts the watched pane as on screen (no push for it). */
 let inFront = true;
 let pushToken: string | null = null;
-/** Undefined until the app knows whether it runs a Live Activity. */
+/** Null: no Live Activity (none since 04/11/2026), told on every connection. */
 let activityToken: string | null | undefined;
-/** Null until the PC said which panes the iPhone drives. */
-let followed: string[] | null = null;
 /** The chat pane on screen: the PC streams its chat's events (`chat`). */
 let shownChat: string | null = null;
 type ChatMsg = Extract<ServerMsg, { t: "chat" }>["event"];
@@ -76,7 +74,6 @@ const chatSubs = new Set<(event: ChatMsg) => void>();
 const chatCatchUpSubs = new Set<(chatId: string) => void>();
 /** Told when another chat (or none) comes on top of the stack. */
 const shownChatSubs = new Set<() => void>();
-const followSubs = new Set<() => void>();
 const viewSubs = new Set<() => void>();
 const frameSubs = new Set<() => void>();
 
@@ -150,10 +147,7 @@ function connect() {
       else waiting?.resolve(msg.result);
     } else if (msg.t === "event") emit(msg.name, msg.payload);
     else if (msg.t === "wake") saveRelay({ url: msg.url, token: msg.token });
-    else if (msg.t === "follow") {
-      followed = msg.panes;
-      for (const cb of followSubs) cb();
-    } else if (msg.t === "chat") {
+    else if (msg.t === "chat") {
       for (const cb of chatSubs) cb(msg.event);
     } else if (msg.t === "error") console.warn("[arkadia]", msg.message);
   };
@@ -295,17 +289,6 @@ export function registerPushToken(token: string) {
 export function registerActivityToken(token: string | null) {
   activityToken = token;
   send({ t: "activity", token });
-}
-
-/** The panes whose tabs the Live Activity lists, as the PC tells; null until it did. */
-export function useFollowedPanes(): string[] | null {
-  return useSyncExternalStore(
-    (cb) => {
-      followSubs.add(cb);
-      return () => followSubs.delete(cb);
-    },
-    () => followed,
-  );
 }
 
 export function listSessions(): Promise<ClaudeSession[]> {

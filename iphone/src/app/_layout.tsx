@@ -3,7 +3,7 @@ import { StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useLiveActivity } from "~/activity/use-live-activity";
+import { useEndLiveActivity } from "~/activity/use-end-live-activity";
 import { LockScreen } from "~/lock/lock-screen";
 import { CrashOverlay } from "~/errors/crash-screen";
 import { installCrashHandler } from "~/errors/crash-store";
@@ -27,7 +27,7 @@ export default function RootLayout() {
   const { status, snapshot } = useRemoteView();
   usePushNotifications(snapshot);
   useReopenLastTab(snapshot);
-  useLiveActivity(snapshot);
+  useEndLiveActivity();
   const { reach, wake } = useReach();
   const lock = useAppLock();
   // Down for a known reason (or waking it): a screen that says so. A plain

@@ -15,6 +15,9 @@ export interface ClaudeDotsProps {
 }
 
 /**
+ * Kept only so `useEndLiveActivity` finds and ends one an earlier version
+ * left running: the app no longer starts it (04/11/2026).
+ *
  * The Lock Screen and Dynamic Island: a row per listed tab, in the
  * projects' order, its dot (green: Claude waits for you, orange: it works)
  * then its project and tab (Alexis's request of 25/10/2026). The island
