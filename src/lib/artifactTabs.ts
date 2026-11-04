@@ -2,6 +2,11 @@
  * The artifacts of each Arkadia tab, shown as tabs of the artifact panel.
  * Pure state: the native windows (`artifact_view.rs`) follow it from
  * `ArtifactPanel` and from the keys these functions report as closed.
+ *
+ * A pane's Chrome window (`chrome_view.rs`) is a tab of the same panel, a
+ * `kind: "chrome"` item. It belongs to its pane, not to the panel: closing
+ * its tab or the panel only parks it, it is never parked here nor reported
+ * as closed, and it does not count among the artifacts of a tab.
  */
 
 /** Oldest artifact of a tab closes beyond this: each one is a live page. */
@@ -17,6 +22,28 @@ export interface ArtifactItem {
   title: string | null;
   /** Bumped when Claude publishes the link again: the page reloads. */
   nonce: number;
+  /** A pane's Chrome window rather than a claude.ai page (no url). */
+  kind?: "chrome";
+  /** The pane whose Chrome window this is. */
+  paneId?: string;
+  /** Said above the window: Claude may browse in another window. */
+  note?: string | null;
+  /** The window was closed in Chrome: the panel offers to open another. */
+  gone?: boolean;
+}
+
+export function isChrome(item: ArtifactItem | undefined): boolean {
+  return item?.kind === "chrome";
+}
+
+/** Whether the panel holds a claude.ai page, not only a pane's Chrome. */
+export function hasPages(tab: TabArtifacts | undefined): boolean {
+  return (tab?.items ?? []).some((i) => !isChrome(i));
+}
+
+/** The key of pane `paneId`'s Chrome item (and native window). */
+export function chromeKey(paneId: string): string {
+  return `chrome:${paneId}`;
 }
 
 export interface TabArtifacts {
@@ -82,12 +109,16 @@ export function openArtifact(
     ? bump(parked)
     : { key: newKey(), url, accountId, title: null, nonce: 1 };
   const all = [...(current?.items ?? []), added];
-  const evicted = all.slice(0, Math.max(0, all.length - MAX_ARTIFACTS_PER_TAB));
+  const pages = all.filter((i) => !isChrome(i));
+  const evicted = pages.slice(
+    0,
+    Math.max(0, pages.length - MAX_ARTIFACTS_PER_TAB),
+  );
   return {
     state: {
       ...state,
       [tabId]: {
-        items: all.slice(evicted.length),
+        items: all.filter((i) => !evicted.includes(i)),
         activeKey: added.key,
         parked: parked ? undefined : current?.parked,
       },
@@ -124,6 +155,12 @@ export function closeArtifact(
       : current.activeKey === key
         ? items[Math.min(index, items.length - 1)].key
         : current.activeKey;
+  if (isChrome(current.items[index])) {
+    return {
+      state: { ...state, [tabId]: { ...current, items, activeKey } },
+      closed: [],
+    };
+  }
   return {
     state: {
       ...state,
@@ -141,9 +178,17 @@ export function closePanel(
 ): ArtifactChange {
   const current = state[tabId];
   if (!current || !hasPanel(current)) return { state, closed: [] };
-  const kept =
-    current.items.find((i) => i.key === current.activeKey) ?? current.items[0];
-  const closed = current.items.filter((i) => i !== kept).map((i) => i.key);
+  const pages = current.items.filter((i) => !isChrome(i));
+  const onScreen = current.items.find((i) => i.key === current.activeKey);
+  // Chrome on screen: the page parked before stays parked.
+  if (isChrome(onScreen) || pages.length === 0) {
+    return {
+      state: { ...state, [tabId]: { ...current, items: [], activeKey: "" } },
+      closed: pages.map((i) => i.key),
+    };
+  }
+  const kept = onScreen ?? pages[0];
+  const closed = pages.filter((i) => i !== kept).map((i) => i.key);
   if (current.parked) closed.push(current.parked.key);
   return {
     state: { ...state, [tabId]: { items: [], activeKey: "", parked: kept } },
@@ -157,7 +202,7 @@ export function dropTab(state: ArtifactsByTab, tabId: string): ArtifactChange {
   if (!current) return { state, closed: [] };
   const next = { ...state };
   delete next[tabId];
-  const keys = current.items.map((i) => i.key);
+  const keys = current.items.filter((i) => !isChrome(i)).map((i) => i.key);
   if (current.parked) keys.push(current.parked.key);
   return { state: next, closed: keys };
 }
@@ -189,6 +234,52 @@ export function setArtifactTitle(
     if (!current.items.some((i) => i.key === key)) continue;
     const items = current.items.map((i) =>
       i.key === key ? { ...i, title } : i,
+    );
+    return { ...state, [tabId]: { ...current, items } };
+  }
+  return state;
+}
+
+/** Pane `paneId`'s Chrome comes forward in tab `tabId`'s panel, added as
+ *  its last tab when the panel did not show it. */
+export function showChrome(
+  state: ArtifactsByTab,
+  tabId: string,
+  paneId: string,
+  accountId: string,
+): ArtifactsByTab {
+  const current = state[tabId];
+  const key = chromeKey(paneId);
+  const items = current?.items ?? [];
+  if (items.some((i) => i.key === key)) {
+    return { ...state, [tabId]: { ...current!, activeKey: key } };
+  }
+  const added: ArtifactItem = {
+    key,
+    url: "",
+    accountId,
+    title: null,
+    nonce: 1,
+    kind: "chrome",
+    paneId,
+    note: null,
+  };
+  return {
+    ...state,
+    [tabId]: { ...current, items: [...items, added], activeKey: key },
+  };
+}
+
+/** What Arkadia learnt of a Chrome item (profile name, note, closed). */
+export function updateChrome(
+  state: ArtifactsByTab,
+  key: string,
+  patch: Pick<Partial<ArtifactItem>, "title" | "note" | "gone">,
+): ArtifactsByTab {
+  for (const [tabId, current] of Object.entries(state)) {
+    if (!current.items.some((i) => i.key === key)) continue;
+    const items = current.items.map((i) =>
+      i.key === key ? { ...i, ...patch } : i,
     );
     return { ...state, [tabId]: { ...current, items } };
   }

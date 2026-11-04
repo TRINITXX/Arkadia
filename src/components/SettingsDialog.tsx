@@ -18,6 +18,7 @@ import {
 } from "@/types";
 import { ToolbarSettings } from "@/components/ToolbarSettings";
 import { PipFollowSettings } from "@/components/PipFollowSettings";
+import { ChromeProfileSettings } from "@/components/ChromeProfileSettings";
 import { ChatSleepSettings } from "@/components/chat/chat-sleep-settings";
 import { useOverlay } from "@/lib/overlays";
 
@@ -807,6 +808,7 @@ function GeneralSettings({
       </section>
 
       <PipFollowSettings />
+      <ChromeProfileSettings />
       <ChatSleepSettings />
 
       <section>

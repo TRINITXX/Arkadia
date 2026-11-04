@@ -9,6 +9,8 @@ import {
   openArtifact,
   selectArtifact,
   setArtifactTitle,
+  showChrome,
+  updateChrome,
   type ArtifactsByTab,
 } from "@/lib/artifactTabs";
 
@@ -297,5 +299,65 @@ describe("artifact tabs", () => {
     expect(hasPanel(sent.state.t1)).toBe(true);
     // Already closed: nothing more happens.
     expect(closeArtifactByKey(sent.state, "k2").state).toBe(sent.state);
+  });
+
+  describe("a pane's Chrome tab", () => {
+    const url = "https://claude.ai/artifact/a";
+    const withPage = () => openArtifact({}, "t1", url, "main", keys(), "click");
+
+    it("comes forward, once, beside the artifacts", () => {
+      const a = showChrome(withPage().state, "t1", "p1", "main");
+      const b = showChrome(selectArtifact(a, "t1", "k1"), "t1", "p1", "main");
+      expect(b.t1.items.map((i) => i.key)).toEqual(["k1", "chrome:p1"]);
+      expect(b.t1.activeKey).toBe("chrome:p1");
+      expect(hasPanel(showChrome({}, "t2", "p2", "alt").t2)).toBe(true);
+    });
+
+    it("never parks nor closes its window: the pane owns it", () => {
+      const shown = showChrome(withPage().state, "t1", "p1", "main");
+      const tabClosed = closeArtifact(shown, "t1", "chrome:p1");
+      expect(tabClosed.closed).toEqual([]);
+      expect(tabClosed.state.t1.parked).toBeUndefined();
+      expect(tabClosed.state.t1.activeKey).toBe("k1");
+
+      const panelClosed = closePanel(shown, "t1");
+      expect(panelClosed.closed).toEqual(["k1"]);
+      expect(panelClosed.state.t1.parked).toBeUndefined();
+
+      expect(dropTab(shown, "t1").closed).toEqual(["k1"]);
+    });
+
+    it("leaves the artifact limit to the pages", () => {
+      const next = keys();
+      let state = showChrome({}, "t1", "p1", "main");
+      for (let i = 0; i < MAX_ARTIFACTS_PER_TAB + 1; i++) {
+        state = openArtifact(
+          state,
+          "t1",
+          `${url}${i}`,
+          "main",
+          next,
+          "click",
+        ).state;
+      }
+      const items = state.t1.items;
+      expect(items.some((i) => i.key === "chrome:p1")).toBe(true);
+      expect(items.filter((i) => i.kind !== "chrome")).toHaveLength(
+        MAX_ARTIFACTS_PER_TAB,
+      );
+    });
+
+    it("takes the profile name and the note Arkadia reports", () => {
+      const shown = showChrome({}, "t1", "p1", "main");
+      const named = updateChrome(shown, "chrome:p1", {
+        title: "Chrome, Minifashion",
+        note: "x",
+      });
+      expect(named.t1.items[0]).toMatchObject({
+        title: "Chrome, Minifashion",
+        note: "x",
+      });
+      expect(updateChrome(shown, "chrome:nope", { gone: true })).toBe(shown);
+    });
   });
 });

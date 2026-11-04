@@ -30,7 +30,7 @@ import { SidebarTabContextMenu } from "@/components/SidebarTabContextMenu";
 import { RenameDialog } from "@/components/RenameDialog";
 import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
-import { ArtifactPanel } from "@/components/ArtifactPanel";
+import { ArtifactPanel, type ChromeShown } from "@/components/ArtifactPanel";
 import {
   artifactPageUrl,
   isRepublish,
@@ -38,19 +38,29 @@ import {
 } from "@/lib/openLink";
 import { useAnyOverlayOpen } from "@/lib/overlays";
 import {
+  chromeKey,
   closeArtifact,
   closeArtifactByKey,
   closePanel,
   dropTab,
+  hasPages,
   hasPanel,
+  isChrome,
   openArtifact,
   selectArtifact,
   setArtifactTitle,
+  showChrome,
+  updateChrome,
   type ArtifactChange,
   type OpenSource,
   type ArtifactsByTab,
 } from "@/lib/artifactTabs";
 import { artifactId, rememberArtifactTitle } from "@/lib/artifactTitles";
+
+/** Said above a pane's Chrome window when Arkadia could not steer Claude in
+ *  Chrome to it (Arkadia was not in front, Alexis had used that profile). */
+const CHROME_ELSEWHERE =
+  "Claude travaille peut-être dans une autre fenêtre Chrome de ce compte : Arkadia n'était pas devant quand il a ouvert son navigateur.";
 import { snipTarget } from "@/lib/artifactSnip";
 import { SessionsOverlay } from "@/components/SessionsOverlay";
 import { Toaster, useToasts } from "@/components/Toaster";
@@ -594,7 +604,8 @@ export function App() {
   const badgePaneStates = useMemo(() => {
     let merged: Record<string, AgentStateValue> | null = null;
     for (const tab of tabs) {
-      if (!hasPanel(artifacts[tab.id])) continue;
+      // A pane's Chrome alone is no artifact to look at.
+      if (!hasPages(artifacts[tab.id])) continue;
       for (const paneId of Object.keys(tab.panes)) {
         const state = effectivePaneStates[paneId];
         if (!state) continue;
@@ -733,7 +744,143 @@ export function App() {
     void invoke("artifact_view_set_hidden", { hidden: overlayOpen }).catch(
       () => {},
     );
+    void invoke("chrome_view_set_hidden", { hidden: overlayOpen }).catch(
+      () => {},
+    );
   }, [overlayOpen]);
+
+  // A pane's Chrome window in the panel (`chrome_view.rs`). Claude in Chrome
+  // asks for it before its tool calls (`chrome-request`, answered once the
+  // window is ready); the globe asks for it too. Its tab comes forward by
+  // itself the first time only: later calls never take the panel back from
+  // what Alexis chose. Panes that got a window: it closes with them.
+  const chromePanes = useRef(new Set<string>());
+  // Panes whose Chrome tab came forward by itself since this page loaded.
+  const chromeShownOnce = useRef(new Set<string>());
+  // Bumped once the windows of before a page reload are known again.
+  const [chromeKnown, setChromeKnown] = useState(0);
+  // A reload of this page (watchdog repair) forgets the panel, not Rust:
+  // nothing stays on screen, and the windows of before still close with
+  // their pane.
+  useEffect(() => {
+    void invoke("chrome_view_hide").catch(() => {});
+    invoke<string[]>("chrome_view_keys")
+      .then((keys) => {
+        for (const key of keys) {
+          if (key.startsWith("chrome:")) chromePanes.current.add(key.slice(7));
+        }
+        setChromeKnown((n) => n + 1);
+      })
+      .catch(() => {});
+  }, []);
+  const pushToastRef = useRef(pushToast);
+  useEffect(() => {
+    pushToastRef.current = pushToast;
+  }, [pushToast]);
+  const onChromeShown = useCallback(
+    (key: string, shown: ChromeShown) =>
+      changeArtifacts((state) => ({
+        state: updateChrome(state, key, {
+          title: `Chrome, ${shown.profile}`,
+          ...(shown.steered ? {} : { note: CHROME_ELSEWHERE }),
+        }),
+        closed: [],
+      })),
+    [changeArtifacts],
+  );
+  useEffect(() => {
+    const stops = [
+      subscribeStable<{ id: string; paneId: string }>(
+        listen,
+        "chrome-request",
+        ({ id, paneId }) => {
+          const tab = artifactTabsRef.current.find((t) =>
+            Object.prototype.hasOwnProperty.call(t.panes, paneId),
+          );
+          // Another Arkadia's pane (`tauri dev` shares the folder): its
+          // own instance answers.
+          if (!tab) return;
+          const accountId = paneAccountId(tab.panes[paneId]?.accountId);
+          const key = chromeKey(paneId);
+          chromePanes.current.add(paneId);
+          if (!chromeShownOnce.current.has(paneId)) {
+            chromeShownOnce.current.add(paneId);
+            changeArtifacts((state) => ({
+              state: showChrome(state, tab.id, paneId, accountId),
+              closed: [],
+            }));
+          }
+          invoke<ChromeShown>("chrome_view_prepare", {
+            id,
+            key,
+            account: accountId,
+          })
+            .then((shown) =>
+              changeArtifacts((state) => ({
+                state: updateChrome(state, key, {
+                  title: `Chrome, ${shown.profile}`,
+                  gone: false,
+                  ...(shown.steered ? {} : { note: CHROME_ELSEWHERE }),
+                }),
+                closed: [],
+              })),
+            )
+            .catch((e) =>
+              pushToastRef.current("error", `Chrome : ${String(e)}`),
+            );
+        },
+      ),
+      // Closed in Chrome itself (Ctrl+Shift+W, its last tab).
+      subscribeStable<{ key: string }>(listen, "chrome-closed", ({ key }) =>
+        changeArtifacts((state) => ({
+          state: updateChrome(state, key, { gone: true, note: null }),
+          closed: [],
+        })),
+      ),
+    ];
+    return () => stops.forEach((stop) => stop());
+  }, [changeArtifacts]);
+  // Whatever closed a pane (its own close, its tab's, its project's), it
+  // leaves `tabs`: its Chrome window closes then.
+  useEffect(() => {
+    // Before the saved tabs are back, every pane looks gone.
+    if (!loaded || chromePanes.current.size === 0) return;
+    const live = new Set(tabs.flatMap((t) => Object.keys(t.panes)));
+    for (const paneId of [...chromePanes.current]) {
+      if (live.has(paneId)) continue;
+      chromePanes.current.delete(paneId);
+      void invoke("chrome_view_close", { key: chromeKey(paneId) }).catch(
+        () => {},
+      );
+      changeArtifacts((state) => closeArtifactByKey(state, chromeKey(paneId)));
+    }
+  }, [tabs, loaded, chromeKnown, changeArtifacts]);
+  // The globe of the toolbar: the active pane's Chrome comes forward in the
+  // panel (an empty window of its account when it has none), or leaves it.
+  const toggleChromePanel = useCallback(() => {
+    const tab = artifactTabsRef.current.find(
+      (t) => t.id === activeTabIdRef.current,
+    );
+    if (!tab) return;
+    const paneId = tab.activePaneId;
+    const key = chromeKey(paneId);
+    const current = artifactsRef.current[tab.id];
+    const shown = current?.items.find((i) => i.key === key);
+    // On screen and alive: the globe hides it. A closed one reopens.
+    if (current?.activeKey === key && shown && isChrome(shown) && !shown.gone) {
+      changeArtifacts((state) => closeArtifact(state, tab.id, key));
+      return;
+    }
+    chromePanes.current.add(paneId);
+    const accountId = paneAccountId(tab.panes[paneId]?.accountId);
+    changeArtifacts((state) => ({
+      state: updateChrome(showChrome(state, tab.id, paneId, accountId), key, {
+        gone: false,
+        ...(shown?.gone ? { note: null } : {}),
+      }),
+      closed: [],
+    }));
+  }, [changeArtifacts]);
   useEffect(() => {
     setArtifactOpener(openArtifactFor);
     return () => setArtifactOpener(null);
@@ -3406,6 +3553,11 @@ export function App() {
           buttons={toolbarButtons}
           onRunAction={runToolbarAction}
           onOpenSettings={() => setSettingsOpen(true)}
+          onToggleChrome={toggleChromePanel}
+          chromeShown={
+            !!activePaneIdOfActiveTab &&
+            tabArtifacts?.activeKey === chromeKey(activePaneIdOfActiveTab)
+          }
           disabled={!activeProject}
           sidepanelOpen={sidepanelOpen}
           onToggleSidepanel={() => setSidepanelOpen((v) => !v)}
@@ -3572,6 +3724,7 @@ export function App() {
           onWidthChange={setArtifactWidth}
           onSnipped={pasteSnipInClaude}
           onSnipFailed={onSnipFailed}
+          onChromeShown={onChromeShown}
         />
       )}
 

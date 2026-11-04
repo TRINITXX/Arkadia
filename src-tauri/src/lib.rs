@@ -6,6 +6,7 @@ mod artifact_snip;
 mod artifact_view;
 mod chat;
 mod chrome_profile;
+mod chrome_view;
 mod claude_watcher;
 mod conversation;
 // Only consumed by the release-only single-instance block below; in debug the
@@ -50,6 +51,8 @@ use terminal::{
 /// a rebuilt window would otherwise lose these handlers.
 pub(crate) fn wire_main_window(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
     let _ = window.maximize();
+    // The panel's Chrome windows are owned by this main (chrome_view).
+    crate::chrome_view::set_main(window);
     // When the user alt-tabs back to Arkadia, dismiss any pending background
     // notification — they're now looking at the app.
     let ah = app.clone();
@@ -57,8 +60,12 @@ pub(crate) fn wire_main_window(app: &tauri::AppHandle, window: &tauri::WebviewWi
         tauri::WindowEvent::Focused(true) => crate::popup::dismiss_all(&ah),
         // The artifact window is laid over main's panel: it moves along.
         tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
-            crate::artifact_view::follow(&ah)
+            crate::artifact_view::follow(&ah);
+            // Minimized or restored too: Chrome never hides with main.
+            crate::chrome_view::follow(&ah);
         }
+        // A watchdog rebuild: no Chrome window stays owned by a dead main.
+        tauri::WindowEvent::Destroyed => crate::chrome_view::release(&ah),
         _ => {}
     });
 }
@@ -154,6 +161,7 @@ pub fn run() {
         .manage(sessions::SessionIndex::default())
         .manage(ai_search::AiSearchState::default())
         .manage(artifact_view::ArtifactView::default())
+        .manage(chrome_view::ChromeView::default())
         .manage(artifact_snip::ArtifactSnip::default())
         .manage(registry.clone())
         .manage(popup::PopupQueue::default())
@@ -198,6 +206,9 @@ pub fn run() {
                         }
                     });
                 }
+                // Claude in Chrome calls of the panes: their Chrome window
+                // goes in the artifact panel (chrome_view).
+                chrome_view::spawn(app_handle.clone());
                 // Background-task count per pane, for the sidebar badge.
                 {
                     let panes_app = app_handle.clone();
@@ -296,6 +307,17 @@ pub fn run() {
             artifact_view::artifact_view_close,
             artifact_view::artifact_view_close_all,
             chrome_profile::artifact_open_in_browser,
+            chrome_profile::chrome_profiles_list,
+            chrome_profile::chrome_pairing_get,
+            chrome_profile::chrome_pairing_set,
+            chrome_view::chrome_view_show,
+            chrome_view::chrome_view_prepare,
+            chrome_view::chrome_view_place,
+            chrome_view::chrome_view_hide,
+            chrome_view::chrome_view_set_hidden,
+            chrome_view::chrome_view_close,
+            chrome_view::chrome_view_close_all,
+            chrome_view::chrome_view_keys,
             artifact_snip::artifact_snip_grab,
             artifact_snip::artifact_snip_copy,
             artifact_snip::artifact_snip_cancel,
@@ -376,6 +398,8 @@ pub fn run() {
             }
             tauri::RunEvent::Exit => {
                 messages_only::forget_all();
+                // The panes' Chrome windows close with their sessions.
+                chrome_view::on_exit(app);
                 // The Twitch PiP goes back where it was before Arkadia came in front.
                 if pip_follow::ENABLED {
                     pip_follow::restore_on_exit();

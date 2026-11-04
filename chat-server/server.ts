@@ -11,7 +11,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
-import { mkdir, open, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -297,6 +297,60 @@ const VISUAL_CHECK_MS = 8_000;
  * Claude Code: it is the server's own.
  */
 const ACCOUNT = process.env.ARKADIA_CHAT_ACCOUNT ?? null;
+
+/** When each chat last asked for its Chrome window: at most every 20 s. */
+const chromeAskedAt = new Map<string, number>();
+
+/**
+ * Claude in Chrome (`src-tauri/src/chrome_view.rs`): before its tool calls,
+ * Arkadia lays this chat's own Chrome window in the artifact panel and makes
+ * it the profile's last-focused window, where the extension puts the
+ * session's tabs. The request `~/.claude/hooks/chrome-profile-open.ps1`
+ * makes in a terminal: user hooks never run in a chat (`settingSources: []`).
+ * Waits 12 s at most for Arkadia's answer, 6 s more when the profile had no
+ * window (its extension is only starting). Never blocks the call otherwise.
+ */
+async function askChromePanel(
+  paneId: string | undefined,
+  lab: boolean,
+): Promise<Record<string, never>> {
+  const local = process.env.LOCALAPPDATA;
+  if (!paneId || !local) return {};
+  const last = chromeAskedAt.get(paneId) ?? 0;
+  if (Date.now() - last < 20_000) return {};
+  chromeAskedAt.set(paneId, Date.now());
+  const inbox = join(local, "Arkadia", lab ? "chrome-inbox-lab" : "chrome-inbox");
+  try {
+    const pid = Number((await readFile(join(inbox, "ready"), "utf8")).trim());
+    // Throws when no such process: an Arkadia gone since.
+    process.kill(pid, 0);
+  } catch {
+    return {};
+  }
+  const id = randomUUID().replace(/-/g, "");
+  const tmp = join(inbox, `${id}.tmp`);
+  await writeFile(tmp, JSON.stringify({ id, paneId }));
+  await rename(tmp, join(inbox, `${id}.json`));
+  const ack = join(inbox, `${id}.ack`);
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline) {
+    const raw = await readFile(ack, "utf8").catch(() => null);
+    if (raw !== null) {
+      await unlink(ack).catch(() => {});
+      const answer = (() => {
+        try {
+          return JSON.parse(raw) as { profileStarted?: boolean };
+        } catch {
+          return {};
+        }
+      })();
+      if (answer.profileStarted) await new Promise((r) => setTimeout(r, 6_000));
+      return {};
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return {};
+}
 delete process.env.ARKADIA_CHAT_ACCOUNT;
 
 export type ServerEvent =
@@ -943,7 +997,22 @@ class Chat {
         includeHookEvents: true,
         // The wakeups Claude scheduled, said at each turn's end: asleep, they
         // would never fire, so they keep the chat awake (`SleepFacts.crons`).
-        hooks: { Stop: [{ hooks: [async (input) => this.noteCrons(input)] }] },
+        hooks: {
+          Stop: [{ hooks: [async (input) => this.noteCrons(input)] }],
+          // Claude in Chrome: this chat's Chrome window, in the artifact panel.
+          PreToolUse: [
+            {
+              matcher: "mcp__claude-in-chrome__.*",
+              hooks: [
+                async () =>
+                  askChromePanel(
+                    start.env?.ARKADIA_PANE_ID,
+                    start.env?.ARKADIA_LAB === "1",
+                  ),
+              ],
+            },
+          ],
+        },
         // Esc stops Claude's turn only: background agents and workflows go
         // on (verified live 31/10/2026); the page stops a workflow by its card.
         perTaskStopAffordance: true,
