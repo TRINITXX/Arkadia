@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { StyleSheet, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useLiveActivity } from "~/activity/use-live-activity";
@@ -34,7 +35,9 @@ export default function RootLayout() {
   const down = status !== "open" && (reach !== "unknown" || wake !== null);
 
   return (
-    <View style={styles.root}>
+    // Every gesture-handler gesture needs it (first: the projects list's
+    // swipe to delete a tab).
+    <GestureHandlerRootView style={styles.root}>
       <StatusBar style="light" />
       <Stack
         screenOptions={{
@@ -68,7 +71,7 @@ export default function RootLayout() {
       <CrashOverlay />
       <NoticeBanner />
       {lock.locked && <LockScreen onUnlock={() => void lock.unlock()} />}
-    </View>
+    </GestureHandlerRootView>
   );
 }
 

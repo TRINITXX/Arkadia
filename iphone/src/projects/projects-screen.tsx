@@ -15,8 +15,8 @@ import {
   useRemoteView,
   type Status,
 } from "~/remote/connection";
-import { failure, tap, tick } from "~/ui/haptics";
-import { AccountChip, BadgeDot } from "~/ui/status-dots";
+import { failure, tap } from "~/ui/haptics";
+import { closeOpenRow, TabRow } from "~/projects/tab-row";
 
 const STATUS_TEXT: Record<Status, string> = {
   connecting: "Connexion à Arkadia…",
@@ -31,6 +31,7 @@ export function ProjectsScreen() {
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={styles.content}
+      onScrollBeginDrag={() => void closeOpenRow()}
     >
       <View style={styles.status}>
         <View
@@ -127,29 +128,7 @@ function ProjectGroup({ project }: { project: RemoteProject }) {
         </Pressable>
       </View>
       {project.tabs.map((t) => (
-        <Pressable
-          key={t.id}
-          onPress={() => {
-            tick();
-            router.push({ pathname: "/tab/[id]", params: { id: t.id } });
-          }}
-          style={({ pressed }) => [
-            styles.row,
-            styles.tabRow,
-            pressed && styles.pressed,
-          ]}
-        >
-          <View style={styles.separator} />
-          <Text style={styles.tabTitle} numberOfLines={1}>
-            {t.title}
-          </Text>
-          <AccountChip account={t.account} />
-          {t.panes.length > 1 && (
-            <Text style={styles.paneCount}>{t.panes.length}</Text>
-          )}
-          <BadgeDot badge={t.badge} question={t.question} />
-          <SymbolView name="chevron.right" size={13} tintColor="#5a5a5e" />
-        </Pressable>
+        <TabRow key={t.id} tab={t} />
       ))}
     </View>
   );
@@ -188,19 +167,7 @@ const styles = StyleSheet.create({
     minHeight: 46,
     paddingHorizontal: 16,
   },
-  tabRow: { paddingLeft: 38 },
-  pressed: { backgroundColor: "#2c2c2e" },
-  separator: {
-    position: "absolute",
-    top: 0,
-    left: 38,
-    right: 0,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: "#38383a",
-  },
   projectDot: { width: 10, height: 10, borderRadius: 5 },
   projectName: { flex: 1, color: "#ffffff", fontSize: 17, fontWeight: "600" },
   idle: { color: "#8e8e93", fontWeight: "500" },
-  tabTitle: { flex: 1, color: "#ffffff", fontSize: 15 },
-  paneCount: { color: "#8e8e93", fontSize: 12 },
 });
