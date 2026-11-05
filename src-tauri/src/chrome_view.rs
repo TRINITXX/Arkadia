@@ -450,7 +450,25 @@ fn launch(state: &ChromeView, dir: &str) -> Result<(Win, bool), String> {
     // whatever Alexis uses: the foreground goes back to it.
     let before = win::foreground();
     let _launching = win::Launching::start();
+    // Chrome sizes a new window like the most recently active normal Chrome
+    // window, whatever its profile (`WindowSizer`, read 05/11/2026): most
+    // often Alexis's own, maximized, hence a full-screen flash. One of the
+    // panel's parked windows is made that window first: the new one opens
+    // at its place, off-screen but for a corner. Chrome takes the
+    // foreground at the launch anyway; it goes back right after.
+    let reference = state.inner.lock().ok().and_then(|inner| {
+        inner
+            .spares
+            .values()
+            .chain(inner.windows.values())
+            .find(|w| w.at.is_none() && win::alive(w.hwnd))
+            .map(|w| w.hwnd)
+    });
+    if let Some(reference) = reference {
+        win::make_most_recent(reference);
+    }
     if !crate::chrome_profile::launch_window(&dir, &title) {
+        win::steering_done();
         return Err("Chrome could not be started".into());
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -474,6 +492,7 @@ fn launch(state: &ChromeView, dir: &str) -> Result<(Win, bool), String> {
     win::wait_parked(hwnd, std::time::Duration::from_secs(1));
     win::unveil(hwnd);
     win::hand_back(hwnd, before);
+    win::steering_done();
     win::watch_process(hwnd);
     let win = Win {
         hwnd,
@@ -2030,11 +2049,27 @@ mod win {
         }
     }
 
+    /// Activates a parked window an instant before a launch, so Chrome sizes
+    /// the new window like it (see `launch`). The guard lets it be.
+    pub(super) fn make_most_recent(raw: isize) {
+        STEER_UNTIL.store(now_ms() + 15_000, Ordering::SeqCst);
+        force_foreground(hwnd(raw));
+        // Chrome records the activation on its own thread.
+        std::thread::sleep(std::time::Duration::from_millis(80));
+    }
+
+    /// The launch is over: the guard watches the panel's windows again.
+    pub(super) fn steering_done() {
+        STEER_UNTIL.store(0, Ordering::SeqCst);
+    }
+
     /// After a launch: the new window took the foreground, which goes back
     /// to the window Alexis used last (the launch can take seconds: the one
     /// in front before it may be stale), else to the one before the launch.
     pub(super) fn hand_back(raw: isize, before: Option<isize>) {
-        if foreground() != Some(raw) {
+        // The new window, or the parked one activated before the launch.
+        let fg = foreground();
+        if fg != Some(raw) && !fg.is_some_and(|f| is_panel_window(hwnd(f))) {
             return;
         }
         let last = LAST_OTHER.load(Ordering::SeqCst);
@@ -2240,6 +2275,8 @@ mod win {
     }
     pub(super) fn close_active_tab(_: isize) {}
     pub(super) fn hand_back(_: isize, _: Option<isize>) {}
+    pub(super) fn make_most_recent(_: isize) {}
+    pub(super) fn steering_done() {}
     pub(super) fn unveil(_: isize) {}
     pub(super) fn wait_parked(_: isize, _: std::time::Duration) {}
     pub(super) fn run_covers() {}
