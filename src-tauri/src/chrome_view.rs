@@ -178,6 +178,13 @@ struct Inner {
     /// Panes closed while their window was still launching: it closes as
     /// soon as it appears.
     closed: HashSet<String>,
+    /// Per profile folder: a parked window on its blank launch page, kept
+    /// when the profile's last session window closed. With none open,
+    /// Chrome opens the profile's next window as it last saved it, often
+    /// maximized: a full-screen flash. Next to a parked window, it opens
+    /// at that window's place, kept 30 px on screen: a corner (both
+    /// measured 05/11/2026). The next session takes the spare: no launch.
+    spares: HashMap<String, Win>,
     /// Launch tabs just closed: their window going away means it was its
     /// last tab (Claude's group was elsewhere). Never again for that pane.
     closing: HashMap<String, std::time::Instant>,
@@ -367,6 +374,38 @@ fn ensure(
             return Ok((win, false, false));
         }
     }
+    let spare = state
+        .inner
+        .lock()
+        .ok()
+        .and_then(|mut inner| inner.spares.remove(&dir))
+        .filter(|w| win::alive(w.hwnd));
+    let (win, profile_started) = match spare {
+        Some(spare) => (spare, false),
+        None => launch(state, &dir)?,
+    };
+    let hwnd = win.hwnd;
+    let pane_gone = state.inner.lock().is_ok_and(|mut inner| {
+        if inner.closed.remove(key) {
+            return true;
+        }
+        inner.windows.insert(key.to_string(), win.clone());
+        false
+    });
+    if pane_gone {
+        win::close(hwnd);
+        return Err("pane closed".into());
+    }
+    arrange(app, state);
+    Ok((win, true, profile_started))
+}
+
+/// Launches a window in profile folder `dir` and makes it the panel's:
+/// found by its first page's unique title, parked, shown again only once
+/// off-screen. The caller holds `state.launching`. Returns it with whether
+/// no window of the profile was open before.
+fn launch(state: &ChromeView, dir: &str) -> Result<(Win, bool), String> {
+    let dir = dir.to_string();
     // The new window opens where the profile's last active window is: off
     // the screen while Arkadia launches (arrange lays them back after).
     let shown: Vec<isize> = state
@@ -423,6 +462,7 @@ fn ensure(
     win::wait_parked(hwnd, std::time::Duration::from_secs(1));
     win::unveil(hwnd);
     win::hand_back(hwnd, before);
+    win::watch_process(hwnd);
     let win = Win {
         hwnd,
         profile_dir: dir,
@@ -432,20 +472,7 @@ fn ensure(
             landed: false,
         }),
     };
-    let pane_gone = state.inner.lock().is_ok_and(|mut inner| {
-        if inner.closed.remove(key) {
-            return true;
-        }
-        inner.windows.insert(key.to_string(), win.clone());
-        false
-    });
-    if pane_gone {
-        win::close(hwnd);
-        return Err("pane closed".into());
-    }
-    win::watch_process(hwnd);
-    arrange(app, state);
-    Ok((win, true, profile_started))
+    Ok((win, profile_started))
 }
 
 /// Makes `win` its profile's last-focused window when that may be needed
@@ -644,20 +671,50 @@ pub async fn chrome_view_set_hidden(app: AppHandle, hidden: bool) {
 /// Pane `key` closed: its window closes (connections stay in the profile).
 #[tauri::command]
 pub async fn chrome_view_close(app: AppHandle, key: String) {
-    let state = app.state::<ChromeView>();
-    let win = state.inner.lock().ok().and_then(|mut inner| {
-        if inner.active.as_deref() == Some(key.as_str()) {
-            inner.active = None;
-        }
-        let win = inner.windows.remove(&key);
-        if win.is_none() {
-            // Maybe still launching: it closes when it appears.
-            inner.closed.insert(key.clone());
-        }
-        win
-    });
-    if let Some(win) = win {
+    let worker = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let state = worker.state::<ChromeView>();
+        let win = state.inner.lock().ok().and_then(|mut inner| {
+            if inner.active.as_deref() == Some(key.as_str()) {
+                inner.active = None;
+            }
+            let win = inner.windows.remove(&key);
+            if win.is_none() {
+                // Maybe still launching: it closes when it appears.
+                inner.closed.insert(key.clone());
+            }
+            win
+        });
+        let Some(win) = win else { return };
+        keep_a_spare(&state, &win);
         win::close(win.hwnd);
+    })
+    .await;
+}
+
+/// Before the profile's last window closes: a spare is launched next to it,
+/// parked, born in the screen's corner (see `Inner::spares`).
+fn keep_a_spare(state: &ChromeView, closing: &Win) {
+    let Ok(_launch) = state.launching.lock() else {
+        return;
+    };
+    let others = state.inner.lock().is_ok_and(|inner| {
+        inner
+            .windows
+            .values()
+            .chain(inner.spares.values())
+            .any(|w| w.profile_dir == closing.profile_dir && w.hwnd != closing.hwnd)
+    });
+    if others {
+        return;
+    }
+    // The new window opens where this one is: off the screen.
+    win::park(closing.hwnd);
+    win::wait_parked(closing.hwnd, std::time::Duration::from_millis(500));
+    if let Ok((spare, _)) = launch(state, &closing.profile_dir) {
+        if let Ok(mut inner) = state.inner.lock() {
+            inner.spares.insert(closing.profile_dir.clone(), spare);
+        }
     }
 }
 
@@ -684,7 +741,13 @@ fn close_all(state: &ChromeView) {
         .lock()
         .map(|mut inner| {
             inner.active = None;
-            inner.windows.drain().map(|(_, w)| w).collect()
+            let spares: Vec<Win> = inner.spares.drain().map(|(_, w)| w).collect();
+            inner
+                .windows
+                .drain()
+                .map(|(_, w)| w)
+                .chain(spares)
+                .collect()
         })
         .unwrap_or_default();
     for win in wins {
@@ -811,6 +874,7 @@ fn on_destroyed(app: &AppHandle, hwnd: isize) {
         return;
     };
     let key = state.inner.lock().ok().and_then(|mut inner| {
+        inner.spares.retain(|_, w| w.hwnd != hwnd);
         let key = inner
             .windows
             .iter()
