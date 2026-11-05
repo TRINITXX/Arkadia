@@ -465,8 +465,12 @@ fn main_is_foreground(app: &AppHandle) -> bool {
         .get_webview_window("main")
         .and_then(|w| w.is_focused().ok())
         .unwrap_or(false);
-    // Reading an artifact beside the terminals is being in Arkadia too.
-    focused || crate::artifact_view::has_focus(app) || main_is_effective_foreground(app)
+    // Reading an artifact beside the terminals is being in Arkadia too, and
+    // so is typing in the panel's Chrome.
+    focused
+        || crate::artifact_view::has_focus(app)
+        || crate::chrome_view::shown_has_foreground(app)
+        || main_is_effective_foreground(app)
 }
 
 /// Runs as soon as a signal lands (no grace since 31/10/2026), on a throwaway

@@ -50,6 +50,14 @@ export function TabBar({
       activationConstraint: { distance: 5 },
     }),
   );
+  // No scrollbar: the active tab is brought into view when it changes
+  // (sidebar, Ctrl+Tab, a new tab), the wheel scrolls the rest.
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    stripRef.current
+      ?.querySelector('[data-active-tab="true"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeTabId, tabs.length]);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -66,8 +74,13 @@ export function TabBar({
       data-tauri-drag-region
     >
       <div
-        className="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
+        ref={stripRef}
+        className="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden [scrollbar-width:none]"
         data-tauri-drag-region
+        // No bar: the wheel scrolls the tabs that do not fit.
+        onWheel={(e) => {
+          e.currentTarget.scrollLeft += e.deltaY;
+        }}
       >
         <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
           <SortableContext
@@ -231,6 +244,7 @@ function SortableTab({
       style={style}
       {...attributes}
       {...listeners}
+      data-active-tab={active}
       onClick={() => onActivate(tab.id)}
       onAuxClick={(e) => {
         if (e.button === 1) {

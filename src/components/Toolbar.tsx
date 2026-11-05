@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ChevronDown,
   ChevronRight,
+  Globe,
   PanelLeftClose,
   PanelLeftOpen,
   Settings as SettingsIcon,
@@ -21,12 +22,18 @@ interface ToolbarProps {
   accountChip: React.ReactNode;
   /** Chat / Terminal for the active pane, before the settings. */
   paneMode?: React.ReactNode;
+  /** The active pane's Chrome in the artifact panel: shows or hides it. */
+  onToggleChrome: () => void;
+  /** The panel shows the active pane's Chrome now. */
+  chromeShown: boolean;
 }
 
 export function Toolbar({
   buttons,
   onRunAction,
   onOpenSettings,
+  onToggleChrome,
+  chromeShown,
   disabled = false,
   sidepanelOpen,
   onToggleSidepanel,
@@ -82,8 +89,24 @@ export function Toolbar({
       </div>
       {paneMode}
       <button
+        onClick={onToggleChrome}
+        className={`ml-1 flex size-7 shrink-0 items-center justify-center rounded hover:bg-zinc-900 hover:text-zinc-100 ${
+          chromeShown ? "text-[#d4af37]" : "text-zinc-400"
+        }`}
+        title={
+          chromeShown
+            ? "Cacher le Chrome de cet onglet"
+            : "Afficher le Chrome de cet onglet dans le panneau"
+        }
+        aria-label="Chrome de cet onglet"
+        aria-pressed={chromeShown}
+        type="button"
+      >
+        <Globe size={14} />
+      </button>
+      <button
         onClick={onOpenSettings}
-        className="ml-1 flex size-7 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+        className="ml-1 flex size-7 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
         title="Settings"
         aria-label="Settings"
         type="button"

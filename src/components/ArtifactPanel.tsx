@@ -1,8 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
-import { ExternalLink, RotateCw, Scissors, X } from "lucide-react";
-import type { ArtifactItem } from "@/lib/artifactTabs";
+import {
+  ExternalLink,
+  Globe,
+  RotateCw,
+  Scissors,
+  TriangleAlert,
+  X,
+} from "lucide-react";
+import { isChrome, type ArtifactItem } from "@/lib/artifactTabs";
 import { useAnyOverlayOpen } from "@/lib/overlays";
 import { useArtifactSnip } from "@/lib/useArtifactSnip";
 
@@ -34,9 +41,16 @@ function bodyBounds(el: HTMLElement) {
 }
 
 function placeWebview(el: HTMLElement): void {
-  void invoke("artifact_view_place", { bounds: bodyBounds(el) }).catch(
-    () => {},
-  );
+  const bounds = bodyBounds(el);
+  void invoke("artifact_view_place", { bounds }).catch(() => {});
+  // A pane's Chrome window lies on the same body (`chrome_view.rs`).
+  void invoke("chrome_view_place", { bounds }).catch(() => {});
+}
+
+/** What `chrome_view_show` reports once the window is on the body. */
+export interface ChromeShown {
+  profile: string;
+  steered: boolean;
 }
 
 /** The nonce each artifact was last shown with: a newer one reloads its page.
@@ -57,6 +71,8 @@ interface ArtifactPanelProps {
   /** A region of the artifact is on the clipboard: paste it in Claude. */
   onSnipped: () => void;
   onSnipFailed: (message: string) => void;
+  /** A pane's Chrome window came on the body (its profile, its steering). */
+  onChromeShown: (key: string, shown: ChromeShown) => void;
 }
 
 /**
@@ -74,6 +90,7 @@ export function ArtifactPanel({
   onWidthChange,
   onSnipped,
   onSnipFailed,
+  onChromeShown,
 }: ArtifactPanelProps) {
   const [width, setWidth] = useState(() => clampWidth(undefined));
   const [settledWidth, setSettledWidth] = useState(width);
@@ -130,12 +147,44 @@ export function ArtifactPanel({
   // first time, reloaded when Claude published it again, else as it was left.
   const activeItemKey = active?.key;
   const activeNonce = active?.nonce;
+  const activeGone = active?.gone;
   useLayoutEffect(() => {
     const el = bodyRef.current;
     if (!el || !active) return;
+    setError(null);
+    if (isChrome(active)) {
+      // A pane's real Chrome window instead of a page (launched on the
+      // first show). The artifact windows step aside.
+      void invoke("artifact_view_hide_all").catch(() => {});
+      if (active.gone) {
+        // Closed in Chrome: the window shown before leaves the body too.
+        void invoke("chrome_view_hide").catch(() => {});
+        return;
+      }
+      const key = active.key;
+      // The launch can take seconds: by then the panel may show another
+      // item, or be gone.
+      let current = true;
+      invoke<ChromeShown>("chrome_view_show", {
+        key,
+        account: active.accountId,
+        bounds: bodyBounds(el),
+        hidden,
+      })
+        .then((shown) => {
+          onChromeShown(key, shown);
+          if (current && el.isConnected) placeWebview(el);
+        })
+        .catch((e) => {
+          if (current) setError(String(e));
+        });
+      return () => {
+        current = false;
+      };
+    }
+    void invoke("chrome_view_hide").catch(() => {});
     const last = shownNonce.get(active.key);
     shownNonce.set(active.key, active.nonce);
-    setError(null);
     invoke("artifact_view_show", {
       key: active.key,
       url: active.url,
@@ -149,13 +198,14 @@ export function ArtifactPanel({
       .catch((e) => setError(String(e)));
     // Keyed on the artifact and its nonce only: a title change is no reload.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeItemKey, activeNonce]);
+  }, [activeItemKey, activeNonce, activeGone]);
 
   // The panel leaves the screen with its tab: the pages hide and stay as
   // they are, for when the tab comes back.
   useEffect(
     () => () => {
       void invoke("artifact_view_hide_all").catch(() => {});
+      void invoke("chrome_view_hide").catch(() => {});
     },
     [],
   );
@@ -257,7 +307,9 @@ export function ArtifactPanel({
             >
               {items.map((item) => {
                 const isActive = item.key === active?.key;
-                const label = item.title?.trim() || "Artefact";
+                const label =
+                  item.title?.trim() ||
+                  (isChrome(item) ? "Chrome" : "Artefact");
                 return (
                   <div
                     key={item.key}
@@ -272,10 +324,13 @@ export function ArtifactPanel({
                       role="tab"
                       aria-selected={isActive}
                       onClick={() => onSelect(item.key)}
-                      className="min-w-0 flex-1 truncate py-1.5 text-left"
+                      className="flex min-w-0 flex-1 items-center gap-1.5 truncate py-1.5 text-left"
                       title={label}
                     >
-                      {label}
+                      {isChrome(item) && (
+                        <Globe size={12} className="shrink-0" />
+                      )}
+                      <span className="truncate">{label}</span>
                     </button>
                     <button
                       type="button"
@@ -285,7 +340,11 @@ export function ArtifactPanel({
                           ? "text-zinc-500 hover:bg-zinc-300 hover:text-zinc-900"
                           : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100"
                       }`}
-                      title="Fermer cet artefact"
+                      title={
+                        isChrome(item)
+                          ? "Retirer du panneau (la fenêtre reste ouverte pour Claude)"
+                          : "Fermer cet artefact"
+                      }
                       aria-label={`Fermer ${label}`}
                     >
                       <X size={12} />
@@ -295,56 +354,62 @@ export function ArtifactPanel({
               })}
             </div>
           )}
-          <button
-            type="button"
-            onClick={() => void toggleSnip()}
-            className={
-              snipping
-                ? `${iconButton} bg-[#d4af37] text-zinc-900 hover:bg-[#d4af37] hover:text-zinc-900`
-                : iconButton
-            }
-            title={
-              snipping
-                ? "Annuler la capture"
-                : "Capturer une zone et la coller dans Claude"
-            }
-            aria-label="Capturer une zone de l'artefact"
-            aria-pressed={snipping}
-          >
-            <Scissors size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={() => void invoke("artifact_view_reload").catch(() => {})}
-            className={iconButton}
-            title="Recharger"
-            aria-label="Recharger l'artefact"
-          >
-            <RotateCw size={14} />
-          </button>
-          <button
-            type="button"
-            // In the Chrome profile of the artifact's account, else the
-            // default browser (`chrome_profile.rs`). Once it opened there,
-            // the artifact leaves the panel; on a failure it stays.
-            onClick={(e) => {
-              // The second click of a double-click would hit the artifact
-              // that came forward after the first one closed.
-              if (!active || e.detail > 1) return;
-              const { key, url, accountId } = active;
-              void invoke("artifact_open_in_browser", {
-                url,
-                account: accountId,
-              })
-                .then(() => onCloseItem(key))
-                .catch(() => {});
-            }}
-            className={iconButton}
-            title="Ouvrir dans le navigateur et fermer ici"
-            aria-label="Ouvrir l'artefact dans le navigateur"
-          >
-            <ExternalLink size={14} />
-          </button>
+          {!isChrome(active) && (
+            <>
+              <button
+                type="button"
+                onClick={() => void toggleSnip()}
+                className={
+                  snipping
+                    ? `${iconButton} bg-[#d4af37] text-zinc-900 hover:bg-[#d4af37] hover:text-zinc-900`
+                    : iconButton
+                }
+                title={
+                  snipping
+                    ? "Annuler la capture"
+                    : "Capturer une zone et la coller dans Claude"
+                }
+                aria-label="Capturer une zone de l'artefact"
+                aria-pressed={snipping}
+              >
+                <Scissors size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void invoke("artifact_view_reload").catch(() => {})
+                }
+                className={iconButton}
+                title="Recharger"
+                aria-label="Recharger l'artefact"
+              >
+                <RotateCw size={14} />
+              </button>
+              <button
+                type="button"
+                // In the Chrome profile of the artifact's account, else the
+                // default browser (`chrome_profile.rs`). Once it opened there,
+                // the artifact leaves the panel; on a failure it stays.
+                onClick={(e) => {
+                  // The second click of a double-click would hit the artifact
+                  // that came forward after the first one closed.
+                  if (!active || e.detail > 1) return;
+                  const { key, url, accountId } = active;
+                  void invoke("artifact_open_in_browser", {
+                    url,
+                    account: accountId,
+                  })
+                    .then(() => onCloseItem(key))
+                    .catch(() => {});
+                }}
+                className={iconButton}
+                title="Ouvrir dans le navigateur et fermer ici"
+                aria-label="Ouvrir l'artefact dans le navigateur"
+              >
+                <ExternalLink size={14} />
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={onCloseAll}
@@ -355,13 +420,25 @@ export function ArtifactPanel({
             <X size={14} />
           </button>
         </div>
+        {isChrome(active) && active?.note && !active.gone && (
+          <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800 bg-amber-950/40 px-3 py-1.5 text-xs text-amber-200">
+            <TriangleAlert size={13} className="shrink-0" />
+            <span className="min-w-0">{active.note}</span>
+          </div>
+        )}
         <div
           ref={bodyRef}
           className="relative flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-zinc-500"
         >
-          {error
-            ? `Impossible d'afficher l'artefact : ${error}`
-            : "Chargement de l'artefact…"}
+          {isChrome(active)
+            ? active?.gone
+              ? "Fenêtre Chrome fermée. Le globe en haut à droite en rouvre une."
+              : error
+                ? `Impossible d'ouvrir Chrome : ${error}`
+                : "Ouverture de Chrome…"
+            : error
+              ? `Impossible d'afficher l'artefact : ${error}`
+              : "Chargement de l'artefact…"}
           {/* The artifact, frozen while a region is traced over it. */}
           {snipSrc && (
             <div

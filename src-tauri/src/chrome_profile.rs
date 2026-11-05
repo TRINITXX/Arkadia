@@ -152,6 +152,113 @@ fn launch_args(dir: &str, url: &str) -> [String; 3] {
     ]
 }
 
+/// The profile display name paired with Claude account `account` (an id):
+/// the table's, else the profile named after the account's email.
+pub(crate) fn profile_name_for_account(account: &str) -> Option<String> {
+    let email = crate::accounts::account_email(account)?;
+    if let Some(name) = pairing_file()
+        .and_then(read_json)
+        .and_then(|pairing| profile_name(&pairing, &email))
+    {
+        return Some(name);
+    }
+    let state = local_state_file().and_then(read_json)?;
+    profile_dir(&state, &email).map(|_| email)
+}
+
+/// The profile folder ("Profile 3") paired with Claude account `account`.
+pub(crate) fn profile_dir_for_account(account: &str) -> Option<String> {
+    let name = profile_name_for_account(account)?;
+    profile_dir(&read_json(local_state_file()?)?, &name)
+}
+
+/// Opens a new window in profile folder `dir` (the Chrome panel), on a blank
+/// page titled `title`: the window is found by it.
+pub(crate) fn launch_window(dir: &str, title: &str) -> bool {
+    let Some(chrome) = chrome_exe() else {
+        return false;
+    };
+    let [profile, silent, page] = launch_args(dir, &blank_page(title));
+    Command::new(chrome)
+        .args([profile, silent, "--new-window".to_owned(), page])
+        .spawn()
+        .is_ok()
+}
+
+/// Dark like Chrome's own pages: no white flash in the panel. No `#` in
+/// it, which would start the URL's fragment.
+fn blank_page(title: &str) -> String {
+    format!("data:text/html,<title>{title}</title><body style=background:rgb(32,33,36)>")
+}
+
+#[derive(serde::Serialize)]
+pub struct ChromeProfile {
+    /// Folder ("Profile 3"), stable.
+    dir: String,
+    /// Display name, as Chrome shows it: what the pairing table holds.
+    name: String,
+}
+
+/// Chrome's profiles, for the pairing in the settings.
+#[tauri::command]
+pub async fn chrome_profiles_list() -> Vec<ChromeProfile> {
+    let Some(state) = local_state_file().and_then(read_json) else {
+        return Vec::new();
+    };
+    let Some(cache) = state
+        .get("profile")
+        .and_then(|p| p.get("info_cache"))
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let mut out: Vec<ChromeProfile> = cache
+        .iter()
+        .filter_map(|(dir, info)| {
+            let name = info.get("name")?.as_str()?;
+            Some(ChromeProfile {
+                dir: dir.clone(),
+                name: unsuffixed(name).to_owned(),
+            })
+        })
+        .collect();
+    out.sort_by_key(|p| p.name.to_lowercase());
+    out
+}
+
+/// The pairing table: account email -> profile display name.
+#[tauri::command]
+pub async fn chrome_pairing_get() -> std::collections::BTreeMap<String, String> {
+    pairing_file()
+        .and_then(read_json)
+        .and_then(|v| v.as_object().cloned())
+        .map(|map| {
+            map.into_iter()
+                .filter(|(key, _)| !key.starts_with('_'))
+                .filter_map(|(key, value)| Some((key, value.as_str()?.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Pairs `email` with profile `name` (None: unpaired). Keeps the table's
+/// comment and the other accounts as they are.
+#[tauri::command]
+pub async fn chrome_pairing_set(email: String, name: Option<String>) -> Result<(), String> {
+    let path = pairing_file().ok_or("no home folder")?;
+    let mut table = read_json(path.clone())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    table.retain(|key, _| !same(key, &email));
+    if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
+        table.insert(email, Value::String(name));
+    }
+    let text = serde_json::to_string_pretty(&Value::Object(table)).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
 /// The panel's "open in browser": the artifact opens in the Chrome profile of
 /// the account it belongs to, else in the default browser.
 #[tauri::command]

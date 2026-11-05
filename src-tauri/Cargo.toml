@@ -76,6 +76,16 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
     # Foreground-window hook: the Twitch PiP window follows Arkadia (pip_follow).
     "Win32_UI_Accessibility",
+    # Chrome panel (chrome_view): a window's profile (AppUserModelID), its dpi.
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_HiDpi",
+    # The cover over Chrome's caption buttons: its own window, the strip's
+    # color read from Chrome's render.
+    "Win32_Storage_Xps",
+    "Win32_System_LibraryLoader",
 ] }
 
 [dev-dependencies]

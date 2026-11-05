@@ -570,6 +570,8 @@ export const CHAT_CSS = `
 .chat-shells { margin-top: 6px; flex-shrink: 0; }
 .chat-chip.shells { color: #67e8f9; border-color: rgba(103,232,249,.3); background: rgba(34,211,238,.08); }
 .chat-chip.shells:hover { border-color: rgba(103,232,249,.6); }
+.chat-chip.chrome { color: #8ab4f8; border-color: rgba(138,180,248,.3); background: rgba(138,180,248,.08); }
+.chat-chip.chrome:hover { border-color: rgba(138,180,248,.6); }
 .chat-shells-list { position: absolute; bottom: calc(100% + 6px); right: 0; width: min(560px, 90vw); max-height: 50vh; overflow: auto; border-radius: 12px; background: #202327; border: 1px solid #31353b; box-shadow: 0 2px 6px rgba(0,0,0,.3); padding: 10px; z-index: 6; display: flex; flex-direction: column; gap: 10px; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
 .chat-shells-list .shell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .chat-shells-list .head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }

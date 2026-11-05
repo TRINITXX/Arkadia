@@ -30,7 +30,7 @@ import { SidebarTabContextMenu } from "@/components/SidebarTabContextMenu";
 import { RenameDialog } from "@/components/RenameDialog";
 import { ColorPickerDialog } from "@/components/ColorPickerDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
-import { ArtifactPanel } from "@/components/ArtifactPanel";
+import { ArtifactPanel, type ChromeShown } from "@/components/ArtifactPanel";
 import {
   artifactPageUrl,
   isRepublish,
@@ -38,19 +38,29 @@ import {
 } from "@/lib/openLink";
 import { useAnyOverlayOpen } from "@/lib/overlays";
 import {
+  chromeKey,
   closeArtifact,
   closeArtifactByKey,
   closePanel,
   dropTab,
+  hasPages,
   hasPanel,
+  isChrome,
   openArtifact,
   selectArtifact,
   setArtifactTitle,
+  showChrome,
+  updateChrome,
   type ArtifactChange,
   type OpenSource,
   type ArtifactsByTab,
 } from "@/lib/artifactTabs";
 import { artifactId, rememberArtifactTitle } from "@/lib/artifactTitles";
+
+/** Said above a pane's Chrome window when Arkadia could not steer Claude in
+ *  Chrome to it (Arkadia was not in front, Alexis had used that profile). */
+const CHROME_ELSEWHERE =
+  "Claude travaille peut-être dans une autre fenêtre Chrome de ce compte : Arkadia n'était pas devant quand il a ouvert son navigateur.";
 import { snipTarget } from "@/lib/artifactSnip";
 import { SessionsOverlay } from "@/components/SessionsOverlay";
 import { Toaster, useToasts } from "@/components/Toaster";
@@ -103,6 +113,7 @@ import {
 import { findProjectsByPath, parentOf } from "@/lib/externalAction";
 import { resolveProjectTarget, type ClaudeSession } from "@/lib/sessionsIndex";
 import { subscribeStable } from "@/lib/tauriEvents";
+import { setChromePane, setChromeToggler } from "@/lib/chromePanes";
 import {
   dropFrame,
   getFrame,
@@ -594,7 +605,8 @@ export function App() {
   const badgePaneStates = useMemo(() => {
     let merged: Record<string, AgentStateValue> | null = null;
     for (const tab of tabs) {
-      if (!hasPanel(artifacts[tab.id])) continue;
+      // A pane's Chrome alone is no artifact to look at.
+      if (!hasPages(artifacts[tab.id])) continue;
       for (const paneId of Object.keys(tab.panes)) {
         const state = effectivePaneStates[paneId];
         if (!state) continue;
@@ -733,7 +745,167 @@ export function App() {
     void invoke("artifact_view_set_hidden", { hidden: overlayOpen }).catch(
       () => {},
     );
+    void invoke("chrome_view_set_hidden", { hidden: overlayOpen }).catch(
+      () => {},
+    );
   }, [overlayOpen]);
+
+  // A pane's Chrome window in the panel (`chrome_view.rs`). Claude in Chrome
+  // asks for it before its tool calls (`chrome-request`, answered once the
+  // window is ready); the globe asks for it too. Its tab comes forward by
+  // itself the first time only: later calls never take the panel back from
+  // what Alexis chose. Panes that got a window: it closes with them.
+  const chromePanes = useRef(new Set<string>());
+  // Panes whose Chrome tab came forward by itself since this page loaded.
+  const chromeShownOnce = useRef(new Set<string>());
+  // Bumped once the windows of before a page reload are known again.
+  const [chromeKnown, setChromeKnown] = useState(0);
+  // A reload of this page (watchdog repair) forgets the panel, not Rust:
+  // nothing stays on screen, and the windows of before still close with
+  // their pane.
+  useEffect(() => {
+    void invoke("chrome_view_hide").catch(() => {});
+    invoke<string[]>("chrome_view_keys")
+      .then((keys) => {
+        for (const key of keys) {
+          if (key.startsWith("chrome:")) {
+            chromePanes.current.add(key.slice(7));
+            setChromePane(key.slice(7), true);
+          }
+        }
+        setChromeKnown((n) => n + 1);
+      })
+      .catch(() => {});
+  }, []);
+  const pushToastRef = useRef(pushToast);
+  useEffect(() => {
+    pushToastRef.current = pushToast;
+  }, [pushToast]);
+  const onChromeShown = useCallback(
+    (key: string, shown: ChromeShown) =>
+      changeArtifacts((state) => ({
+        state: updateChrome(state, key, {
+          title: `Chrome, ${shown.profile}`,
+          ...(shown.steered ? {} : { note: CHROME_ELSEWHERE }),
+        }),
+        closed: [],
+      })),
+    [changeArtifacts],
+  );
+  useEffect(() => {
+    const stops = [
+      subscribeStable<{ id: string; paneId: string }>(
+        listen,
+        "chrome-request",
+        ({ id, paneId }) => {
+          const tab = artifactTabsRef.current.find((t) =>
+            Object.prototype.hasOwnProperty.call(t.panes, paneId),
+          );
+          // Another Arkadia's pane (`tauri dev` shares the folder): its
+          // own instance answers.
+          if (!tab) return;
+          const accountId = paneAccountId(tab.panes[paneId]?.accountId);
+          const key = chromeKey(paneId);
+          chromePanes.current.add(paneId);
+          if (!chromeShownOnce.current.has(paneId)) {
+            chromeShownOnce.current.add(paneId);
+            changeArtifacts((state) => ({
+              state: showChrome(state, tab.id, paneId, accountId),
+              closed: [],
+            }));
+          }
+          invoke<ChromeShown>("chrome_view_prepare", {
+            id,
+            key,
+            account: accountId,
+          })
+            .then((shown) => {
+              setChromePane(paneId, true);
+              changeArtifacts((state) => ({
+                state: updateChrome(state, key, {
+                  title: `Chrome, ${shown.profile}`,
+                  gone: false,
+                  ...(shown.steered ? {} : { note: CHROME_ELSEWHERE }),
+                }),
+                closed: [],
+              }));
+            })
+            .catch((e) =>
+              pushToastRef.current("error", `Chrome : ${String(e)}`),
+            );
+        },
+      ),
+      // Closed in Chrome itself (Ctrl+Shift+W, its last tab).
+      subscribeStable<{ key: string }>(listen, "chrome-closed", ({ key }) => {
+        if (key.startsWith("chrome:")) setChromePane(key.slice(7), false);
+        changeArtifacts((state) => ({
+          state: updateChrome(state, key, { gone: true, note: null }),
+          closed: [],
+        }));
+      }),
+    ];
+    return () => stops.forEach((stop) => stop());
+  }, [changeArtifacts]);
+  // Whatever closed a pane (its own close, its tab's, its project's), it
+  // leaves `tabs`: its Chrome window closes then.
+  useEffect(() => {
+    // Before the saved tabs are back, every pane looks gone.
+    if (!loaded || chromePanes.current.size === 0) return;
+    const live = new Set(tabs.flatMap((t) => Object.keys(t.panes)));
+    for (const paneId of [...chromePanes.current]) {
+      if (live.has(paneId)) continue;
+      chromePanes.current.delete(paneId);
+      setChromePane(paneId, false);
+      void invoke("chrome_view_close", { key: chromeKey(paneId) }).catch(
+        () => {},
+      );
+      changeArtifacts((state) => closeArtifactByKey(state, chromeKey(paneId)));
+    }
+  }, [tabs, loaded, chromeKnown, changeArtifacts]);
+  // The globe of the toolbar: the active pane's Chrome comes forward in the
+  // panel (an empty window of its account when it has none), or leaves it.
+  const toggleChromeOfPane = useCallback(
+    (asked?: string) => {
+      const all = artifactTabsRef.current;
+      const tab = asked
+        ? all.find((t) => Object.prototype.hasOwnProperty.call(t.panes, asked))
+        : all.find((t) => t.id === activeTabIdRef.current);
+      if (!tab) return;
+      const paneId = asked ?? tab.activePaneId;
+      const key = chromeKey(paneId);
+      const current = artifactsRef.current[tab.id];
+      const shown = current?.items.find((i) => i.key === key);
+      // On screen and alive: the globe hides it. A closed one reopens.
+      if (
+        current?.activeKey === key &&
+        shown &&
+        isChrome(shown) &&
+        !shown.gone
+      ) {
+        changeArtifacts((state) => closeArtifact(state, tab.id, key));
+        return;
+      }
+      chromePanes.current.add(paneId);
+      const accountId = paneAccountId(tab.panes[paneId]?.accountId);
+      changeArtifacts((state) => ({
+        state: updateChrome(showChrome(state, tab.id, paneId, accountId), key, {
+          gone: false,
+          ...(shown?.gone ? { note: null } : {}),
+        }),
+        closed: [],
+      }));
+    },
+    [changeArtifacts],
+  );
+  const toggleChromePanel = useCallback(
+    () => toggleChromeOfPane(),
+    [toggleChromeOfPane],
+  );
+  // The « Chrome » chip under a chat's input (`chat-chrome-chip.tsx`).
+  useEffect(() => {
+    setChromeToggler(toggleChromeOfPane);
+    return () => setChromeToggler(null);
+  }, [toggleChromeOfPane]);
   useEffect(() => {
     setArtifactOpener(openArtifactFor);
     return () => setArtifactOpener(null);
@@ -3380,7 +3552,10 @@ export function App() {
         />
       )}
 
-      <div className="flex flex-1 flex-col overflow-hidden">
+      {/* The title row (tabs, window buttons) runs the whole width: the
+          artifact panel opens below it, beside the toolbar and the panes,
+          never pushing the window buttons into the middle (05/11/2026). */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TabBar
           tabs={visibleTabs}
           activeTabId={activeTabId}
@@ -3402,178 +3577,197 @@ export function App() {
           disabled={!activeProject}
         />
 
-        <Toolbar
-          buttons={toolbarButtons}
-          onRunAction={runToolbarAction}
-          onOpenSettings={() => setSettingsOpen(true)}
-          disabled={!activeProject}
-          sidepanelOpen={sidepanelOpen}
-          onToggleSidepanel={() => setSidepanelOpen((v) => !v)}
-          accountChip={
-            accounts.state && accounts.state.accounts.length > 1 ? (
-              <AccountChip
-                state={accounts.state}
-                onSelect={(id) => void accounts.setCurrent(id)}
-              />
-            ) : null
-          }
-          paneMode={
-            activeModePane ? (
-              <ChatModeToggle
-                mode={activeModePane.chat ? "chat" : "terminal"}
-                busy={chatHandlers.switching.has(activeModePane.id)}
-                onSwitch={() => void chatHandlers.onToggle(activeModePane.id)}
-              />
-            ) : null
-          }
-        />
-
-        {error && (
-          <div className="mx-4 mt-2 flex items-start gap-3 rounded border border-red-800 bg-red-950/50 px-3 py-2 text-sm text-red-300">
-            <span className="flex-1 break-words">{error}</span>
-            <button
-              type="button"
-              aria-label="Dismiss error"
-              onClick={() => setError(null)}
-              className="-mr-1 rounded px-1.5 py-0.5 text-red-400 transition-colors hover:bg-red-900/40 hover:text-red-200"
-            >
-              ×
-            </button>
-          </div>
-        )}
-
-        <div ref={paneHostRef} className="relative flex flex-1 overflow-hidden">
-          {sessionPreview ? (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <div className="flex shrink-0 items-center gap-3 border-b border-zinc-800 px-4 py-2.5">
-                <div className="min-w-0 flex-1 truncate text-sm text-zinc-100">
-                  {sessionPreview.title}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const session = sessionPreview;
-                    setSessionPreview(null);
-                    void resumeSession(session);
-                  }}
-                  className="shrink-0 rounded border border-sky-600/50 bg-sky-600/15 px-2.5 py-1.5 text-xs text-sky-300 hover:bg-sky-600/25"
-                >
-                  Reprendre
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSessionPreview(null)}
-                  className="shrink-0 rounded border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-                >
-                  Fermer
-                </button>
-              </div>
-              <div className="min-h-0 flex-1">
-                <ModernConversationView
-                  key={sessionPreview.id}
-                  paneId={null}
-                  transcript={{
-                    sessionId: sessionPreview.id,
-                    path: sessionPreview.path,
-                  }}
-                  filters={convFilters}
-                  onFiltersChange={setConvFilters}
-                  density={toolDensity}
-                  palette={palette}
-                  backgroundCss={background.glass ? background.css : undefined}
-                  isActive
-                  onToast={pushToast}
-                />
-              </div>
-            </div>
-          ) : !activeProject ? (
-            <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
-              {projects.length === 0
-                ? "no project yet — add one in the sidepanel"
-                : "select a project in the sidepanel"}
-            </div>
-          ) : null}
-          {!sessionPreview && activeProject && visibleTabs.length === 0 && (
-            <div className="flex flex-1 flex-col items-center justify-center gap-1 text-sm text-zinc-500">
-              <span>no tab open</span>
-              <span className="text-xs text-zinc-600">
-                Ctrl+T, or the + in the tab bar, to open one
-              </span>
-            </div>
-          )}
-          {!sessionPreview &&
-            activeProject &&
-            visibleTabs.map((tab) => (
-              <div
-                key={tab.id}
-                className={`flex min-h-0 min-w-0 flex-1 ${
-                  tab.id === activeTabId ? "" : "hidden"
-                }`}
-              >
-                <PromptButtonsContext.Provider value={promptButtons}>
-                  <PaneTreeView
-                    tree={tab.tree}
-                    panes={tab.panes}
-                    activePaneId={tab.activePaneId}
-                    font={font}
-                    palette={palette}
-                    useWebGPU={useWebGPU}
-                    editorProtocol={editorProtocol}
-                    showMessageFrames={messageFramesEnabled}
-                    onToast={pushToast}
-                    inputRailEnabled={navRailEnabled}
-                    onActivate={(paneId) => focusPane(tab.id, paneId)}
-                    onUserInput={() => {
-                      markProjectInput(tab.projectId);
-                      revealSidebarTab(tab.id);
-                    }}
-                    onContextMenu={(paneId, x, y) =>
-                      setPaneMenu({ tabId: tab.id, paneId, x, y })
-                    }
-                    onSetRatio={(path, ratio) =>
-                      setPaneRatio(tab.id, path, ratio)
-                    }
-                    chat={chatHandlers}
-                    shown={tab.id === activeTabId}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <Toolbar
+              buttons={toolbarButtons}
+              onRunAction={runToolbarAction}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onToggleChrome={toggleChromePanel}
+              chromeShown={
+                !!activePaneIdOfActiveTab &&
+                tabArtifacts?.activeKey === chromeKey(activePaneIdOfActiveTab)
+              }
+              disabled={!activeProject}
+              sidepanelOpen={sidepanelOpen}
+              onToggleSidepanel={() => setSidepanelOpen((v) => !v)}
+              accountChip={
+                accounts.state && accounts.state.accounts.length > 1 ? (
+                  <AccountChip
+                    state={accounts.state}
+                    onSelect={(id) => void accounts.setCurrent(id)}
                   />
-                </PromptButtonsContext.Provider>
+                ) : null
+              }
+              paneMode={
+                activeModePane ? (
+                  <ChatModeToggle
+                    mode={activeModePane.chat ? "chat" : "terminal"}
+                    busy={chatHandlers.switching.has(activeModePane.id)}
+                    onSwitch={() =>
+                      void chatHandlers.onToggle(activeModePane.id)
+                    }
+                  />
+                ) : null
+              }
+            />
+
+            {error && (
+              <div className="mx-4 mt-2 flex items-start gap-3 rounded border border-red-800 bg-red-950/50 px-3 py-2 text-sm text-red-300">
+                <span className="flex-1 break-words">{error}</span>
+                <button
+                  type="button"
+                  aria-label="Dismiss error"
+                  onClick={() => setError(null)}
+                  className="-mr-1 rounded px-1.5 py-0.5 text-red-400 transition-colors hover:bg-red-900/40 hover:text-red-200"
+                >
+                  ×
+                </button>
               </div>
-            ))}
-          {!sessionPreview &&
-            activeProject &&
-            promptBarEnabled &&
-            activePaneIsClaude && (
-              <FloatingPromptBar
-                hostRef={paneHostRef}
-                buttons={promptButtons}
-                onRunAction={runPromptAction}
-                background={palette.bg}
-              />
             )}
+
+            <div
+              ref={paneHostRef}
+              className="relative flex flex-1 overflow-hidden"
+            >
+              {sessionPreview ? (
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                  <div className="flex shrink-0 items-center gap-3 border-b border-zinc-800 px-4 py-2.5">
+                    <div className="min-w-0 flex-1 truncate text-sm text-zinc-100">
+                      {sessionPreview.title}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const session = sessionPreview;
+                        setSessionPreview(null);
+                        void resumeSession(session);
+                      }}
+                      className="shrink-0 rounded border border-sky-600/50 bg-sky-600/15 px-2.5 py-1.5 text-xs text-sky-300 hover:bg-sky-600/25"
+                    >
+                      Reprendre
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSessionPreview(null)}
+                      className="shrink-0 rounded border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                    >
+                      Fermer
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    <ModernConversationView
+                      key={sessionPreview.id}
+                      paneId={null}
+                      transcript={{
+                        sessionId: sessionPreview.id,
+                        path: sessionPreview.path,
+                      }}
+                      filters={convFilters}
+                      onFiltersChange={setConvFilters}
+                      density={toolDensity}
+                      palette={palette}
+                      backgroundCss={
+                        background.glass ? background.css : undefined
+                      }
+                      isActive
+                      onToast={pushToast}
+                    />
+                  </div>
+                </div>
+              ) : !activeProject ? (
+                <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
+                  {projects.length === 0
+                    ? "no project yet — add one in the sidepanel"
+                    : "select a project in the sidepanel"}
+                </div>
+              ) : null}
+              {!sessionPreview && activeProject && visibleTabs.length === 0 && (
+                <div className="flex flex-1 flex-col items-center justify-center gap-1 text-sm text-zinc-500">
+                  <span>no tab open</span>
+                  <span className="text-xs text-zinc-600">
+                    Ctrl+T, or the + in the tab bar, to open one
+                  </span>
+                </div>
+              )}
+              {!sessionPreview &&
+                activeProject &&
+                visibleTabs.map((tab) => (
+                  <div
+                    key={tab.id}
+                    className={`flex min-h-0 min-w-0 flex-1 ${
+                      tab.id === activeTabId ? "" : "hidden"
+                    }`}
+                  >
+                    <PromptButtonsContext.Provider value={promptButtons}>
+                      <PaneTreeView
+                        tree={tab.tree}
+                        panes={tab.panes}
+                        activePaneId={tab.activePaneId}
+                        font={font}
+                        palette={palette}
+                        useWebGPU={useWebGPU}
+                        editorProtocol={editorProtocol}
+                        showMessageFrames={messageFramesEnabled}
+                        onToast={pushToast}
+                        inputRailEnabled={navRailEnabled}
+                        onActivate={(paneId) => focusPane(tab.id, paneId)}
+                        onUserInput={() => {
+                          markProjectInput(tab.projectId);
+                          revealSidebarTab(tab.id);
+                        }}
+                        onContextMenu={(paneId, x, y) =>
+                          setPaneMenu({ tabId: tab.id, paneId, x, y })
+                        }
+                        onSetRatio={(path, ratio) =>
+                          setPaneRatio(tab.id, path, ratio)
+                        }
+                        chat={chatHandlers}
+                        shown={tab.id === activeTabId}
+                      />
+                    </PromptButtonsContext.Provider>
+                  </div>
+                ))}
+              {!sessionPreview &&
+                activeProject &&
+                promptBarEnabled &&
+                activePaneIsClaude && (
+                  <FloatingPromptBar
+                    hostRef={paneHostRef}
+                    buttons={promptButtons}
+                    onRunAction={runPromptAction}
+                    background={palette.bg}
+                  />
+                )}
+            </div>
+          </div>
+
+          {activeTabId && tabArtifacts && (
+            <ArtifactPanel
+              items={tabArtifacts.items}
+              activeKey={tabArtifacts.activeKey}
+              onSelect={(key) =>
+                changeArtifacts((state) => ({
+                  state: selectArtifact(state, activeTabId, key),
+                  closed: [],
+                }))
+              }
+              onCloseItem={(key) =>
+                changeArtifacts((state) =>
+                  closeArtifact(state, activeTabId, key),
+                )
+              }
+              onCloseAll={() =>
+                changeArtifacts((state) => closePanel(state, activeTabId))
+              }
+              onWidthChange={setArtifactWidth}
+              onSnipped={pasteSnipInClaude}
+              onSnipFailed={onSnipFailed}
+              onChromeShown={onChromeShown}
+            />
+          )}
         </div>
       </div>
-
-      {activeTabId && tabArtifacts && (
-        <ArtifactPanel
-          items={tabArtifacts.items}
-          activeKey={tabArtifacts.activeKey}
-          onSelect={(key) =>
-            changeArtifacts((state) => ({
-              state: selectArtifact(state, activeTabId, key),
-              closed: [],
-            }))
-          }
-          onCloseItem={(key) =>
-            changeArtifacts((state) => closeArtifact(state, activeTabId, key))
-          }
-          onCloseAll={() =>
-            changeArtifacts((state) => closePanel(state, activeTabId))
-          }
-          onWidthChange={setArtifactWidth}
-          onSnipped={pasteSnipInClaude}
-          onSnipFailed={onSnipFailed}
-        />
-      )}
 
       <AddProjectDialog
         open={addOpen}
