@@ -178,12 +178,11 @@ struct Inner {
     /// Panes closed while their window was still launching: it closes as
     /// soon as it appears.
     closed: HashSet<String>,
-    /// Per profile folder: a parked window on its blank launch page, kept
-    /// when the profile's last session window closed. With none open,
-    /// Chrome opens the profile's next window as it last saved it, often
-    /// maximized: a full-screen flash. Next to a parked window, it opens
-    /// at that window's place, kept 30 px on screen: a corner (both
-    /// measured 05/11/2026). The next session takes the spare: no launch.
+    /// Per profile folder: its anchor, a parked window on its blank launch
+    /// page. With no window of the profile open, Chrome opens the next one
+    /// as it last saved it, often maximized: a full-screen flash. Next to a
+    /// parked window, it opens at that window's place, kept 30 px on
+    /// screen: a corner (both measured 05/11/2026).
     spares: HashMap<String, Win>,
     /// Launch tabs just closed: their window going away means it was its
     /// last tab (Claude's group was elsewhere). Never again for that pane.
@@ -374,31 +373,29 @@ fn ensure(
             return Ok((win, false, false));
         }
     }
-    let spare = state
-        .inner
-        .lock()
-        .ok()
-        .and_then(|mut inner| inner.spares.remove(&dir))
-        .filter(|w| win::alive(w.hwnd));
-    let (win, profile_started) = match spare {
-        Some(spare) => (spare, false),
-        None => launch(state, &dir)?,
-    };
-    // A spare stays beside it from now on: the profile is never left with
-    // no window (Chrome closing the session's last tab, the pane closing),
-    // and the next launch opens next to a parked window, in the corner.
-    // Launched while this one is still parked: the spare is born there.
-    let spare_missing = state
-        .inner
-        .lock()
-        .is_ok_and(|inner| !inner.spares.contains_key(&dir));
-    if spare_missing {
-        if let Ok((spare, _)) = launch(state, &dir) {
+    // The profile's anchor first (`Inner::spares`), never taken by a
+    // session: the profile is never left with no window (Chrome closing the
+    // session's last tab, the pane closing), so the session's window opens
+    // next to a parked one, in the corner. And launched last, the session's
+    // window is the profile's last focused one, where Claude's tabs go: a
+    // spare launched after it took them (05/11/2026).
+    let anchored = state.inner.lock().is_ok_and(|inner| {
+        inner
+            .spares
+            .get(&dir)
+            .is_some_and(|anchor| win::alive(anchor.hwnd))
+    });
+    let mut profile_started = false;
+    if !anchored {
+        if let Ok((anchor, started)) = launch(state, &dir) {
+            profile_started = started;
             if let Ok(mut inner) = state.inner.lock() {
-                inner.spares.insert(dir.clone(), spare);
+                inner.spares.insert(dir.clone(), anchor);
             }
         }
     }
+    let (win, started) = launch(state, &dir)?;
+    let profile_started = profile_started || started;
     let hwnd = win.hwnd;
     let pane_gone = state.inner.lock().is_ok_and(|mut inner| {
         if inner.closed.remove(key) {
@@ -493,6 +490,15 @@ fn launch(state: &ChromeView, dir: &str) -> Result<(Win, bool), String> {
 /// Makes `win` its profile's last-focused window when that may be needed
 /// and Arkadia is in front. Returns whether Claude's group lands there.
 fn steer(state: &ChromeView, win: &Win, created: bool) -> bool {
+    // Chrome activates the window it launches (seen at every launch): it is
+    // the profile's last focused one, Arkadia in front or not.
+    if created {
+        if let Ok(mut inner) = state.inner.lock() {
+            inner.dirty.remove(&win.profile_dir);
+            inner.steered.insert(win.profile_dir.clone(), win.hwnd);
+        }
+        return true;
+    }
     let (dirty, last) = match state.inner.lock() {
         Ok(inner) => (
             inner.dirty.contains(&win.profile_dir),
@@ -1528,12 +1534,25 @@ mod win {
             let app = app.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(AWAY_AFTER);
+                // What is in front now, not what the event said: a window
+                // that takes the foreground an instant (Chrome's, Windows')
+                // parked the panel while Arkadia stayed in front.
+                // SAFETY: plain read.
+                let now = unsafe { GetForegroundWindow() };
+                if is_front_side(now) {
+                    return;
+                }
                 if FRONT_TURN.load(Ordering::SeqCst) == turn && FRONT.swap(false, Ordering::SeqCst)
                 {
                     super::set_away(&app, true);
                 }
             });
         }
+    }
+
+    /// Arkadia's side: one of its windows, a panel's Chrome, or a popup of it.
+    fn is_front_side(h: HWND) -> bool {
+        !h.0.is_null() && (own_process(h) || is_panel_window(h) || owned_by_panel(h))
     }
 
     fn owned_by_panel(h: HWND) -> bool {
