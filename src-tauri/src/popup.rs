@@ -814,6 +814,15 @@ fn popup_dims(compact: bool, notif_w: f64) -> (f64, f64) {
 /// pane, closed with it.
 const NOTIF_LABEL: &str = "popup-notif";
 
+/// Window property set on every notification window (toast, mirror popup),
+/// for `pip_follow`: one of them in front is not Arkadia in front. A property
+/// reads from any process, so the daily instance also sees the Lab's. Windows
+/// lets a background app take the foreground after 200 s without input
+/// (`ForegroundLockTimeout`), and the toast did, which sent the Twitch PiP to
+/// its Arkadia place while Alexis watched a stream in another app (05/11/2026).
+#[cfg(windows)]
+pub const NOTIFICATION_PROP: windows::core::PCWSTR = windows::core::w!("ArkadiaNotification");
+
 /// Label of the window showing `pane_id` in the given style. The `popup-`
 /// prefix is shared, so the sweeps reach every notification window.
 fn window_label(pane_id: &str, compact: bool) -> String {
@@ -895,15 +904,27 @@ fn build_pane_window(
     // events, so the toast's open/dismiss keep working). The mirror popup
     // re-activates itself explicitly on user interaction (`setFocus()` in the
     // frontend), which is a deliberate user action and still allowed.
+    // Not watertight (seen 05/11/2026, tao 0.34): tao rewrites the extended
+    // style whenever its window flags change, dropping this bit (live toast:
+    // 0x40118), and only the first show is SW_SHOWNOACTIVATE. After 200 s
+    // without input Windows lets the toast take the foreground; `pip_follow`
+    // ignores these windows (`NOTIFICATION_PROP`) for that reason.
     #[cfg(windows)]
     if let Ok(hwnd) = win.hwnd() {
+        use windows::Win32::Foundation::HANDLE;
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+            GetWindowLongPtrW, SetPropW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
         };
-        // SAFETY: reading/writing our own window's style bits on a valid HWND.
+        // SAFETY: reading/writing our own window's style bits and property
+        // list on a valid HWND.
         unsafe {
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE.0 as isize);
+            if let Err(e) = SetPropW(hwnd, NOTIFICATION_PROP, Some(HANDLE(1 as _))) {
+                log_line(&format!(
+                    "notification window not tagged for pip_follow: {e}"
+                ));
+            }
         }
     }
     Ok(win)
@@ -913,8 +934,8 @@ fn build_pane_window(
 /// `dismiss_all` and the dismiss commands run there: a sync started on an
 /// older queue can no longer show a window they just hid (the toast is only
 /// hidden now, so a late show brought it back empty), nor hide one a newer
-/// notification needs. Showing never activates: built `focused(false)`, the
-/// window keeps tao's no-activate show for good.
+/// notification needs. Only the first show is no-activate (tao clears its
+/// `focused(false)` mark after it): see `build_pane_window`.
 fn show_if_queued(app: &AppHandle, win: WebviewWindow) {
     let app2 = app.clone();
     let label = win.label().to_string();

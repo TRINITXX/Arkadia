@@ -1,6 +1,7 @@
 //! Twitch picture-in-picture window that follows Arkadia: while an Arkadia
-//! window (daily or Lab) is the foreground window, Chrome's Twitch PiP window
-//! (TRINITX extension) moves to the place Alexis saved in the settings; when
+//! window (daily or Lab, notifications aside) is the foreground window,
+//! Chrome's Twitch PiP window (TRINITX extension) moves to the place Alexis
+//! saved in the settings; when
 //! another app takes the foreground, it goes back where it was just before
 //! (Alexis, 31/10/2026). Nothing moves until a place is saved.
 //!
@@ -8,6 +9,9 @@
 //!   the keyboard back to the window below right after. While Arkadia stays in
 //!   front (`away`), the PiP never moves again: Alexis can drag it to a new
 //!   place and save it.
+//! - An Arkadia notification (toast, mirror popup, daily or Lab) in front
+//!   moves nothing either: after 200 s without input, Windows lets the toast
+//!   take the foreground while Alexis watches a stream elsewhere (05/11/2026).
 //! - The place to go back to (`origin`) belongs to no window handle: Chrome
 //!   reopens a closed PiP at its last place (the target), and the new window
 //!   must still go back. It is never the target itself, and it survives a
@@ -71,7 +75,23 @@ impl Rect {
 enum Foreground {
     Arkadia,
     Pip,
+    /// One of Arkadia's notification windows (toast, mirror popup).
+    Notification,
     Other,
+}
+
+impl Foreground {
+    /// Neither Arkadia nor another app: a click in the PiP, or a notification
+    /// that took the foreground. The last side stays what it was.
+    fn is_neutral(self) -> bool {
+        matches!(self, Foreground::Pip | Foreground::Notification)
+    }
+
+    /// A pending return to the origin still happens: Alexis is not back on
+    /// Arkadia (a click in the PiP or Arkadia itself cancels it).
+    fn keeps_restore(self) -> bool {
+        matches!(self, Foreground::Other | Foreground::Notification)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,7 +203,7 @@ mod imp {
     };
     use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
     use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, EnumWindows, GetForegroundWindow, GetMessageW, GetWindowLongW,
+        DispatchMessageW, EnumWindows, GetForegroundWindow, GetMessageW, GetPropW, GetWindowLongW,
         GetWindowRect, GetWindowThreadProcessId, InternalGetWindowText, IsWindowVisible, KillTimer,
         SetTimer, SetWindowPos, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, MSG, SWP_ASYNCWINDOWPOS,
         SWP_NOACTIVATE, SWP_NOZORDER, WINEVENT_OUTOFCONTEXT, WS_EX_TOPMOST,
@@ -201,7 +221,8 @@ mod imp {
         /// Where the PiP was when Arkadia last came in front from another
         /// app, even without a target: the first "save" goes back there.
         entry: Option<Rect>,
-        /// Last foreground side, Arkadia or Other (a click in the PiP is neither).
+        /// Last foreground side, Arkadia or Other (never a neutral one, see
+        /// `Foreground::is_neutral`).
         last_side: Option<Foreground>,
         /// Pending restore timer of the hook thread (0: none).
         restore_timer: usize,
@@ -339,7 +360,7 @@ mod imp {
         // Still not Arkadia (nor the PiP) once the taskbar or Alt+Tab is gone.
         // SAFETY: plain read of the foreground window.
         let fg = unsafe { GetForegroundWindow() };
-        if classify(fg) == Foreground::Other {
+        if classify(fg).keeps_restore() {
             restore_now();
         }
     }
@@ -348,12 +369,12 @@ mod imp {
         let kind = classify(fg);
         let Some((away, closing, back, pending)) = state(|s| {
             let back = came_back(s.last_side, kind);
-            if kind != Foreground::Pip {
+            if !kind.is_neutral() {
                 s.last_side = Some(kind);
             }
             // Arkadia (or a click in the PiP) is back: a pending restore no
             // longer applies.
-            let pending = if kind == Foreground::Other {
+            let pending = if kind.keeps_restore() {
                 0
             } else {
                 std::mem::take(&mut s.restore_timer)
@@ -451,6 +472,11 @@ mod imp {
     fn classify(hwnd: HWND) -> Foreground {
         if is_pip(hwnd) {
             return Foreground::Pip;
+        }
+        // SAFETY: reads a window's property list (no message sent).
+        let tag = unsafe { GetPropW(hwnd, crate::popup::NOTIFICATION_PROP) };
+        if !tag.0.is_null() {
+            return Foreground::Notification;
         }
         let mut pid = 0u32;
         // SAFETY: reads the owner of a window handle.
@@ -568,6 +594,21 @@ mod tests {
     fn a_click_in_the_pip_keeps_the_placement() {
         assert_eq!(next_action(true, Foreground::Pip), Action::Nothing);
         assert_eq!(next_action(false, Foreground::Pip), Action::Nothing);
+    }
+
+    #[test]
+    fn a_notification_in_front_moves_nothing() {
+        assert_eq!(
+            next_action(false, Foreground::Notification),
+            Action::Nothing
+        );
+        assert_eq!(next_action(true, Foreground::Notification), Action::Nothing);
+        assert!(Foreground::Notification.is_neutral());
+        // Alexis left Arkadia, then a toast took the foreground: the PiP still
+        // goes back.
+        assert!(Foreground::Notification.keeps_restore());
+        assert!(!Foreground::Arkadia.keeps_restore());
+        assert!(!Foreground::Pip.keeps_restore());
     }
 
     #[test]
