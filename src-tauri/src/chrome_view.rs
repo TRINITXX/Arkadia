@@ -384,6 +384,21 @@ fn ensure(
         Some(spare) => (spare, false),
         None => launch(state, &dir)?,
     };
+    // A spare stays beside it from now on: the profile is never left with
+    // no window (Chrome closing the session's last tab, the pane closing),
+    // and the next launch opens next to a parked window, in the corner.
+    // Launched while this one is still parked: the spare is born there.
+    let spare_missing = state
+        .inner
+        .lock()
+        .is_ok_and(|inner| !inner.spares.contains_key(&dir));
+    if spare_missing {
+        if let Ok((spare, _)) = launch(state, &dir) {
+            if let Ok(mut inner) = state.inner.lock() {
+                inner.spares.insert(dir.clone(), spare);
+            }
+        }
+    }
     let hwnd = win.hwnd;
     let pane_gone = state.inner.lock().is_ok_and(|mut inner| {
         if inner.closed.remove(key) {
@@ -1041,15 +1056,14 @@ mod win {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, EnumWindows, GetClassNameW, GetForegroundWindow, GetMessageW, GetPropW,
-        GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
-        GetWindowThreadProcessId, InternalGetWindowText, IsIconic, IsWindow, IsWindowVisible,
-        IsZoomed, PostMessageW, PostThreadMessageW, SendMessageTimeoutW, SetForegroundWindow,
-        SetPropW, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, EVENT_OBJECT_DESTROY,
-        EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, GWLP_HWNDPARENT, GWL_EXSTYLE,
-        GWL_STYLE, GW_HWNDPREV, HWND_TOP, MSG, OBJID_WINDOW, SMTO_ABORTIFHUNG, SM_XVIRTUALSCREEN,
-        SM_YVIRTUALSCREEN, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER,
-        SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINEVENT_OUTOFCONTEXT, WM_APP,
-        WM_CLOSE, WM_NULL, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
+        InternalGetWindowText, IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW,
+        PostThreadMessageW, SendMessageTimeoutW, SetForegroundWindow, SetPropW, SetWindowLongPtrW,
+        SetWindowPos, EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND,
+        GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOP, MSG, OBJID_WINDOW,
+        SMTO_ABORTIFHUNG, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_ASYNCWINDOWPOS,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, WINEVENT_OUTOFCONTEXT,
+        WM_APP, WM_CLOSE, WM_NULL, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
         WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -1062,6 +1076,7 @@ mod win {
         SetLayeredWindowAttributes, EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, LWA_ALPHA,
         WS_EX_LAYERED,
     };
+    use windows::Win32::UI::WindowsAndMessaging::{SC_RESTORE, WM_SYSCOMMAND};
     use windows::Win32::UI::WindowsAndMessaging::{SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN};
 
     fn hwnd(raw: isize) -> HWND {
@@ -1160,15 +1175,16 @@ mod win {
         // SAFETY: style and placement changes on a window that exists.
         unsafe {
             if IsZoomed(h).as_bool() || IsIconic(h).as_bool() {
-                let mut wp = WINDOWPLACEMENT {
-                    length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                    ..Default::default()
-                };
-                if GetWindowPlacement(h, &mut wp).is_ok() {
-                    wp.showCmd = SW_SHOWNOACTIVATE.0 as u32;
-                    wp.flags = Default::default();
-                    let _ = SetWindowPlacement(h, &wp);
-                }
+                // Chrome restores it itself, as on a click of its button:
+                // restored from outside, Chrome still saved the profile as
+                // maximized, and its next first window opened full screen
+                // (measured 05/11/2026). Posted before the park, done first.
+                let _ = PostMessageW(
+                    Some(h),
+                    WM_SYSCOMMAND,
+                    WPARAM(SC_RESTORE as usize),
+                    LPARAM(0),
+                );
             }
             let style = GetWindowLongPtrW(h, GWL_STYLE) as u32;
             let style = style & !(WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0 | WS_MINIMIZEBOX.0);
