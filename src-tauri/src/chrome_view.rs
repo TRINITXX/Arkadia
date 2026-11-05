@@ -153,6 +153,11 @@ struct Inner {
     bounds: Option<Bounds>,
     /// A layer of main covers the panel.
     hidden: bool,
+    /// Another app is in front (`win::note_front`). The window on screen is
+    /// parked then too: Chrome raises its window by itself (the extension's
+    /// focus, a download bubble), and an owned window drags main up with it,
+    /// over the app Alexis uses (05/11/2026). Off-screen, nothing shows.
+    away: bool,
     /// Per profile folder: the window last made its last-focused one.
     steered: HashMap<String, isize>,
     /// Profile folders whose window Alexis used outside Arkadia since.
@@ -279,7 +284,12 @@ fn arrange(app: &AppHandle, state: &ChromeView) {
         let Ok(mut inner) = state.inner.lock() else {
             return;
         };
-        let show = match (&inner.active, inner.bounds, origin, inner.hidden) {
+        let show = match (
+            &inner.active,
+            inner.bounds,
+            origin,
+            inner.hidden || inner.away,
+        ) {
             (Some(key), Some(bounds), Some(origin), false) => Some((key.clone(), bounds, origin)),
             _ => None,
         };
@@ -663,6 +673,11 @@ pub fn release(app: &AppHandle) {
     spawn_arrange(app);
 }
 
+/// Arkadia (or the panel's Chrome) came in front, or another app did.
+fn set_away(app: &AppHandle, away: bool) {
+    rearrange(app, move |inner| inner.away = away);
+}
+
 /// Whether the foreground window is the panel's Chrome on screen: Alexis is
 /// in Arkadia, typing in it.
 pub fn shown_has_foreground(app: &AppHandle) -> bool {
@@ -891,7 +906,7 @@ fn run_inbox(app: AppHandle) -> Result<(), String> {
 mod win {
     use super::Layout;
     use std::collections::HashSet;
-    use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
     use std::sync::{Mutex, OnceLock};
 
     use tauri::AppHandle;
@@ -923,6 +938,7 @@ mod win {
     use windows::Win32::UI::Shell::PropertiesSystem::{
         IPropertyStore, SHGetPropertyStoreForWindow,
     };
+    use windows::Win32::UI::WindowsAndMessaging::GW_OWNER;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, LoadCursorW, RegisterClassW,
         ShowWindowAsync, GWLP_USERDATA, IDC_ARROW, MA_NOACTIVATE, SW_HIDE, WM_ERASEBKGND,
@@ -1375,6 +1391,38 @@ mod win {
         if let Some((cover, rect, color)) = target.filter(|t| t.0 != 0) {
             apply_cover(cover, rect, color);
         }
+    }
+
+    /// Whether Arkadia's side has the foreground: an Arkadia window, the
+    /// panel's Chrome, or a popup of it (download bubble, translation).
+    static FRONT: AtomicBool = AtomicBool::new(true);
+    static FRONT_TURN: AtomicU64 = AtomicU64::new(0);
+    /// The taskbar and Alt+Tab take the foreground an instant between two
+    /// windows (as for `pip_follow`): leaving counts after this.
+    const AWAY_AFTER: std::time::Duration = std::time::Duration::from_millis(250);
+
+    fn note_front(app: &AppHandle, front: bool) {
+        let turn = FRONT_TURN.fetch_add(1, Ordering::SeqCst) + 1;
+        if front {
+            if !FRONT.swap(true, Ordering::SeqCst) {
+                let app = app.clone();
+                std::thread::spawn(move || super::set_away(&app, false));
+            }
+        } else if FRONT.load(Ordering::SeqCst) {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(AWAY_AFTER);
+                if FRONT_TURN.load(Ordering::SeqCst) == turn && FRONT.swap(false, Ordering::SeqCst)
+                {
+                    super::set_away(&app, true);
+                }
+            });
+        }
+    }
+
+    fn owned_by_panel(h: HWND) -> bool {
+        // SAFETY: plain read.
+        unsafe { GetWindow(h, GW_OWNER) }.is_ok_and(is_panel_window)
     }
 
     /// The last foreground window, to resample a panel window losing it.
@@ -2002,6 +2050,7 @@ mod win {
                     resample_soon(raw);
                 }
                 let ours = is_chrome_class(h) && super::on_foreground(app, raw, app_id(h));
+                note_front(app, ours || own_process(h) || owned_by_panel(h));
                 if !ours {
                     // Neither a window being launched nor another Arkadia's
                     // panel window (the daily and the Lab side by side would
