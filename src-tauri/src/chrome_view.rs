@@ -70,10 +70,23 @@ fn layout(origin: (i32, i32), bounds: Bounds, dpi: u32) -> Layout {
     }
 }
 
-/// A parked window's top-left: left of the whole virtual screen, so no
-/// monitor ever shows it, at the same size Chrome keeps drawing at.
-fn park_position(virtual_left: i32, virtual_top: i32, width: i32) -> (i32, i32) {
-    (virtual_left - width - 400, virtual_top)
+/// A parked window's top-left: below and right of the whole virtual screen
+/// (`virtual` = left, top, width, height), so no monitor ever shows it.
+///
+/// Bottom-right, not left: Chrome opens a new window where the profile's
+/// last active window is, kept at least 30 px on a monitor. Parked on the
+/// left, a new window flashed as a full-height strip (or full screen); here
+/// it is a 30 px square in the screen's corner, then parked (05/11/2026).
+fn park_position(virtual_screen: (i32, i32, i32, i32)) -> (i32, i32) {
+    let (left, top, width, height) = virtual_screen;
+    (left + width + 400, top + height + 400)
+}
+
+/// Whether a window rect lies wholly off the virtual screen, where
+/// `park_position` puts it.
+fn parked_rect(rect: (i32, i32, i32, i32), virtual_screen: (i32, i32, i32, i32)) -> bool {
+    let (left, top, width, height) = virtual_screen;
+    rect.0 >= left + width || rect.1 >= top + height || rect.0 + rect.2 <= left
 }
 
 /// Chrome's AppUserModelID for a profile folder: its windows carry it.
@@ -353,6 +366,24 @@ fn ensure(
         if win::alive(win.hwnd) {
             return Ok((win, false, false));
         }
+    }
+    // The new window opens where the profile's last active window is: off
+    // the screen while Arkadia launches (arrange lays them back after).
+    let shown: Vec<isize> = state
+        .inner
+        .lock()
+        .map(|inner| {
+            inner
+                .windows
+                .values()
+                .filter(|w| w.profile_dir == dir && w.at.is_some())
+                .map(|w| w.hwnd)
+                .collect()
+        })
+        .unwrap_or_default();
+    for raw in shown {
+        win::park(raw);
+        win::wait_parked(raw, std::time::Duration::from_millis(500));
     }
     let app_id = app_id_of(&dir);
     let profile_started = !win::browser_windows()
@@ -967,6 +998,7 @@ mod win {
         SetLayeredWindowAttributes, EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, LWA_ALPHA,
         WS_EX_LAYERED,
     };
+    use windows::Win32::UI::WindowsAndMessaging::{SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN};
 
     fn hwnd(raw: isize) -> HWND {
         HWND(raw as *mut core::ffi::c_void)
@@ -1179,12 +1211,14 @@ mod win {
         cover_set(raw, Some(at), false);
     }
 
-    fn virtual_origin() -> (i32, i32) {
+    fn virtual_screen() -> (i32, i32, i32, i32) {
         // SAFETY: plain reads.
         unsafe {
             (
                 GetSystemMetrics(SM_XVIRTUALSCREEN),
                 GetSystemMetrics(SM_YVIRTUALSCREEN),
+                GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                GetSystemMetrics(SM_CYVIRTUALSCREEN),
             )
         }
     }
@@ -1200,8 +1234,7 @@ mod win {
             let _ = GetWindowRect(h, &mut rect);
             let width = (rect.right - rect.left).max(800);
             let height = (rect.bottom - rect.top).max(600);
-            let (vx, vy) = virtual_origin();
-            let (x, y) = super::park_position(vx, vy, width);
+            let (x, y) = super::park_position(virtual_screen());
             let _ = SetWindowPos(
                 h,
                 None,
@@ -1215,12 +1248,15 @@ mod win {
     }
 
     pub(super) fn is_parked(rect: (i32, i32, i32, i32)) -> bool {
-        let (vx, _) = virtual_origin();
-        rect.0 + rect.2 <= vx
+        super::parked_rect(rect, virtual_screen())
     }
 
     pub(super) fn close(raw: isize) {
         cover_drop(raw);
+        // Chrome saves a closing window's place for the profile's next
+        // first window: off-screen, a later launch flashes at most a corner.
+        // Both messages are posted to its thread, in this order.
+        park(raw);
         // SAFETY: a posted message, never waited on.
         unsafe {
             let _ = PostMessageW(Some(hwnd(raw)), WM_CLOSE, WPARAM(0), LPARAM(0));
@@ -2168,10 +2204,16 @@ mod tests {
     }
 
     #[test]
-    fn parks_left_of_every_monitor() {
-        let (x, y) = park_position(-3840, -200, 1600);
-        assert!(x + 1600 < -3840);
-        assert_eq!(y, -200);
+    fn parks_below_right_of_every_monitor() {
+        // A 4K screen with a second one on its left.
+        let screen = (-1920, 0, 1920 + 3840, 2160);
+        let (x, y) = park_position(screen);
+        assert!(x >= 3840 && y >= 2160);
+        assert!(parked_rect((x, y, 2400, 2000), screen));
+        // On a monitor, even in part: not parked.
+        assert!(!parked_rect((3000, 1000, 2400, 2000), screen));
+        // The old place, left of every monitor, still counts as parked.
+        assert!(parked_rect((-6000, 0, 2400, 2000), screen));
     }
 
     #[test]
