@@ -744,6 +744,7 @@ function Preview() {
     <div style={{ position: "relative", height: "100%" }}>
       <ChatView
         key={mount}
+        paneId="preview"
         state={chat}
         agents={{}}
         cwd={"C:\\Users\\TRINITX\\Desktop\\Claude Desktop\\Arkadia-lab"}

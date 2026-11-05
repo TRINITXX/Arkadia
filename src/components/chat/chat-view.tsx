@@ -16,6 +16,7 @@ import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatAgentSheet } from "@/components/chat/chat-agent-sheet";
 import { ChatAgentCards } from "@/components/chat/chat-agent-cards";
 import { ChatShellsChip } from "@/components/chat/chat-shells-chip";
+import { ChatChromeChip } from "@/components/chat/chat-chrome-chip";
 import { ChatWorkflowCard } from "@/components/chat/chat-workflow-card";
 import { useAgentSheet } from "@/lib/chat/useAgentSheet";
 import { runningBash } from "@/lib/chat/chatBash";
@@ -82,6 +83,8 @@ const VOICE_WARM_MS = 5_000;
 
 export interface ChatViewProps {
   state: ChatState;
+  /** The pane's id: its Chrome window, when Claude drives one. */
+  paneId: string;
   /** Subagent conversations loaded so far, by agent id. */
   agents: Record<string, ChatState>;
   cwd: string | null;
@@ -153,6 +156,7 @@ export const ChatView = memo(ChatViewBody, restsWhileHidden);
 
 function ChatViewBody({
   state,
+  paneId,
   agents,
   cwd,
   isActive,
@@ -513,6 +517,7 @@ function ChatViewBody({
         now={live.now}
         onOutput={onShellOutput}
       />
+      <ChatChromeChip paneId={paneId} />
     </>
   );
   let inInput = false;

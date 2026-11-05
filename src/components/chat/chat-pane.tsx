@@ -135,6 +135,7 @@ export function ChatPane({
   return (
     <ChatView
       state={state}
+      paneId={pane.id}
       agents={session.agents}
       cwd={chat.cwd}
       isActive={isActive}

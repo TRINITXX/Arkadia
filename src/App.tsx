@@ -113,6 +113,7 @@ import {
 import { findProjectsByPath, parentOf } from "@/lib/externalAction";
 import { resolveProjectTarget, type ClaudeSession } from "@/lib/sessionsIndex";
 import { subscribeStable } from "@/lib/tauriEvents";
+import { setChromePane, setChromeToggler } from "@/lib/chromePanes";
 import {
   dropFrame,
   getFrame,
@@ -767,7 +768,10 @@ export function App() {
     invoke<string[]>("chrome_view_keys")
       .then((keys) => {
         for (const key of keys) {
-          if (key.startsWith("chrome:")) chromePanes.current.add(key.slice(7));
+          if (key.startsWith("chrome:")) {
+            chromePanes.current.add(key.slice(7));
+            setChromePane(key.slice(7), true);
+          }
         }
         setChromeKnown((n) => n + 1);
       })
@@ -815,7 +819,8 @@ export function App() {
             key,
             account: accountId,
           })
-            .then((shown) =>
+            .then((shown) => {
+              setChromePane(paneId, true);
               changeArtifacts((state) => ({
                 state: updateChrome(state, key, {
                   title: `Chrome, ${shown.profile}`,
@@ -823,20 +828,21 @@ export function App() {
                   ...(shown.steered ? {} : { note: CHROME_ELSEWHERE }),
                 }),
                 closed: [],
-              })),
-            )
+              }));
+            })
             .catch((e) =>
               pushToastRef.current("error", `Chrome : ${String(e)}`),
             );
         },
       ),
       // Closed in Chrome itself (Ctrl+Shift+W, its last tab).
-      subscribeStable<{ key: string }>(listen, "chrome-closed", ({ key }) =>
+      subscribeStable<{ key: string }>(listen, "chrome-closed", ({ key }) => {
+        if (key.startsWith("chrome:")) setChromePane(key.slice(7), false);
         changeArtifacts((state) => ({
           state: updateChrome(state, key, { gone: true, note: null }),
           closed: [],
-        })),
-      ),
+        }));
+      }),
     ];
     return () => stops.forEach((stop) => stop());
   }, [changeArtifacts]);
@@ -849,6 +855,7 @@ export function App() {
     for (const paneId of [...chromePanes.current]) {
       if (live.has(paneId)) continue;
       chromePanes.current.delete(paneId);
+      setChromePane(paneId, false);
       void invoke("chrome_view_close", { key: chromeKey(paneId) }).catch(
         () => {},
       );
@@ -857,30 +864,48 @@ export function App() {
   }, [tabs, loaded, chromeKnown, changeArtifacts]);
   // The globe of the toolbar: the active pane's Chrome comes forward in the
   // panel (an empty window of its account when it has none), or leaves it.
-  const toggleChromePanel = useCallback(() => {
-    const tab = artifactTabsRef.current.find(
-      (t) => t.id === activeTabIdRef.current,
-    );
-    if (!tab) return;
-    const paneId = tab.activePaneId;
-    const key = chromeKey(paneId);
-    const current = artifactsRef.current[tab.id];
-    const shown = current?.items.find((i) => i.key === key);
-    // On screen and alive: the globe hides it. A closed one reopens.
-    if (current?.activeKey === key && shown && isChrome(shown) && !shown.gone) {
-      changeArtifacts((state) => closeArtifact(state, tab.id, key));
-      return;
-    }
-    chromePanes.current.add(paneId);
-    const accountId = paneAccountId(tab.panes[paneId]?.accountId);
-    changeArtifacts((state) => ({
-      state: updateChrome(showChrome(state, tab.id, paneId, accountId), key, {
-        gone: false,
-        ...(shown?.gone ? { note: null } : {}),
-      }),
-      closed: [],
-    }));
-  }, [changeArtifacts]);
+  const toggleChromeOfPane = useCallback(
+    (asked?: string) => {
+      const all = artifactTabsRef.current;
+      const tab = asked
+        ? all.find((t) => Object.prototype.hasOwnProperty.call(t.panes, asked))
+        : all.find((t) => t.id === activeTabIdRef.current);
+      if (!tab) return;
+      const paneId = asked ?? tab.activePaneId;
+      const key = chromeKey(paneId);
+      const current = artifactsRef.current[tab.id];
+      const shown = current?.items.find((i) => i.key === key);
+      // On screen and alive: the globe hides it. A closed one reopens.
+      if (
+        current?.activeKey === key &&
+        shown &&
+        isChrome(shown) &&
+        !shown.gone
+      ) {
+        changeArtifacts((state) => closeArtifact(state, tab.id, key));
+        return;
+      }
+      chromePanes.current.add(paneId);
+      const accountId = paneAccountId(tab.panes[paneId]?.accountId);
+      changeArtifacts((state) => ({
+        state: updateChrome(showChrome(state, tab.id, paneId, accountId), key, {
+          gone: false,
+          ...(shown?.gone ? { note: null } : {}),
+        }),
+        closed: [],
+      }));
+    },
+    [changeArtifacts],
+  );
+  const toggleChromePanel = useCallback(
+    () => toggleChromeOfPane(),
+    [toggleChromeOfPane],
+  );
+  // The « Chrome » chip under a chat's input (`chat-chrome-chip.tsx`).
+  useEffect(() => {
+    setChromeToggler(toggleChromeOfPane);
+    return () => setChromeToggler(null);
+  }, [toggleChromeOfPane]);
   useEffect(() => {
     setArtifactOpener(openArtifactFor);
     return () => setArtifactOpener(null);
