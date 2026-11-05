@@ -28,8 +28,6 @@ export interface ArtifactItem {
   paneId?: string;
   /** Said above the window: Claude may browse in another window. */
   note?: string | null;
-  /** The window was closed in Chrome: the panel offers to open another. */
-  gone?: boolean;
 }
 
 export function isChrome(item: ArtifactItem | undefined): boolean {
@@ -270,11 +268,11 @@ export function showChrome(
   };
 }
 
-/** What Arkadia learnt of a Chrome item (profile name, note, closed). */
+/** What Arkadia learnt of a Chrome item (profile name, note). */
 export function updateChrome(
   state: ArtifactsByTab,
   key: string,
-  patch: Pick<Partial<ArtifactItem>, "title" | "note" | "gone">,
+  patch: Pick<Partial<ArtifactItem>, "title" | "note">,
 ): ArtifactsByTab {
   for (const [tabId, current] of Object.entries(state)) {
     if (!current.items.some((i) => i.key === key)) continue;

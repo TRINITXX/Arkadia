@@ -807,13 +807,19 @@ export function App() {
           const accountId = paneAccountId(tab.panes[paneId]?.accountId);
           const key = chromeKey(paneId);
           chromePanes.current.add(paneId);
-          if (!chromeShownOnce.current.has(paneId)) {
+          const comeForwardOnce = () => {
+            if (chromeShownOnce.current.has(paneId)) return;
+            const owner = artifactTabsRef.current.find((t) =>
+              Object.prototype.hasOwnProperty.call(t.panes, paneId),
+            );
+            if (!owner) return;
             chromeShownOnce.current.add(paneId);
             changeArtifacts((state) => ({
-              state: showChrome(state, tab.id, paneId, accountId),
+              state: showChrome(state, owner.id, paneId, accountId),
               closed: [],
             }));
-          }
+          };
+          comeForwardOnce();
           invoke<ChromeShown>("chrome_view_prepare", {
             id,
             key,
@@ -821,10 +827,12 @@ export function App() {
           })
             .then((shown) => {
               setChromePane(paneId, true);
+              // The window before closed while this one was launching: this
+              // one comes forward in its place.
+              comeForwardOnce();
               changeArtifacts((state) => ({
                 state: updateChrome(state, key, {
                   title: `Chrome, ${shown.profile}`,
-                  gone: false,
                   ...(shown.steered ? {} : { note: CHROME_ELSEWHERE }),
                 }),
                 closed: [],
@@ -835,13 +843,19 @@ export function App() {
             );
         },
       ),
-      // Closed in Chrome itself (Ctrl+Shift+W, its last tab).
+      // Closed in Chrome itself (Claude closed its last tab, Ctrl+Shift+W):
+      // its tab leaves the panel, which closes when it held nothing else.
+      // Still in the panel then, the pane's next window comes forward by
+      // itself again, as the first one did.
       subscribeStable<{ key: string }>(listen, "chrome-closed", ({ key }) => {
-        if (key.startsWith("chrome:")) setChromePane(key.slice(7), false);
-        changeArtifacts((state) => ({
-          state: updateChrome(state, key, { gone: true, note: null }),
-          closed: [],
-        }));
+        if (!key.startsWith("chrome:")) return;
+        const paneId = key.slice(7);
+        setChromePane(paneId, false);
+        const inPanel = Object.values(artifactsRef.current).some((t) =>
+          t.items.some((i) => i.key === key),
+        );
+        if (inPanel) chromeShownOnce.current.delete(paneId);
+        changeArtifacts((state) => closeArtifactByKey(state, key));
       }),
     ];
     return () => stops.forEach((stop) => stop());
@@ -875,23 +889,15 @@ export function App() {
       const key = chromeKey(paneId);
       const current = artifactsRef.current[tab.id];
       const shown = current?.items.find((i) => i.key === key);
-      // On screen and alive: the globe hides it. A closed one reopens.
-      if (
-        current?.activeKey === key &&
-        shown &&
-        isChrome(shown) &&
-        !shown.gone
-      ) {
+      // On screen: the globe hides it.
+      if (current?.activeKey === key && shown && isChrome(shown)) {
         changeArtifacts((state) => closeArtifact(state, tab.id, key));
         return;
       }
       chromePanes.current.add(paneId);
       const accountId = paneAccountId(tab.panes[paneId]?.accountId);
       changeArtifacts((state) => ({
-        state: updateChrome(showChrome(state, tab.id, paneId, accountId), key, {
-          gone: false,
-          ...(shown?.gone ? { note: null } : {}),
-        }),
+        state: showChrome(state, tab.id, paneId, accountId),
         closed: [],
       }));
     },

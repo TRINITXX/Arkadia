@@ -147,7 +147,6 @@ export function ArtifactPanel({
   // first time, reloaded when Claude published it again, else as it was left.
   const activeItemKey = active?.key;
   const activeNonce = active?.nonce;
-  const activeGone = active?.gone;
   useLayoutEffect(() => {
     const el = bodyRef.current;
     if (!el || !active) return;
@@ -156,11 +155,6 @@ export function ArtifactPanel({
       // A pane's real Chrome window instead of a page (launched on the
       // first show). The artifact windows step aside.
       void invoke("artifact_view_hide_all").catch(() => {});
-      if (active.gone) {
-        // Closed in Chrome: the window shown before leaves the body too.
-        void invoke("chrome_view_hide").catch(() => {});
-        return;
-      }
       const key = active.key;
       // The launch can take seconds: by then the panel may show another
       // item, or be gone.
@@ -198,7 +192,7 @@ export function ArtifactPanel({
       .catch((e) => setError(String(e)));
     // Keyed on the artifact and its nonce only: a title change is no reload.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeItemKey, activeNonce, activeGone]);
+  }, [activeItemKey, activeNonce]);
 
   // The panel leaves the screen with its tab: the pages hide and stay as
   // they are, for when the tab comes back.
@@ -420,7 +414,7 @@ export function ArtifactPanel({
             <X size={14} />
           </button>
         </div>
-        {isChrome(active) && active?.note && !active.gone && (
+        {isChrome(active) && active?.note && (
           <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800 bg-amber-950/40 px-3 py-1.5 text-xs text-amber-200">
             <TriangleAlert size={13} className="shrink-0" />
             <span className="min-w-0">{active.note}</span>
@@ -431,11 +425,9 @@ export function ArtifactPanel({
           className="relative flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-zinc-500"
         >
           {isChrome(active)
-            ? active?.gone
-              ? "Fenêtre Chrome fermée. Le globe en haut à droite en rouvre une."
-              : error
-                ? `Impossible d'ouvrir Chrome : ${error}`
-                : "Ouverture de Chrome…"
+            ? error
+              ? `Impossible d'ouvrir Chrome : ${error}`
+              : "Ouverture de Chrome…"
             : error
               ? `Impossible d'afficher l'artefact : ${error}`
               : "Chargement de l'artefact…"}

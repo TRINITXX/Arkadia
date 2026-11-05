@@ -357,7 +357,23 @@ describe("artifact tabs", () => {
         title: "Chrome, Minifashion",
         note: "x",
       });
-      expect(updateChrome(shown, "chrome:nope", { gone: true })).toBe(shown);
+      expect(updateChrome(shown, "chrome:nope", { note: "x" })).toBe(shown);
+    });
+
+    it("leaves with its window, the panel too when it held nothing else", () => {
+      const alone = closeArtifactByKey(
+        showChrome({}, "t1", "p1", "main"),
+        "chrome:p1",
+      );
+      expect(hasPanel(alone.state.t1)).toBe(false);
+      expect(alone.closed).toEqual([]);
+
+      const beside = closeArtifactByKey(
+        showChrome(withPage().state, "t1", "p1", "main"),
+        "chrome:p1",
+      );
+      expect(beside.state.t1.items.map((i) => i.key)).toEqual(["k1"]);
+      expect(beside.state.t1.activeKey).toBe("k1");
     });
   });
 });
