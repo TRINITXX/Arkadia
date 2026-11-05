@@ -82,6 +82,19 @@ instead of popping up in front. Alexis sees Claude browse and can take over (cli
   "close tab", no focus needed), only when the group landed there and the launch page is still the active
   tab. Never on a delay: it could close the window's last tab.
 
+## Second try (05/11/2026)
+
+- A white full-screen flash at each launch: Chrome shows the new window (often maximized) before Arkadia
+  parks it. While a launch lives, a WinEvent hook on window creation makes every new Chrome frame fully
+  transparent (WS_EX_LAYERED, alpha 0); the panel's window is unveiled once parked off-screen, any other at
+  the launch's end. DWM cloaking is refused for another process's window (E_ACCESSDENIED, tried).
+- Caption buttons: a window region made Chrome paint the corner white, and Chrome draws its buttons
+  whatever the styles (WS_SYSMENU and boxes removed: still drawn). A cover window of Arkadia's, owned by
+  the Chrome window (always above it), no activation, painted the tab strip's color read with PrintWindow
+  (PW_RENDERFULLCONTENT), resampled when the window gains or loses the foreground.
+- Layout A chosen: Arkadia's title row (tabs, window buttons) runs the whole width; the panel opens below
+  it. The tab strip shows no scrollbar (wheel scrolls); the globe and the settings never shrink.
+
 ## Out of scope (v1)
 
 Spare pre-steered windows, tab-group window detection through UI Automation, iPhone.

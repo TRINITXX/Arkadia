@@ -3527,7 +3527,10 @@ export function App() {
         />
       )}
 
-      <div className="flex flex-1 flex-col overflow-hidden">
+      {/* The title row (tabs, window buttons) runs the whole width: the
+          artifact panel opens below it, beside the toolbar and the panes,
+          never pushing the window buttons into the middle (05/11/2026). */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TabBar
           tabs={visibleTabs}
           activeTabId={activeTabId}
@@ -3549,184 +3552,197 @@ export function App() {
           disabled={!activeProject}
         />
 
-        <Toolbar
-          buttons={toolbarButtons}
-          onRunAction={runToolbarAction}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onToggleChrome={toggleChromePanel}
-          chromeShown={
-            !!activePaneIdOfActiveTab &&
-            tabArtifacts?.activeKey === chromeKey(activePaneIdOfActiveTab)
-          }
-          disabled={!activeProject}
-          sidepanelOpen={sidepanelOpen}
-          onToggleSidepanel={() => setSidepanelOpen((v) => !v)}
-          accountChip={
-            accounts.state && accounts.state.accounts.length > 1 ? (
-              <AccountChip
-                state={accounts.state}
-                onSelect={(id) => void accounts.setCurrent(id)}
-              />
-            ) : null
-          }
-          paneMode={
-            activeModePane ? (
-              <ChatModeToggle
-                mode={activeModePane.chat ? "chat" : "terminal"}
-                busy={chatHandlers.switching.has(activeModePane.id)}
-                onSwitch={() => void chatHandlers.onToggle(activeModePane.id)}
-              />
-            ) : null
-          }
-        />
-
-        {error && (
-          <div className="mx-4 mt-2 flex items-start gap-3 rounded border border-red-800 bg-red-950/50 px-3 py-2 text-sm text-red-300">
-            <span className="flex-1 break-words">{error}</span>
-            <button
-              type="button"
-              aria-label="Dismiss error"
-              onClick={() => setError(null)}
-              className="-mr-1 rounded px-1.5 py-0.5 text-red-400 transition-colors hover:bg-red-900/40 hover:text-red-200"
-            >
-              ×
-            </button>
-          </div>
-        )}
-
-        <div ref={paneHostRef} className="relative flex flex-1 overflow-hidden">
-          {sessionPreview ? (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <div className="flex shrink-0 items-center gap-3 border-b border-zinc-800 px-4 py-2.5">
-                <div className="min-w-0 flex-1 truncate text-sm text-zinc-100">
-                  {sessionPreview.title}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const session = sessionPreview;
-                    setSessionPreview(null);
-                    void resumeSession(session);
-                  }}
-                  className="shrink-0 rounded border border-sky-600/50 bg-sky-600/15 px-2.5 py-1.5 text-xs text-sky-300 hover:bg-sky-600/25"
-                >
-                  Reprendre
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSessionPreview(null)}
-                  className="shrink-0 rounded border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-                >
-                  Fermer
-                </button>
-              </div>
-              <div className="min-h-0 flex-1">
-                <ModernConversationView
-                  key={sessionPreview.id}
-                  paneId={null}
-                  transcript={{
-                    sessionId: sessionPreview.id,
-                    path: sessionPreview.path,
-                  }}
-                  filters={convFilters}
-                  onFiltersChange={setConvFilters}
-                  density={toolDensity}
-                  palette={palette}
-                  backgroundCss={background.glass ? background.css : undefined}
-                  isActive
-                  onToast={pushToast}
-                />
-              </div>
-            </div>
-          ) : !activeProject ? (
-            <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
-              {projects.length === 0
-                ? "no project yet — add one in the sidepanel"
-                : "select a project in the sidepanel"}
-            </div>
-          ) : null}
-          {!sessionPreview && activeProject && visibleTabs.length === 0 && (
-            <div className="flex flex-1 flex-col items-center justify-center gap-1 text-sm text-zinc-500">
-              <span>no tab open</span>
-              <span className="text-xs text-zinc-600">
-                Ctrl+T, or the + in the tab bar, to open one
-              </span>
-            </div>
-          )}
-          {!sessionPreview &&
-            activeProject &&
-            visibleTabs.map((tab) => (
-              <div
-                key={tab.id}
-                className={`flex min-h-0 min-w-0 flex-1 ${
-                  tab.id === activeTabId ? "" : "hidden"
-                }`}
-              >
-                <PromptButtonsContext.Provider value={promptButtons}>
-                  <PaneTreeView
-                    tree={tab.tree}
-                    panes={tab.panes}
-                    activePaneId={tab.activePaneId}
-                    font={font}
-                    palette={palette}
-                    useWebGPU={useWebGPU}
-                    editorProtocol={editorProtocol}
-                    showMessageFrames={messageFramesEnabled}
-                    onToast={pushToast}
-                    inputRailEnabled={navRailEnabled}
-                    onActivate={(paneId) => focusPane(tab.id, paneId)}
-                    onUserInput={() => {
-                      markProjectInput(tab.projectId);
-                      revealSidebarTab(tab.id);
-                    }}
-                    onContextMenu={(paneId, x, y) =>
-                      setPaneMenu({ tabId: tab.id, paneId, x, y })
-                    }
-                    onSetRatio={(path, ratio) =>
-                      setPaneRatio(tab.id, path, ratio)
-                    }
-                    chat={chatHandlers}
-                    shown={tab.id === activeTabId}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <Toolbar
+              buttons={toolbarButtons}
+              onRunAction={runToolbarAction}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onToggleChrome={toggleChromePanel}
+              chromeShown={
+                !!activePaneIdOfActiveTab &&
+                tabArtifacts?.activeKey === chromeKey(activePaneIdOfActiveTab)
+              }
+              disabled={!activeProject}
+              sidepanelOpen={sidepanelOpen}
+              onToggleSidepanel={() => setSidepanelOpen((v) => !v)}
+              accountChip={
+                accounts.state && accounts.state.accounts.length > 1 ? (
+                  <AccountChip
+                    state={accounts.state}
+                    onSelect={(id) => void accounts.setCurrent(id)}
                   />
-                </PromptButtonsContext.Provider>
+                ) : null
+              }
+              paneMode={
+                activeModePane ? (
+                  <ChatModeToggle
+                    mode={activeModePane.chat ? "chat" : "terminal"}
+                    busy={chatHandlers.switching.has(activeModePane.id)}
+                    onSwitch={() =>
+                      void chatHandlers.onToggle(activeModePane.id)
+                    }
+                  />
+                ) : null
+              }
+            />
+
+            {error && (
+              <div className="mx-4 mt-2 flex items-start gap-3 rounded border border-red-800 bg-red-950/50 px-3 py-2 text-sm text-red-300">
+                <span className="flex-1 break-words">{error}</span>
+                <button
+                  type="button"
+                  aria-label="Dismiss error"
+                  onClick={() => setError(null)}
+                  className="-mr-1 rounded px-1.5 py-0.5 text-red-400 transition-colors hover:bg-red-900/40 hover:text-red-200"
+                >
+                  ×
+                </button>
               </div>
-            ))}
-          {!sessionPreview &&
-            activeProject &&
-            promptBarEnabled &&
-            activePaneIsClaude && (
-              <FloatingPromptBar
-                hostRef={paneHostRef}
-                buttons={promptButtons}
-                onRunAction={runPromptAction}
-                background={palette.bg}
-              />
             )}
+
+            <div
+              ref={paneHostRef}
+              className="relative flex flex-1 overflow-hidden"
+            >
+              {sessionPreview ? (
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                  <div className="flex shrink-0 items-center gap-3 border-b border-zinc-800 px-4 py-2.5">
+                    <div className="min-w-0 flex-1 truncate text-sm text-zinc-100">
+                      {sessionPreview.title}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const session = sessionPreview;
+                        setSessionPreview(null);
+                        void resumeSession(session);
+                      }}
+                      className="shrink-0 rounded border border-sky-600/50 bg-sky-600/15 px-2.5 py-1.5 text-xs text-sky-300 hover:bg-sky-600/25"
+                    >
+                      Reprendre
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSessionPreview(null)}
+                      className="shrink-0 rounded border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                    >
+                      Fermer
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    <ModernConversationView
+                      key={sessionPreview.id}
+                      paneId={null}
+                      transcript={{
+                        sessionId: sessionPreview.id,
+                        path: sessionPreview.path,
+                      }}
+                      filters={convFilters}
+                      onFiltersChange={setConvFilters}
+                      density={toolDensity}
+                      palette={palette}
+                      backgroundCss={
+                        background.glass ? background.css : undefined
+                      }
+                      isActive
+                      onToast={pushToast}
+                    />
+                  </div>
+                </div>
+              ) : !activeProject ? (
+                <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
+                  {projects.length === 0
+                    ? "no project yet — add one in the sidepanel"
+                    : "select a project in the sidepanel"}
+                </div>
+              ) : null}
+              {!sessionPreview && activeProject && visibleTabs.length === 0 && (
+                <div className="flex flex-1 flex-col items-center justify-center gap-1 text-sm text-zinc-500">
+                  <span>no tab open</span>
+                  <span className="text-xs text-zinc-600">
+                    Ctrl+T, or the + in the tab bar, to open one
+                  </span>
+                </div>
+              )}
+              {!sessionPreview &&
+                activeProject &&
+                visibleTabs.map((tab) => (
+                  <div
+                    key={tab.id}
+                    className={`flex min-h-0 min-w-0 flex-1 ${
+                      tab.id === activeTabId ? "" : "hidden"
+                    }`}
+                  >
+                    <PromptButtonsContext.Provider value={promptButtons}>
+                      <PaneTreeView
+                        tree={tab.tree}
+                        panes={tab.panes}
+                        activePaneId={tab.activePaneId}
+                        font={font}
+                        palette={palette}
+                        useWebGPU={useWebGPU}
+                        editorProtocol={editorProtocol}
+                        showMessageFrames={messageFramesEnabled}
+                        onToast={pushToast}
+                        inputRailEnabled={navRailEnabled}
+                        onActivate={(paneId) => focusPane(tab.id, paneId)}
+                        onUserInput={() => {
+                          markProjectInput(tab.projectId);
+                          revealSidebarTab(tab.id);
+                        }}
+                        onContextMenu={(paneId, x, y) =>
+                          setPaneMenu({ tabId: tab.id, paneId, x, y })
+                        }
+                        onSetRatio={(path, ratio) =>
+                          setPaneRatio(tab.id, path, ratio)
+                        }
+                        chat={chatHandlers}
+                        shown={tab.id === activeTabId}
+                      />
+                    </PromptButtonsContext.Provider>
+                  </div>
+                ))}
+              {!sessionPreview &&
+                activeProject &&
+                promptBarEnabled &&
+                activePaneIsClaude && (
+                  <FloatingPromptBar
+                    hostRef={paneHostRef}
+                    buttons={promptButtons}
+                    onRunAction={runPromptAction}
+                    background={palette.bg}
+                  />
+                )}
+            </div>
+          </div>
+
+          {activeTabId && tabArtifacts && (
+            <ArtifactPanel
+              items={tabArtifacts.items}
+              activeKey={tabArtifacts.activeKey}
+              onSelect={(key) =>
+                changeArtifacts((state) => ({
+                  state: selectArtifact(state, activeTabId, key),
+                  closed: [],
+                }))
+              }
+              onCloseItem={(key) =>
+                changeArtifacts((state) =>
+                  closeArtifact(state, activeTabId, key),
+                )
+              }
+              onCloseAll={() =>
+                changeArtifacts((state) => closePanel(state, activeTabId))
+              }
+              onWidthChange={setArtifactWidth}
+              onSnipped={pasteSnipInClaude}
+              onSnipFailed={onSnipFailed}
+              onChromeShown={onChromeShown}
+            />
+          )}
         </div>
       </div>
-
-      {activeTabId && tabArtifacts && (
-        <ArtifactPanel
-          items={tabArtifacts.items}
-          activeKey={tabArtifacts.activeKey}
-          onSelect={(key) =>
-            changeArtifacts((state) => ({
-              state: selectArtifact(state, activeTabId, key),
-              closed: [],
-            }))
-          }
-          onCloseItem={(key) =>
-            changeArtifacts((state) => closeArtifact(state, activeTabId, key))
-          }
-          onCloseAll={() =>
-            changeArtifacts((state) => closePanel(state, activeTabId))
-          }
-          onWidthChange={setArtifactWidth}
-          onSnipped={pasteSnipInClaude}
-          onSnipFailed={onSnipFailed}
-          onChromeShown={onChromeShown}
-        />
-      )}
 
       <AddProjectDialog
         open={addOpen}

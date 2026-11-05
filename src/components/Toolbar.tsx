@@ -90,7 +90,7 @@ export function Toolbar({
       {paneMode}
       <button
         onClick={onToggleChrome}
-        className={`ml-1 flex size-7 items-center justify-center rounded hover:bg-zinc-900 hover:text-zinc-100 ${
+        className={`ml-1 flex size-7 shrink-0 items-center justify-center rounded hover:bg-zinc-900 hover:text-zinc-100 ${
           chromeShown ? "text-[#d4af37]" : "text-zinc-400"
         }`}
         title={
@@ -106,7 +106,7 @@ export function Toolbar({
       </button>
       <button
         onClick={onOpenSettings}
-        className="ml-1 flex size-7 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+        className="ml-1 flex size-7 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
         title="Settings"
         aria-label="Settings"
         type="button"

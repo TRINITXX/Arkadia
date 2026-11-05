@@ -53,9 +53,10 @@ const CAPTION_BUTTONS_DIP: i32 = 3 * 46 + 2;
 const CAPTION_HEIGHT_DIP: i32 = 40;
 
 /// Where `bounds` (relative to main's client origin `origin`) lays a Chrome
-/// window at `dpi`: exactly the panel body, its caption buttons cut out.
-/// A window wider than the panel pushed the toolbar's right end (menu,
-/// extensions) out of view too (seen 05/11/2026).
+/// window at `dpi`: exactly the panel body, its caption buttons under a
+/// cover (`win::cover_set`). A window wider than the panel pushed the
+/// toolbar's right end (menu, extensions) out of view too, and a window
+/// region made Chrome paint that corner white (both seen 05/11/2026).
 fn layout(origin: (i32, i32), bounds: Bounds, dpi: u32) -> Layout {
     let scale = |dip: i32| dip * dpi.max(96) as i32 / 96;
     let width = bounds.width.round().max(1.0) as i32;
@@ -375,6 +376,11 @@ fn ensure(
     };
     win::adopt(hwnd);
     win::park(hwnd);
+    // The park is async on Chrome's thread: the window shows again only
+    // once it is off every monitor for sure (the others launched meanwhile
+    // come back when the launch ends, `Launching`'s drop).
+    win::wait_parked(hwnd, std::time::Duration::from_secs(1));
+    win::unveil(hwnd);
     win::hand_back(hwnd, before);
     let win = Win {
         hwnd,
@@ -785,6 +791,7 @@ pub fn spawn(app: AppHandle) {
     win::close_orphans();
     let hooks_app = app.clone();
     std::thread::spawn(move || win::run_hooks(hooks_app));
+    std::thread::spawn(win::run_covers);
     std::thread::spawn(move || {
         if let Err(e) = run_inbox(app) {
             eprintln!("[arkadia chrome] inbox watcher stopped: {e}");
@@ -888,25 +895,38 @@ mod win {
     use std::sync::{Mutex, OnceLock};
 
     use tauri::AppHandle;
+    use windows::core::PWSTR;
     use windows::core::{w, PCWSTR};
     use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::Foundation::LRESULT;
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, PROPERTYKEY, RECT, WPARAM};
+    use windows::Win32::Graphics::Gdi::DeleteObject;
     use windows::Win32::Graphics::Gdi::{
-        CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_DIFF,
+        BeginPaint, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
+        EndPaint, FillRect, GetDC, GetPixel, InvalidateRect, ReleaseDC, SelectObject, PAINTSTRUCT,
     };
+    use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
     use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
     use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::SystemInformation::GetTickCount64;
     use windows::Win32::System::Threading::{
         AttachThreadInput, GetCurrentThreadId, GetExitCodeProcess, OpenProcess,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
+    use windows::Win32::System::Threading::{QueryFullProcessImageNameW, PROCESS_NAME_WIN32};
+    use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
     use windows::Win32::UI::Shell::PropertiesSystem::{
         IPropertyStore, SHGetPropertyStoreForWindow,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, LoadCursorW, RegisterClassW,
+        ShowWindowAsync, GWLP_USERDATA, IDC_ARROW, MA_NOACTIVATE, SW_HIDE, WM_ERASEBKGND,
+        WM_MOUSEACTIVATE, WM_PAINT, WNDCLASSW, WS_EX_NOACTIVATE, WS_POPUP,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, EnumWindows, GetClassNameW, GetForegroundWindow, GetMessageW, GetPropW,
@@ -923,6 +943,13 @@ mod win {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetAncestor, GetCursorPos, WindowFromPoint, GA_ROOT, WM_APPCOMMAND,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetLayeredWindowAttributes, LAYERED_WINDOW_ATTRIBUTES_FLAGS,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetLayeredWindowAttributes, EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, LWA_ALPHA,
+        WS_EX_LAYERED,
     };
 
     fn hwnd(raw: isize) -> HWND {
@@ -1034,6 +1061,7 @@ mod win {
             let style = GetWindowLongPtrW(h, GWL_STYLE) as u32;
             let style = style & !(WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0 | WS_MINIMIZEBOX.0);
             SetWindowLongPtrW(h, GWL_STYLE, style as isize);
+            let _styles = VEILED.lock().unwrap_or_else(|e| e.into_inner());
             let ex = GetWindowLongPtrW(h, GWL_EXSTYLE) as u32;
             let ex = (ex | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
             SetWindowLongPtrW(h, GWL_EXSTYLE, ex as isize);
@@ -1091,8 +1119,7 @@ mod win {
         // freshly launched window sits on top of every app, the one Alexis
         // uses included. Inserted after the window just above main (Arkadia
         // behind another app), or on top when main is the top window.
-        // SAFETY: region and position of a window that exists; the system
-        // owns the region once set.
+        // SAFETY: position of a window that exists.
         unsafe {
             // A topmost window above main (Arkadia's hidden notification,
             // a tooltip, the taskbar) would make Chrome topmost too: main
@@ -1103,11 +1130,6 @@ mod win {
                 Ok(prev) if !is_topmost(prev) => (Some(prev), Default::default()),
                 _ => (Some(HWND_TOP), Default::default()),
             };
-            let region = CreateRectRgn(0, 0, at.width, at.height);
-            let notch = CreateRectRgn(at.width - at.notch_width, 0, at.width, at.notch_height);
-            let _ = CombineRgn(Some(region), Some(region), Some(notch), RGN_DIFF);
-            let _ = DeleteObject(notch.into());
-            let _ = SetWindowRgn(h, Some(region), true);
             let _ = SetWindowPos(
                 h,
                 after,
@@ -1118,6 +1140,7 @@ mod win {
                 SWP_NOACTIVATE | order | SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS,
             );
         }
+        cover_set(raw, Some(at), true);
     }
 
     /// Moves a laid window back (from the hook: no wait, no region).
@@ -1136,6 +1159,8 @@ mod win {
                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_ASYNCWINDOWPOS,
             );
         }
+        // From the hook: no new color sample (it waits on Chrome).
+        cover_set(raw, Some(at), false);
     }
 
     fn virtual_origin() -> (i32, i32) {
@@ -1151,6 +1176,7 @@ mod win {
     /// Off every monitor, unowned (main may minimize), still drawn.
     pub(super) fn park(raw: isize) {
         let h = hwnd(raw);
+        cover_set(raw, None, false);
         set_owner(h, 0);
         let mut rect = RECT::default();
         // SAFETY: plain read then an async move.
@@ -1178,9 +1204,319 @@ mod win {
     }
 
     pub(super) fn close(raw: isize) {
+        cover_drop(raw);
         // SAFETY: a posted message, never waited on.
         unsafe {
             let _ = PostMessageW(Some(hwnd(raw)), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
+
+    // ---- The cover over Chrome's caption buttons ---------------------------
+    //
+    // Chrome draws its minimize/maximize/close itself, whatever the window's
+    // styles (WS_SYSMENU, boxes: tried 05/11/2026), and a window region makes
+    // it paint that corner white. A small window of Arkadia's lies on them
+    // instead, painted the tab strip's own color (read from Chrome's render):
+    // owned by the Chrome window, it always stays above it, and it takes no
+    // click and no focus. Created and destroyed on the hook thread, which
+    // pumps its messages.
+
+    struct Cover {
+        chrome: isize,
+        /// 0 until the hook thread created it.
+        cover: isize,
+        /// Where it goes (screen pixels), None while the window is parked.
+        rect: Option<(i32, i32, i32, i32)>,
+        color: u32,
+        /// The window's layout, for a sample outside a layout pass.
+        layout: Option<Layout>,
+        /// Chrome renders the whole window for a sample: at most this
+        /// often while the panel is dragged or the window moves.
+        sampled: Option<std::time::Instant>,
+    }
+
+    const SAMPLE_EVERY: std::time::Duration = std::time::Duration::from_secs(3);
+
+    static COVERS: Mutex<Vec<Cover>> = Mutex::new(Vec::new());
+    const WM_COVER: u32 = WM_APP + 43;
+    const COVER_CLASS: PCWSTR = w!("ArkadiaChromeCover");
+    /// Black (the tab strip of Alexis's dark Chrome), until the first sample.
+    const DEFAULT_STRIP: u32 = 0x0000_0000;
+
+    fn cover_rect(at: Layout) -> (i32, i32, i32, i32) {
+        (
+            at.x + at.width - at.notch_width,
+            at.y,
+            at.notch_width,
+            at.notch_height,
+        )
+    }
+
+    /// The tab strip's color: a corner pixel of the minimize button, whose
+    /// background is the strip's (its glyph sits in its middle). Chrome
+    /// renders the window into a bitmap: no screen needed, any z-order.
+    fn sample_strip(raw: isize, at: Layout) -> Option<u32> {
+        // SAFETY: a memory DC and bitmap made, used and freed here.
+        unsafe {
+            let screen = GetDC(None);
+            if screen.is_invalid() {
+                return None;
+            }
+            let dc = CreateCompatibleDC(Some(screen));
+            let bitmap = CreateCompatibleBitmap(screen, at.width.max(1), at.height.max(1));
+            let old = SelectObject(dc, bitmap.into());
+            let painted = PrintWindow(hwnd(raw), dc, PRINT_WINDOW_FLAGS(2)).as_bool();
+            let pixel = GetPixel(dc, at.width - at.notch_width + 4, 4);
+            SelectObject(dc, old);
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(dc);
+            ReleaseDC(None, screen);
+            (painted && pixel.0 != 0xFFFF_FFFF).then_some(pixel.0)
+        }
+    }
+
+    /// The cover of Chrome window `raw` goes to `at` (None: hidden). With
+    /// `sample`, its color is read again soon if due: never here, where a
+    /// layout pass holds the panel's lock (Chrome renders for a sample),
+    /// and once Chrome has done the async move (the pixel at the new size).
+    fn cover_set(raw: isize, at: Option<Layout>, sample: bool) {
+        let mut due = false;
+        let (cover, rect, color) = {
+            let mut covers = COVERS.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = match covers.iter().position(|c| c.chrome == raw) {
+                Some(i) => &mut covers[i],
+                None => {
+                    if at.is_none() {
+                        return;
+                    }
+                    covers.push(Cover {
+                        chrome: raw,
+                        cover: 0,
+                        rect: None,
+                        color: DEFAULT_STRIP,
+                        layout: None,
+                        sampled: None,
+                    });
+                    covers.last_mut().expect("just pushed")
+                }
+            };
+            entry.rect = at.map(cover_rect);
+            if at.is_some() {
+                entry.layout = at;
+                if sample && entry.sampled.is_none_or(|t| t.elapsed() >= SAMPLE_EVERY) {
+                    entry.sampled = Some(std::time::Instant::now());
+                    due = true;
+                }
+            }
+            (entry.cover, entry.rect, entry.color)
+        };
+        if due {
+            resample_soon(raw);
+        }
+        if cover == 0 {
+            post_cover(raw, 0);
+            return;
+        }
+        apply_cover(cover, rect, color);
+    }
+
+    fn apply_cover(cover: isize, rect: Option<(i32, i32, i32, i32)>, color: u32) {
+        let h = hwnd(cover);
+        // SAFETY: Arkadia's own window, moved async, repainted.
+        unsafe {
+            match rect {
+                Some((x, y, w, hgt)) => {
+                    if GetWindowLongPtrW(h, GWLP_USERDATA) as u32 != color {
+                        SetWindowLongPtrW(h, GWLP_USERDATA, color as isize);
+                        let _ = InvalidateRect(Some(h), None, true);
+                    }
+                    let _ = SetWindowPos(
+                        h,
+                        None,
+                        x,
+                        y,
+                        w,
+                        hgt,
+                        SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
+                    );
+                }
+                None => {
+                    let _ = ShowWindowAsync(h, SW_HIDE);
+                }
+            }
+        }
+    }
+
+    /// Chrome repaints its tab strip when it gains or loses the foreground
+    /// (themes color an inactive window differently): the cover follows.
+    fn cover_resample(raw: isize) {
+        let layout = COVERS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|c| c.chrome == raw && c.rect.is_some())
+            .and_then(|c| c.layout);
+        let Some(at) = layout else { return };
+        // PrintWindow waits on Chrome with no limit: never on a hung one.
+        if !responsive(hwnd(raw)) {
+            return;
+        }
+        let Some(color) = sample_strip(raw, at) else {
+            return;
+        };
+        let target = {
+            let mut covers = COVERS.lock().unwrap_or_else(|e| e.into_inner());
+            covers.iter_mut().find(|c| c.chrome == raw).map(|c| {
+                c.color = color;
+                c.sampled = Some(std::time::Instant::now());
+                (c.cover, c.rect, c.color)
+            })
+        };
+        if let Some((cover, rect, color)) = target.filter(|t| t.0 != 0) {
+            apply_cover(cover, rect, color);
+        }
+    }
+
+    /// The last foreground window, to resample a panel window losing it.
+    static PREV_FG: AtomicIsize = AtomicIsize::new(0);
+
+    fn resample_soon(raw: isize) {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            cover_resample(raw);
+        });
+    }
+
+    fn cover_drop(raw: isize) {
+        let found = {
+            let mut covers = COVERS.lock().unwrap_or_else(|e| e.into_inner());
+            covers
+                .iter()
+                .position(|c| c.chrome == raw)
+                .map(|i| covers.remove(i))
+        };
+        if let Some(c) = found.filter(|c| c.cover != 0) {
+            post_cover(c.cover, 1);
+        }
+    }
+
+    /// The covers' own thread. A window owned by Chrome's attaches its
+    /// input queue to Chrome's UI thread: a frozen Chrome blocks only this
+    /// thread, never the hook thread nor the foreground handovers.
+    static COVER_THREAD: AtomicU32 = AtomicU32::new(0);
+
+    pub(super) fn run_covers() {
+        // SAFETY: the covers are made, painted and destroyed on this thread,
+        // from the loop below.
+        unsafe {
+            COVER_THREAD.store(GetCurrentThreadId(), Ordering::SeqCst);
+            let mut msg = MSG::default();
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                if msg.hwnd.0.is_null() && msg.message == WM_COVER {
+                    match msg.lParam.0 {
+                        0 => create_cover(msg.wParam.0 as isize),
+                        _ => {
+                            let _ = DestroyWindow(hwnd(msg.wParam.0 as isize));
+                        }
+                    }
+                    continue;
+                }
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+
+    /// To the covers' thread: create the cover of a Chrome window (0), or
+    /// destroy a cover (1).
+    fn post_cover(raw: isize, what: isize) {
+        let thread = COVER_THREAD.load(Ordering::SeqCst);
+        if thread == 0 {
+            return;
+        }
+        // SAFETY: a posted message to the hook thread.
+        unsafe {
+            let _ = PostThreadMessageW(thread, WM_COVER, WPARAM(raw as usize), LPARAM(what));
+        }
+    }
+
+    unsafe extern "system" fn cover_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        // SAFETY: the cover's own messages, on the thread that made it.
+        unsafe {
+            match msg {
+                WM_PAINT => {
+                    let mut ps = PAINTSTRUCT::default();
+                    let dc = BeginPaint(h, &mut ps);
+                    let brush =
+                        CreateSolidBrush(COLORREF(GetWindowLongPtrW(h, GWLP_USERDATA) as u32));
+                    FillRect(dc, &ps.rcPaint, brush);
+                    let _ = DeleteObject(brush.into());
+                    let _ = EndPaint(h, &ps);
+                    LRESULT(0)
+                }
+                WM_ERASEBKGND => LRESULT(1),
+                // A click on it neither activates it nor reaches Chrome.
+                WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+                _ => DefWindowProcW(h, msg, wp, lp),
+            }
+        }
+    }
+
+    /// On the covers' thread: a cover made for Chrome window `chrome`, then laid
+    /// where it should be.
+    fn create_cover(chrome: isize) {
+        static REGISTERED: std::sync::Once = std::sync::Once::new();
+        // SAFETY: class and window of this thread, owned by a live window.
+        unsafe {
+            let Ok(module) = GetModuleHandleW(None) else {
+                return;
+            };
+            REGISTERED.call_once(|| {
+                let class = WNDCLASSW {
+                    lpfnWndProc: Some(cover_proc),
+                    hInstance: module.into(),
+                    lpszClassName: COVER_CLASS,
+                    hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                    ..Default::default()
+                };
+                RegisterClassW(&class);
+            });
+            if !IsWindow(Some(hwnd(chrome))).as_bool() {
+                return;
+            }
+            let Ok(cover) = CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                COVER_CLASS,
+                w!(""),
+                WS_POPUP,
+                -32000,
+                -32000,
+                1,
+                1,
+                Some(hwnd(chrome)),
+                None,
+                Some(module.into()),
+                None,
+            ) else {
+                return;
+            };
+            let raw = cover.0 as isize;
+            let state = {
+                let mut covers = COVERS.lock().unwrap_or_else(|e| e.into_inner());
+                match covers.iter_mut().find(|c| c.chrome == chrome) {
+                    Some(c) if c.cover == 0 => {
+                        c.cover = raw;
+                        Some((c.rect, c.color))
+                    }
+                    _ => None,
+                }
+            };
+            match state {
+                Some((rect, color)) => apply_cover(raw, rect, color),
+                // Dropped meanwhile, or already made.
+                None => {
+                    let _ = DestroyWindow(cover);
+                }
+            }
         }
     }
 
@@ -1239,6 +1575,7 @@ mod win {
     /// Windows a crashed run of this Arkadia left: closed. Those of an
     /// instance still running (`tauri dev` beside the daily) are left alone.
     pub(super) fn close_orphans() {
+        unveil_leftovers();
         for (raw, _, _) in browser_windows() {
             // SAFETY: plain read of a window property.
             let mark = unsafe { GetPropW(hwnd(raw), mark_name()) };
@@ -1279,16 +1616,179 @@ mod win {
     /// window, never a place to go back to.
     static LAUNCHES: AtomicU32 = AtomicU32::new(0);
 
+    /// A launch in progress. Chrome shows the new window at once, often
+    /// maximized, before Arkadia finds and parks it: a full-screen flash,
+    /// over whatever app is in front (Alexis, 05/11/2026). While a launch
+    /// lives, every new Chrome frame is made fully transparent as soon as
+    /// it is created (`veil`); the panel's window is unveiled once parked
+    /// off-screen, any other (Alexis opening one meanwhile) when it ends.
     pub(super) struct Launching;
     impl Launching {
         pub(super) fn start() -> Self {
             LAUNCHES.fetch_add(1, Ordering::SeqCst);
+            post_watch(1);
             Launching
         }
     }
     impl Drop for Launching {
         fn drop(&mut self) {
-            LAUNCHES.fetch_sub(1, Ordering::SeqCst);
+            if LAUNCHES.fetch_sub(1, Ordering::SeqCst) == 1 {
+                post_watch(0);
+                unveil_all();
+            }
+        }
+    }
+
+    /// Frames made transparent during a launch. Its lock also covers every
+    /// change of a Chrome window's extended style (`adopt`), so a late veil
+    /// never undoes a style set meanwhile, nor comes after the unveil.
+    static VEILED: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+    const WM_LAUNCH_WATCH: u32 = WM_APP + 42;
+
+    fn post_watch(on: usize) {
+        let thread = HOOK_THREAD.load(Ordering::SeqCst);
+        if thread == 0 {
+            return;
+        }
+        // SAFETY: a posted message to the hook thread.
+        unsafe {
+            let _ = PostThreadMessageW(thread, WM_LAUNCH_WATCH, WPARAM(on), LPARAM(0));
+        }
+    }
+
+    /// A Chrome browser frame, visible or not yet (at its creation). Its
+    /// class is shared by every Chromium app (VS Code, Discord, Edge): only
+    /// chrome.exe's.
+    fn is_new_frame(h: HWND) -> bool {
+        // SAFETY: plain reads of a window's state.
+        let frame = unsafe {
+            is_chrome_class(h)
+                && GetAncestor(h, GA_ROOT) == h
+                && GetWindowLongPtrW(h, GWL_STYLE) as u32 & WS_CAPTION.0 == WS_CAPTION.0
+        };
+        frame && !is_panel_window(h) && is_chrome_exe(h)
+    }
+
+    /// Whether the window belongs to chrome.exe (answers kept per pid).
+    fn is_chrome_exe(h: HWND) -> bool {
+        static KNOWN: Mutex<Vec<(u32, bool)>> = Mutex::new(Vec::new());
+        let mut pid = 0u32;
+        // SAFETY: plain read.
+        unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+        if pid == 0 {
+            return false;
+        }
+        if let Some((_, known)) = KNOWN
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(p, _)| *p == pid)
+        {
+            return *known;
+        }
+        // SAFETY: the process handle is closed before returning.
+        let chrome = unsafe {
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).is_ok_and(|process| {
+                let mut buf = [0u16; 512];
+                let mut len = buf.len() as u32;
+                let read = QueryFullProcessImageNameW(
+                    process,
+                    PROCESS_NAME_WIN32,
+                    PWSTR(buf.as_mut_ptr()),
+                    &mut len,
+                )
+                .is_ok();
+                let _ = CloseHandle(process);
+                read && String::from_utf16_lossy(&buf[..len as usize])
+                    .to_ascii_lowercase()
+                    .ends_with("\\chrome.exe")
+            })
+        };
+        let mut known = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
+        if known.len() > 64 {
+            known.clear();
+        }
+        known.push((pid, chrome));
+        chrome
+    }
+
+    fn veil(raw: isize) {
+        let h = hwnd(raw);
+        let mut veiled = VEILED.lock().unwrap_or_else(|e| e.into_inner());
+        // The launch ended meanwhile (nobody would unveil it), it is already
+        // the panel's (it would stay invisible in the panel), or veiled.
+        if LAUNCHES.load(Ordering::SeqCst) == 0 || is_panel_window(h) || veiled.contains(&raw) {
+            return;
+        }
+        // SAFETY: style and opacity of a window that exists.
+        unsafe {
+            let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+            SetWindowLongPtrW(h, GWL_EXSTYLE, ex | WS_EX_LAYERED.0 as isize);
+            let _ = SetLayeredWindowAttributes(h, COLORREF(0), 0, LWA_ALPHA);
+        }
+        veiled.push(raw);
+    }
+
+    fn drop_layered(h: HWND) {
+        // SAFETY: style of a window that may be gone (then it fails).
+        unsafe {
+            let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+            if ex & WS_EX_LAYERED.0 as isize != 0 {
+                SetWindowLongPtrW(h, GWL_EXSTYLE, ex & !(WS_EX_LAYERED.0 as isize));
+            }
+        }
+    }
+
+    /// Visible again, veiled or not (a late veil cannot have come after:
+    /// the window is the panel's now).
+    pub(super) fn unveil(raw: isize) {
+        let mut veiled = VEILED.lock().unwrap_or_else(|e| e.into_inner());
+        veiled.retain(|w| *w != raw);
+        drop_layered(hwnd(raw));
+    }
+
+    fn unveil_all() {
+        let mut veiled = VEILED.lock().unwrap_or_else(|e| e.into_inner());
+        for raw in veiled.drain(..) {
+            drop_layered(hwnd(raw));
+        }
+    }
+
+    /// Waits (bounded) until Chrome moved the window off every monitor.
+    pub(super) fn wait_parked(raw: isize, at_most: std::time::Duration) {
+        let deadline = std::time::Instant::now() + at_most;
+        loop {
+            let mut r = RECT::default();
+            // SAFETY: plain read.
+            let read = unsafe { GetWindowRect(hwnd(raw), &mut r) }.is_ok();
+            if !read || is_parked((r.left, r.top, r.right - r.left, r.bottom - r.top)) {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+    }
+
+    /// A window Arkadia was killed with while it was veiled (a launch cut
+    /// short): Chrome frames never use full transparency themselves.
+    fn unveil_leftovers() {
+        for (raw, _, _) in browser_windows() {
+            let h = hwnd(raw);
+            let mut alpha = 255u8;
+            let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+            // SAFETY: plain reads.
+            let veiled = unsafe {
+                GetWindowLongPtrW(h, GWL_EXSTYLE) & WS_EX_LAYERED.0 as isize != 0
+                    && GetLayeredWindowAttributes(h, None, Some(&mut alpha), Some(&mut flags))
+                        .is_ok()
+                    && flags.0 & LWA_ALPHA.0 != 0
+                    && alpha == 0
+            };
+            if veiled {
+                drop_layered(h);
+            }
         }
     }
 
@@ -1407,8 +1907,33 @@ mod win {
                 0,
                 WINEVENT_OUTOFCONTEXT,
             );
+            let mut launch_hook: Option<HWINEVENTHOOK> = None;
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                if msg.hwnd.0.is_null() && msg.message == WM_LAUNCH_WATCH {
+                    // Every process: a cold start has no Chrome pid yet.
+                    // Only while a launch lives, which lasts seconds. The
+                    // range also brings DESTROY (0x8001): ignored.
+                    if msg.wParam.0 == 1 && launch_hook.is_none() {
+                        let hook = SetWinEventHook(
+                            EVENT_OBJECT_CREATE,
+                            EVENT_OBJECT_SHOW,
+                            None,
+                            Some(on_launch_event),
+                            0,
+                            0,
+                            WINEVENT_OUTOFCONTEXT,
+                        );
+                        if !hook.is_invalid() {
+                            launch_hook = Some(hook);
+                        }
+                    } else if msg.wParam.0 == 0 && LAUNCHES.load(Ordering::SeqCst) == 0 {
+                        if let Some(hook) = launch_hook.take() {
+                            let _ = UnhookWinEvent(hook);
+                        }
+                    }
+                    continue;
+                }
                 if msg.hwnd.0.is_null() && msg.message == WM_WATCH_PROCESS {
                     let pid = msg.wParam.0 as u32;
                     let mut watched = WATCHED.lock().unwrap_or_else(|e| e.into_inner());
@@ -1432,6 +1957,27 @@ mod win {
         }
     }
 
+    /// During a launch: a new Chrome frame turns transparent at once (off
+    /// the hook: changing its style waits on Chrome's thread).
+    unsafe extern "system" fn on_launch_event(
+        _hook: HWINEVENTHOOK,
+        _event: u32,
+        h: HWND,
+        id_object: i32,
+        id_child: i32,
+        _thread: u32,
+        _time: u32,
+    ) {
+        if h.0.is_null() || id_object != OBJID_WINDOW.0 || id_child != 0 {
+            return;
+        }
+        if LAUNCHES.load(Ordering::SeqCst) == 0 || !is_new_frame(h) {
+            return;
+        }
+        let raw = h.0 as isize;
+        std::thread::spawn(move || veil(raw));
+    }
+
     unsafe extern "system" fn on_event(
         _hook: HWINEVENTHOOK,
         event: u32,
@@ -1448,6 +1994,13 @@ mod win {
         match event {
             EVENT_SYSTEM_FOREGROUND => {
                 let raw = h.0 as isize;
+                let prev = PREV_FG.swap(raw, Ordering::SeqCst);
+                if prev != 0 && prev != raw && is_panel_window(hwnd(prev)) {
+                    resample_soon(prev);
+                }
+                if is_panel_window(h) {
+                    resample_soon(raw);
+                }
                 let ours = is_chrome_class(h) && super::on_foreground(app, raw, app_id(h));
                 if !ours {
                     // Neither a window being launched nor another Arkadia's
@@ -1479,7 +2032,10 @@ mod win {
                     );
                 }
             }
-            EVENT_OBJECT_DESTROY => super::on_destroyed(app, h.0 as isize),
+            EVENT_OBJECT_DESTROY => {
+                cover_drop(h.0 as isize);
+                super::on_destroyed(app, h.0 as isize);
+            }
             _ => {}
         }
     }
@@ -1500,6 +2056,9 @@ mod win {
     }
     pub(super) fn close_active_tab(_: isize) {}
     pub(super) fn hand_back(_: isize, _: Option<isize>) {}
+    pub(super) fn unveil(_: isize) {}
+    pub(super) fn wait_parked(_: isize, _: std::time::Duration) {}
+    pub(super) fn run_covers() {}
     pub(super) struct Launching;
     impl Launching {
         pub(super) fn start() -> Self {
