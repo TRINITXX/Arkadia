@@ -28,6 +28,16 @@ import {
   type BangRun,
   type Kept,
 } from "./bash.ts";
+import {
+  answeredTurn,
+  endsOwnCompact,
+  idleCompactAhead,
+  idleCompactDue,
+  turnCompactDue,
+  TURN_COMPACT_SETTLE_MS,
+  type AutoCompact,
+  type CompactFacts,
+} from "./autoCompact.ts";
 import { pipeGone, strayVerdict } from "./guard.ts";
 import {
   coldFacts,
@@ -54,10 +64,12 @@ import {
   atRest,
   cronCount,
   DEFAULT_SLEEP_MS,
+  notShell,
   queuedAfter,
   readSleepAfter,
   SLEEP_CHECK_MS,
   sleepDue,
+  takenAfter,
   tasksAfter,
   turnAfter,
   type SleepFacts,
@@ -702,6 +714,25 @@ class Chat {
   private asleep = false;
   /** A compaction since the last turn's end: the ring counts again then. */
   private compacted = false;
+  /**
+   * A `/compact` this server sent itself (`autoCompact.ts`), by its uuid:
+   * `running` once Claude Code took it, until its turn's end. Never the
+   * next `result` whoever's: a turn already taken may end first.
+   */
+  private autoCompact: { kind: AutoCompact; uuid: string; running: boolean } | null = null;
+  /** A turn's end waits a moment before compacting (`TURN_COMPACT_SETTLE_MS`). */
+  private compactTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The request an idle compaction was last tried after (`CompactFacts.idleTried`). */
+  private idleTried: number | null = null;
+  /** Background subagents and workflows, shells and monitors aside: a compaction waits for them. */
+  private agentTasks: readonly string[] = [];
+  /**
+   * A turn under way from its first request, before anything streams (on a
+   * big context, seconds after the last turn's end): a compaction waits.
+   */
+  private requesting = false;
+  /** Messages Claude Code took and hasn't finished (`takenAfter`): their turn runs, maybe silent yet. */
+  private taken: readonly string[] = [];
   /** A message's look for a cold session, then its handoff: what is sent meanwhile waits (`send`). */
   private handingOff: Promise<void> | null = null;
   /** Opus writing a handoff: a close stops it. */
@@ -910,6 +941,11 @@ class Chat {
     const start = this.start;
     // A new process has no background task yet: its set comes with the first change.
     this.tasks = [];
+    this.agentTasks = [];
+    this.requesting = false;
+    this.taken = [];
+    // Its `/compact` died with the old process, or never reached it.
+    this.autoCompact = null;
     const q = query({
       prompt: this.input,
       options: {
@@ -1019,7 +1055,8 @@ class Chat {
   /** What keeps it awake now (`sleepDue`). */
   private sleepFacts(): SleepFacts {
     return {
-      turn: this.turn,
+      // Its own `/compact` streams nothing: no turn shows, yet one runs.
+      turn: this.turn || this.autoCompact !== null,
       tasks: this.tasks.length,
       // A sign-in open in the browser: its callback goes to this Claude Code.
       requests: this.pending.size + this.elicitations.size + this.signIns.size,
@@ -1028,6 +1065,77 @@ class Chat {
       bangs: this.bangs.size + this.writing.size,
       crons: this.crons,
     };
+  }
+
+  /** What a compaction of its own goes by (`autoCompact.ts`); null before any request seen. */
+  private compactFacts(): CompactFacts | null {
+    const known = this.knownFacts;
+    if (!known) return null;
+    const f = this.sleepFacts();
+    // Shells, monitors and wakeups don't hold it up: they may run for hours.
+    const busy =
+      f.turn ||
+      this.requesting ||
+      this.taken.length > 0 ||
+      f.queued > 0 ||
+      f.requests > 0 ||
+      f.bangs > 0 ||
+      this.outbox.length > 0 ||
+      this.agentTasks.length > 0 ||
+      this.handingOff !== null;
+    return { tokens: known.tokens, at: known.at, ttlMs: known.ttlMs, busy, idleTried: this.idleTried };
+  }
+
+  /** A turn Claude answered ended: a moment later, compacted if big and nothing follows. */
+  private armTurnCompact(): void {
+    clearTimeout(this.compactTimer);
+    this.compactTimer = setTimeout(() => this.compactIfDue("turn"), TURN_COMPACT_SETTLE_MS);
+  }
+
+  /**
+   * Sends `/compact` as if typed, when due (`turnCompactDue`,
+   * `idleCompactDue`): the page shows its live line and its notice, no
+   * bubble, no notification (`autoCompact` on its messages). True if sent.
+   */
+  compactIfDue(kind: AutoCompact, now = Date.now()): boolean {
+    if (this.asleep || this.ended || this.silent || !this.query || this.autoCompact) return false;
+    const facts = this.compactFacts();
+    if (!facts) return false;
+    const due = kind === "turn" ? turnCompactDue(facts) : idleCompactDue(facts, now);
+    if (!due) return false;
+    // Once per request: a compaction that fails (the usage limit) isn't
+    // tried again every check, and the chat may sleep.
+    if (kind === "idle") this.idleTried = facts.at;
+    const uuid = randomUUID();
+    this.autoCompact = { kind, uuid, running: false };
+    this.queued = [...this.queued, uuid];
+    this.input.push({
+      type: "user",
+      uuid,
+      parent_tool_use_id: null,
+      message: { role: "user", content: [{ type: "text", text: "/compact" }] },
+    });
+    return true;
+  }
+
+  /** Its own `/compact` taken by Claude Code: what comes next is its; dropped unrun: none. */
+  private noteAutoCompact(message: SDKMessage): void {
+    const own = this.autoCompact;
+    // Not in the SDK's types (0.3.314): a message's lifecycle frames.
+    const frame = message as { type: string; command_uuid?: unknown; state?: unknown };
+    if (!own || frame.type !== "command_lifecycle" || frame.command_uuid !== own.uuid) return;
+    if (frame.state === "started") this.autoCompact = { ...own, running: true };
+    else if (frame.state !== "queued" && !own.running) this.autoCompact = null;
+  }
+
+  /** Its own `/compact`'s notice and end, marked for the page (`compactNotice`, `chatNotify`). */
+  private markAutoCompact(message: SDKMessage): SDKMessage {
+    const own = this.autoCompact;
+    if (!own) return message;
+    const marked =
+      endsOwnCompact(own, message) ||
+      (own.running && message.type === "system" && message.subtype === "compact_boundary");
+    return marked ? Object.assign({ autoCompact: own.kind }, message) : message;
   }
 
   /**
@@ -1065,7 +1173,13 @@ class Chat {
     // Starting, waking, asleep, or stopped for a relaunch: not now.
     if (this.asleep || this.silent || !this.query) return false;
     if (!sleepDue(this.sleepFacts(), this.lastActive, now, afterMs)) return false;
+    // A big session's idle compaction still to come: asleep, its cache would
+    // expire, and the next message would pay for the whole of it. A sleep
+    // asked now (`afterMs` 0) isn't held.
+    const facts = this.compactFacts();
+    if (afterMs !== 0 && facts && idleCompactAhead(facts, now)) return false;
     const q = this.query;
+    clearTimeout(this.compactTimer);
     this.asleep = true;
     // Its pump ends without a word: it is no longer this chat's query.
     this.query = null;
@@ -1283,11 +1397,20 @@ class Chat {
       for await (const message of q) {
         // Put to sleep: what that Claude Code still says is no one's.
         if (this.query !== q) break;
-        this.touch();
+        // Its own `/compact` isn't something done in the chat: an idle one
+        // lets the chat sleep right after, as it would have.
+        if (!this.autoCompact?.running) this.touch();
         // The end of a turn Claude Code ran for our `!` entries alone: no one's.
         if (this.ownEnd(message)) continue;
         this.turn = turnAfter(this.turn, message);
         this.tasks = tasksAfter(this.tasks, message);
+        this.agentTasks = tasksAfter(this.agentTasks, message, notShell);
+        if (message.type === "system" && message.subtype === "status" && message.status === "requesting") {
+          this.requesting = true;
+        }
+        if (message.type === "result") this.requesting = false;
+        this.taken = takenAfter(this.taken, message);
+        this.noteAutoCompact(message);
         // The main thread's requests, as they go: a later handoff knows the
         // session's size and age without reading its transcript.
         if (message.type === "assistant" && message.parent_tool_use_id === null) {
@@ -1314,7 +1437,7 @@ class Chat {
           if (origin) this.out(origin);
           continue;
         }
-        this.out({ type: "sdk", chatId: this.chatId, message: slimHook(message) });
+        this.out({ type: "sdk", chatId: this.chatId, message: this.markAutoCompact(slimHook(message)) });
         this.watchWorkflows(message);
         this.noteOutputFiles(message);
         // Not in the SDK's types (0.3.314): a message's lifecycle frames.
@@ -1358,6 +1481,10 @@ class Chat {
           this.log = this.log.filter((e) => e.type !== "sdk" || !isSettledHook(e.message));
           void this.reportContext(q, this.compacted ? "full" : "summary");
           this.compacted = false;
+          // Its own `/compact` ended; a turn Claude answered may call for one.
+          const own = endsOwnCompact(this.autoCompact, message);
+          if (own) this.autoCompact = null;
+          if (!own && answeredTurn(message)) this.armTurnCompact();
           void this.reportUsage(q);
           void this.reportInfo();
           void this.reportBranch();
@@ -2437,6 +2564,7 @@ class Chat {
     for (const done of [...this.visualChecks.values()]) done(null);
     this.visualPages.clear();
     clearTimeout(this.mcpTimer);
+    clearTimeout(this.compactTimer);
     for (const timer of this.signIns.values()) clearTimeout(timer);
     this.signIns.clear();
     this.input.end();
@@ -2827,7 +2955,10 @@ function shutdown(code: number): void {
 setInterval(() => {
   const now = Date.now();
   for (const [chatId, chat] of chats) {
-    if (!relaunching.has(chatId)) chat.sleepIfDue(now, sleepAfterMs);
+    if (relaunching.has(chatId)) continue;
+    // A big session left alone: compacted before its cache expires, then
+    // asleep as due (`idleCompactAhead` holds its sleep till then).
+    if (!chat.compactIfDue("idle", now)) chat.sleepIfDue(now, sleepAfterMs);
   }
 }, SLEEP_CHECK_MS).unref();
 

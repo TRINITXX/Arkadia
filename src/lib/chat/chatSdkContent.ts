@@ -40,13 +40,19 @@ function kTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "").replace(".", ",")} M`;
 }
 
+/** Who compacted: Claude Code at its ceiling, the chat server (`autoCompact` it adds), or the user. */
+function compactHead(m: JsonObject): string {
+  if (m.autoCompact === "turn") return "Compacté en fin de tour";
+  if (m.autoCompact === "idle") return "Compacté en veille";
+  return obj(m.compact_metadata).trigger === "auto"
+    ? "Compacté automatiquement"
+    : "Conversation compactée";
+}
+
 /** « Compacté automatiquement · 180 k → 32 k tokens » (`compact_boundary`). */
 export function compactNotice(m: JsonObject): string {
   const meta = obj(m.compact_metadata);
-  const head =
-    meta.trigger === "auto"
-      ? "Compacté automatiquement"
-      : "Conversation compactée";
+  const head = compactHead(m);
   const pre = num(meta.pre_tokens);
   const post = num(meta.post_tokens);
   if (pre === undefined) return head;

@@ -148,6 +148,32 @@ describe("Claude Code's notices in the column", () => {
       ["La compaction a échoué : la conversation reste entière", "error"],
     ]);
   });
+
+  it("fills no command card with its own compaction's end, and adds no turn line", () => {
+    const state = run([
+      sdk({ type: "system", subtype: "init", uuid: "i1", slash_commands: ["usage"] }),
+      { type: "user_sent", chatId: "c", text: "/usage", images: 0, uuid: "u1" },
+      sdk({ type: "result", subtype: "success", uuid: "r1", num_turns: 0, duration_ms: 90_000, result: "", autoCompact: "turn" }),
+    ]);
+    const card = state.items.find((x) => x.kind === "command");
+    expect(card?.kind === "command" && card.output).toBeUndefined();
+    expect(state.items.some((x) => x.kind === "turn")).toBe(false);
+  });
+
+  it("says who compacted when the chat server did", () => {
+    const boundary = (autoCompact: string, uuid: string) =>
+      sdk({
+        type: "system",
+        subtype: "compact_boundary",
+        uuid,
+        autoCompact,
+        compact_metadata: { trigger: "manual", pre_tokens: 812_000, post_tokens: 31_000 },
+      });
+    expect(notices(run([boundary("turn", "c1"), boundary("idle", "c2")])).map((n) => n.text)).toEqual([
+      "Compacté en fin de tour · 812 k → 31 k tokens",
+      "Compacté en veille · 812 k → 31 k tokens",
+    ]);
+  });
 });
 
 describe("Claude Code's turn around the column", () => {

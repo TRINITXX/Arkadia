@@ -16,7 +16,7 @@ import {
  * pane's hook (`lib\subagent-gate.ps1`), decided with Alexis on 31/10/2026:
  * - a turn's end notifies (`done`), an error, the usage limit or Claude
  *   Code gone mid-turn included, never an end the user caused (Esc) nor a
- *   local command's answer;
+ *   local command's answer, nor a compaction the chat server started;
  * - Claude waiting on the user notifies at once (`question`): a permission,
  *   AskUserQuestion, ExitPlanMode, an MCP's request, or a ❓ round in a
  *   reply of the turn, as the sheet shows it (`lastReplyRound`: after the
@@ -320,6 +320,9 @@ function endTurn(
     ),
   };
   if (stoppedByUser(m, t.interrupted)) return quiet(ended);
+  // A compaction the chat server started itself (`autoCompact`): nobody's
+  // turn, even when it fails.
+  if (m.autoCompact !== undefined) return quiet(ended);
   // A local command's answer (no model, `endCommandTurn`): typed just now.
   if (m.num_turns === 0 && m.subtype === "success" && m.is_error !== true)
     return quiet(ended);

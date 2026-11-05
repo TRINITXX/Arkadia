@@ -5,6 +5,8 @@ import {
   queuedAfter,
   readSleepAfter,
   sleepDue,
+  notShell,
+  takenAfter,
   tasksAfter,
   turnAfter,
 } from "../../../chat-server/sleep.ts";
@@ -72,6 +74,46 @@ describe("when a chat's Claude Code goes to sleep (chat-server/sleep.ts)", () =>
       tasks: [{ task_id: "b" }, { task_id: "c", ambient: true }],
     });
     expect(tasks).toEqual(["b"]);
+  });
+
+  it("holds a message Claude Code took until its end, before it says anything", () => {
+    const frame = (state: string) => ({ type: "command_lifecycle", command_uuid: "u1", state });
+    let taken = takenAfter([], frame("queued"));
+    expect(taken).toEqual([]);
+    taken = takenAfter(taken, frame("started"));
+    expect(taken).toEqual(["u1"]);
+    expect(takenAfter(taken, frame("completed"))).toEqual([]);
+    expect(takenAfter(taken, frame("cancelled"))).toEqual([]);
+    // A frame missed: the turn's end lets it go.
+    expect(takenAfter(taken, { type: "result", subtype: "success" })).toEqual([]);
+  });
+
+  it("leaves shells and monitors out of the work Claude comes back on", () => {
+    let tasks = tasksAfter(
+      [],
+      { type: "system", subtype: "task_started", task_id: "sh", task_type: "local_bash" },
+      notShell,
+    );
+    tasks = tasksAfter(
+      tasks,
+      { type: "system", subtype: "task_started", task_id: "ag", task_type: "local_agent" },
+      notShell,
+    );
+    expect(tasks).toEqual(["ag"]);
+    expect(
+      tasksAfter(
+        [],
+        {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [
+            { task_id: "m", task_type: "monitor" },
+            { task_id: "w", task_type: "local_workflow" },
+          ],
+        },
+        notShell,
+      ),
+    ).toEqual(["w"]);
   });
 
   it("lets a message go once Claude Code takes or drops it", () => {

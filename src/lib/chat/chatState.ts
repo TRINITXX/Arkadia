@@ -1199,8 +1199,12 @@ function addSdk(state: ChatState, m: JsonObject, now: number): ChatState {
     case "conversation_reset":
       return resetConversation(state, m);
     case "result": {
+      // The chat server's own /compact (`autoCompact`): no card is its (a
+      // command typed meanwhile waits for its own end), and its notice says
+      // it all, no « Terminé en … » under it.
+      const ownCompact = m.autoCompact !== undefined;
       // A local command's turn (no model): its answer goes in its card.
-      state = endCommandTurn(state, m);
+      if (!ownCompact) state = endCommandTurn(state, m);
       // Kept for every turn; `turnDoneLine` decides whether it shows.
       const turn: ChatItem = {
         kind: "turn",
@@ -1219,7 +1223,8 @@ function addSdk(state: ChatState, m: JsonObject, now: number): ChatState {
         interrupted: state.interrupted,
       });
       const ended = { ...endTurn(markCut(state, m)), apiError: null };
-      if (!notice) return { ...ended, items: [...ended.items, turn] };
+      const done = ownCompact ? [] : [turn];
+      if (!notice) return { ...ended, items: [...ended.items, ...done] };
       return {
         ...ended,
         items: [
@@ -1230,7 +1235,7 @@ function addSdk(state: ChatState, m: JsonObject, now: number): ChatState {
             ...notice,
             at: now,
           },
-          turn,
+          ...done,
         ],
       };
     }

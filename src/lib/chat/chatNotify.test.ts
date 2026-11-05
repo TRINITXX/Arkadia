@@ -165,6 +165,13 @@ describe("a turn's end", () => {
     ).toEqual([]);
     expect(run([sent(), result({ num_turns: 0 })]).signals).toEqual([]);
   });
+
+  it("stays silent on a compaction the chat server started, failed or not", () => {
+    expect(run([result({ num_turns: 0, autoCompact: "idle" })]).signals).toEqual([]);
+    expect(
+      run([result({ subtype: "error_during_execution", is_error: true, autoCompact: "turn" })]).signals,
+    ).toEqual([]);
+  });
 });
 
 describe("Claude waiting on the user", () => {
