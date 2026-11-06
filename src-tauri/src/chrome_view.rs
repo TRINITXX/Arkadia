@@ -89,6 +89,43 @@ fn parked_rect(rect: (i32, i32, i32, i32), virtual_screen: (i32, i32, i32, i32))
     rect.0 >= left + width || rect.1 >= top + height || rect.0 + rect.2 <= left
 }
 
+fn overlap(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> i64 {
+    let width = (a.0 + a.2).min(b.0 + b.2) - a.0.max(b.0);
+    let height = (a.1 + a.3).min(b.1 + b.3) - a.1.max(b.1);
+    if width > 0 && height > 0 {
+        width as i64 * height as i64
+    } else {
+        0
+    }
+}
+
+/// Whether a window shows less than a tenth of itself on the monitors
+/// (their rects): where Chrome opens a window of Alexis's after one of the
+/// panel's parked windows was its last active one, 30 px in a corner.
+fn lost_off_screen(rect: (i32, i32, i32, i32), monitors: &[(i32, i32, i32, i32)]) -> bool {
+    let area = rect.2.max(0) as i64 * rect.3.max(0) as i64;
+    area > 0 && monitors.iter().map(|m| overlap(rect, *m)).sum::<i64>() * 10 < area
+}
+
+/// Whether a window has the panel's place (`laid`), as Chrome gives a new
+/// window after the panel's was its last active one: shifted 10 dip down
+/// and right, give or take its resize borders.
+fn copies_laid(rect: (i32, i32, i32, i32), laid: Layout, dpi: u32) -> bool {
+    let tolerance = 48 * dpi.max(96) as i32 / 96;
+    (rect.0 - laid.x).abs() <= tolerance
+        && (rect.1 - laid.y).abs() <= tolerance
+        && (rect.2 - laid.width).abs() <= tolerance
+        && (rect.3 - laid.height).abs() <= tolerance
+}
+
+/// A rescued window's restored place: 80 % of the work area, centered. It
+/// is maximized right after; this is where « restore down » takes it.
+fn rescue_rect(work_area: (i32, i32, i32, i32)) -> (i32, i32, i32, i32) {
+    let (left, top, width, height) = work_area;
+    let (w, h) = (width * 4 / 5, height * 4 / 5);
+    (left + (width - w) / 2, top + (height - h) / 2, w, h)
+}
+
 /// Chrome's AppUserModelID for a profile folder: its windows carry it.
 fn app_id_of(profile_dir: &str) -> String {
     if profile_dir == "Default" {
@@ -190,6 +227,9 @@ struct Inner {
     /// last tab (Claude's group was elsewhere). Never again for that pane.
     closing: HashMap<String, std::time::Instant>,
     no_autoclose: HashSet<String>,
+    /// The panel's place, last time a window was laid there: a window of
+    /// Alexis's opened at it (`copies_laid`) is moved and maximized.
+    last_laid: Option<Layout>,
 }
 
 #[derive(Default)]
@@ -321,6 +361,7 @@ fn arrange(app: &AppHandle, state: &ChromeView) {
             _ => None,
         };
         let keys: Vec<String> = inner.windows.keys().cloned().collect();
+        let mut laid = None;
         for key in keys {
             let Some(win) = inner.windows.get_mut(&key) else {
                 continue;
@@ -331,12 +372,16 @@ fn arrange(app: &AppHandle, state: &ChromeView) {
                     let at = layout(*origin, *bounds, dpi);
                     win::lay(win.hwnd, owner, at);
                     win.at = Some(at);
+                    laid = Some(at);
                 }
                 _ => {
                     win::park(win.hwnd);
                     win.at = None;
                 }
             }
+        }
+        if laid.is_some() {
+            inner.last_laid = laid;
         }
     }
     #[cfg(not(windows))]
@@ -928,6 +973,13 @@ fn on_foreground(app: &AppHandle, hwnd: isize, app_id: Option<String>) -> bool {
     false
 }
 
+/// The panel's place, last time a window was laid there.
+fn last_laid(app: &AppHandle) -> Option<Layout> {
+    let state = app.try_state::<ChromeView>()?;
+    let inner = state.inner.lock().ok()?;
+    inner.last_laid
+}
+
 /// A panel window or an anchor moved by itself (the extension resizes it, a
 /// drag on its tab strip): back where Arkadia laid or parked it.
 fn on_moved(app: &AppHandle, hwnd: isize, rect: (i32, i32, i32, i32)) {
@@ -1124,8 +1176,16 @@ mod win {
     use windows::Win32::Graphics::Gdi::DeleteObject;
     use windows::Win32::Graphics::Gdi::{
         BeginPaint, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
-        EndPaint, FillRect, GetDC, GetPixel, InvalidateRect, ReleaseDC, SelectObject, PAINTSTRUCT,
+        EndPaint, EnumDisplayMonitors, FillRect, GetDC, GetMonitorInfoW, GetPixel, InvalidateRect,
+        MonitorFromPoint, ReleaseDC, SelectObject, HDC, HMONITOR, MONITORINFO,
+        MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
     };
+    use windows::Win32::Foundation::WAIT_OBJECT_0;
+    use windows::Win32::System::Threading::{
+        CreateEventW, OpenEventW, ResetEvent, SetEvent, WaitForSingleObject,
+        SYNCHRONIZATION_SYNCHRONIZE,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
     use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
     use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
     use windows::Win32::System::Com::{
@@ -1174,7 +1234,7 @@ mod win {
         SetLayeredWindowAttributes, EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, LWA_ALPHA,
         WS_EX_LAYERED,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{SC_RESTORE, WM_SYSCOMMAND};
+    use windows::Win32::UI::WindowsAndMessaging::{SC_MAXIMIZE, SC_RESTORE, WM_SYSCOMMAND};
     use windows::Win32::UI::WindowsAndMessaging::{SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN};
 
     fn hwnd(raw: isize) -> HWND {
@@ -1420,6 +1480,189 @@ mod win {
                 GetSystemMetrics(SM_CXVIRTUALSCREEN),
                 GetSystemMetrics(SM_CYVIRTUALSCREEN),
             )
+        }
+    }
+
+    fn monitors() -> Vec<(i32, i32, i32, i32)> {
+        unsafe extern "system" fn cb(
+            _monitor: HMONITOR,
+            _dc: HDC,
+            rect: *mut RECT,
+            lp: LPARAM,
+        ) -> windows::core::BOOL {
+            // SAFETY: lp points at the Vec below, alive during the call;
+            // rect is the monitor's, given by Windows.
+            unsafe {
+                let out = &mut *(lp.0 as *mut Vec<(i32, i32, i32, i32)>);
+                let r = *rect;
+                out.push((r.left, r.top, r.right - r.left, r.bottom - r.top));
+            }
+            true.into()
+        }
+        let mut out: Vec<(i32, i32, i32, i32)> = Vec::new();
+        // SAFETY: the callback only touches `out`.
+        unsafe {
+            let _ = EnumDisplayMonitors(None, None, Some(cb), LPARAM(&mut out as *mut _ as isize));
+        }
+        out
+    }
+
+    /// The work area of the monitor under the cursor.
+    fn cursor_work_area() -> Option<(i32, i32, i32, i32)> {
+        // SAFETY: plain reads.
+        unsafe {
+            let mut cursor = POINT::default();
+            GetCursorPos(&mut cursor).ok()?;
+            let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+                return None;
+            }
+            let r = info.rcWork;
+            Some((r.left, r.top, r.right - r.left, r.bottom - r.top))
+        }
+    }
+
+    /// A Chrome window of Alexis's came in front where Chrome put it by
+    /// copying one of the panel's (the most recently active Chrome window,
+    /// `make_most_recent` or the extension's focus): 30 px in the screen's
+    /// corner, or over the panel. It goes maximized on the monitor under
+    /// the cursor, where he just clicked (Alexis, 07/11/2026).
+    fn rescue_soon(h: HWND) {
+        static RESCUING: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+        let raw = h.0 as isize;
+        if !misplaced(h) {
+            return;
+        }
+        {
+            let mut rescuing = RESCUING.lock().unwrap_or_else(|e| e.into_inner());
+            // Two foreground events for one new window: one rescue.
+            if rescuing.contains(&raw) {
+                return;
+            }
+            rescuing.push(raw);
+        }
+        std::thread::spawn(move || {
+            let h = hwnd(raw);
+            // Checked again a moment later: the other Arkadia may have made
+            // it its own meanwhile, or Alexis maximized it.
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            if misplaced(h) && responsive(h) {
+                if let Some(work) = cursor_work_area() {
+                    let (x, y, width, height) = super::rescue_rect(work);
+                    // SAFETY: a move then a posted command, on a window that
+                    // exists. The move is synchronous so the maximize happens
+                    // on its monitor; Chrome maximizes itself, as on a click
+                    // of its button, and saves the profile maximized.
+                    unsafe {
+                        let _ = SetWindowPos(
+                            h,
+                            None,
+                            x,
+                            y,
+                            width,
+                            height,
+                            SWP_NOACTIVATE | SWP_NOZORDER,
+                        );
+                        let _ = PostMessageW(
+                            Some(h),
+                            WM_SYSCOMMAND,
+                            WPARAM(SC_MAXIMIZE as usize),
+                            LPARAM(0),
+                        );
+                    }
+                }
+            }
+            RESCUING
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|w| *w != raw);
+        });
+    }
+
+    /// Whether a Chrome window is Alexis's and sits where only Chrome
+    /// copying one of the panel's puts it. Reads only: safe from the hook.
+    fn misplaced(h: HWND) -> bool {
+        // A launch's new frame (this Arkadia's or the other's) is the
+        // panel's to be; a tab dragged out of the panel's window is a new
+        // frame at its place, the button still down.
+        if is_panel_window(h)
+            || LAUNCHES.load(Ordering::SeqCst) > 0
+            || other_launching()
+            || left_button_down()
+            || !is_chrome_exe(h)
+        {
+            return false;
+        }
+        // SAFETY: plain reads of a window's state.
+        let rect = unsafe {
+            if !is_browser_frame(h) || IsZoomed(h).as_bool() || IsIconic(h).as_bool() {
+                return false;
+            }
+            let mut r = RECT::default();
+            if GetWindowRect(h, &mut r).is_err() {
+                return false;
+            }
+            (r.left, r.top, r.right - r.left, r.bottom - r.top)
+        };
+        let laid = APP.get().and_then(super::last_laid);
+        super::lost_off_screen(rect, &monitors())
+            || laid.is_some_and(|at| super::copies_laid(rect, at, dpi(h.0 as isize)))
+    }
+
+    fn left_button_down() -> bool {
+        // SAFETY: plain read.
+        unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 }
+    }
+
+    /// A launch in progress, seen by the other Arkadia (daily, Lab): its
+    /// new frame shows in the corner, unmarked until adopted.
+    fn launch_event(lab: bool) -> PCWSTR {
+        if lab {
+            w!("Local\\ArkadiaLabChromeLaunching")
+        } else {
+            w!("Local\\ArkadiaChromeLaunching")
+        }
+    }
+
+    fn set_launching(on: bool) {
+        static OWN: OnceLock<isize> = OnceLock::new();
+        let raw = *OWN.get_or_init(|| {
+            // SAFETY: a named event, kept for the process's life.
+            unsafe { CreateEventW(None, true, false, launch_event(crate::lab::LAB)) }
+                .map(|h| h.0 as isize)
+                .unwrap_or(0)
+        });
+        if raw == 0 {
+            return;
+        }
+        let event = HANDLE(raw as *mut _);
+        // SAFETY: the event created above, never closed.
+        unsafe {
+            let _ = if on {
+                SetEvent(event)
+            } else {
+                ResetEvent(event)
+            };
+        }
+    }
+
+    fn other_launching() -> bool {
+        // SAFETY: a handle opened, waited on without blocking, and closed.
+        unsafe {
+            let Ok(event) = OpenEventW(
+                SYNCHRONIZATION_SYNCHRONIZE,
+                false,
+                launch_event(!crate::lab::LAB),
+            ) else {
+                return false;
+            };
+            let set = WaitForSingleObject(event, 0) == WAIT_OBJECT_0;
+            let _ = CloseHandle(event);
+            set
         }
     }
 
@@ -1922,7 +2165,9 @@ mod win {
     pub(super) struct Launching;
     impl Launching {
         pub(super) fn start() -> Self {
-            LAUNCHES.fetch_add(1, Ordering::SeqCst);
+            if LAUNCHES.fetch_add(1, Ordering::SeqCst) == 0 {
+                set_launching(true);
+            }
             post_watch(1);
             Launching
         }
@@ -1930,6 +2175,7 @@ mod win {
     impl Drop for Launching {
         fn drop(&mut self) {
             if LAUNCHES.fetch_sub(1, Ordering::SeqCst) == 1 {
+                set_launching(false);
                 post_watch(0);
                 unveil_all();
             }
@@ -2324,6 +2570,9 @@ mod win {
                     if !(chrome && (LAUNCHES.load(Ordering::SeqCst) > 0 || is_panel_window(h))) {
                         LAST_OTHER.store(raw, Ordering::SeqCst);
                     }
+                    if chrome {
+                        rescue_soon(h);
+                    }
                     return;
                 }
                 // Chrome took it by itself (the extension focuses its window):
@@ -2445,6 +2694,38 @@ mod tests {
         assert!(!parked_rect((3000, 1000, 2400, 2000), screen));
         // The old place, left of every monitor, still counts as parked.
         assert!(parked_rect((-6000, 0, 2400, 2000), screen));
+    }
+
+    #[test]
+    fn finds_a_window_chrome_opened_next_to_a_parked_one() {
+        // A 1440p screen with a second one on its left.
+        let monitors = [(0, 0, 2560, 1440), (-1920, 0, 1920, 1080)];
+        // 30 px in the corner of the work area.
+        assert!(lost_off_screen((2530, 1340, 2520, 1400), &monitors));
+        // Alexis's own windows: maximized, half off the edge, on the other
+        // screen.
+        assert!(!lost_off_screen((-12, -12, 2584, 1404), &monitors));
+        assert!(!lost_off_screen((1800, 200, 1400, 900), &monitors));
+        assert!(!lost_off_screen((-1900, 100, 1200, 800), &monitors));
+    }
+
+    #[test]
+    fn finds_a_window_chrome_opened_at_the_panel_s_place() {
+        let panel = Bounds {
+            x: 1500.0,
+            y: 120.0,
+            width: 1060.0,
+            height: 1280.0,
+        };
+        let laid = layout((0, 0), panel, 192);
+        // 10 dip down-right at 200 %.
+        assert!(copies_laid((1520, 140, 1060, 1280), laid, 192));
+        assert!(!copies_laid((0, 0, 2560, 1400), laid, 192));
+    }
+
+    #[test]
+    fn restores_a_rescued_window_down_to_the_middle_of_its_screen() {
+        assert_eq!(rescue_rect((0, 0, 2560, 1392)), (256, 139, 2048, 1113));
     }
 
     #[test]
