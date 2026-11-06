@@ -1059,7 +1059,11 @@ mod win {
     };
     use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
     use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
-    use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::SystemInformation::GetTickCount64;
     use windows::Win32::System::Threading::{
@@ -1223,6 +1227,28 @@ mod win {
                 mark_name(),
                 Some(HANDLE(std::process::id() as usize as *mut _)),
             );
+        }
+        // Out of the style lock: it waits on Explorer.
+        drop_taskbar_button(h);
+    }
+
+    /// The shell gave the window its taskbar button when Chrome showed it,
+    /// before its tool-window style: a style changed on a visible window
+    /// never takes the button away (Microsoft, « Managing Taskbar
+    /// Buttons »). Alexis saw the profile's Chrome in his taskbar and took
+    /// it for a window opened outside Arkadia (06/11/2026).
+    fn drop_taskbar_button(h: HWND) {
+        // SAFETY: COM calls on this thread, on a window that exists.
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let Ok(list) =
+                CoCreateInstance::<_, ITaskbarList>(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+            else {
+                return;
+            };
+            if list.HrInit().is_ok() {
+                let _ = list.DeleteTab(h);
+            }
         }
     }
 

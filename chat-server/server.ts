@@ -74,6 +74,7 @@ import {
   turnAfter,
   type SleepFacts,
 } from "./sleep.ts";
+import { callShowsTab } from "./chromePanel.ts";
 import { needsReread, outputFiles, readConsoleTail } from "./taskOutput.ts";
 import { sessionTitle, TITLE_LOOKS_MS } from "./title.ts";
 import { storedVisual, visualServer, VISUAL_RULE, type PreparedVisual } from "./visual.ts";
@@ -314,7 +315,8 @@ function chromeInbox(local: string, lab: boolean): string {
   return join(local, "Arkadia", lab ? "chrome-inbox-lab" : "chrome-inbox");
 }
 
-/** A Claude in Chrome call ran: its tab exists in the chat's window, so
+/** A Claude in Chrome call ran and its result names a tab (`callShowsTab`,
+ *  checked by the caller): Claude's tab exists in the chat's window, so
  *  Arkadia closes the window's launch tab (`note_ran`). Never waited on. */
 async function reportChromeCallRan(
   paneId: string | undefined,
@@ -340,7 +342,9 @@ const chromeAskedAt = new Map<string, number>();
  * Arkadia lays this chat's own Chrome window in the artifact panel and makes
  * it the profile's last-focused window, where the extension puts the
  * session's tabs. The request `~/.claude/hooks/chrome-profile-open.ps1`
- * makes in a terminal: user hooks never run in a chat (`settingSources: []`).
+ * makes in a terminal. A chat loads the user's settings and runs their
+ * hooks too: that script skips chats (`ARKADIA_CHAT`), or every call asked
+ * twice and paid a PowerShell start (06/11/2026).
  * Waits 12 s at most for Arkadia's answer, 6 s more when the profile had no
  * window (its extension is only starting). Never blocks the call otherwise.
  */
@@ -1074,11 +1078,13 @@ class Chat {
             {
               matcher: "mcp__claude-in-chrome__.*",
               hooks: [
-                async () =>
-                  reportChromeCallRan(
-                    start.env?.ARKADIA_PANE_ID,
-                    start.env?.ARKADIA_LAB === "1",
-                  ),
+                async (input) =>
+                  "tool_response" in input && callShowsTab(input.tool_response)
+                    ? reportChromeCallRan(
+                        start.env?.ARKADIA_PANE_ID,
+                        start.env?.ARKADIA_LAB === "1",
+                      )
+                    : {},
               ],
             },
           ],
