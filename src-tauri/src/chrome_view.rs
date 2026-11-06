@@ -182,7 +182,9 @@ struct Inner {
     /// page. With no window of the profile open, Chrome opens the next one
     /// as it last saved it, often maximized: a full-screen flash. Next to a
     /// parked window, it opens at that window's place, kept 30 px on
-    /// screen: a corner (both measured 05/11/2026).
+    /// screen: a corner (both measured 05/11/2026). The tabs of a session
+    /// Arkadia does not run (a scheduled task, another terminal) go there
+    /// too: nothing shows (`prepare_outside`).
     spares: HashMap<String, Win>,
     /// Launch tabs just closed: their window going away means it was its
     /// last tab (Claude's group was elsewhere). Never again for that pane.
@@ -200,7 +202,8 @@ pub struct ChromeView {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Prepared {
-    /// The Chrome profile's display name, for the panel's tab.
+    /// The Chrome profile's display name, for the panel's tab; its folder
+    /// for a session Arkadia does not run (its hook only checks it is set).
     profile: String,
     /// Whether Claude's tab group lands in this window: false when Arkadia
     /// could not make it the profile's last-focused window (not in front).
@@ -225,7 +228,12 @@ struct ChromeClosed {
 #[serde(rename_all = "camelCase")]
 struct RequestFile {
     id: String,
+    #[serde(default)]
     pane_id: String,
+    /// A session Arkadia does not run (no pane): its account's email, for
+    /// its profile's parked anchor (`prepare_outside`).
+    #[serde(default)]
+    email: Option<String>,
     /// Claude Code's PostToolUse: one of the pane's calls ran, its tab
     /// exists (`note_ran`). Nothing to answer.
     #[serde(default)]
@@ -379,21 +387,7 @@ fn ensure(
     // next to a parked one, in the corner. And launched last, the session's
     // window is the profile's last focused one, where Claude's tabs go: a
     // spare launched after it took them (05/11/2026).
-    let anchored = state.inner.lock().is_ok_and(|inner| {
-        inner
-            .spares
-            .get(&dir)
-            .is_some_and(|anchor| win::alive(anchor.hwnd))
-    });
-    let mut profile_started = false;
-    if !anchored {
-        if let Ok((anchor, started)) = launch(state, &dir) {
-            profile_started = started;
-            if let Ok(mut inner) = state.inner.lock() {
-                inner.spares.insert(dir.clone(), anchor);
-            }
-        }
-    }
+    let profile_started = anchor_of(state, &dir).is_ok_and(|(_, _, started)| started);
     let (win, started) = launch(state, &dir)?;
     let profile_started = profile_started || started;
     let hwnd = win.hwnd;
@@ -410,6 +404,51 @@ fn ensure(
     }
     arrange(app, state);
     Ok((win, true, profile_started))
+}
+
+/// Profile folder `dir`'s anchor (`Inner::spares`), launched when it has
+/// none. The caller holds `state.launching`. Returns it with whether it is
+/// new and whether no window of the profile was open before.
+fn anchor_of(state: &ChromeView, dir: &str) -> Result<(Win, bool, bool), String> {
+    let existing = state
+        .inner
+        .lock()
+        .ok()
+        .and_then(|inner| inner.spares.get(dir).cloned())
+        .filter(|anchor| win::alive(anchor.hwnd));
+    if let Some(anchor) = existing {
+        return Ok((anchor, false, false));
+    }
+    let (anchor, started) = launch(state, dir)?;
+    if let Ok(mut inner) = state.inner.lock() {
+        inner.spares.insert(dir.to_string(), anchor.clone());
+    }
+    Ok((anchor, true, started))
+}
+
+/// A Claude session Arkadia does not run (a scheduled task, another
+/// terminal) is about to use Claude in Chrome: its profile's anchor, parked
+/// off-screen, becomes the profile's last-focused window, where the
+/// extension puts the session's tabs. Nothing shows; Chrome opened in
+/// Windows before (Alexis, 06/11/2026). Not steered (Arkadia behind
+/// another app, the anchor steered by nobody): the tabs go to the profile's
+/// last-focused window, as before; the hook does not look. Known limits: a
+/// launch here borrows the foreground as every launch does
+/// (`make_most_recent`), and the anchor, its tabs with it, closes with
+/// Arkadia (exit, rebuild).
+fn prepare_outside(state: &ChromeView, email: &str) -> Result<Prepared, String> {
+    let dir = crate::chrome_profile::profile_dir_for_email(email)
+        .ok_or_else(|| "no Chrome profile paired with this account".to_string())?;
+    let (anchor, created, profile_started) = {
+        let _launch = state.launching.lock().map_err(|e| e.to_string())?;
+        anchor_of(state, &dir)?
+    };
+    let steered = steer(state, &anchor, created);
+    Ok(Prepared {
+        profile: dir,
+        steered,
+        profile_started,
+    })
 }
 
 /// Launches a window in profile folder `dir` and makes it the panel's:
@@ -848,10 +887,10 @@ pub fn on_exit(app: &AppHandle) {
 
 // ---- Events from the hook thread (`win`) ----------------------------------
 
-/// The foreground went to a Chrome window: one of the panel's (it is now
-/// its profile's last-focused window), or one of Alexis's (its profile is
-/// dirty until the next steer).
-/// Returns whether the window is one of the panel's.
+/// The foreground went to a Chrome window: one of the panel's or an anchor
+/// (it is now its profile's last-focused window), or one of Alexis's (its
+/// profile is dirty until the next steer).
+/// Returns whether the window is one of the panel's or an anchor.
 fn on_foreground(app: &AppHandle, hwnd: isize, app_id: Option<String>) -> bool {
     let Some(state) = app.try_state::<ChromeView>() else {
         return false;
@@ -859,9 +898,12 @@ fn on_foreground(app: &AppHandle, hwnd: isize, app_id: Option<String>) -> bool {
     let Ok(mut inner) = state.inner.lock() else {
         return false;
     };
+    // An anchor too: the extension focuses the window that holds the tabs
+    // of a session Arkadia does not run, and the foreground goes back.
     if let Some(dir) = inner
         .windows
         .values()
+        .chain(inner.spares.values())
         .find(|w| w.hwnd == hwnd)
         .map(|w| w.profile_dir.clone())
     {
@@ -872,9 +914,13 @@ fn on_foreground(app: &AppHandle, hwnd: isize, app_id: Option<String>) -> bool {
     let Some(app_id) = app_id else {
         return false;
     };
+    // A profile with its anchor only (a scheduled task's) too: else an
+    // anchor steered earlier still looked last-focused, and the task's tabs
+    // went to Alexis's window.
     let dirs: Vec<String> = inner
         .windows
         .values()
+        .chain(inner.spares.values())
         .map(|w| w.profile_dir.clone())
         .filter(|d| app_id_of(d) == app_id)
         .collect();
@@ -882,15 +928,22 @@ fn on_foreground(app: &AppHandle, hwnd: isize, app_id: Option<String>) -> bool {
     false
 }
 
-/// A panel window moved by itself (the extension resizes it, a drag on its
-/// tab strip): back where Arkadia laid it.
+/// A panel window or an anchor moved by itself (the extension resizes it, a
+/// drag on its tab strip): back where Arkadia laid or parked it.
 fn on_moved(app: &AppHandle, hwnd: isize, rect: (i32, i32, i32, i32)) {
     let Some(state) = app.try_state::<ChromeView>() else {
         return;
     };
     let Some((owner, at)) = state.inner.lock().ok().and_then(|inner| {
-        let win = inner.windows.values().find(|w| w.hwnd == hwnd)?;
-        Some((main_hwnd(app), win.at))
+        // An anchor is never laid: the extension moving it parks it again.
+        let at = match inner.windows.values().find(|w| w.hwnd == hwnd) {
+            Some(win) => win.at,
+            None => {
+                inner.spares.values().find(|w| w.hwnd == hwnd)?;
+                None
+            }
+        };
+        Some((main_hwnd(app), at))
     }) else {
         return;
     };
@@ -1008,6 +1061,22 @@ fn run_inbox(app: AppHandle) -> Result<(), String> {
                 continue;
             };
             if !valid_id(&request.id) || !seen.insert(request.id.clone()) {
+                continue;
+            }
+            if let Some(email) = request.email.filter(|_| request.pane_id.is_empty()) {
+                // Taken by the Arkadia the hook asked only (its pid in `ready`).
+                let ours = std::fs::read_to_string(&ready)
+                    .is_ok_and(|pid| pid.trim() == std::process::id().to_string());
+                if ours {
+                    let _ = std::fs::remove_file(&path);
+                    let app = app.clone();
+                    let id = request.id;
+                    // Off the watcher: a launch takes seconds.
+                    std::thread::spawn(move || {
+                        let prepared = prepare_outside(&app.state::<ChromeView>(), &email);
+                        write_ack(&id, prepared.as_ref().ok());
+                    });
+                }
                 continue;
             }
             if request.ran {
@@ -2445,5 +2514,16 @@ mod tests {
         let raw = "\u{feff}{\"id\":\"r1\",\"paneId\":\"p1\"}";
         let r: RequestFile = serde_json::from_str(raw.trim_start_matches('\u{feff}')).unwrap();
         assert_eq!((r.id.as_str(), r.pane_id.as_str()), ("r1", "p1"));
+        assert_eq!(r.email, None);
+    }
+
+    #[test]
+    fn reads_the_request_of_a_session_arkadia_does_not_run() {
+        // A scheduled task's hook: no pane, its account's email.
+        let raw = "{\"email\":\"minifashion83@hotmail.fr\",\"id\":\"r2\"}";
+        let r: RequestFile = serde_json::from_str(raw).unwrap();
+        assert_eq!(r.pane_id, "");
+        assert_eq!(r.email.as_deref(), Some("minifashion83@hotmail.fr"));
+        assert!(!r.ran);
     }
 }

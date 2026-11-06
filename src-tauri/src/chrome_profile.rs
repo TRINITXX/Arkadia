@@ -172,6 +172,13 @@ pub(crate) fn profile_dir_for_account(account: &str) -> Option<String> {
     profile_dir(&read_json(local_state_file()?)?, &name)
 }
 
+/// The profile folder paired with `email` in the table: a session Arkadia
+/// does not run names its account by email (`chrome-profile-open.ps1`).
+pub(crate) fn profile_dir_for_email(email: &str) -> Option<String> {
+    let name = profile_name(&read_json(pairing_file()?)?, email)?;
+    profile_dir(&read_json(local_state_file()?)?, &name)
+}
+
 /// Opens a new window in profile folder `dir` (the Chrome panel), on a blank
 /// page titled `title`: the window is found by it.
 pub(crate) fn launch_window(dir: &str, title: &str) -> bool {
