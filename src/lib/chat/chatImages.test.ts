@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   chatGallery,
   drawnImageKeys,
+  lineImagePaths,
   stripRefs,
+  toolImagePath,
   userMessageView,
+  withToolImages,
 } from "@/lib/chat/chatImages";
 import type { ChatItem } from "@/lib/chat/chatState";
 
@@ -132,5 +135,78 @@ describe("the user's attached files", () => {
     );
     expect(all).toEqual([{ path: SHOT }]);
     expect(byItem.has("r2")).toBe(false);
+  });
+});
+
+describe("the images on a tool's line", () => {
+  const tool = (
+    id: string,
+    name: string,
+    input: Record<string, string>,
+    result?: { text: string; isError: boolean },
+  ): ChatItem => ({ kind: "tool", id, name, input, result });
+  const SHOT_TOOL = "mcp__playwright__browser_take_screenshot";
+
+  it("finds the image a Read looks at and the file a screenshot saves", () => {
+    expect(
+      toolImagePath(tool("r", "Read", { file_path: "C:\\proj\\a.png" }), CWD),
+    ).toBe("C:\\proj\\a.png");
+    // Playwright: a name without a drive is the working folder's.
+    expect(
+      toolImagePath(
+        tool("p", SHOT_TOOL, { filename: ".screenshots/vue_v1.png" }),
+        CWD,
+      ),
+    ).toBe("C:\\proj\\.screenshots\\vue_v1.png");
+    expect(
+      toolImagePath(
+        tool("d", "mcp__chrome-devtools__take_screenshot", {
+          filePath: "C:\\tmp\\shot.png",
+        }),
+        CWD,
+      ),
+    ).toBe("C:\\tmp\\shot.png");
+  });
+
+  it("reads in its result a screenshot its input doesn't name, none when it failed", () => {
+    const saved = {
+      text: "### Result\n- [Screenshot of viewport](.playwright-mcp\\page-1.png)",
+      isError: false,
+    };
+    expect(toolImagePath(tool("p", SHOT_TOOL, {}, saved), CWD)).toBe(
+      "C:\\proj\\.playwright-mcp\\page-1.png",
+    );
+    const failed = { text: "Error", isError: true };
+    expect(
+      toolImagePath(tool("p", SHOT_TOOL, { filename: "a.png" }, failed), CWD),
+    ).toBeNull();
+    expect(
+      toolImagePath(tool("b", "Bash", { command: "ls C:\\p\\a.png" }), CWD),
+    ).toBeNull();
+  });
+
+  it("keeps the latest four, each once, in their order", () => {
+    const reads = ["a", "b", "a", "c", "d", "e"].map((n, i) =>
+      tool(`r${i}`, "Read", { file_path: `C:\\p\\${n}.png` }),
+    );
+    expect(lineImagePaths(reads, (t) => toolImagePath(t, CWD))).toEqual(
+      ["a", "c", "d", "e"].map((n) => `C:\\p\\${n}.png`),
+    );
+  });
+
+  it("puts a screenshot in the gallery the lightbox walks", () => {
+    const { all } = chatGallery(
+      [tool("p", SHOT_TOOL, { filename: "C:\\proj\\shot.png" })],
+      CWD,
+    );
+    expect(all).toEqual([{ path: "C:\\proj\\shot.png" }]);
+  });
+
+  it("adds a reply's tool images to its strip once", () => {
+    const refs = [{ path: "C:\\p\\a.png" }];
+    expect(
+      withToolImages(refs, ["c:/p/A.png", "C:\\p\\b.png"]).map((r) => r.path),
+    ).toEqual(["C:\\p\\a.png", "C:\\p\\b.png"]);
+    expect(withToolImages(refs, ["C:\\p\\a.png"])).toBe(refs);
   });
 });

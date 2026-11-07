@@ -86,6 +86,8 @@ const firstTextDelta = (e: ChatEvent) =>
     ?.type === "text_delta";
 
 const LAB = "C:\\Users\\TRINITX\\Desktop\\Claude Desktop\\Arkadia-lab";
+/** This repo: the only folder Vite serves files from. */
+const REPO = "C:\\Users\\TRINITX\\Desktop\\Claude Desktop\\Arkadia";
 
 /** A file of the worktree as Vite serves it (the app reads it over IPC). */
 const fsUrl = (path: string) => `/@fs/${encodeURI(path.replace(/\\/g, "/"))}`;
@@ -294,6 +296,11 @@ function recitState(): ChatState {
       new_string: "b",
     }),
     run("Bash", { command: "npx vitest run", description: "lancer les tests" }),
+    // The images its tools look at or make: on its line (07/11/2026).
+    run("mcp__playwright__browser_take_screenshot", {
+      filename: `${REPO}\\src-tauri\\icons\\Square150x150Logo.png`,
+    }),
+    run("Read", { file_path: `${REPO}\\src-tauri\\icons\\icon.png` }),
     say(
       "✅ Les chemins de fichiers s'affichent en étiquette avec leur nom. Un clic ouvre le fichier.\n\n⏳",
     ),

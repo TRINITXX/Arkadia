@@ -5,6 +5,7 @@ import {
   imagePathKey,
   isImagePath,
   isVideoPath,
+  resolveRelative,
   splitImagePaths,
 } from "@/lib/imagePaths";
 
@@ -144,6 +145,66 @@ export function readImagePath(item: ChatItem): string | null {
   return typeof path === "string" && isImagePath(path) ? path : null;
 }
 
+/** A screenshot tool that saves a file: Playwright's, Chrome DevTools'. */
+const SHOT_TOOL_RE = /(?:^|__)(?:browser_)?take_screenshot$/;
+const ABSOLUTE_RE = /^[A-Za-z]:[\\/]/;
+
+/**
+ * The image a call looks at or makes: the one a `Read` reads, the file a
+ * screenshot tool saves (named in its input, else in its result). A name
+ * without a drive is the working folder's.
+ */
+export function toolImagePath(
+  item: ChatItem,
+  cwd: string | null,
+): string | null {
+  const read = readImagePath(item);
+  if (read || item.kind !== "tool" || !SHOT_TOOL_RE.test(item.name))
+    return read;
+  if (item.result?.isError) return null;
+  const named = [item.input.filename, item.input.filePath].find(
+    (v): v is string => typeof v === "string" && v.trim() !== "",
+  );
+  if (named) {
+    const path = ABSOLUTE_RE.test(named)
+      ? named
+      : cwd && resolveRelative(cwd, named);
+    return path && isImagePath(path) ? path : null;
+  }
+  const saved = splitImagePaths(item.result?.text ?? "", cwd).find(
+    (s) => s.path && isImagePath(s.path),
+  );
+  return saved?.path ?? null;
+}
+
+/** A message's strip, then the images of its tools it doesn't hold yet. */
+export function withToolImages(refs: ImageRef[], paths: string[]): ImageRef[] {
+  const held = new Set(
+    refs.filter((r) => !r.url).map((r) => imagePathKey(r.path)),
+  );
+  const more = paths.filter((p) => !held.has(imagePathKey(p)));
+  return more.length > 0 ? [...refs, ...more.map((path) => ({ path }))] : refs;
+}
+
+/** A line shows at most this many images. */
+const MAX_LINE_IMAGES = 4;
+
+/** The latest images of these calls (`pathOf`), each once, in their order. */
+export function lineImagePaths(
+  tools: readonly ChatItem[],
+  pathOf: (tool: ChatItem) => string | null,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (let i = tools.length - 1; i >= 0; i--) {
+    const path = pathOf(tools[i]);
+    if (!path || seen.has(imagePathKey(path))) continue;
+    seen.add(imagePathKey(path));
+    if (out.unshift(path) >= MAX_LINE_IMAGES) break;
+  }
+  return out;
+}
+
 export interface ChatGallery {
   /** Every image once, in reading order. */
   all: ImageRef[];
@@ -176,8 +237,9 @@ export function chatGallery(
       }
     }
     for (const path of mentionedPaths(item, cwd)) refs.push({ path });
-    const read = readImagePath(item);
-    if (read) refs.push({ path: read });
+    // An image a tool looks at or makes: the lightbox's ←/→ walk it too.
+    const shown = toolImagePath(item, cwd);
+    if (shown) refs.push({ path: shown });
     if (refs.length === 0) continue;
     byItem.set(item.id, refs);
     for (const ref of refs) {

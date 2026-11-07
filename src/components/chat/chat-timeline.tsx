@@ -17,6 +17,7 @@ import { ChatPlanCard } from "@/components/chat/chat-plan-card";
 import { ChatPluginErrors } from "@/components/chat/chat-plugin-errors";
 import { ChatProseContexts } from "@/components/chat/chat-prose-contexts";
 import { ChatQueuedMark } from "@/components/chat/chat-queued-mark";
+import { ChatThumbStrip } from "@/components/chat/chat-read-thumbs";
 import { ChatReplyText } from "@/components/chat/chat-reply-text";
 import { ChatStepReply } from "@/components/chat/chat-step-reply";
 import { ChatThoughtBulb } from "@/components/chat/chat-thought-bulb";
@@ -27,15 +28,23 @@ import { ChatVisualCard } from "@/components/chat/chat-visual-card";
 import { ChatWorkGroup } from "@/components/chat/chat-work-group";
 import { ChatLiveThought } from "@/components/chat/chat-live-thought";
 import {
+  activityTools,
   foldActivity,
   groupChatItems,
   messagesOnly as onlyMessages,
   questionAnswers,
   stepReplyIds,
   type ChatUnit,
+  type FoldedUnit,
 } from "@/lib/chat/chatGroups";
 import { withDayBreaks } from "@/lib/chat/chatDays";
-import { chatGallery } from "@/lib/chat/chatImages";
+import {
+  chatGallery,
+  drawnImageKeys,
+  lineImagePaths,
+  toolImagePath,
+  withToolImages,
+} from "@/lib/chat/chatImages";
 import { peerLabel } from "@/lib/chat/chatPeer";
 import { latestPlan, type ChatItem, type Subagent } from "@/lib/chat/chatState";
 import { placeWork } from "@/lib/chat/chatWorkPlaces";
@@ -43,11 +52,16 @@ import type { VisualEntry } from "@/lib/chat/chatVisual";
 import { turnDoneLine } from "@/lib/chat/chatSteps";
 import { copiedCodeMessage } from "@/lib/codeCopy";
 import type { ImageRef } from "@/lib/imageGallery";
+import { imagePathKey } from "@/lib/imagePaths";
 
 const NO_IMAGES: ImageRef[] = [];
 const NO_VISUALS: Record<string, VisualEntry> = {};
 /** No reply bare: the sheet is down. */
 const NO_BARE: readonly string[] = [];
+
+/** The images the tools behind a wrench look at or make. */
+const workImagePaths = (units: FoldedUnit[], cwd: string | null) =>
+  lineImagePaths(activityTools(units), (t) => toolImagePath(t, cwd));
 
 /** Rows a long chat draws first when it comes back (`tailFirst`). */
 const TAIL_ROWS = 40;
@@ -160,6 +174,23 @@ export const ChatTimeline = memo(function ChatTimeline({
   }, [whole]);
   const drawn = whole ? units : units.slice(-TAIL_ROWS);
   const gallery = useMemo(() => chatGallery(items, cwd), [items, cwd]);
+  // The images Claude's tools look at or make, on the line of the reply
+  // they go behind, in view without opening its wrench (the user's ask of
+  // 07/11/2026).
+  const lineImages = useMemo(() => {
+    const byReply = new Map<string, string[]>();
+    for (const [id, units] of places.tools) {
+      const paths = workImagePaths(units, cwd);
+      if (paths.length > 0) byReply.set(id, paths);
+    }
+    return byReply;
+  }, [places, cwd]);
+  // A whole reply's: in its strip, its foot of icons showing on hover only.
+  const replyRefs = (id: string): ImageRef[] => {
+    const refs = gallery.byItem.get(id) ?? NO_IMAGES;
+    const tools = lineImages.get(id);
+    return tools ? withToolImages(refs, tools) : refs;
+  };
   // A code block's copy toasts here (the reading view's stays silent).
   const codeCopy = useMemo<CodeCopyListener>(
     () => ({
@@ -168,15 +199,23 @@ export const ChatTimeline = memo(function ChatTimeline({
     }),
     [onToast],
   );
-  // A reply's icons: its thinking, and its tools (all but the line under way).
-  const peeks = (id: string): React.ReactNode => {
+  // A reply's icons: its thinking, and its tools (all but the line under
+  // way); on a step's line (`stepText`), its tools' images after them, but
+  // those its sentence already shows as minis.
+  const peeks = (id: string, stepText?: string): React.ReactNode => {
     const thoughts = places.thoughts.get(id);
     const tools = places.tools.get(id);
     if (!thoughts && !tools) return null;
+    let shots = stepText === undefined ? undefined : lineImages.get(id);
+    if (shots && stepText) {
+      const drawn = drawnImageKeys(stepText, cwd);
+      shots = shots.filter((p) => !drawn.has(imagePathKey(p)));
+    }
     return (
       <>
         {thoughts && <ChatThoughtBulb items={thoughts} />}
         {tools && <ChatWorkIcon units={tools} render={renderUnit} />}
+        {shots && <ChatThumbStrip paths={shots} imagesOnly />}
       </>
     );
   };
@@ -252,7 +291,7 @@ export const ChatTimeline = memo(function ChatTimeline({
               text={unit.item.text}
               bare={bareReplyIds.includes(unit.item.id)}
               past={!places.current.has(unit.item.id)}
-              peeks={peeks(unit.item.id)}
+              peeks={peeks(unit.item.id, unit.item.text)}
               cwd={cwd}
               onOpen={onOpen}
               onToast={onToast}
@@ -274,7 +313,7 @@ export const ChatTimeline = memo(function ChatTimeline({
               text={unit.item.text}
               bare={bareReplyIds.includes(unit.item.id)}
               cwd={cwd}
-              refs={gallery.byItem.get(unit.item.id) ?? NO_IMAGES}
+              refs={replyRefs(unit.item.id)}
               onOpen={onOpen}
               onToast={onToast}
             />
@@ -442,6 +481,10 @@ export const ChatTimeline = memo(function ChatTimeline({
         return places.alone.has(unit.id) ? (
           <div key={unit.id} className="chat-unit chat-peek-alone">
             <ChatWorkIcon units={unit.units} render={renderUnit} />
+            <ChatThumbStrip
+              paths={workImagePaths(unit.units, cwd)}
+              imagesOnly
+            />
           </div>
         ) : null;
     }

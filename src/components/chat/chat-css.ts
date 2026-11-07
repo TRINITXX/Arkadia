@@ -61,7 +61,9 @@ export const CHAT_CSS = `
 .chat-peek { position: relative; display: inline-grid; place-items: center; width: 24px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #6f727a; cursor: pointer; flex-shrink: 0; }
 .chat-peek:hover, .chat-peek.on { background: #25282c; color: #e2c26b; }
 .chat-peek .lucide { width: 14px; height: 14px; }
-.chat-peek-alone { padding: 0 2px; }
+.chat-peek-alone { display: flex; align-items: center; gap: 2px; padding: 0 2px; }
+/* A line's images after its icons, in view without opening the wrench (07/11/2026). */
+.chat-peeks .chat-read-thumbs, .chat-peek-alone .chat-read-thumbs { margin-left: 4px; }
 .chat-peek-card { --chat-bg: ${T.bg}; --chat-ink: ${T.ink}; --chat-dim: ${T.dim}; --chat-mute: ${T.mute}; --chat-line: ${T.line}; --chat-card: ${T.card}; --chat-accent: ${T.accent}; --chat-accent-ink: ${T.accentInk};
   position: fixed; z-index: 35; box-sizing: border-box; overflow: hidden; background: ${T.raised}; border: 1px solid ${T.lineStrong}; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.45); padding: 10px 12px;
   font: 12.5px/1.55 "Segoe UI", system-ui, sans-serif; color: #c4c4cb; text-align: left; pointer-events: none; }
