@@ -85,8 +85,8 @@ export function ChatQuestionSheet({
   const replyId = round?.id ?? "";
   const sheet = useSheetAnswers(paneKey, replyId);
   const folded = !!sheet.folded;
-  // The question shown, and its text unclamped: a new round starts on its first.
-  const [view, setView] = useState({ replyId, step: 0, more: false });
+  // The question shown: a new round starts on its first.
+  const [view, setView] = useState({ replyId, step: 0 });
   /** The field a dictation of the sheet writes to, while it runs. */
   const [dictating, setDictating] = useState<string | null>(null);
 
@@ -200,8 +200,7 @@ export function ChatQuestionSheet({
   if (!round || sheet.closed) return null;
   const { questions } = round;
   const isAnswered = (q: RoundQuestion) => !!roundReply([q], sheet.answers);
-  const more = view.replyId === replyId && view.more;
-  const goTo = (i: number) => setView({ replyId, step: i, more: false });
+  const goTo = (i: number) => setView({ replyId, step: i });
   const q = questions[step];
   const a = sheet.answers[q.key] ?? {};
   const set = (id: string, patch: RoundAnswer) =>
@@ -335,16 +334,10 @@ export function ChatQuestionSheet({
         <div className="qs" role="tabpanel">
           <div className="q">
             <div className="qt">{q.title}</div>
+            {/* Always whole, never cut: a line hidden is a line missed
+                (the user's ask of 07/11/2026). */}
             {q.body && (
-              <div
-                className={`qb${more ? " more" : ""}`}
-                title={more ? "Réduire" : "Tout lire"}
-                onClick={() => {
-                  // A selection drag ends in a click: it selected.
-                  if (window.getSelection()?.toString()) return;
-                  setView({ replyId, step, more: !more });
-                }}
-              >
+              <div className="qb">
                 {/* Claude writes it after « Titre : », in lower case. */}
                 {q.body.charAt(0).toUpperCase() + q.body.slice(1)}
               </div>

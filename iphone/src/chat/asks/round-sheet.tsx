@@ -51,7 +51,7 @@ export function RoundSheet({
 }) {
   const replyId = round.id;
   const sheet = useRoundSheet(chatId, replyId);
-  const [view, setView] = useState({ step: 0, more: false });
+  const [view, setView] = useState({ step: 0 });
   const dictation = useAskDictation();
   if (sheet.closed) return null;
 
@@ -66,7 +66,7 @@ export function RoundSheet({
   const answered = answeredFlags.filter(Boolean).length;
   const reply = roundReply(questions, sheet.answers);
 
-  const goTo = (i: number) => setView({ step: i, more: false });
+  const goTo = (i: number) => setView({ step: i });
   const set = (key: string, patch: RoundAnswer) =>
     updateRound(chatId, replyId, (s) => withRoundAnswer(s, key, patch));
   const setFolded = (on: boolean) => {
@@ -195,22 +195,13 @@ export function RoundSheet({
             keyboardShouldPersistTaps="handled"
           >
             <Text style={styles.title}>{q.title}</Text>
+            {/* Always whole, never cut: a line hidden is a line missed
+                (the user's ask of 07/11/2026). Claude writes it after
+                « Titre : », in lower case. */}
             {q.body ? (
-              <Pressable
-                accessibilityHint={view.more ? "Réduire" : "Tout lire"}
-                onPress={() => {
-                  tick();
-                  setView({ step, more: !view.more });
-                }}
-              >
-                {/* Claude writes it after « Titre : », in lower case. */}
-                <Text
-                  style={styles.text}
-                  numberOfLines={view.more ? undefined : 3}
-                >
-                  {q.body.charAt(0).toUpperCase() + q.body.slice(1)}
-                </Text>
-              </Pressable>
+              <Text style={styles.text}>
+                {q.body.charAt(0).toUpperCase() + q.body.slice(1)}
+              </Text>
             ) : null}
             {q.options.map((o) => {
               const on = a.option === o.key;

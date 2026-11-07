@@ -753,8 +753,7 @@ export const CHAT_CSS = `
 .chat-sheet-q .qs { overflow-y: auto; padding: 10px 14px 0; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
 .chat-sheet-q .q { display: flex; flex-direction: column; gap: 8px; }
 .chat-sheet-q .qt { font-size: 14.5px; color: #f4f4f5; font-weight: 600; }
-.chat-sheet-q .qb { font-size: 13px; color: var(--chat-dim); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
-.chat-sheet-q .qb.more { display: block; }
+.chat-sheet-q .qb { font-size: 13px; color: var(--chat-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-sheet-q .opts { display: flex; flex-direction: column; gap: 5px; }
 .chat-sheet-q .opt { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; text-align: left; border: 1px solid #31353b; border-radius: 10px; background: transparent; color: var(--chat-ink); font: inherit; font-size: 13.5px; line-height: 1.45; padding: 6px 10px; cursor: pointer; transition: border-color .12s ease-out, background-color .12s ease-out; }
 .chat-sheet-q .opt:hover { border-color: #464a51; background: #222529; }

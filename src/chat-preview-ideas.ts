@@ -74,7 +74,11 @@ export const TALL_ROUND = [
   "",
   "---",
   "",
-  "❓ **Q2** - **Expiration** : un brouillon oublié reste combien de temps ?",
+  "❓ **Q2** - **Expiration** : deux façons de faire.",
+  "- Au fil de l'eau : chaque brouillon porte sa date, et Arkadia efface au démarrage ceux qui n'ont pas bougé depuis le délai choisi.",
+  "- En bloc : un ménage par semaine efface tout ce qui n'a pas été envoyé, quel que soit son âge.",
+  "",
+  "Le fil de l'eau ne perd jamais un brouillon récent. Le bloc est plus simple mais peut effacer une réponse commencée la veille. Un brouillon oublié reste combien de temps ?",
   "",
   "➡️ Une semaine.",
 ].join("\n");
