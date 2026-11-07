@@ -27,6 +27,7 @@ export const ImageThumb = memo(function ImageThumb({
   url,
   small = false,
   named = false,
+  quiet = false,
 }: {
   /** The file, or a pasted image's name (« Image collée 1 »). */
   path: string;
@@ -36,6 +37,8 @@ export const ImageThumb = memo(function ImageThumb({
   small?: boolean;
   /** Failed, its name stays (an attached file, never lost from sight). */
   named?: boolean;
+  /** Failed, nothing shows: on a reply's line, a name would squeeze it. */
+  quiet?: boolean;
 }) {
   const open = useOpenImage();
   const [ratio, setRatio] = useState<number | null>(null);
@@ -57,7 +60,7 @@ export const ImageThumb = memo(function ImageThumb({
     : size.height;
   const name = url ? path : fileName(path);
   if (failed)
-    return small || named ? (
+    return (small || named) && !quiet ? (
       <Text style={styles.alt} numberOfLines={1}>
         {name}
       </Text>
@@ -102,13 +105,20 @@ export function ImageStrip({ paths }: { paths: readonly string[] }) {
   );
 }
 
-/** The images Claude read, in their tool line (`ChatReadThumbs`). */
-export function ReadThumbs({ paths }: { paths: readonly string[] }) {
+/** The images Claude read, in their tool line (`ChatReadThumbs`); with
+ *  `quiet`, on a reply's line after its icons (`ChatThumbStrip`). */
+export function ReadThumbs({
+  paths,
+  quiet = false,
+}: {
+  paths: readonly string[];
+  quiet?: boolean;
+}) {
   if (paths.length === 0) return null;
   return (
-    <View style={styles.lineRow}>
+    <View style={[styles.lineRow, quiet && styles.afterIcons]}>
       {paths.map((path) => (
-        <ImageThumb key={path} path={path} small />
+        <ImageThumb key={path} path={path} small quiet={quiet} />
       ))}
     </View>
   );
@@ -117,6 +127,7 @@ export function ReadThumbs({ paths }: { paths: readonly string[] }) {
 const styles = StyleSheet.create({
   stripRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   lineRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+  afterIcons: { marginLeft: 4 },
   strip: {
     borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,

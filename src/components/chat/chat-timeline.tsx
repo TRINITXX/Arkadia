@@ -28,22 +28,19 @@ import { ChatVisualCard } from "@/components/chat/chat-visual-card";
 import { ChatWorkGroup } from "@/components/chat/chat-work-group";
 import { ChatLiveThought } from "@/components/chat/chat-live-thought";
 import {
-  activityTools,
   foldActivity,
   groupChatItems,
   messagesOnly as onlyMessages,
   questionAnswers,
   stepReplyIds,
   type ChatUnit,
-  type FoldedUnit,
 } from "@/lib/chat/chatGroups";
 import { withDayBreaks } from "@/lib/chat/chatDays";
 import {
   chatGallery,
   drawnImageKeys,
-  lineImagePaths,
-  toolImagePath,
   withToolImages,
+  workImagePaths,
 } from "@/lib/chat/chatImages";
 import { peerLabel } from "@/lib/chat/chatPeer";
 import { latestPlan, type ChatItem, type Subagent } from "@/lib/chat/chatState";
@@ -58,10 +55,6 @@ const NO_IMAGES: ImageRef[] = [];
 const NO_VISUALS: Record<string, VisualEntry> = {};
 /** No reply bare: the sheet is down. */
 const NO_BARE: readonly string[] = [];
-
-/** The images the tools behind a wrench look at or make. */
-const workImagePaths = (units: FoldedUnit[], cwd: string | null) =>
-  lineImagePaths(activityTools(units), (t) => toolImagePath(t, cwd));
 
 /** Rows a long chat draws first when it comes back (`tailFirst`). */
 const TAIL_ROWS = 40;

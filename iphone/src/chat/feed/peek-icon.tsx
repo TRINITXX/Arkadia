@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, View } from "react-native";
 import { SymbolView } from "expo-symbols";
 import { F } from "~/chat/feed/feed-style";
+import { ReadThumbs } from "~/chat/feed/image-thumb";
 
 /** What an icon hides: Claude's thinking (a bulb) or its tools (a wrench). */
 export type PeekKind = "thoughts" | "tools";
@@ -41,20 +42,26 @@ export function PeekIcon({
   );
 }
 
-/** Thinking or tools with no reply in their exchange: an icon of their own. */
+/** Thinking or tools with no reply in their exchange: an icon of their own,
+ *  the images its tools look at or make beside it. */
 export function PeekAlone({
   kind,
   onPress,
+  images = NO_IMAGES,
 }: {
   kind: PeekKind;
   onPress: () => void;
+  images?: readonly string[];
 }) {
   return (
     <View style={styles.alone}>
       <PeekIcon kind={kind} onPress={onPress} />
+      <ReadThumbs paths={images} quiet />
     </View>
   );
 }
+
+const NO_IMAGES: readonly string[] = [];
 
 const styles = StyleSheet.create({
   peek: {
@@ -65,5 +72,5 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   on: { backgroundColor: "#25282c" },
-  alone: { flexDirection: "row", paddingHorizontal: 2 },
+  alone: { flexDirection: "row", alignItems: "center", paddingHorizontal: 2 },
 });

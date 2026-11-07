@@ -1,4 +1,5 @@
 import { messageCards } from "@/lib/chat/chatAttachments";
+import { activityTools, type FoldedUnit } from "@/lib/chat/chatGroups";
 import type { ChatItem } from "@/lib/chat/chatState";
 import type { ImageRef } from "@/lib/imageRef";
 import {
@@ -175,6 +176,14 @@ export function toolImagePath(
     (s) => s.path && isImagePath(s.path),
   );
   return saved?.path ?? null;
+}
+
+/** The images the tools behind a wrench look at or make (`placeWork`). */
+export function workImagePaths(
+  units: FoldedUnit[],
+  cwd: string | null,
+): string[] {
+  return lineImagePaths(activityTools(units), (t) => toolImagePath(t, cwd));
 }
 
 /** A message's strip, then the images of its tools it doesn't hold yet. */

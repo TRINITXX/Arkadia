@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { workImagePaths } from "@/lib/chat/chatImages";
 import type { ChatState } from "@/lib/chat/chatState";
 import type { VisualEntry } from "@/lib/chat/chatVisual";
 import {
@@ -156,6 +157,8 @@ export const FeedRowView = memo(function FeedRowView({
           step={row.step}
           past={row.past}
           bare={bare}
+          tools={tools}
+          cwd={env.cwd}
           peeks={
             thoughts || tools ? (
               <>
@@ -205,7 +208,11 @@ export const FeedRowView = memo(function FeedRowView({
     // reply that announced them, or a wrench of their own.
     case "activity":
       return row.alone ? (
-        <PeekAlone kind="tools" onPress={open("activity")} />
+        <PeekAlone
+          kind="tools"
+          onPress={open("activity")}
+          images={workImagePaths(unit.units, env.cwd)}
+        />
       ) : (
         <ActivityLine
           units={unit.units}
