@@ -11,6 +11,7 @@ import {
   rememberPastes,
   tagAt,
   unfoldPaste,
+  unwrapPastes,
   withPasteTags,
 } from "@/lib/chat/chatPastes";
 
@@ -86,5 +87,33 @@ describe("a long text pasted in the chat's input", () => {
     );
     expect(pasteOfHref("#arkadia-paste-1", pastes)).toBe(carried);
     expect(pasteOfHref("https://claude.ai/artifact/x", pastes)).toBeNull();
+  });
+});
+
+describe("a user message read back from the session", () => {
+  it("shows Claude Code's tagged pastes as text, the long ones as tags", () => {
+    const short = "trois petits mots";
+    const r = unwrapPastes(
+      `Résume ce texte en une ligne :\n\n<pasted_content id="d947">\n${LONG}\n</pasted_content id="d947">\n` +
+        `\n<pasted_content id="0a1b">\n${short}\n</pasted_content id="0a1b">\n\npuis relance`,
+    );
+    expect(r.text).toBe(
+      `Résume ce texte en une ligne :\n\n${LONG}\n\n${short}\n\npuis relance`,
+    );
+    expect(r.pastes).toEqual([LONG]);
+    // No tag: the text as is.
+    expect(unwrapPastes("Corrige ça")).toEqual({
+      text: "Corrige ça",
+      pastes: [],
+    });
+  });
+
+  it("puts back a tag's name Claude Code escaped inside a paste", () => {
+    const body = `${LONG} <\\pasted_content id="ffff"> fin`;
+    const r = unwrapPastes(
+      `<pasted_content id="c3d4">\n${body}\n</pasted_content id="c3d4">\n`,
+    );
+    expect(r.text).toBe(`${LONG} <pasted_content id="ffff"> fin`);
+    expect(r.pastes).toEqual([r.text]);
   });
 });

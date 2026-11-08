@@ -467,6 +467,39 @@ describe("times, images and the turn's figures", () => {
     expect(user.kind === "user" && user.pastes).toEqual(["ce log"]);
   });
 
+  it("shows a resumed message's pastes out of Claude Code's tags", () => {
+    const log =
+      "TypeError: Cannot read properties of undefined reading tabs at restoreSession";
+    const state = reduceChat(
+      EMPTY_CHAT,
+      {
+        type: "history",
+        chatId: "c",
+        truncated: false,
+        messages: [
+          {
+            type: "user",
+            uuid: "h1",
+            message: {
+              content: [
+                {
+                  type: "text",
+                  text: `Corrige ce log :\n\n<pasted_content id="d947">\n${log}\n</pasted_content id="d947">\n`,
+                },
+              ],
+            },
+          },
+        ],
+      },
+      0,
+    );
+    const [user] = state.items;
+    expect(user.kind === "user" && user.text).toBe(
+      `Corrige ce log :\n\n${log}`,
+    );
+    expect(user.kind === "user" && user.pastes).toEqual([log]);
+  });
+
   it("reads the times and pasted images of a resumed session", () => {
     const state = reduceChat(
       EMPTY_CHAT,

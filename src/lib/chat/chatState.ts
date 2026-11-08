@@ -24,6 +24,7 @@ import {
   resetConversation,
 } from "@/lib/chat/chatCommands";
 import { resultNotice, type RetryInfo } from "@/lib/chat/chatErrors";
+import { unwrapPastes } from "@/lib/chat/chatPastes";
 import { startTurn } from "@/lib/chat/chatTurn";
 import { peerMessages, type PeerMessage } from "@/lib/chat/chatPeer";
 import { addSdkContent, compactNotice } from "@/lib/chat/chatSdkContent";
@@ -599,8 +600,9 @@ function addUser(
     if (!fromHistory) return state;
     const bash = pastBash(state, m, content);
     if (bash) return bash;
-    const text = visibleUserText(content);
-    if (text === null) return state;
+    const visible = visibleUserText(content);
+    if (visible === null) return state;
+    const { text, pastes } = unwrapPastes(visible);
     return {
       ...state,
       items: [
@@ -610,12 +612,14 @@ function addUser(
           id: str(m.uuid) ?? `u${items.length}`,
           text,
           images: 0,
+          ...(pastes.length > 0 ? { pastes } : {}),
           at: messageTime(m),
         },
       ],
     };
   }
   let texts: string[] = [];
+  let pastes: string[] = [];
   let images = 0;
   let pasted: string[] = [];
   // The structured result is the message's: one tool result per message.
@@ -652,8 +656,12 @@ function addUser(
         items = [...items, handoff];
         continue;
       }
-      const text = visibleUserText(str(block.text) ?? "");
-      if (text !== null) texts = [...texts, text];
+      const visible = visibleUserText(str(block.text) ?? "");
+      if (visible !== null) {
+        const unwrapped = unwrapPastes(visible);
+        texts = [...texts, unwrapped.text];
+        pastes = [...pastes, ...unwrapped.pastes];
+      }
     } else if (block.type === "image" && fromHistory) {
       images += 1;
       const url = imageUrl(block);
@@ -669,6 +677,7 @@ function addUser(
         text: texts.join("\n"),
         images,
         pasted: pasted.length > 0 ? pasted : undefined,
+        ...(pastes.length > 0 ? { pastes } : {}),
         at: messageTime(m),
       },
     ];

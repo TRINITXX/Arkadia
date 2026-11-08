@@ -488,6 +488,36 @@ const SCENARIOS: Record<string, () => ChatState> = {
       },
     ]);
   },
+  // A resumed session's message: Claude Code's `<pasted_content>` tags
+  // read back as a paste's tag (`unwrapPastes`).
+  "paste-history": () =>
+    reduceChat(
+      EMPTY_CHAT,
+      {
+        type: "history",
+        chatId: "preview",
+        truncated: false,
+        messages: [
+          {
+            type: "user",
+            uuid: "preview-paste-history",
+            message: {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "Résume ce rapport en une ligne :\n\n" +
+                    '<pasted_content id="d947">\n' +
+                    "Bonjour Alexis, voici le rapport du serveur de cette nuit avec toutes les erreurs relevées par le moniteur.\n" +
+                    '</pasted_content id="d947">\n',
+                },
+              ],
+            },
+          },
+        ],
+      },
+      0,
+    ),
   // A message typed while Claude works: grey until Claude Code takes it.
   queued: () =>
     reduceChat(

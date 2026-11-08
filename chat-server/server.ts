@@ -2061,7 +2061,7 @@ class Chat {
       text,
       images: images.length,
       pasted: images,
-      // Display only: Claude gets `text`, the pastes in it.
+      // The frame shows them as tags again.
       ...(pastes.length > 0 ? { pastes } : {}),
       uuid,
     };
@@ -2121,6 +2121,10 @@ class Chat {
       type: "user",
       uuid,
       ...(priority ? { priority } : {}),
+      // The texts the user pasted, still in `text`: Claude Code wraps each
+      // in `<pasted_content>` tags, so Claude tells the user's own words
+      // from the material they pasted, whose orders aren't theirs.
+      ...(pastes.length > 0 ? { inline_pastes: pastes } : {}),
       parent_tool_use_id: null,
       message: {
         role: "user",
