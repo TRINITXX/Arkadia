@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { messageDraft } from "@/lib/chat/chatAttachments";
 import type { ChatDraft } from "@/lib/chat/chatDrafts";
 import { recallStep, sentHistory } from "@/lib/chat/chatInputHistory";
-import type { ChatItem } from "@/lib/chat/chatState";
+import { itemPastes, type ChatItem } from "@/lib/chat/chatState";
 
 /**
  * ↑ / ↓ in the chat's input (`chatInputHistory`): from an empty input, ↑
@@ -30,11 +30,7 @@ export function useInputHistory(
   // With the pastes the frames show as tags, after a reload too
   // (`framePastes`): read at the key, not at each event of the chat.
   const draftOf = (message: string) =>
-    messageDraft(
-      message,
-      [],
-      items.flatMap((i) => (i.kind === "user" ? (i.pastes ?? []) : [])),
-    );
+    messageDraft(message, [], itemPastes(items));
   const shown = (step: { index: number }, draft: ChatDraft) => ({
     index: step.index,
     text: draft.text,

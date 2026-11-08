@@ -87,12 +87,15 @@ export function useSlashMenu({
   setText,
   slash,
   send,
+  restore,
 }: {
   text: string;
   setText: (text: string) => void;
   slash: ChatSlash;
   /** Sends a command as a message, the input emptied; `now` as Ctrl+Enter. */
   send: (text: string, now: boolean) => void;
+  /** A message /rewind went back before, put in the input in the command's place. */
+  restore: (message: string) => void;
 }) {
   // Each keeps the text it was set for: typing resets it without an effect.
   const [selected, setSelected] = useState({ i: 0, text: "" });
@@ -317,9 +320,10 @@ export function useSlashMenu({
       if (!point) return;
       const why = actions.rewind(point, mode);
       if (why) setHint({ text: why, for: text });
-      // Back before the message: it waits in the input, as in the terminal.
       // The code alone: the conversation goes on, the input empties.
-      else setText(mode === "code" ? "" : point.text);
+      else if (mode === "code") setText("");
+      // Back before the message: it waits in the input, as in the terminal.
+      else restore(point.text);
     } finally {
       picking.current = false;
     }

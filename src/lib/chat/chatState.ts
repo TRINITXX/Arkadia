@@ -1083,6 +1083,14 @@ function dropQueued(items: ChatItem[]): ChatItem[] {
   );
 }
 
+/**
+ * The pasted texts the user's frames show as tags, after a reload too: a
+ * message put back in the input gets them back as tags (`messageDraft`).
+ */
+export function itemPastes(items: readonly ChatItem[]): string[] {
+  return items.flatMap((i) => (i.kind === "user" ? (i.pastes ?? []) : []));
+}
+
 /** A message still waits for Claude (one sent « now » may pass those before it). */
 export function hasQueued(items: ChatItem[]): boolean {
   return items.some(

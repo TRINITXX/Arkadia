@@ -11,7 +11,11 @@ import type { LightboxContent } from "@/components/modern/ImageThumb";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatAttachments } from "@/components/chat/chat-attachments";
 import type { AttachmentSource } from "@/components/chat/chat-attachment-card";
-import { withAttachedPaths } from "@/lib/chat/chatAttachments";
+import {
+  mergeDrafts,
+  messageDraft,
+  withAttachedPaths,
+} from "@/lib/chat/chatAttachments";
 import { usePastedPaths } from "@/lib/chat/usePastedPaths";
 import type { ActionButton } from "@/types";
 import { ChatCommandsMenu } from "@/components/chat/chat-commands-menu";
@@ -33,7 +37,7 @@ import {
 import { useSlashMenu, type ChatSlash } from "@/lib/chat/useSlashMenu";
 import { useChatLayers } from "@/lib/chat/useChatLayers";
 import type { ChatImage } from "@/lib/chat/useChatSession";
-import { hasQueued, type ChatItem } from "@/lib/chat/chatState";
+import { hasQueued, itemPastes, type ChatItem } from "@/lib/chat/chatState";
 import { useSendAfterDictation } from "@/lib/chat/useSendAfterDictation";
 import { useChatSuggestion } from "@/lib/chat/useChatSuggestion";
 import { attachedKey, useInputHistory } from "@/lib/chat/useInputHistory";
@@ -220,6 +224,16 @@ export function ChatComposer({
       onSend(command, [], now);
       setText("");
     },
+    // As the pencil: its attachments as cards, its pasted texts as tags,
+    // the input's cards and images kept, the command's text gone.
+    restore: (message) =>
+      onDraft((d) =>
+        mergeDrafts(messageDraft(message, [], itemPastes(items)), {
+          ...d,
+          text: "",
+          pastes: undefined,
+        }),
+      ),
   });
 
   // The mic button lives here: whatever takes the input away (a request, the
