@@ -114,7 +114,8 @@ export function markPhoneWithdrawal(chatId: string, uuid: string): void {
 
 /** A message withdrawn as the input had it: a command as typed. */
 function draftOf(item: Extract<ChatItem, { kind: "user" | "command" }>) {
-  if (item.kind === "user") return messageDraft(item.text, item.pasted);
+  if (item.kind === "user")
+    return messageDraft(item.text, item.pasted, item.pastes);
   const text = `/${item.name}${item.args ? ` ${item.args}` : ""}`;
   return { text, images: [] };
 }

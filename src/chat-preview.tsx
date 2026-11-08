@@ -344,6 +344,10 @@ const withRequest = (
   request: ChatState["requests"][number],
 ): ChatState => ({ ...state, requests: [request] });
 
+/** `?s=paste-history`'s pasted text. */
+const PREVIEW_REPORT =
+  "Bonjour Alexis, voici le rapport du serveur de cette nuit avec toutes les erreurs relevées par le moniteur.";
+
 const SCENARIOS: Record<string, () => ChatState> = {
   tools: () => replay(parse(tools)),
   // Claude's thinking before its work (the recording has none).
@@ -507,8 +511,7 @@ const SCENARIOS: Record<string, () => ChatState> = {
                   type: "text",
                   text:
                     "Résume ce rapport en une ligne :\n\n" +
-                    '<pasted_content id="d947">\n' +
-                    "Bonjour Alexis, voici le rapport du serveur de cette nuit avec toutes les erreurs relevées par le moniteur.\n" +
+                    `<pasted_content id="d947">\n${PREVIEW_REPORT}\n` +
                     '</pasted_content id="d947">\n',
                 },
               ],
@@ -669,11 +672,24 @@ const PREVIEW_SLASH: SlashActions = {
       ["Ajoute aussi la date du jour en haut du fichier.", 31],
       ["Non, mets la date en bas plutôt, au format 31/10/2026.", 12],
       ["Parfait. Relis le tout et dis-moi s'il reste une faute.", 2],
-    ].map(([text, min], i) => ({
-      uuid: `p${i}`,
-      text: String(text),
-      timestamp: new Date(ago(Number(min))).toISOString(),
-    })),
+    ]
+      .map(([text, min], i) => ({
+        uuid: `p${i}`,
+        text: String(text),
+        timestamp: new Date(ago(Number(min))).toISOString(),
+      }))
+      .concat(
+        // `?s=paste-history`'s message, out of its tags as the server reads it.
+        name === "paste-history"
+          ? [
+              {
+                uuid: "preview-paste-history",
+                text: `Résume ce rapport en une ligne :\n\n${PREVIEW_REPORT}`,
+                timestamp: new Date(ago(1)).toISOString(),
+              },
+            ]
+          : [],
+      ),
   resume: async () => null,
   rewind: () => null,
 };

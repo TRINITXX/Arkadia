@@ -11,7 +11,7 @@ import type { LightboxContent } from "@/components/modern/ImageThumb";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatAttachments } from "@/components/chat/chat-attachments";
 import type { AttachmentSource } from "@/components/chat/chat-attachment-card";
-import { messageDraft, withAttachedPaths } from "@/lib/chat/chatAttachments";
+import { withAttachedPaths } from "@/lib/chat/chatAttachments";
 import { usePastedPaths } from "@/lib/chat/usePastedPaths";
 import type { ActionButton } from "@/types";
 import { ChatCommandsMenu } from "@/components/chat/chat-commands-menu";
@@ -196,7 +196,8 @@ export function ChatComposer({
   const history = useInputHistory(
     items,
     text,
-    (message) => onDraft((d) => ({ ...d, ...messageDraft(message) })),
+    // Its pastes replace the input's: none left from a message browsed past.
+    (draft) => onDraft((d) => ({ ...d, ...draft, pastes: draft.pastes })),
     attachedKey(
       files.map((f) => f.path),
       images.length,

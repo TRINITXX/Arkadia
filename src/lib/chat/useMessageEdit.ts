@@ -54,10 +54,12 @@ export function useMessageEdit({
         }
         const why = actions.rewind(point, "conversation");
         if (why) onToast?.("info", why);
-        // Its attachments come back as cards, its images too, before what
-        // the input already holds (`messageDraft`).
+        // Its attachments come back as cards, its images and pasted texts
+        // too, before what the input already holds (`messageDraft`).
         else
-          onDraft((d) => mergeDrafts(messageDraft(point.text, item.pasted), d));
+          onDraft((d) =>
+            mergeDrafts(messageDraft(point.text, item.pasted, item.pastes), d),
+          );
       } catch (e) {
         onToast?.("error", e instanceof Error ? e.message : String(e));
       } finally {

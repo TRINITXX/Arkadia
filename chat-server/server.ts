@@ -75,6 +75,7 @@ import {
   type SleepFacts,
 } from "./sleep.ts";
 import { callShowsTab } from "./chromePanel.ts";
+import { unwrapPastedContent } from "./pastedContent.ts";
 import { needsReread, outputFiles, readConsoleTail } from "./taskOutput.ts";
 import { sessionTitle, TITLE_LOOKS_MS } from "./title.ts";
 import { storedVisual, visualServer, VISUAL_RULE, type PreparedVisual } from "./visual.ts";
@@ -2817,9 +2818,13 @@ function promptText(message: unknown): string | null {
       .join("\n");
   }
   text = text.trim();
+  // Claude Code's notes open with a tag; a message opening with a paste is
+  // the user's, shown as they wrote it, out of its tags.
+  if (text.startsWith("<") && !text.startsWith('<pasted_content id="'))
+    return null;
+  text = unwrapPastedContent(text).text;
   if (
     !text ||
-    text.startsWith("<") ||
     text.startsWith(COMPACT_SUMMARY) ||
     text.startsWith("[Request interrupted") ||
     text.startsWith("Caveat:")

@@ -4,6 +4,7 @@ import {
   dropTag,
   editPaste,
   expandPastes,
+  foldPastes,
   framePastes,
   pasteInto,
   pasteOfHref,
@@ -106,6 +107,26 @@ describe("a user message read back from the session", () => {
       text: "Corrige ça",
       pastes: [],
     });
+  });
+
+  it("comes back in the input with its pastes as tags, in reading order", () => {
+    const other = "un deux trois quatre cinq six sept huit neuf dix onze";
+    const text = `Vois ${other} puis ${LONG} et ${other}`;
+    const r = foldPastes(text, [LONG, other]);
+    // One tag per place: removing one never takes the other's text.
+    expect(r.text).toBe(
+      "Vois [Texte collé #1 · 11 mots] puis [Texte collé #2 · 12 mots] et [Texte collé #3 · 11 mots]",
+    );
+    expect(expandPastes(r.text, r.pastes)).toBe(text);
+    const first = tagAt(r.text, r.pastes, "Vois ".length, "before")!;
+    const dropped = dropTag(r.text, r.pastes, first);
+    expect(expandPastes(dropped.text, dropped.pastes)).toBe(
+      `Vois  puis ${LONG} et ${other}`,
+    );
+    // A short or absent one stays as text.
+    expect(
+      foldPastes("trois petits mots", ["trois petits mots"]).pastes,
+    ).toEqual([]);
   });
 
   it("puts back a tag's name Claude Code escaped inside a paste", () => {

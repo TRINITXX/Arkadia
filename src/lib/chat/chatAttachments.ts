@@ -1,5 +1,6 @@
 import type { ChatDraft, DraftFile, DraftImage } from "@/lib/chat/chatDrafts";
 import { imagePathKey } from "@/lib/imagePaths";
+import { foldPastes, renumberPastes } from "@/lib/chat/chatPastes";
 
 /**
  * Files attached to a chat message by their path: cards above the input
@@ -208,19 +209,26 @@ const imageTags = (text: string) => [
 
 /**
  * A sent message as a draft again: its text, its attachment lines as cards,
- * and the pasted images the chat still keeps (`ChatItem.pasted`).
+ * the pasted images the chat still keeps (`ChatItem.pasted`), and its
+ * pasted texts as tags (`ChatItem.pastes`, `foldPastes`).
  */
-export function messageDraft(text: string, pasted: string[] = []): ChatDraft {
+export function messageDraft(
+  text: string,
+  pasted: string[] = [],
+  pastes: readonly string[] = [],
+): ChatDraft {
   const split = splitAttachedLines(text);
   // The numbers its text gives them, in order (« [Image #2] [Image #3] »
   // once #1 was removed); else 1, 2, …
   const named = imageTags(split.text);
+  const folded = foldPastes(split.text, pastes);
   return {
-    text: split.text,
+    text: folded.text,
     images: pasted
       .map((url, i) => draftImage(url, i, named[i] ?? i + 1))
       .filter((img): img is DraftImage => img !== null),
     files: split.paths.map(draftFile),
+    ...(folded.pastes.length > 0 ? { pastes: folded.pastes } : {}),
   };
 }
 
@@ -239,8 +247,18 @@ export function mergeDrafts(back: ChatDraft, now: ChatDraft): ChatDraft {
         (_, d: string) => `[Image #${Number(d) + after}]`,
       )
     : now.text;
+  // The pasted texts coming back numbered after the input's: its own keep
+  // their numbers, a tag the user broke there still said at sending.
+  const nowPastes = now.pastes ?? [];
+  const backPastes = renumberPastes(
+    back.text,
+    back.pastes ?? [],
+    Math.max(0, ...nowPastes.map((p) => p.id)),
+  );
+  const pastes = [...backPastes.pastes, ...nowPastes];
+  const backText = backPastes.text;
   const text =
-    back.text && nowText ? `${back.text}\n${nowText}` : back.text || nowText;
+    backText && nowText ? `${backText}\n${nowText}` : backText || nowText;
   return attachPaths(
     {
       text,
@@ -251,8 +269,8 @@ export function mergeDrafts(back: ChatDraft, now: ChatDraft): ChatDraft {
         ),
       ],
       files: back.files,
-      // The input's pasted texts: their tags stay in its text.
-      ...(now.pastes ? { pastes: now.pastes } : {}),
+      // Both drafts' pasted texts: their tags stay in the text.
+      ...(pastes.length > 0 ? { pastes } : {}),
     },
     (now.files ?? []).map((f) => f.path),
   );

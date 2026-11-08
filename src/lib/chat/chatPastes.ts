@@ -6,6 +6,7 @@
  * message sends the text itself. In the user's frame, a text sent so shows
  * as a tag again (`rememberPastes`).
  */
+import { unwrapPastedContent } from "@chat-server/pastedContent";
 
 /** A paste of this many words or more becomes a tag. */
 export const PASTE_MIN_WORDS = 10;
@@ -228,35 +229,75 @@ export function pasteOfHref(
 }
 
 /**
- * A paste as Claude Code keeps it in the session: wrapped in tags named by
- * 4 hex digits, opening and closing alike, each on its own line (its
- * terminal since 10/2026, the chat's `inline_pastes` since 08/11/2026).
- */
-const WRAPPED =
-  /\n{0,2}<pasted_content id="([0-9a-f]{4})">\n(?:([\s\S]*?)\n)?<\/pasted_content id="\1">\n{0,2}/g;
-
-/** Claude Code's escape of a tag's name inside the text (« <\pasted_content »). */
-const ESCAPED_TAG = /<\\(?=\/?pasted_content)/g;
-
-/**
- * A user message read back from the session: its pastes out of their tags,
- * each a paragraph (a paste sent mid-line comes back on its own), the long
- * ones apart for the frame to show as tags.
+ * A user message read back from the session: its pastes out of Claude
+ * Code's `<pasted_content>` tags (`unwrapPastedContent`), the long ones
+ * apart for the frame to show as tags.
  */
 export function unwrapPastes(text: string): { text: string; pastes: string[] } {
-  const parts: string[] = [];
-  const pastes: string[] = [];
-  const unescape = (s: string) => s.replace(ESCAPED_TAG, "<");
-  let at = 0;
-  for (const m of text.matchAll(WRAPPED)) {
-    if (m.index > at) parts.push(unescape(text.slice(at, m.index)));
-    // Trimmed, as the chat sends it: the frame finds it in the text whole.
-    const body = unescape(m[2] ?? "").trim();
-    parts.push(body);
-    if (wordCount(body) >= PASTE_MIN_WORDS) pastes.push(body);
-    at = m.index + m[0].length;
+  const r = unwrapPastedContent(text);
+  return {
+    text: r.text,
+    pastes: r.pastes.filter((t) => wordCount(t) >= PASTE_MIN_WORDS),
+  };
+}
+
+/**
+ * A sent message back in the input (↑, the pencil, a withdrawn message):
+ * each paste its frame shows (`framePastes`) as its tag again, one tag per
+ * place it stands, numbered in reading order. Sent again, the pastes go to
+ * Claude marked as pasted, after a reload too.
+ */
+export function foldPastes(
+  text: string,
+  carried: readonly string[] = [],
+): { text: string; pastes: PastedText[] } {
+  const found = framePastes(text, carried).filter(
+    (t) => wordCount(t) >= PASTE_MIN_WORDS,
+  );
+  // Longest first (`framePastes`): a paste inside a longer one goes with it.
+  const spans: { start: number; end: number; text: string }[] = [];
+  for (const paste of found) {
+    let from = 0;
+    for (;;) {
+      const start = text.indexOf(paste, from);
+      if (start < 0) break;
+      const end = start + paste.length;
+      const free = !spans.some((s) => start < s.end && s.start < end);
+      if (free) spans.push({ start, end, text: paste });
+      from = free ? end : start + 1;
+    }
   }
-  if (at === 0) return { text, pastes };
-  if (at < text.length) parts.push(unescape(text.slice(at)));
-  return { text: parts.join("\n\n").trim(), pastes };
+  spans.sort((a, b) => a.start - b.start);
+  const pastes: PastedText[] = [];
+  let out = "";
+  let at = 0;
+  for (const s of spans) {
+    const paste = { id: pastes.length + 1, text: s.text };
+    pastes.push(paste);
+    out += text.slice(at, s.start) + pasteTag(paste);
+    at = s.end;
+  }
+  return { text: out + text.slice(at), pastes };
+}
+
+/**
+ * A draft's pastes numbered after `after`, their tags with them: two drafts
+ * merged never share a number. For a draft just made (`foldPastes`): a tag
+ * the user broke would keep its old number.
+ */
+export function renumberPastes(
+  text: string,
+  pastes: readonly PastedText[],
+  after: number,
+): { text: string; pastes: PastedText[] } {
+  const moved = new Map(
+    pastes.map((p) => [p, { id: p.id + after, text: p.text }]),
+  );
+  let out = "";
+  let at = 0;
+  for (const s of pasteSpans(text, pastes)) {
+    out += text.slice(at, s.start) + pasteTag(moved.get(s.paste) ?? s.paste);
+    at = s.end;
+  }
+  return { text: out + text.slice(at), pastes: [...moved.values()] };
 }

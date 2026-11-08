@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { splitAttachedLines } from "@/lib/chat/chatAttachments";
+import { messageDraft } from "@/lib/chat/chatAttachments";
+import type { ChatDraft } from "@/lib/chat/chatDrafts";
 import { recallStep, sentHistory } from "@/lib/chat/chatInputHistory";
 import type { ChatItem } from "@/lib/chat/chatState";
 
@@ -8,15 +9,15 @@ import type { ChatItem } from "@/lib/chat/chatState";
  * brings back the pane's last message, again the one before; ↓ the other
  * way, down to empty. Typing in a recalled message ends the browsing, as do
  * the arrows off its first (↑) or last (↓) line. `recall` gets the message
- * as sent: its attachment lines go back as cards (`messageDraft`), so the
- * input's text is the rest. `attached`: the input's cards and images
- * (`attachedKey`), which a recall replaces: a card added to a recalled
- * message ends the browsing too, so no arrow drops it.
+ * as a draft: its attachment lines as cards, its pasted texts as tags
+ * (`messageDraft`), so the input's text is the rest. `attached`: the
+ * input's cards and images (`attachedKey`), which a recall replaces: a card
+ * added to a recalled message ends the browsing too, so no arrow drops it.
  */
 export function useInputHistory(
   items: readonly ChatItem[],
   text: string,
-  recall: (message: string) => void,
+  recall: (draft: ChatDraft) => void,
   attached = "",
 ) {
   const history = useMemo(() => sentHistory(items), [items]);
@@ -26,14 +27,22 @@ export function useInputHistory(
     attached: string;
   } | null>(null);
   const browsing = at !== null && at.text === text && at.attached === attached;
-  const shown = (step: { index: number; text: string }) => {
-    const split = splitAttachedLines(step.text);
-    return {
-      index: step.index,
-      text: split.text,
-      attached: attachedKey(split.paths, 0),
-    };
-  };
+  // With the pastes the frames show as tags, after a reload too
+  // (`framePastes`): read at the key, not at each event of the chat.
+  const draftOf = (message: string) =>
+    messageDraft(
+      message,
+      [],
+      items.flatMap((i) => (i.kind === "user" ? (i.pastes ?? []) : [])),
+    );
+  const shown = (step: { index: number }, draft: ChatDraft) => ({
+    index: step.index,
+    text: draft.text,
+    attached: attachedKey(
+      (draft.files ?? []).map((f) => f.path),
+      0,
+    ),
+  });
 
   /** True when the key was the history's. */
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
@@ -46,8 +55,9 @@ export function useInputHistory(
       const step = recallStep(history, browsing ? at.index : -1, "up");
       if (!step) return false;
       e.preventDefault();
-      setAt(shown(step));
-      recall(step.text);
+      const draft = draftOf(step.text);
+      setAt(shown(step, draft));
+      recall(draft);
       return true;
     }
     if (!browsing) return false;
@@ -55,8 +65,9 @@ export function useInputHistory(
     const step = recallStep(history, at.index, "down");
     if (!step) return false;
     e.preventDefault();
-    setAt(step.index < 0 ? null : shown(step));
-    recall(step.text);
+    const draft = draftOf(step.text);
+    setAt(step.index < 0 ? null : shown(step, draft));
+    recall(draft);
     return true;
   };
 

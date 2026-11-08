@@ -10,6 +10,7 @@ import {
   withAttachedPaths,
 } from "@/lib/chat/chatAttachments";
 import { EMPTY_DRAFT } from "@/lib/chat/chatDrafts";
+import { brokenPastes, expandPastes } from "@/lib/chat/chatPastes";
 
 const SHOT =
   "C:\\Users\\TRINITX\\Pictures\\Screenshots\\Capture d'écran 2026-10-31 130956.png";
@@ -129,6 +130,38 @@ describe("a withdrawn message back in the input", () => {
     expect(mergeDrafts(messageDraft("ancien"), tagged).pastes).toEqual(
       tagged.pastes,
     );
+  });
+
+  it("gets its pasted texts back as tags, numbered after the input's", () => {
+    const log =
+      "TypeError: Cannot read properties of undefined reading tabs at restoreSession";
+    const back = messageDraft(`Corrige :\n\n${log}`, [], [log]);
+    expect(back.text).toBe("Corrige :\n\n[Texte collé #1 · 10 mots]");
+    // The input already holds its own #1: it keeps it, the one coming back
+    // takes #2.
+    const now = {
+      text: "et [Texte collé #1 · 11 mots]",
+      images: [],
+      pastes: [
+        {
+          id: 1,
+          text: "un deux trois quatre cinq six sept huit neuf dix onze",
+        },
+      ],
+    };
+    const merged = mergeDrafts(back, now);
+    expect(merged.text).toBe(
+      "Corrige :\n\n[Texte collé #2 · 10 mots]\net [Texte collé #1 · 11 mots]",
+    );
+    expect(expandPastes(merged.text, merged.pastes)).toBe(
+      `Corrige :\n\n${log}\net ${now.pastes[0].text}`,
+    );
+    // A tag the user broke in the input is still said at sending.
+    const broken = mergeDrafts(back, {
+      ...now,
+      text: "et [Texte collé #1 · 11 mo",
+    });
+    expect(brokenPastes(broken.text, broken.pastes)).toEqual(now.pastes);
   });
 });
 
