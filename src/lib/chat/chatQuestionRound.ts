@@ -46,9 +46,11 @@ const ARROW = /^\s*➡️?\s*/;
 const OPTION =
   /^\s*(?:[-*•]\s+)?(?:\*\*)?\(?([a-hA-H])(?:\)|\.)(?:\*\*)?\s*[:\-–—]?\s*(.+)$/;
 /** « Question 1 sur 2. », bold or a heading or neither, a dot or a colon in
- *  or out of the bold (`**Question 1 sur 2.**`, missed on 02/11/2026). */
+ *  or out of the bold (`**Question 1 sur 2.**`, missed on 02/11/2026).
+ *  Its context may follow on its line after a dot, a colon or the bold's
+ *  end (`**Question 1 sur 3.** Le filtre…`, missed on 09/11/2026): group 3. */
 const SERIES =
-  /^\s*(?:#{1,6}\s*)?\**\s*Question\s+(\d+)\s+sur\s+(\d+)\s*[.:]?\s*\**\s*[.:]?\s*$/i;
+  /^\s*(?:#{1,6}\s*)?\**\s*Question\s+(\d+)\s+sur\s+(\d+)(?:\s*[.:]?\s*\**\s*[.:]?\s*|\s*(?:[.:]\s*\**|\*\*\s*[.:]?)\s+(\S.*))$/i;
 /** « Je pencherais pour (b) : … »: a letter alone, never a word's first
  *  (« pour celle qui… »). */
 const LEANING =
@@ -247,8 +249,13 @@ function seriesRead(
   start: number,
   stop: number,
 ): { question: ParsedQuestion; start: number; end: number } | null {
-  const n = SERIES.exec(lines[start])![1];
-  const after = lines.slice(start + 1, stop);
+  const [, n, , context] = SERIES.exec(lines[start])!;
+  // `after[0]` is line `start + skip`: the header's own context, if any.
+  const skip = context ? 0 : 1;
+  const after = [
+    ...(context ? [context] : []),
+    ...lines.slice(start + 1, stop),
+  ];
   // The options come before the leaning, whose « (a) » is none.
   const leanAt = after.findIndex((l) => LEANING.test(l));
   const scope = leanAt >= 0 ? after.slice(0, leanAt) : after;
@@ -265,6 +272,9 @@ function seriesRead(
   prose.forEach((l, i) => {
     if (l.trimEnd().endsWith("?")) qi = i;
   });
+  // « Question 2 sur 2 : réglée. » then steps `a.` `b.`: a report, not
+  // an ask. Words on the header's line take a « ? » to count.
+  if (context && qi < 0) return null;
   const title = qi >= 0 ? prose[qi] : (prose[0] ?? "");
   return {
     question: {
@@ -277,7 +287,7 @@ function seriesRead(
       recommendedKey,
     },
     start,
-    end: start + 1 + last + 1,
+    end: start + skip + last + 1,
   };
 }
 

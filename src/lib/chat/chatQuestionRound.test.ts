@@ -232,6 +232,56 @@ describe("question rounds in Claude's reply", () => {
     );
   });
 
+  it("reads « Question n sur N » with its context on the same line", () => {
+    // The Cockpit's reply of 09/11/2026: no sheet showed.
+    const two = [
+      "Bilan.",
+      "",
+      "---",
+      "",
+      "**Question 1 sur 2.** Le filtre laisse passer un chiffre reformulé.",
+      "",
+      "Baisser le seuil à 50 % ?",
+      "",
+      "  a) Oui",
+      "  b) Non, garder 60 %",
+      "",
+      "Je pencherais pour (a) : 9 doublons évités.",
+      "",
+      "Question 2 sur 2 : la barre d'achat ne fait aucun clic.",
+      "",
+      "Remplacer le produit ?",
+      "",
+      "  a) Oui",
+      "  b) Non",
+    ].join("\n");
+    const [q1, q2] = parseQuestionRound(two);
+    expect(q1).toMatchObject({
+      id: "Q1",
+      title: "Baisser le seuil à 50 % ?",
+      body: "Le filtre laisse passer un chiffre reformulé.",
+      recommendedKey: "a",
+    });
+    expect(q2).toMatchObject({
+      id: "Q2",
+      title: "Remplacer le produit ?",
+      body: "la barre d'achat ne fait aucun clic.",
+    });
+    expect(withoutQuestions(two)).toBe("Bilan.");
+  });
+
+  it("leaves a « Question n sur N » report with words on its line as prose", () => {
+    // No dot or colon after the number: a sentence.
+    expect(
+      parseQuestionRound("Question 1 sur 2 réglée.\n\n  a) Oui\n  b) Non"),
+    ).toEqual([]);
+    // A colon, but no « ? » before the letters: steps, not options.
+    const report =
+      "Question 2 sur 2 : réglée.\n\nÉtapes :\n\n  a. migrer\n  b. tester\n\nFin.";
+    expect(parseQuestionRound(report)).toEqual([]);
+    expect(withoutQuestions(report)).toBe(report);
+  });
+
   it("reads « Question n sur N » as a heading or with a colon", () => {
     const ask = (head: string) =>
       parseQuestionRound(
