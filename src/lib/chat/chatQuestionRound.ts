@@ -48,9 +48,14 @@ const OPTION =
 /** « Question 1 sur 2. », bold or a heading or neither, a dot or a colon in
  *  or out of the bold (`**Question 1 sur 2.**`, missed on 02/11/2026).
  *  Its context may follow on its line after a dot, a colon or the bold's
- *  end (`**Question 1 sur 3.** Le filtre…`, missed on 09/11/2026): group 3. */
+ *  end (`**Question 1 sur 3.** Le filtre…`, missed on 09/11/2026): group 3.
+ *  Read through `seriesHeader` only. */
 const SERIES =
   /^\s*(?:#{1,6}\s*)?\**\s*Question\s+(\d+)\s+sur\s+(\d+)(?:\s*[.:]?\s*\**\s*[.:]?\s*|\s*(?:[.:]\s*\**|\*\*\s*[.:]?)\s+(\S.*))$/i;
+/** `SERIES` on a line whose blanks are single spaces: its `\s*` side by side
+ *  would try every split of a long run of blanks (seconds for 400). */
+const seriesHeader = (line: string) =>
+  SERIES.exec(line.replace(/\s+/g, " ").trim());
 /** « Je pencherais pour (b) : … »: a letter alone, never a word's first
  *  (« pour celle qui… »). */
 const LEANING =
@@ -249,7 +254,7 @@ function seriesRead(
   start: number,
   stop: number,
 ): { question: ParsedQuestion; start: number; end: number } | null {
-  const [, n, , context] = SERIES.exec(lines[start])!;
+  const [, n, , context] = seriesHeader(lines[start])!;
   // `after[0]` is line `start + skip`: the header's own context, if any.
   const skip = context ? 0 : 1;
   const after = [
@@ -293,7 +298,7 @@ function seriesRead(
 
 /** Every « Question n sur N » of a reply: one message may ask several. */
 function seriesReads(lines: string[]) {
-  const starts = lines.flatMap((l, i) => (SERIES.test(l) ? [i] : []));
+  const starts = lines.flatMap((l, i) => (seriesHeader(l) ? [i] : []));
   return starts.flatMap((start, k) => {
     const read = seriesRead(lines, start, starts[k + 1] ?? lines.length);
     return read ? [read] : [];

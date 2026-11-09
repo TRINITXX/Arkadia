@@ -282,6 +282,12 @@ describe("question rounds in Claude's reply", () => {
     expect(withoutQuestions(report)).toBe(report);
   });
 
+  it("reads a « Question n sur N » line full of blanks at once", () => {
+    // Its blanks side by side took seconds for 400, hours for 5 000.
+    const blanks = `Question 1 sur 3${" ".repeat(5000)}x\n\n  a) Oui\n  b) Non`;
+    expect(parseQuestionRound(blanks)).toEqual([]);
+  });
+
   it("reads « Question n sur N » as a heading or with a colon", () => {
     const ask = (head: string) =>
       parseQuestionRound(
