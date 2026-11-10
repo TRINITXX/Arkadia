@@ -457,6 +457,12 @@ export type ChatCommand =
   | { type: "phone_replay"; chatId: string; to: string }
   /** « Ouvrir dans le navigateur »: the page as the card shows it. */
   | { type: "visual_open"; chatId: string; html: string; title: string }
+  /**
+   * An artifact opened from this chat sent its reply to Claude: a chat whose
+   * Claude Code no longer listens to it (asleep, woken since) says it to
+   * Claude itself (`chat-server/artifactWatch.ts`).
+   */
+  | { type: "artifact_reply"; chatId: string; url: string }
   | { type: "close"; chatId: string };
 
 /** The SDK's `EffortLevel`, low to max. */

@@ -43,6 +43,7 @@ import {
   closeArtifactByKey,
   closePanel,
   dropTab,
+  shownArtifact,
   hasPages,
   hasPanel,
   isChrome,
@@ -133,7 +134,9 @@ import { isBlankShell } from "@/lib/blankShell";
 import {
   chatActivity,
   chatCommand,
+  chatCommandFor,
   chatReplaying,
+  chatServerLive,
   closeChat,
   IDLE_CHAT,
   stopAndCloseChat,
@@ -728,11 +731,32 @@ export function App() {
             return `artifact-${artifactSeq.current}`;
           },
           source,
+          pane?.id,
         ),
       );
     },
     [changeArtifacts],
   );
+  // A reply sent from an artifact's page reaches Claude through a watcher
+  // of its Claude Code: a chat asleep, or woken since, has none. Its server
+  // is told, and says the reply to Claude itself when no one listens
+  // (`chat-server/artifactWatch.ts`). A terminal's Claude keeps its own.
+  // Once per opening: the signal is the page's to send as it pleases, and
+  // the page it closes stays loaded (`shownArtifact`).
+  const relayArtifactReply = useCallback((key: string) => {
+    const item = shownArtifact(artifactsRef.current, key);
+    const paneId = item?.fromPaneId;
+    if (!item || !paneId || !chatServerLive(paneId)) return;
+    const pane = artifactTabsRef.current.find((t) =>
+      Object.prototype.hasOwnProperty.call(t.panes, paneId),
+    )?.panes[paneId];
+    if (!pane?.chat) return;
+    void chatCommandFor(paneId, {
+      type: "artifact_reply",
+      chatId: paneId,
+      url: item.url,
+    }).catch(() => {});
+  }, []);
   // A reload of this page forgets the panel: drop windows left from before.
   useEffect(() => {
     void invoke("artifact_view_close_all").catch(() => {});
@@ -930,11 +954,12 @@ export function App() {
         isRepublish(e.payload.url) ? "republish" : "publish",
       ),
     ).then(keep);
-    // The artifact's reply reached Claude (`artifact_view.rs`'s bridge): it
-    // leaves the panel, parked like any closed artifact.
-    void listen<string>("artifact-sent", (e) =>
-      changeArtifacts((state) => closeArtifactByKey(state, e.payload)),
-    ).then(keep);
+    // The artifact's reply went to Claude (`artifact_view.rs`'s bridge): its
+    // chat is told, and it leaves the panel, parked like any closed artifact.
+    void listen<string>("artifact-sent", (e) => {
+      relayArtifactReply(e.payload);
+      changeArtifacts((state) => closeArtifactByKey(state, e.payload));
+    }).then(keep);
     void listen<{ key: string; title: string; url?: string }>(
       "artifact-title",
       (e) =>
@@ -959,7 +984,7 @@ export function App() {
       cancelled = true;
       for (const fn of unlisteners) fn();
     };
-  }, [openArtifactFor, changeArtifacts]);
+  }, [openArtifactFor, changeArtifacts, relayArtifactReply]);
   // A chat's first publish opens in its tab's panel, as Claude Code opens a
   // terminal's (`publishedArtifact`). A replay's is old news.
   useEffect(

@@ -28,6 +28,9 @@ export interface ArtifactItem {
   paneId?: string;
   /** Said above the window: Claude may browse in another window. */
   note?: string | null;
+  /** The pane whose Claude published the page, else the one it was opened
+   *  from: a reply sent from the page goes to that pane's chat. */
+  fromPaneId?: string;
 }
 
 export function isChrome(item: ArtifactItem | undefined): boolean {
@@ -75,7 +78,9 @@ export type OpenSource = "click" | "publish" | "republish";
  *  forward: as it was on a click, reloaded when Claude published it. A new
  *  one becomes the tab's last and active artifact. A republish only reloads
  *  what the tab holds: a parked page reloads when it comes back, and a page
- *  the user closed stays closed. */
+ *  the user closed stays closed. `paneId` is the pane the link comes from:
+ *  the one that publishes it owns the page, a click only names an owner to
+ *  a page that has none. */
 export function openArtifact(
   state: ArtifactsByTab,
   tabId: string,
@@ -83,10 +88,16 @@ export function openArtifact(
   accountId: string,
   newKey: () => string,
   source: OpenSource,
+  paneId?: string,
 ): ArtifactChange {
   const current = state[tabId];
+  const owned = (i: ArtifactItem): ArtifactItem => {
+    const fromPaneId =
+      source === "click" ? (i.fromPaneId ?? paneId) : (paneId ?? i.fromPaneId);
+    return fromPaneId === i.fromPaneId ? i : { ...i, fromPaneId };
+  };
   const bump = (i: ArtifactItem) =>
-    source === "click" ? i : { ...i, nonce: i.nonce + 1 };
+    source === "click" ? owned(i) : { ...owned(i), nonce: i.nonce + 1 };
   const same = current?.items.find((i) => i.url === url);
   if (current && same) {
     const items = current.items.map((i) => (i === same ? bump(i) : i));
@@ -105,7 +116,7 @@ export function openArtifact(
   }
   const added: ArtifactItem = parked
     ? bump(parked)
-    : { key: newKey(), url, accountId, title: null, nonce: 1 };
+    : owned({ key: newKey(), url, accountId, title: null, nonce: 1 });
   const all = [...(current?.items ?? []), added];
   const pages = all.filter((i) => !isChrome(i));
   const evicted = pages.slice(
@@ -203,6 +214,19 @@ export function dropTab(state: ArtifactsByTab, tabId: string): ArtifactChange {
   const keys = current.items.filter((i) => !isChrome(i)).map((i) => i.key);
   if (current.parked) keys.push(current.parked.key);
   return { state: next, closed: keys };
+}
+
+/** Artifact `key` while a panel shows it: never a parked page, which stays
+ *  loaded and may still speak (its reply is said once, as it closes). */
+export function shownArtifact(
+  state: ArtifactsByTab,
+  key: string,
+): ArtifactItem | undefined {
+  for (const current of Object.values(state)) {
+    const item = current.items.find((i) => i.key === key);
+    if (item) return item;
+  }
+  return undefined;
 }
 
 /** Closes artifact `key` in whichever tab shows it (it reported itself, by

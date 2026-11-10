@@ -28,6 +28,7 @@ import {
   type BangRun,
   type Kept,
 } from "./bash.ts";
+import { listensTo, replyRelayDue, replyRelayText, watchedAfter } from "./artifactWatch.ts";
 import {
   answeredTurn,
   endsOwnCompact,
@@ -249,6 +250,8 @@ export type Command =
   | { type: "phone_replay"; chatId: string; to: string }
   /** « Ouvrir dans le navigateur »: the page as the column shows it, theme in. */
   | { type: "visual_open"; chatId: string; html: string; title: string }
+  /** An artifact opened from this chat sent its reply to Claude (`artifactWatch.ts`). */
+  | { type: "artifact_reply"; chatId: string; url: string }
   | { type: "close"; chatId: string };
 
 type StartCommand = Extract<Command, { type: "start" }>;
@@ -807,6 +810,8 @@ class Chat {
   private idleTried: number | null = null;
   /** Background subagents and workflows, shells and monitors aside: a compaction waits for them. */
   private agentTasks: readonly string[] = [];
+  /** The artifacts its Claude Code listens to (`watchedAfter`): their replies come by themselves. */
+  private watched: readonly string[] = [];
   /**
    * A turn under way from its first request, before anything streams (on a
    * big context, seconds after the last turn's end): a compaction waits.
@@ -1023,6 +1028,7 @@ class Chat {
     // A new process has no background task yet: its set comes with the first change.
     this.tasks = [];
     this.agentTasks = [];
+    this.watched = [];
     this.requesting = false;
     this.taken = [];
     // Its `/compact` died with the old process, or never reached it.
@@ -1515,6 +1521,7 @@ class Chat {
         this.turn = turnAfter(this.turn, message);
         this.tasks = tasksAfter(this.tasks, message);
         this.agentTasks = tasksAfter(this.agentTasks, message, notShell);
+        this.watched = watchedAfter(this.watched, message);
         if (message.type === "system" && message.subtype === "status" && message.status === "requesting") {
           this.requesting = true;
         }
@@ -2178,6 +2185,28 @@ class Chat {
     // Nothing sent away: no boundary takes it, so the turn stops for it (a
     // message waiting outlives an interrupt and runs next).
     if (!(await this.spare(q, spare))) await q.interrupt();
+  }
+
+  /**
+   * An artifact opened from this chat sent its reply to Claude (the page's
+   * `artifact_reply`). Its Claude Code hands it over while it listens to
+   * that artifact; asleep or started again since, it never would
+   * (`artifactWatch.ts`): the chat says it, as a message of the user's.
+   */
+  async artifactReplied(url: string): Promise<void> {
+    const text = replyRelayText(url);
+    if (!text || !replyRelayDue(url, this.running(), this.watched)) return;
+    await this.send(text);
+  }
+
+  /** Its Claude Code runs and listens to that artifact: its reply comes by itself. */
+  listensTo(url: string): boolean {
+    return listensTo(url, this.running(), this.watched);
+  }
+
+  /** A Claude Code of its own runs: not asleep, nor starting. */
+  private running(): boolean {
+    return !this.asleep && this.query !== null;
   }
 
   /**
@@ -2945,6 +2974,8 @@ async function handle(cmd: Command): Promise<void> {
   const chat = chats.get(cmd.chatId);
   // Arkadia closes the chat of every pane it closes, chat or not.
   if (!chat && cmd.type === "close") return;
+  // A reply for a chat gone meanwhile: no one to tell, and no error in a column.
+  if (!chat && cmd.type === "artifact_reply") return;
   if (!chat) {
     emit({ type: "error", chatId: cmd.chatId, message: "Conversation fermée" }, replyTo(cmd));
     return;
@@ -3009,6 +3040,11 @@ async function handle(cmd: Command): Promise<void> {
     case "sleep":
       chat.sleepIfDue(Date.now(), 0);
       return;
+    case "artifact_reply":
+      // Another chat's Claude Code listens to it (the page was opened from
+      // this one, published by that one): the reply is its, never both's.
+      if ([...chats.values()].some((other) => other !== chat && other.listensTo(cmd.url))) return;
+      return chat.artifactReplied(cmd.url);
     case "close":
       chats.delete(cmd.chatId);
       return chat.close();

@@ -5,6 +5,7 @@ import {
   closeArtifactByKey,
   closePanel,
   dropTab,
+  shownArtifact,
   hasPanel,
   openArtifact,
   selectArtifact,
@@ -299,6 +300,42 @@ describe("artifact tabs", () => {
     expect(hasPanel(sent.state.t1)).toBe(true);
     // Already closed: nothing more happens.
     expect(closeArtifactByKey(sent.state, "k2").state).toBe(sent.state);
+  });
+
+  it("remembers the pane a page comes from: where its reply goes", () => {
+    const url = "https://claude.ai/artifact/a";
+    const next = keys();
+    // Clicked in pane p1: it names the page's owner.
+    let state = openArtifact({}, "t1", url, "main", next, "click", "p1").state;
+    expect(shownArtifact(state, "k1")?.fromPaneId).toBe("p1");
+    // Clicked again from another pane: the owner stays.
+    const again = openArtifact(state, "t1", url, "main", next, "click", "p2");
+    expect(again.state).toEqual(state);
+    // Published by pane p2's Claude: the page is its.
+    state = openArtifact(state, "t1", url, "main", next, "publish", "p2").state;
+    expect(shownArtifact(state, "k1")?.fromPaneId).toBe("p2");
+    expect(shownArtifact(state, "nope")).toBeUndefined();
+  });
+
+  it("lets a page say its reply once: parked, it is no longer shown", () => {
+    const url = "https://claude.ai/artifact/a";
+    const next = keys();
+    let state = openArtifact(
+      {},
+      "t1",
+      url,
+      "main",
+      next,
+      "publish",
+      "p1",
+    ).state;
+    // Its reply sent: the page closes, kept loaded, and may fire again.
+    state = closeArtifactByKey(state, "k1").state;
+    expect(state.t1.parked?.key).toBe("k1");
+    expect(shownArtifact(state, "k1")).toBeUndefined();
+    // Opened again by the user: shown, its owner kept.
+    state = openArtifact(state, "t1", url, "main", next, "click").state;
+    expect(shownArtifact(state, "k1")?.fromPaneId).toBe("p1");
   });
 
   describe("a pane's Chrome tab", () => {

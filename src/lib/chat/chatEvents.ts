@@ -236,6 +236,16 @@ export function liveServerAccounts(): (string | undefined)[] {
   return [...liveServers].map((key) => (key === "main" ? undefined : key));
 }
 
+/**
+ * Whether the server that runs `chatId` runs now, as far as this page
+ * knows: Rust starts a server for any command, so one for a chat never
+ * started here, or whose server stopped, would start a server with no chat.
+ */
+export function chatServerLive(chatId: string): boolean {
+  const account = accountOf.get(chatId);
+  return account !== undefined && liveServers.has(account);
+}
+
 /** A command to the server that runs `chatId` (its start named the account). */
 export function chatCommandFor(
   chatId: string,
