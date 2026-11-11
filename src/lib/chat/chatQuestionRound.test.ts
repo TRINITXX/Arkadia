@@ -288,6 +288,134 @@ describe("question rounds in Claude's reply", () => {
     expect(parseQuestionRound(blanks)).toEqual([]);
   });
 
+  it("reads `**Q1.**` questions and their « Reco : »", () => {
+    // The affiliation sites' reply of 11/11/2026: no sheet showed.
+    const four = [
+      "- Page famille : la Philips 5500.",
+      "",
+      "**Quatre réponses attendues**",
+      "",
+      "**Q1.** Je mets en ligne la page Projets ? L'image montre le quiz.",
+      "Reco : oui.",
+      "",
+      "**Q3.** Je corrige 4 erreurs du site café ?",
+      "- « d'une touche » dans 19 pages ;",
+      "- une machine à 610 € sur la page « 350 à 600 € ».",
+      "",
+      "Reco : oui.",
+      "",
+      "**Q4.** Les duels : ta sélection dans le visuel au-dessus.",
+      "**Reco :** les 5 cochés par site.",
+      "",
+      "---",
+      "Détail technique : rien.",
+    ].join("\n");
+    const [q1, q3, q4] = parseQuestionRound(four);
+    expect(q1).toMatchObject({
+      id: "Q1",
+      numbered: true,
+      title: "Je mets en ligne la page Projets ?",
+      body: "L'image montre le quiz.",
+      options: [],
+      recommendation: "oui.",
+    });
+    expect(q3).toMatchObject({
+      id: "Q3",
+      title: "Je corrige 4 erreurs du site café ?",
+      recommendation: "oui.",
+    });
+    expect(q3.body).toContain("610 €");
+    expect(q4).toMatchObject({
+      id: "Q4",
+      title: "Les duels : ta sélection dans le visuel au-dessus.",
+      recommendation: "les 5 cochés par site.",
+    });
+    expect(withoutQuestions(four)).toBe(
+      "- Page famille : la Philips 5500.\n\n**Quatre réponses attendues**\n\nDétail technique : rien.",
+    );
+  });
+
+  it("reads a `Q1.` question whose « Reco : » shares its line", () => {
+    const [q] = parseQuestionRound("Q1. On publie ? Reco : oui, ce soir.");
+    expect(q).toMatchObject({
+      id: "Q1",
+      title: "On publie ?",
+      recommendation: "oui, ce soir.",
+    });
+  });
+
+  it("leaves `**Q1.**` lines with no recommendation nor options as prose", () => {
+    const recap =
+      "**Q1.** Fait : la page est en ligne.\n**Q2.** Réglé.\n\nFin.";
+    expect(parseQuestionRound(recap)).toEqual([]);
+    expect(withoutQuestions(recap)).toBe(recap);
+    expect(parseQuestionRound("Q1 2026 : Reco : rien.")).toEqual([]);
+  });
+
+  it("leaves a `**Q1.**` report followed by advice or steps as prose", () => {
+    const reports = [
+      "**Q1.** Fait : la page est en ligne.\n\n➡️ Il te reste à relancer le serveur.",
+      "**Q1.** La page charge en 3 s.\n**Q2.** Le cache est vide.\n\nRecommandation : activer le cache.",
+      "**Q1.** Validé : je publie.\n**Q2.** Validé : option b.\n\nJe lance :\na) la mise en ligne\nb) le correctif",
+      "Q3-2026 : CA 12 k€.\nQ4-2026 : objectif 15 k€.\nReco : augmenter les prix.",
+    ];
+    for (const report of reports) {
+      expect(parseQuestionRound(report)).toEqual([]);
+      expect(withoutQuestions(report)).toBe(report);
+    }
+  });
+
+  it("keeps a `Q1 :` inside another format's question as its words", () => {
+    const grill =
+      "❓ **Q2** - **Couleur** : on garde le vert ?\nQ1 : tu as dit oui, donc le vert suit.\n➡️ oui";
+    expect(parseQuestionRound(grill)).toMatchObject([
+      { id: "Q2", recommendation: "oui" },
+    ]);
+    const series = [
+      "Question 2 sur 3.",
+      "",
+      "Q1 : tu as choisi le vert. Pour la police ?",
+      "",
+      "  a) Inter",
+      "  b) Sora",
+      "",
+      "Je pencherais pour (b) : plus ronde.",
+    ].join("\n");
+    expect(parseQuestionRound(series)).toMatchObject([
+      { id: "Q2", recommendedKey: "b" },
+    ]);
+  });
+
+  it("titles a question with its last « ? » before words, not a quote's", () => {
+    const ask = (head: string) => parseQuestionRound(`${head}\nReco : oui.`)[0];
+    expect(
+      ask("**Q1.** Je garde « Pourquoi ? » comme titre de la page ?"),
+    ).toMatchObject({
+      title: "Je garde « Pourquoi ? » comme titre de la page ?",
+      body: "",
+    });
+    expect(ask("**Q1.** Tu préfères A ? Ou B ? Je pense A.")).toMatchObject({
+      title: "Tu préfères A ? Ou B ?",
+      body: "Je pense A.",
+    });
+    expect(
+      parseQuestionRound("Q1. On baisse ? Ma reco : oui.\nReco : non.")[0],
+    ).toMatchObject({ title: "On baisse ?", body: "Ma reco : oui." });
+    // Indented, it keeps its number.
+    expect(ask("  **Q3.** On publie ?")).toMatchObject({
+      id: "Q3",
+      numbered: true,
+      title: "On publie ?",
+    });
+  });
+
+  it("keeps every recommendation line of a question", () => {
+    const [q] = parseQuestionRound(
+      "❓ **Q1** - **Seuil** : on garde 3 s ? Reco : 2,5 s, comme Google.\n➡️ oui",
+    );
+    expect(q.recommendation).toBe("2,5 s, comme Google.\noui");
+  });
+
   it("reads « Question n sur N » as a heading or with a colon", () => {
     const ask = (head: string) =>
       parseQuestionRound(

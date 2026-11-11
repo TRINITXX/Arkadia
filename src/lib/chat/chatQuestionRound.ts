@@ -2,9 +2,10 @@ import type { ChatItem } from "@/lib/chat/chatState";
 
 /**
  * A round of questions Claude asks in plain text, answered from a sheet
- * above the input (`ChatQuestionSheet`). Two formats, as the notification
+ * above the input (`ChatQuestionSheet`). Three formats, as the notification
  * hook spots them (`arkadia-notify.ps1`): the grilling skill's
- * `❓ **Q1** - **title**: body` then `➡️ recommendation`, and the
+ * `❓ **Q1** - **title**: body` then `➡️ recommendation`, its look-alike
+ * without the ❓ (`**Q1.** question ?` then `Reco : oui.`), and the
  * « Question n sur N » of the user's instructions, its options `a) …` and
  * its « Je pencherais pour (x) : … ».
  */
@@ -41,7 +42,19 @@ export interface RoundAnswer {
 }
 
 const QUESTION_MARK = /^\s*❓️?\s*/;
-const ARROW = /^\s*➡️?\s*/;
+/** A recommendation's start: `➡️`, `Reco :`, `**Reco :**`. */
+const ARROW = /^\s*(?:➡️?|\**\s?(?:Reco|Recommandation)\s?\**\s*:\s?\**)\s*/i;
+/** A bare « Reco : »: Claude's own word for his advice on a question. */
+const RECO = /^\s*\**\s?Reco\s?\**\s*:/i;
+/** `**Q1.** Question ?`, `Q2 : …`, `### Q3 - …`: the grilling's numbered
+ *  question without its ❓ (missed on 11/11/2026). A dot, a colon, a dash
+ *  or the bold's end after the number, then words: « Q1 2026 » and
+ *  « Q3-2026 : » are prose. Read through `numberedHead` only. */
+const NUMBERED =
+  /^(?:#{1,6} )?(?:\*\*Q\d+ ?[.:)–—-]? ?\*\*|Q\d+ ?[.:)–—-]) ?[.:–—-]? ?[^\d\s]/i;
+/** `NUMBERED` on a line whose blanks are single spaces (`seriesHeader`). */
+const numberedHead = (line: string) =>
+  NUMBERED.test(line.replace(/\s+/g, " ").trim());
 /** `a) Label`, `(a) Label`, `- **b)** Label`, `c. Label`. */
 const OPTION =
   /^\s*(?:[-*•]\s+)?(?:\*\*)?\(?([a-hA-H])(?:\)|\.)(?:\*\*)?\s*[:\-–—]?\s*(.+)$/;
@@ -154,12 +167,22 @@ function optionsIn(lines: string[]): {
 
 /**
  * Where a recommendation shares the question's line (`… ? a) Petite
- * b) Grande ➡️ b) …`): its first ➡ after the « ? », else -1. A ➡ before
- * it, or in the body, is the question's own words (`clic ➡️ fiche`).
+ * b) Grande ➡️ b) …`, `… ? Reco : oui.`): its first ➡ after the « ? », or
+ * a « Reco : » opening a sentence there, else -1. One before it, or in the
+ * body, is the question's own words (`clic ➡️ fiche`, `Ma reco : …`).
  */
 function arrowAt(head: string): number {
   const asked = head.indexOf("?");
-  return asked < 0 ? -1 : head.indexOf("➡", asked);
+  if (asked < 0) return -1;
+  const arrow = head.indexOf("➡", asked);
+  const reco = /[?.!]\s+(\**(?:Reco|Recommandation)\s?\**\s*:)/i.exec(
+    head.slice(asked),
+  );
+  const recoAt = reco
+    ? asked + reco.index + reco[0].length - reco[1].length
+    : -1;
+  const found = [arrow, recoAt].filter((at) => at >= 0);
+  return found.length > 0 ? Math.min(...found) : -1;
 }
 
 /** The question's line, its recommendation on a line of its own. */
@@ -172,20 +195,41 @@ function splitArrow(head: string): string[] {
 const RULE = /^\s*-{3,}\s*$/;
 
 /**
+ * Whether the `**Q1.**` block `[start, end)` asks: a bare « Reco : »
+ * (`**Q4.** Les duels : ta sélection…`), or a « ? » before its
+ * recommendation or options. Else it is a report: `**Q1.** Fait.` then
+ * `➡️ relance le serveur`, or steps `a) b)`.
+ */
+function numberedAsks(lines: string[], start: number, end: number): boolean {
+  const block = [...splitArrow(lines[start]), ...lines.slice(start + 1, end)];
+  const advice = block.findIndex((line, i) => i > 0 && ARROW.test(line));
+  if (advice > 0 && RECO.test(block[advice])) return true;
+  const before = block.slice(0, advice > 0 ? advice : block.length);
+  const asked = before.some((line) => !OPTION.test(line) && line.includes("?"));
+  return asked && (advice > 0 || optionsIn(block).options.length > 0);
+}
+
+/**
  * Each question's lines, `[start, end)`: from its ❓ up to the next ❓, a
  * `---`, or the blank line that closes its ➡️ paragraph (what follows is
- * Claude's own words again).
+ * Claude's own words again). A reply with no ❓ nor « Question n sur N »
+ * may ask with `**Q1.**` lines instead; within another format, a `Q1 :`
+ * is that question's words.
  */
 function grillingBlocks(lines: string[]): [number, number][] {
+  const numbered =
+    !lines.some((l) => QUESTION_MARK.test(l)) &&
+    !lines.some((l) => seriesHeader(l));
   const blocks: [number, number][] = [];
   let start = -1;
   let advised = false;
   const close = (end: number) => {
-    if (start >= 0) blocks.push([start, end]);
+    if (start >= 0 && (!numbered || numberedAsks(lines, start, end)))
+      blocks.push([start, end]);
     start = -1;
   };
   lines.forEach((line, i) => {
-    if (QUESTION_MARK.test(line)) {
+    if (numbered ? numberedHead(line) : QUESTION_MARK.test(line)) {
       close(i);
       start = i;
       // The recommendation may share the question's line (`arrowAt`).
@@ -210,7 +254,10 @@ function grillingRound(lines: string[]): ParsedQuestion[] {
   ]);
   return blocks.map((block, i) => {
     const head = block[0].replace(QUESTION_MARK, "");
-    const number = /^\**\s*Q\s*(\d+)\s*\**\s*[-–—:.]?\s*/i.exec(head);
+    const number =
+      /^\s*(?:#{1,6}\s*)?\**\s*Q\s*(\d+)\s*[.:)]?\s*\**\s*[-–—:.]?\s*/i.exec(
+        head,
+      );
     let rest = number ? head.slice(number[0].length) : head;
     let title = "";
     const bold = /^\*\*(.+?)\*\*\s*:?\s*/.exec(rest);
@@ -222,7 +269,10 @@ function grillingRound(lines: string[]): ParsedQuestion[] {
     let recommendation: string | null = null;
     for (const line of block.slice(1)) {
       if (ARROW.test(line)) {
-        recommendation = unbold(line.replace(ARROW, ""));
+        // A second one adds to the first, never hides it.
+        const said = unbold(line.replace(ARROW, ""));
+        recommendation =
+          recommendation === null ? said : `${recommendation}\n${said}`;
         continue;
       }
       if (recommendation !== null) recommendation += `\n${line}`;
@@ -231,11 +281,20 @@ function grillingRound(lines: string[]): ParsedQuestion[] {
     recommendation = recommendation?.trim() || null;
     const { options, lines: kept } = optionsIn(body);
     const text = kept.join("\n").trim();
+    // No bold title: the first line's question is the title, what follows
+    // its last « ? » before a word the body (`**Q1.** On publie ? L'image
+    // montre…`). A « ? » before « » » or « ) » is a quote's own.
+    const [line = "", ...others] = text.split("\n");
+    const first = unbold(line);
+    const marks = [...first.matchAll(/\?(?=\s+[\p{L}\d])/gu)];
+    const asked = marks.length > 0 ? marks[marks.length - 1].index : -1;
+    const lead = asked >= 0 ? first.slice(0, asked + 1) : first;
+    const more = asked >= 0 ? first.slice(asked + 1).trim() : "";
     return {
       id: `Q${number?.[1] ?? i + 1}`,
       numbered: !!number,
-      title: title || unbold(text.split("\n")[0] ?? ""),
-      body: title ? text : text.split("\n").slice(1).join("\n").trim(),
+      title: title || lead,
+      body: title ? text : [more, ...others].join("\n").trim(),
       options,
       recommendation,
       recommendedKey: recommendation ? namedKey(recommendation, options) : null,
@@ -314,8 +373,7 @@ function seriesBlock(lines: string[]): [number, number][] {
 }
 
 const linesOf = (text: string) => text.replace(/\r\n/g, "\n").split("\n");
-const isGrilling = (lines: string[]) =>
-  lines.some((l) => QUESTION_MARK.test(l));
+const isGrilling = (lines: string[]) => grillingBlocks(lines).length > 0;
 
 /** The questions of a reply, or none when it asks no round. `replyId`:
  *  the reply's item, which their `key`s name. */
