@@ -416,6 +416,54 @@ describe("question rounds in Claude's reply", () => {
     expect(q.recommendation).toBe("2,5 s, comme Google.\noui");
   });
 
+  it("reads every format with a ❓ before its question", () => {
+    // The user's instructions of 11/11/2026: a ❓ starts every question.
+    const series = [
+      "Bilan.",
+      "",
+      "❓ Question 1 sur 2.",
+      "",
+      "Le filtre laisse passer des doublons.",
+      "",
+      "Baisser le seuil ?",
+      "",
+      "  a) Oui",
+      "  b) Non",
+      "",
+      "Je pencherais pour (a) : moins de doublons.",
+      "",
+      "❓ **Question 2 sur 2.** La barre ne fait aucun clic.",
+      "",
+      "Remplacer le produit ?",
+      "",
+      "  a) Oui",
+      "  b) Non",
+      "",
+      "Je pencherais pour (b) : attendre une semaine.",
+      "",
+      "Je reprends ensuite.",
+    ].join("\n");
+    expect(parseQuestionRound(series)).toMatchObject([
+      { id: "Q1", title: "Baisser le seuil ?", recommendedKey: "a" },
+      {
+        id: "Q2",
+        title: "Remplacer le produit ?",
+        body: "La barre ne fait aucun clic.",
+        recommendedKey: "b",
+      },
+    ]);
+    expect(withoutQuestions(series)).toBe("Bilan.\n\nJe reprends ensuite.");
+    const numbered = "❓ **Q1.** On publie ? L'image est prête.\nReco : oui.";
+    expect(parseQuestionRound(numbered)).toMatchObject([
+      {
+        id: "Q1",
+        title: "On publie ?",
+        body: "L'image est prête.",
+        recommendation: "oui.",
+      },
+    ]);
+  });
+
   it("reads « Question n sur N » as a heading or with a colon", () => {
     const ask = (head: string) =>
       parseQuestionRound(

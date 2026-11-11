@@ -5,9 +5,10 @@ import type { ChatItem } from "@/lib/chat/chatState";
  * above the input (`ChatQuestionSheet`). Three formats, as the notification
  * hook spots them (`arkadia-notify.ps1`): the grilling skill's
  * `❓ **Q1** - **title**: body` then `➡️ recommendation`, its look-alike
- * without the ❓ (`**Q1.** question ?` then `Reco : oui.`), and the
- * « Question n sur N » of the user's instructions, its options `a) …` and
- * its « Je pencherais pour (x) : … ».
+ * (`**Q1.** question ?` then `Reco : oui.`), and the « Question n sur N »
+ * of the user's instructions, its options `a) …` and its « Je pencherais
+ * pour (x) : … ». Since 11/11/2026 his instructions lead every question
+ * with a ❓: older replies, and a session that forgets it, go without.
  */
 
 export interface RoundOption {
@@ -62,9 +63,10 @@ const OPTION =
  *  or out of the bold (`**Question 1 sur 2.**`, missed on 02/11/2026).
  *  Its context may follow on its line after a dot, a colon or the bold's
  *  end (`**Question 1 sur 3.** Le filtre…`, missed on 09/11/2026): group 3.
- *  Read through `seriesHeader` only. */
+ *  A ❓ may lead it, as every question since 11/11/2026. Read through
+ *  `seriesHeader` only. */
 const SERIES =
-  /^\s*(?:#{1,6}\s*)?\**\s*Question\s+(\d+)\s+sur\s+(\d+)(?:\s*[.:]?\s*\**\s*[.:]?\s*|\s*(?:[.:]\s*\**|\*\*\s*[.:]?)\s+(\S.*))$/i;
+  /^\s*(?:❓️?\s*)?(?:#{1,6}\s*)?\**\s*Question\s+(\d+)\s+sur\s+(\d+)(?:\s*[.:]?\s*\**\s*[.:]?\s*|\s*(?:[.:]\s*\**|\*\*\s*[.:]?)\s+(\S.*))$/i;
 /** `SERIES` on a line whose blanks are single spaces: its `\s*` side by side
  *  would try every split of a long run of blanks (seconds for 400). */
 const seriesHeader = (line: string) =>
@@ -214,12 +216,13 @@ function numberedAsks(lines: string[], start: number, end: number): boolean {
  * `---`, or the blank line that closes its ➡️ paragraph (what follows is
  * Claude's own words again). A reply with no ❓ nor « Question n sur N »
  * may ask with `**Q1.**` lines instead; within another format, a `Q1 :`
- * is that question's words.
+ * is that question's words. A `❓ Question n sur N` is a series header,
+ * never a grilling question.
  */
 function grillingBlocks(lines: string[]): [number, number][] {
+  const grillMark = (l: string) => QUESTION_MARK.test(l) && !seriesHeader(l);
   const numbered =
-    !lines.some((l) => QUESTION_MARK.test(l)) &&
-    !lines.some((l) => seriesHeader(l));
+    !lines.some(grillMark) && !lines.some((l) => seriesHeader(l));
   const blocks: [number, number][] = [];
   let start = -1;
   let advised = false;
@@ -229,7 +232,7 @@ function grillingBlocks(lines: string[]): [number, number][] {
     start = -1;
   };
   lines.forEach((line, i) => {
-    if (numbered ? numberedHead(line) : QUESTION_MARK.test(line)) {
+    if (numbered ? numberedHead(line) : grillMark(line)) {
       close(i);
       start = i;
       // The recommendation may share the question's line (`arrowAt`).
