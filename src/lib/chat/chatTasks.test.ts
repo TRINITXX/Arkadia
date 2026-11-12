@@ -621,6 +621,42 @@ describe("workflow card", () => {
     expect(wf.tokens).toBe(39340);
   });
 
+  it("ends a workflow's agents with it, whichever way it ends", () => {
+    const running = run([started, progress("start")]);
+    const ended = (events: ChatEvent[]) => {
+      const wf = run(events, running).workflows[0];
+      // What its card's line and its agent's sheet read.
+      return [wf.status, wf.agents[0].state];
+    };
+    // Its end as an update, the notification never read (a chat left).
+    expect(
+      ended([
+        task("task_updated", { task_id: "w1", patch: { status: "failed" } }),
+      ]),
+    ).toEqual(["failed", "failed"]);
+    expect(
+      ended([
+        task("task_updated", {
+          task_id: "w1",
+          patch: { status: "completed" },
+        }),
+      ]),
+    ).toEqual(["completed", "done"]);
+    // Gone from the live background set.
+    expect(ended([task("background_tasks_changed", { tasks: [] })])).toEqual([
+      "completed",
+      "done",
+    ]);
+    // Its chat ended, or its server stopped, while it ran.
+    expect(ended([{ type: "closed", chatId: "c" }])).toEqual([
+      "interrupted",
+      "failed",
+    ]);
+    expect(
+      ended([task("task_notification", { task_id: "w1", status: "stopped" })]),
+    ).toEqual(["stopped", "failed"]);
+  });
+
   it("adds the journal's live tokens and last write, the SDK's end figures win", () => {
     let s = run([
       started,

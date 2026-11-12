@@ -91,6 +91,23 @@ function kindOf(taskType: unknown): Kind | null {
 type Ended = "completed" | "failed" | "stopped";
 
 /** A task's end as the SDK words it: `killed` is a stop. */
+/**
+ * A workflow ended takes its agents with it: those still running or waiting
+ * are done if it completed, failed otherwise (stopped, or cut by its chat's
+ * end). Every way a workflow ends goes through here: left running, their
+ * lines turned for good and their sheets read on every 2 s.
+ */
+function endAgents(wf: Workflow): Workflow {
+  const open = (a: WorkflowAgent) =>
+    a.state === "running" || a.state === "queued";
+  if (wf.status === "running" || !wf.agents.some(open)) return wf;
+  const state = wf.status === "completed" ? "done" : "failed";
+  return {
+    ...wf,
+    agents: wf.agents.map((a) => (open(a) ? { ...a, state } : a)),
+  };
+}
+
 function endedStatus(v: unknown): Ended | null {
   if (v === "completed" || v === "failed" || v === "stopped") return v;
   return v === "killed" ? "stopped" : null;
@@ -391,7 +408,7 @@ export function addTaskEvent(
         shells: live(state.shells, (s) =>
           end({ ...s, background: s.background || background }),
         ),
-        workflows: live(state.workflows, end),
+        workflows: live(state.workflows, (w) => endAgents(end(w))),
       };
     }
     case "task_notification": {
@@ -410,16 +427,9 @@ export function addTaskEvent(
           retry: undefined,
         })),
         shells: live(state.shells, (s) => ({ ...s, status })),
-        workflows: live(state.workflows, (w) => ({
-          ...w,
-          status,
-          endedAt: w.endedAt ?? now,
-          agents: w.agents.map((a) =>
-            a.state === "running" || a.state === "queued"
-              ? { ...a, state: status === "completed" ? "done" : "failed" }
-              : a,
-          ),
-        })),
+        workflows: live(state.workflows, (w) =>
+          endAgents({ ...w, status, endedAt: w.endedAt ?? now }),
+        ),
       };
     }
     case "background_tasks_changed":
@@ -449,7 +459,7 @@ function backgroundLevel(
     ...next,
     subagents: next.subagents.map((s) => (s.background ? gone(s) : s)),
     shells: next.shells.map((s) => (s.background ? gone(s) : s)),
-    workflows: next.workflows.map(gone),
+    workflows: next.workflows.map((w) => endAgents(gone(w))),
   };
   return next;
 }
@@ -729,7 +739,7 @@ export function interruptTasks(state: ChatState, now: number): ChatState {
   return {
     ...state,
     subagents: state.subagents.map(cut),
-    workflows: state.workflows.map(cut),
+    workflows: state.workflows.map((w) => endAgents(cut(w))),
     shells: state.shells.map((s) =>
       s.status === "running" ? { ...s, status: "stopped" } : s,
     ),

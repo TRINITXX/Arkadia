@@ -13,6 +13,8 @@ import activity from "../chat-server/fixtures/activity.jsonl?raw";
  *   for 30 s after the page loads (`doneAgentsUntil`).
  * - `activity-resumed`: the session reopened while they ran: its subagent
  *   rows say « interrompu ».
+ * - `activity-cut`: the chat ended while they ran: the workflow card's
+ *   agents no longer turn.
  * - `agent-live`: one background subagent at work (not recorded): its sheet.
  */
 
@@ -282,6 +284,13 @@ export function activityScenarios(): Record<string, () => ChatState> {
     // A big fan-out: the agents' list scrolls, under an opaque line.
     "activity-crowded": () => crowded(replayNow(untilFirstEnd())),
     "activity-done": () => replayNow(live),
+    // Its chat ended while the workflow ran: its agents ended with it.
+    "activity-cut": () =>
+      reduceChat(
+        replayNow(untilFirstEnd()),
+        { type: "closed", chatId: "preview" },
+        Date.now(),
+      ),
     "activity-resumed": resumed,
     // Stamped `ago` already: replayed as they are.
     thinking: () => replayAsIs(turnEvents(false)),
