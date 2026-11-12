@@ -141,6 +141,10 @@ export type PaneId = string;
 export interface PaneState {
   id: PaneId;
   title: string;
+  /** Fixed name given by whoever opened the pane (`--tab-add --name`): shown
+   *  in place of `title`, which keeps following the terminal underneath (see
+   *  `paneTabTitle`). */
+  label?: string;
   /** Live cwd reported by the shell via OSC 7 (null until the first prompt fires the hook). */
   cwd: string | null;
   /** Claude account the pane was launched on (fixed for its lifetime).

@@ -17,6 +17,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { Tab } from "@/types";
 import type { AccountMark } from "@/lib/accounts";
+import { paneTabTitle } from "@/lib/paneTitle";
 import { AccountDot } from "./AccountDot";
 
 interface TabBarProps {
@@ -236,7 +237,7 @@ function SortableTab({
     opacity: isDragging ? 0.5 : 1,
   };
 
-  const title = tab.panes[tab.activePaneId]?.title || "pwsh";
+  const title = paneTabTitle(tab.panes[tab.activePaneId]) || "pwsh";
 
   return (
     <div

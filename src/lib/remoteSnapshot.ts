@@ -14,6 +14,7 @@ import {
 } from "@/lib/agentState";
 import type { AccountMark, AccountsState } from "@/lib/accounts";
 import { collectPaneIds } from "@/lib/paneTree";
+import { paneTabTitle } from "@/lib/paneTitle";
 import type {
   Project,
   Tab,
@@ -176,13 +177,13 @@ function remoteTab(
   );
   return {
     id: tab.id,
-    title: plainTitle(tab.panes[tab.activePaneId]?.title ?? ""),
+    title: plainTitle(paneTabTitle(tab.panes[tab.activePaneId])),
     badge: badgeOf(tabState),
     question: questionOf(tabState),
     activePaneId: tab.activePaneId,
     panes: paneIds.map((id) => ({
       id,
-      title: plainTitle(tab.panes[id].title),
+      title: plainTitle(paneTabTitle(tab.panes[id])),
       badge: badgeOf(paneStates[id]),
       question: questionOf(paneStates[id]),
       claude: claudePaneIds.has(id),

@@ -29,6 +29,10 @@ export interface SnapshotPane {
    *  project root). */
   cwd: string | null;
   title: string;
+  /** The pane's fixed name (`PaneState.label`). A reattach keeps it: the
+   *  command it names is still running. A restore drops it: the command it
+   *  named is not relaunched. */
+  label?: string;
   /** True when the pane ever ran a Claude session (sticky) — restore relaunches
    *  it with `ccd --resume <session>`. */
   wasClaude: boolean;
@@ -114,6 +118,7 @@ export function buildSessionSnapshot(
           paneId: id,
           cwd: t.panes[id]?.cwd ?? null,
           title: t.panes[id]?.title ?? "",
+          ...(t.panes[id]?.label ? { label: t.panes[id].label } : {}),
           wasClaude: claudePaneIds.has(id) || !!t.panes[id]?.chat,
           accountId: t.panes[id]?.accountId,
           ...(t.panes[id]?.chat ? { chat: t.panes[id].chat } : {}),
@@ -157,6 +162,9 @@ export function normalizeSessionSnapshot(raw: unknown): SessionSnapshot | null {
         paneId: pane.paneId,
         cwd: typeof pane.cwd === "string" ? pane.cwd : null,
         title: typeof pane.title === "string" ? pane.title : "",
+        ...(typeof pane.label === "string" && pane.label
+          ? { label: pane.label }
+          : {}),
         wasClaude: pane.wasClaude === true,
         accountId:
           typeof pane.accountId === "string" ? pane.accountId : undefined,

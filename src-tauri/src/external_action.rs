@@ -33,7 +33,7 @@ fn value_after(argv: &[String], flag: &str) -> Option<String> {
 ///
 /// `--wt-add` adds a project (a worktree); `--tab-add` opens one more tab in
 /// the project already open on `--path` and runs `--run` in it. There `--name`
-/// only labels the toast: the tab's title follows its terminal.
+/// is the tab's fixed title, shown instead of its terminal's.
 pub fn parse_external_action(argv: &[String]) -> Option<ExternalAction> {
     let kind = if argv.iter().any(|a| a == "--wt-add") {
         "add"

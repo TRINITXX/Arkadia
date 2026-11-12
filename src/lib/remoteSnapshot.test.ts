@@ -211,6 +211,20 @@ describe("buildRemoteSnapshot", () => {
     ]);
   });
 
+  it("names a tab by its fixed name, not by its terminal's title", () => {
+    const t = tab("t1", "arkadia", ["C:\\WINDOWS\\system32\\cmd.exe"]);
+    t.panes["t1-p0"].label = "Serveur dev";
+    const snap = buildRemoteSnapshot(
+      input({
+        projects: [project("arkadia")],
+        tabs: [t],
+        activeProjectIds: new Set(["arkadia"]),
+      }),
+    );
+    expect(snap.active[0].tabs[0].title).toBe("Serveur dev");
+    expect(snap.active[0].tabs[0].panes[0].title).toBe("Serveur dev");
+  });
+
   it("orders the other projects like the sidebar", () => {
     const workspaces: Workspace[] = [
       { id: "w2", name: "Clients", order: 2, collapsed: false },

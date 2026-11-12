@@ -99,6 +99,7 @@ function reattachTab(
     panes: kept.map((p) => ({
       id: p.paneId,
       title: p.title,
+      ...(p.label ? { label: p.label } : {}),
       cwd: null,
       accountId: p.accountId,
       ...(p.chat ? { chat: p.chat } : {}),

@@ -46,7 +46,10 @@ describe("planReattach", () => {
 
   it("brings a chat pane back as a chat, never as a terminal Claude", () => {
     const snap = split();
-    snap.tabs[0].panes[0] = { ...pane("a", true), chat: { cwd: "C:\p", resume: "s1" } };
+    snap.tabs[0].panes[0] = {
+      ...pane("a", true),
+      chat: { cwd: "C:\p", resume: "s1" },
+    };
     const plan = planReattach(snap, ["a", "b"]);
     expect(plan.tabs[0].panes[0].chat).toEqual({ cwd: "C:\p", resume: "s1" });
     expect(plan.tabs[0].claudePaneIds).toEqual([]);
@@ -77,6 +80,16 @@ describe("planReattach", () => {
     expect(plan.tabs[0].panes.map((p) => p.accountId)).toEqual([
       undefined,
       "b2c3",
+    ]);
+  });
+
+  it("keeps the fixed name of a re-attached pane: its command still runs", () => {
+    const snap = split();
+    snap.tabs[0].panes[1].label = "Serveur dev";
+    const plan = planReattach(snap, ["a", "b"]);
+    expect(plan.tabs[0].panes.map((p) => p.label)).toEqual([
+      undefined,
+      "Serveur dev",
     ]);
   });
 

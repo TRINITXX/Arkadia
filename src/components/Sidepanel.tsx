@@ -25,6 +25,7 @@ import { ChevronDown, ChevronRight, History } from "lucide-react";
 import { aggregate, isActive, type AgentStateValue } from "@/lib/agentState";
 import { sortActiveProjects } from "@/lib/activeOrder";
 import { stripStatusGlyph } from "@/lib/notifLabel";
+import { paneTabTitle } from "@/lib/paneTitle";
 import type { Project, Tab, Workspace } from "@/types";
 import { AgentBadge } from "./AgentBadge";
 import { AccountDot } from "./AccountDot";
@@ -194,7 +195,7 @@ function projectAgentStates(
     states.push({
       tabId: tab.id,
       title:
-        stripStatusGlyph(tab.panes[tab.activePaneId]?.title ?? "") || "pwsh",
+        stripStatusGlyph(paneTabTitle(tab.panes[tab.activePaneId])) || "pwsh",
       state: tabState,
     });
   }

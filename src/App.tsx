@@ -1418,6 +1418,8 @@ export function App() {
       /** False from the phone: the desktop keeps showing its current tab
        *  (the new one only becomes the project's tab if it had none). */
       activate = true,
+      /** Fixed name for the tab, shown instead of its terminal's title. */
+      label?: string,
     ): Promise<{ tabId: string; paneId: string } | null> => {
       const paneAccount = accountId === MAIN_ACCOUNT_ID ? undefined : accountId;
       const paneId = await spawnPane(
@@ -1431,6 +1433,7 @@ export function App() {
       const pane: PaneState = {
         id: paneId,
         title: project.name,
+        ...(label ? { label } : {}),
         cwd: null,
         accountId: paneAccount,
       };
@@ -3026,12 +3029,15 @@ export function App() {
           return;
         }
         // Not activated: the desktop view stays on the tab Alexis is in.
+        // `--name` is the tab's fixed title: a dev server's terminal would
+        // name it "cmd.exe".
         const spawned = await spawnTabFor(
           project,
           a.run,
           undefined,
           undefined,
           false,
+          a.name,
         );
         pushToast(
           spawned ? "info" : "error",
