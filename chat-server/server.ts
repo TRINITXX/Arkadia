@@ -503,6 +503,8 @@ export type ServerEvent =
       sessionId?: string;
       /** The mode it starts in: the init that says it comes with a turn. */
       mode?: PermissionMode;
+      /** The model just picked in the menu, before Claude Code says its id. */
+      model?: string;
       /**
        * A /rewind's cut nothing was sent after yet (null: gone): a restart
        * after the server stopped resumes at it, never past it.
@@ -935,6 +937,8 @@ class Chat {
     this.effort = start.effort;
     this.cutBefore = start.historyBefore;
     this.whole = start.whole === true;
+    // A restart on a model picked in the menu: an asleep chat would never say it.
+    if (start.model) this.out({ type: "info", chatId, model: start.model });
     if (start.notice) this.out({ type: "notice", chatId, text: start.notice, tone: "info" });
     if (start.cut) this.out({ type: "notice", chatId, text: RESTART_CUT, tone: "error" });
     // The page keeps the cut: a restart after the server stopped resumes at it.
@@ -1543,6 +1547,9 @@ class Chat {
         // here would come after and override a newer one.
         if (message.type === "conversation_reset") {
           this.log = this.log.filter((e) => e.type === "info");
+          // An `info` of a model picked in the menu stays, what came after it
+          // goes: the model it runs now, after it.
+          if (this.model) this.out({ type: "info", chatId: this.chatId, model: this.model });
           // No session until the next message's init names it (its
           // `new_conversation_id` is not it, seen live on 30/10/2026): a
           // relaunch meanwhile starts fresh, never on the cleared one.
@@ -2527,10 +2534,20 @@ class Chat {
     await (await this.awake()).setPermissionMode(mode);
   }
 
+  /** For this session alone: `setModel` writes no settings file (checked 12/11/2026). */
   async setModel(model: string): Promise<void> {
     this.model = model;
+    // The menu follows the click at once, even while an asleep chat wakes:
+    // before this, nothing said it until the next turn's end.
+    this.out({ type: "info", chatId: this.chatId, model });
     const q = await this.awake();
-    await q.setModel(model);
+    try {
+      await q.setModel(model);
+    } finally {
+      // The id it runs (`sonnet` → `claude-sonnet-5-5`) and its window; the
+      // one it kept if Claude Code refused.
+      void this.reportContext(q);
+    }
     // Another model may take other efforts, or none.
     void this.reportEffort(q);
   }

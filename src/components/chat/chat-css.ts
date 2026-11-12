@@ -899,7 +899,7 @@ export const CHAT_CSS = `
 .chat-session-btn b { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 600; color: #f4f4f5; white-space: nowrap; }
 .chat-session-btn b .lucide { width: 12px; height: 12px; color: var(--chat-mute); }
 .chat-session-btn small { font-size: 10.5px; color: var(--chat-mute); white-space: nowrap; }
-.chat-session-menu { width: 300px; max-height: min(460px, 70vh); overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; padding: 8px; }
+.chat-session-menu { width: 300px; max-height: min(460px, 70vh, var(--room, 100vh)); overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; padding: 8px; }
 .chat-session-menu h6 { margin: 6px 8px 4px; font-size: 11px; font-weight: 600; color: var(--chat-mute); }
 .chat-session-menu .ck { margin-left: auto; width: 14px; height: 14px; color: var(--chat-accent); }
 /* The effort slider (the user's pick of 31/10/2026): accent up to the thumb, the level named at the right of its title. */

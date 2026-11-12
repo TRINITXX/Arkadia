@@ -1472,6 +1472,8 @@ export function reduceChat(
           event.gitBranch === undefined ? state.gitBranch : event.gitBranch,
         // Only until the first turn's init says it: later, init and status rule.
         mode: state.mode ?? event.mode ?? null,
+        // A pick in the menu: shown at once, the turn's init confirms it.
+        model: event.model ?? state.model,
         rewind: event.rewind === undefined ? state.rewind : event.rewind,
       };
     case "history":

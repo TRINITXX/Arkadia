@@ -9,6 +9,8 @@ import {
   mcpFailed,
   mergeMcp,
   modelChoices,
+  parseSavedModels,
+  sessionChoice,
 } from "@/lib/chat/chatSdkSettings";
 import { EMPTY_CHAT, reduceChat, type ChatState } from "@/lib/chat/chatState";
 import { slowHook } from "@/lib/chat/useRunningHook";
@@ -123,6 +125,41 @@ describe("model menu", () => {
     ]);
     // A model the list lacks: all of them while an effort is reported.
     expect(efforts("claude-unknown-9")).toEqual(ALL);
+  });
+
+  it("names, before Claude Code does, the model « Par défaut » runs", () => {
+    const models = modelChoices(MODELS);
+    // A chat asleep since it opened: its efforts can be picked too.
+    expect(sessionChoice(models, null)?.value).toBe("opus");
+    expect(effortChoices({ models, model: null, effort: null })).toEqual(ALL);
+    expect(sessionChoice([], null)).toBeUndefined();
+  });
+
+  it("shows a model picked in the menu at once, the turn's init after", () => {
+    const picked = run([{ type: "info", chatId: "c", model: "haiku" }], {
+      ...EMPTY_CHAT,
+      model: "claude-opus-5-5",
+    });
+    expect(currentChoice(modelChoices(MODELS), picked.model)?.value).toBe(
+      "haiku",
+    );
+    const after = run(
+      [sdk({ type: "system", subtype: "init", model: "claude-haiku-5-5" })],
+      picked,
+    );
+    expect(after.model).toBe("claude-haiku-5-5");
+  });
+
+  it("reads back a kept menu, dropping what isn't a row", () => {
+    const models = modelChoices(MODELS);
+    expect(parseSavedModels(JSON.stringify(models))).toEqual(models);
+    expect(
+      parseSavedModels(
+        JSON.stringify([{ value: "x" }, { ...models[1], efforts: ["huge"] }]),
+      ),
+    ).toEqual([{ ...models[1], efforts: [] }]);
+    expect(parseSavedModels("{oops")).toEqual([]);
+    expect(parseSavedModels(null)).toEqual([]);
   });
 });
 

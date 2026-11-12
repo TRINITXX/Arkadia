@@ -81,6 +81,8 @@ export type ChatEvent =
       sessionId?: string;
       /** The mode the chat starts in, before its first turn's init. */
       mode?: string;
+      /** The model just picked in the menu, before Claude Code says its id. */
+      model?: string;
       /** A /rewind's cut nothing was sent after yet; null: gone. */
       rewind?: { before: string; at: string } | null;
     }

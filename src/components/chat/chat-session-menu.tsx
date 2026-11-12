@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Check,
   ChevronUp,
@@ -18,19 +18,21 @@ import {
 } from "@/lib/chat/chatLabels";
 import type { EffortLevel, PermissionMode } from "@/lib/chat/chatProtocol";
 import {
-  currentChoice,
   effortChoices,
   effortLabel,
   latestModels,
+  sessionChoice,
   type ModelChoice,
   type SdkState,
 } from "@/lib/chat/chatSdkSettings";
+import { rememberedModels, rememberModels } from "@/lib/chat/chatModelsMemory";
+import { fitAbove } from "@/lib/chat/fitAbove";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 import { ChatEffortSlider } from "@/components/chat/chat-effort-slider";
 
-/** Until Claude Code lists its models: the usual four. */
+/** Until Claude Code ever listed its models: the usual four, by alias. */
 const FALLBACK: ModelChoice[] = MODELS.map((m) => ({
-  value: m.id,
+  value: m.alias,
   model: m.id,
   label: m.label,
   efforts: [],
@@ -68,16 +70,20 @@ export function ChatSessionMenu({
   onEffort?: (effort: EffortLevel) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const all = sdk.models.length > 0 ? sdk.models : FALLBACK;
+  useEffect(() => rememberModels(sdk.models), [sdk.models]);
+  // A chat asleep since it opened has no list of its own: the last one
+  // Claude Code gave.
+  const known = useMemo(
+    () => (sdk.models.length > 0 ? sdk.models : rememberedModels()),
+    [sdk.models],
+  );
+  const all = known.length > 0 ? known : FALLBACK;
   // The menu lists the latest of each family; the button still names an
   // older model the session runs.
   const models = useMemo(() => latestModels(all), [all]);
-  const current = useMemo(() => currentChoice(all, model), [all, model]);
-  const efforts = effortChoices({
-    models: sdk.models,
-    model,
-    effort: sdk.effort,
-  });
+  const current = useMemo(() => sessionChoice(all, model), [all, model]);
+  // Never the hand-written list's: its rows know no effort.
+  const efforts = effortChoices({ models: known, model, effort: sdk.effort });
   // Esc closes the menu, never Claude's turn (`chatLayers`).
   useChatLayer(open, () => setOpen(false));
   return (
@@ -106,6 +112,7 @@ export function ChatSessionMenu({
       </button>
       {open && (
         <div
+          ref={fitAbove}
           className="chat-menu chat-session-menu"
           style={{ left: 0 }}
           // On the menu, not the button: the pointer crosses a gap to it.

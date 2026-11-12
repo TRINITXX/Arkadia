@@ -195,6 +195,19 @@ export function currentChoice(
 }
 
 /**
+ * The menu's row for the session: before Claude Code names its model (a
+ * chat asleep since it opened), the one « Par défaut » runs.
+ */
+export function sessionChoice(
+  models: ModelChoice[],
+  model: string | null,
+): ModelChoice | undefined {
+  if (model) return currentChoice(models, model);
+  const fallback = models.find((m) => m.value === "default");
+  return fallback && currentChoice(models, fallback.model);
+}
+
+/**
  * The effort levels the session's model takes: none hides the picker. A
  * model the menu lacks keeps them all while Claude Code reports an effort.
  */
@@ -203,9 +216,39 @@ export function effortChoices(state: {
   model: string | null;
   effort: EffortLevel | null;
 }): EffortLevel[] {
-  const choice = currentChoice(state.models, state.model);
+  const choice = sessionChoice(state.models, state.model);
   if (choice) return choice.efforts;
   return state.effort ? EFFORT_LEVELS : [];
+}
+
+/**
+ * The model menu kept from a past session (`chatModelsMemory`), read back:
+ * rows that aren't one are dropped, as are efforts no longer known.
+ */
+export function parseSavedModels(raw: string | null): ModelChoice[] {
+  let rows: unknown;
+  try {
+    rows = raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+  return arr(rows)
+    .map(obj)
+    .flatMap((r): ModelChoice[] => {
+      const value = str(r.value);
+      const model = str(r.model);
+      const label = str(r.label);
+      if (!value || !model || !label) return [];
+      return [
+        {
+          value,
+          model,
+          label,
+          efforts: arr(r.efforts).filter(isEffort),
+          fast: r.fast === true,
+        },
+      ];
+    });
 }
 
 /** The order the list shows them in: what needs the user first. */

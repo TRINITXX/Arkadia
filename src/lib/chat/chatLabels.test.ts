@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   fastModeLabel,
   fastModeLine,
+  modelLabel,
   resetLabel,
   tokensLabel,
 } from "@/lib/chat/chatLabels";
@@ -42,5 +43,13 @@ describe("fastModeLabel", () => {
       "↯ Mode rapide en pause après une limite d'usage",
     );
     expect(fastModeLine(null)).toBeNull();
+  });
+});
+
+describe("modelLabel", () => {
+  it("names a model picked by its alias as by its id", () => {
+    expect(modelLabel("fable")).toBe("Fable 5.2");
+    expect(modelLabel("claude-fable-5-2")).toBe("Fable 5.2");
+    expect(modelLabel("claude-opus-5-5[1m]")).toBe("Opus 5.5");
   });
 });

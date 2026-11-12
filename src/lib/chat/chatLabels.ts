@@ -32,18 +32,23 @@ export function nextMode(mode: string | null): PermissionMode {
   return MODE_CYCLE[(i + 1) % MODE_CYCLE.length];
 }
 
-export const MODELS: { id: string; label: string }[] = [
-  { id: "claude-opus-5-5", label: "Opus 5.5" },
-  { id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
-  { id: "claude-haiku-5-5", label: "Haiku 5.5" },
-  { id: "claude-fable-5-1", label: "Fable 5.1" },
+/**
+ * The usual four, before Claude Code ever listed its own. `alias` is what
+ * the menu sends: Claude Code runs the family's latest under it, whatever
+ * the label says.
+ */
+export const MODELS: { id: string; alias: string; label: string }[] = [
+  { id: "claude-opus-5-5", alias: "opus", label: "Opus 5.5" },
+  { id: "claude-sonnet-5-5", alias: "sonnet", label: "Sonnet 5.5" },
+  { id: "claude-haiku-5-5", alias: "haiku", label: "Haiku 5.5" },
+  { id: "claude-fable-5-2", alias: "fable", label: "Fable 5.2" },
 ];
 
 /** "Opus 5.5" for `claude-opus-5-5`, `claude-opus-5-5[1m]` or `opus`. */
 export function modelLabel(model: string | null): string {
   if (!model) return "…";
   const base = model.replace(/\[.*\]$/, "");
-  const known = MODELS.find((m) => m.id === base);
+  const known = MODELS.find((m) => m.id === base || m.alias === base);
   if (known) return known.label;
   const family = /(opus|sonnet|haiku|fable)/i.exec(base)?.[1];
   return family
