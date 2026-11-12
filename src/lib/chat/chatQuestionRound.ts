@@ -247,6 +247,26 @@ function yesNoKey(reco: string): string | null {
   return m[1].toLowerCase() === "oui" ? "a" : "b";
 }
 
+/** `a) Fait`: a choice standing alone, never `a.` (a sentence) nor `(a)`. */
+const LONE_OPTION = /^\s*(?:[-*•]\s+)?(?:\*\*)?[aA]\)/;
+
+/**
+ * The one choice Claude writes for an action, `a) Fait` (the user's report
+ * of 12/11/2026: it showed as words): the first option line of `lines`,
+ * code aside, written `a)`, with no other option on its line. Its caller
+ * makes sure nothing there asks with a « ? ».
+ */
+function loneChoice(
+  lines: string[],
+): { option: RoundOption; at: number } | null {
+  const code = inCode(lines);
+  const at = lines.findIndex((l, i) => !code[i] && OPTION.test(l));
+  if (at < 0 || !LONE_OPTION.test(lines[at]) || inlineOptions(lines[at]))
+    return null;
+  const m = OPTION.exec(lines[at])!;
+  return { option: { key: m[1], label: unbold(m[2]) }, at };
+}
+
 /** A question's options, one per line or all on one line, its lines without
  *  them, and the last line that held one (-1 for none). */
 function optionsIn(lines: string[]): {
@@ -388,7 +408,17 @@ function grillingRound(lines: string[]): ParsedQuestion[] {
       else body.push(line);
     }
     recommendation = recommendation?.trim() || null;
-    const { options, lines: kept } = optionsIn(body);
+    const written = optionsIn(body);
+    // A ❓ action asking nothing with a « ? »: its lone `a) Fait` is its
+    // one choice.
+    const lone =
+      written.options.length === 0 &&
+      QUESTION_MARK.test(block[0]) &&
+      !block.some((l) => l.includes("?"))
+        ? loneChoice(body)
+        : null;
+    const options = lone ? [lone.option] : written.options;
+    const kept = lone ? body.filter((_, i) => i !== lone.at) : written.lines;
     const text = kept.join("\n").trim();
     // No bold title: the first line's question is the title, what follows
     // its last « ? » before a word the body (`**Q1.** On publie ? L'image
@@ -501,25 +531,37 @@ function bareSeriesRead(
   scope.forEach((l, i) => {
     if (!code[i] && endsAsking(unbold(l))) qi = i;
   });
-  if (qi < 0)
-    qi = scope.findIndex((l, i) => !code[i] && REPLY_WORD.test(unbold(l)));
+  // Asking nothing with a « ? »: an action, its lone `a) Fait` its choice,
+  // the line asking a word back (else the last before it) its question.
+  const lone = qi < 0 ? loneChoice(scope) : null;
+  if (qi < 0) {
+    const upTo = lone ? lone.at : scope.length;
+    qi = scope.findIndex(
+      (l, i) => i < upTo && !code[i] && REPLY_WORD.test(unbold(l)),
+    );
+    if (qi < 0 && lone)
+      for (let i = lone.at - 1; i >= 0 && qi < 0; i--)
+        if (!code[i] && scope[i].trim()) qi = i;
+  }
   if (qi < 0) return null;
   const line = unbold(scope[qi]).trim();
   const saysYesNo = leanAt >= 0 && YES_NO_LEANING.test(after[leanAt]);
-  const options =
-    actionChoice(line, null) ??
-    (saysYesNo || closedQuestion(line) ? YES_NO : []);
+  const options = lone
+    ? [lone.option]
+    : (actionChoice(line, null) ??
+      (saysYesNo || closedQuestion(line) ? YES_NO : []));
   const lean = leanAt >= 0 ? leaningOf(after[leanAt], options) : null;
-  // Every line it takes from the message shows, the question's aside.
-  const last = leanAt >= 0 ? leanAt : qi + 1;
+  // Every line it takes from the message shows, its question and choice
+  // aside: up to its leaning, else its choice, else its question.
+  const close = leanAt >= 0 ? leanAt : (lone ? lone.at : qi) + 1;
   return {
     question: {
       id: `Q${n}`,
       numbered: true,
       title: line,
       body: scope
-        .slice(0, last)
-        .filter((l, i) => i !== qi && l.trim())
+        .slice(0, close)
+        .filter((l, i) => i !== qi && i !== lone?.at && l.trim())
         .map(unbold)
         .join("\n"),
       options,
@@ -527,7 +569,7 @@ function bareSeriesRead(
       recommendedKey: lean?.key ?? null,
     },
     start,
-    end: from + (leanAt >= 0 ? leanAt : qi) + 1,
+    end: from + (leanAt >= 0 ? leanAt + 1 : close),
   };
 }
 

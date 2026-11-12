@@ -125,6 +125,44 @@ describe("question rounds in Claude's reply", () => {
     expect(labels("❓ Dis-moi quel nom tu préfères.")).toEqual([]);
   });
 
+  it("reads a lone `a) Fait` Claude writes as the one choice, not as words", () => {
+    const [action] = parseQuestionRound(
+      "❓ Connecte-toi dans cette fenêtre, puis réponds « fait » : je vérifie la page.\n\n  a) Fait",
+    );
+    expect(action).toMatchObject({
+      options: [{ key: "a", label: "Fait" }],
+      body: "",
+    });
+    const [series] = parseQuestionRound(
+      "❓ Question 1 sur 1.\n\nColle la clé dans le Bloc-notes.\n\n  a) Fait",
+    );
+    expect(series).toMatchObject({
+      title: "Colle la clé dans le Bloc-notes.",
+      options: [{ key: "a", label: "Fait" }],
+    });
+    // Its words on the header's line too.
+    for (const head of [
+      "❓ Question 1 sur 1 : connecte-toi, puis réponds « fait ».",
+      "❓ Question 1 sur 1. Colle la clé dans le Bloc-notes.",
+    ])
+      expect(parseQuestionRound(`${head}\n\n  a) Fait`)[0].options).toEqual([
+        { key: "a", label: "Fait" },
+      ]);
+    // Without its ❓, a lone `a)` stays a step of a report.
+    expect(
+      parseQuestionRound("Question 1 sur 2.\n\nÉtapes :\n\n  a) migrer"),
+    ).toEqual([]);
+    // Under a question with a « ? », a lone `a)` is a note: Oui / Non stay.
+    for (const asked of [
+      "**Q1.** On migre la base ce soir ?\n  a) la migration prend 10 min\nReco : oui.",
+      "❓ **Q1** - **Cache** : on le vide ?\n(a) il pèse 2 Go\n➡️ Oui, il est périmé.",
+    ])
+      expect(parseQuestionRound(asked)[0]).toMatchObject({
+        options: [{ label: "Oui" }, { label: "Non" }],
+        recommendedKey: "a",
+      });
+  });
+
   it("reads « Question n sur N » with its options and leaning", () => {
     expect(parseQuestionRound(SERIES)).toEqual([
       {
