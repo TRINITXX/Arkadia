@@ -101,7 +101,9 @@ export function workflowAgentSubagent(agent: WorkflowAgent): Subagent {
         ? "running"
         : agent.state === "done"
           ? "completed"
-          : "failed",
+          : // Cut with its workflow: as its workflow ended (« interrompu »,
+            // « arrêté »), not « en échec ».
+            (agent.endedBy ?? "failed"),
     toolUses: agent.toolCalls ?? 0,
     tokens: agent.tokens ?? 0,
     durationMs: agent.durationMs ?? 0,
@@ -109,8 +111,20 @@ export function workflowAgentSubagent(agent: WorkflowAgent): Subagent {
 }
 
 /**
+ * The snapshot a sheet falls back on once its agent is gone from the chat
+ * (`currentAgent`): the agent as last seen under another status, so as it
+ * ended, not as it was when opened. Its figures move every second while it
+ * runs: the snapshot follows its status alone.
+ */
+export function agentSnapshot(kept: Subagent, now: Subagent): Subagent {
+  return now.status === kept.status ? kept : now;
+}
+
+/**
  * An agent's sheet as the agent is now (its figures move): the chat's
- * subagent, else a workflow's agent, else as it was opened.
+ * subagent, else a workflow's agent, else as its sheet last kept it
+ * (`agentSnapshot`). Kept running and gone from the chat (its workflow ran
+ * again without it), it runs no more: « interrompu ».
  */
 export function currentAgent(
   state: Pick<ChatState, "subagents" | "workflows">,
@@ -122,7 +136,9 @@ export function currentAgent(
     const a = wf.agents.find((x) => x.agentId === opened.taskId);
     if (a) return workflowAgentSubagent(a);
   }
-  return opened;
+  return opened.status === "running"
+    ? { ...opened, status: "interrupted" }
+    : opened;
 }
 
 /**

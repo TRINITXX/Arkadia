@@ -8,9 +8,11 @@ import {
 } from "@/lib/chat/chatState";
 import {
   agentConversation,
+  agentSnapshot,
   currentAgent,
   readAtEnd,
   withRunningCalls,
+  workflowAgentSubagent,
 } from "@/lib/chat/chatAgentView";
 import {
   agentCards,
@@ -401,6 +403,18 @@ describe("subagent cards", () => {
     ).toBe("completed");
     const gone = { ...opened, taskId: "x", status: "failed" as const };
     expect(currentAgent(s, gone)).toBe(gone);
+    // Opened running and gone since (its workflow ran again without it).
+    expect(currentAgent(s, { ...gone, status: "running" }).status).toBe(
+      "interrupted",
+    );
+    // Its sheet's snapshot follows its status: ended, then gone, it stays
+    // as it ended, not as it was opened.
+    const ran = { ...opened, taskId: "w-a", status: "running" as const };
+    const seen = agentSnapshot(ran, currentAgent(s, ran));
+    expect(seen.status).toBe("completed");
+    expect(currentAgent(EMPTY_CHAT, seen).status).toBe("completed");
+    // Its figures alone moving: the same snapshot.
+    expect(agentSnapshot(seen, { ...seen, tokens: 9 })).toBe(seen);
   });
 
   it("keeps a running agent's call under way running in its sheet", () => {
@@ -682,6 +696,12 @@ describe("workflow card", () => {
     expect(late.agents.map((a) => a.state)).toEqual(["failed", "failed"]);
     // An agent that ended on its own keeps its state.
     expect(ended([progress("done"), stopped])).toEqual(["stopped", "done"]);
+    // Its sheet says how its workflow ended, not « en échec ».
+    const sheet = (events: ChatEvent[]) =>
+      workflowAgentSubagent(run(events, running).workflows[0].agents[0]).status;
+    expect(sheet([{ type: "closed", chatId: "c" }])).toBe("interrupted");
+    expect(sheet([stopped])).toBe("stopped");
+    expect(sheet([progress("failed")])).toBe("failed");
   });
 
   it("adds the journal's live tokens and last write, the SDK's end figures win", () => {

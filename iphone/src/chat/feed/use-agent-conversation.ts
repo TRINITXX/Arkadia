@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
-import {
-  agentConversation,
-  currentAgent,
-  withRunningCalls,
-} from "@/lib/chat/chatAgentView";
+import { agentConversation, withRunningCalls } from "@/lib/chat/chatAgentView";
 import type { ChatState, Subagent } from "@/lib/chat/chatState";
+import { useCurrentAgent } from "@/lib/chat/useCurrentAgent";
 import { useReadAtEnd } from "@/lib/chat/useReadAtEnd";
 
 /** A running subagent's transcript is read again this often while shown. */
@@ -29,11 +26,7 @@ export function useAgentConversation(
   readable: boolean,
 ) {
   // The opened agent as it is now (a workflow's too): its figures move.
-  const { subagents, workflows } = state;
-  const agent = useMemo(
-    () => (opened ? currentAgent({ subagents, workflows }, opened) : null),
-    [opened, subagents, workflows],
-  );
+  const agent = useCurrentAgent(state, opened);
   const toolUseId = agent?.toolUseId;
   const messages = toolUseId ? state.agentMessages[toolUseId] : undefined;
   // Its Agent call's prompt: a background agent's isn't streamed.

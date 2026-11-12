@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   agentConversation,
-  currentAgent,
   withRunningCalls,
   workflowAgentSubagent,
 } from "@/lib/chat/chatAgentView";
 import type { ChatState, Subagent } from "@/lib/chat/chatState";
 import type { WorkflowAgent } from "@/lib/chat/chatTasks";
+import { useCurrentAgent } from "@/lib/chat/useCurrentAgent";
 import { useReadAtEnd } from "@/lib/chat/useReadAtEnd";
 
 /** A running workflow agent's transcript is read again this often while shown. */
@@ -28,11 +28,7 @@ export function useAgentSheet(
 ) {
   const [opened, setOpened] = useState<Subagent | null>(null);
   // The opened agent as it is now: its card's figures move.
-  const { subagents, workflows } = state;
-  const sheet = useMemo(
-    () => (opened ? currentAgent({ subagents, workflows }, opened) : null),
-    [opened, subagents, workflows],
-  );
+  const sheet = useCurrentAgent(state, opened);
 
   const messages = sheet?.toolUseId
     ? state.agentMessages[sheet.toolUseId]

@@ -42,10 +42,11 @@ export interface WorkflowAgent {
   /** Its last write: the idle time counts from there. */
   lastActivityAt?: number;
   lastTool?: string;
-  /** Its state came from its workflow's end, not its own (`endAgents`): a
+  /** It ended with its workflow, not on its own (`endAgents`): how the
+   *  workflow ended, which its sheet says (« interrompu », « arrêté »). A
    *  later end of the workflow says it again (a guessed end, then its
    *  notification). */
-  byWorkflow?: boolean;
+  endedBy?: Exclude<Subagent["status"], "running">;
 }
 
 export interface Workflow {
@@ -106,22 +107,21 @@ function endedStatus(v: unknown): Ended | null {
  * end). Whatever changes a workflow goes through here, its ends and the
  * frames that come after them: left running, its agents' lines turned for
  * good and their sheets read on every 2 s. An agent ended here follows a
- * later end of its workflow (`byWorkflow`): one that ended on its own keeps
+ * later end of its workflow (`endedBy`): one that ended on its own keeps
  * its state.
  */
 function endAgents(wf: Workflow): Workflow {
-  if (wf.status === "running") return wf;
-  const state = wf.status === "completed" ? "done" : "failed";
+  const by = wf.status;
+  if (by === "running") return wf;
+  const state = by === "completed" ? "done" : "failed";
   const held = (a: WorkflowAgent) =>
     a.state === "running" ||
     a.state === "queued" ||
-    (a.byWorkflow === true && a.state !== state);
+    (a.endedBy !== undefined && a.endedBy !== by);
   if (!wf.agents.some(held)) return wf;
   return {
     ...wf,
-    agents: wf.agents.map((a) =>
-      held(a) ? { ...a, state, byWorkflow: true } : a,
-    ),
+    agents: wf.agents.map((a) => (held(a) ? { ...a, state, endedBy: by } : a)),
   };
 }
 
@@ -350,7 +350,7 @@ export function addWorkflowLive(
             ? prev.lastActivityAt
             : (a.lastActivityAt ?? prev?.lastActivityAt),
           lastTool: prev?.lastTool,
-          byWorkflow: prev?.byWorkflow,
+          endedBy: prev?.endedBy,
         };
         agents =
           i < 0

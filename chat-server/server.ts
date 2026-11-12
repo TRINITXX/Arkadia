@@ -88,7 +88,7 @@ import { needsReread, outputFiles, readConsoleTail } from "./taskOutput.ts";
 import { sessionTitle, TITLE_LOOKS_MS } from "./title.ts";
 import { storedVisual, visualServer, VISUAL_RULE, type PreparedVisual } from "./visual.ts";
 import { readVisualReport, VISUAL_SERVER, VISUAL_TOOL_NAME, type VisualReport } from "./visualHtml.ts";
-import { WorkflowWatch, type WorkflowLiveAgent } from "./workflowWatch.ts";
+import { endedWorkflows, WorkflowWatch, type WorkflowLiveAgent } from "./workflowWatch.ts";
 import {
   getSessionInfo,
   getSessionMessages,
@@ -993,6 +993,10 @@ class Chat {
     this.outbox = [];
     this.writing.clear();
     for (const timer of this.titleTimers) clearTimeout(timer);
+    // Its workflows ended with it: their folders are watched no more (a
+    // chat ended by itself kept looking at them every 1.5 s).
+    for (const { watch } of this.workflows.values()) watch.stop();
+    this.workflows.clear();
   }
 
   /**
@@ -2512,8 +2516,9 @@ class Chat {
 
   /**
    * A workflow launched (its tool result names its folder) is watched until
-   * its notification. What the watcher sees goes out unlogged, the latest
-   * kept for a replay: it changes every second while agents work.
+   * it ends, however it does (`endedWorkflows`). What the watcher sees goes
+   * out unlogged, the latest kept for a replay: it changes every second
+   * while agents work.
    */
   private watchWorkflows(message: SDKMessage): void {
     if (message.type === "user" && !message.parent_tool_use_id) {
@@ -2522,6 +2527,9 @@ class Chat {
         | undefined;
       const { taskId, transcriptDir } = r ?? {};
       if (
+        // Messages still come a moment after the chat ended (`close`):
+        // nothing would stop a watch started then.
+        this.ended ||
         r?.taskType !== "local_workflow" ||
         typeof taskId !== "string" ||
         typeof transcriptDir !== "string" ||
@@ -2539,9 +2547,11 @@ class Chat {
         }),
       };
       this.workflows.set(taskId, entry);
-    } else if (message.type === "system" && message.subtype === "task_notification") {
-      this.workflows.get(message.task_id)?.watch.stop();
-      this.workflows.delete(message.task_id);
+    } else {
+      for (const taskId of endedWorkflows(message, this.workflows.keys())) {
+        this.workflows.get(taskId)?.watch.stop();
+        this.workflows.delete(taskId);
+      }
     }
   }
 
@@ -2735,8 +2745,6 @@ class Chat {
     this.finish();
     // Opus writing a handoff for it: nobody will read it.
     this.writer?.close();
-    for (const { watch } of this.workflows.values()) watch.stop();
-    this.workflows.clear();
     for (const resolve of this.pending.values()) {
       resolve({ behavior: "deny", message: "Chat closed" });
     }

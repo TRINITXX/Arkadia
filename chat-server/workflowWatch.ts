@@ -18,6 +18,49 @@ export interface WorkflowLiveAgent {
   lastActivityAt?: number;
 }
 
+/** An update's statuses that end a task, as the page reads them (`endedStatus`). */
+const ENDS = new Set(["completed", "failed", "stopped", "killed"]);
+
+/**
+ * The watched workflows a message of Claude Code ends: its notification, an
+ * update that ends it, or the live background set without it. A workflow is
+ * in that set before its tool result names its folder (seen live), so one
+ * the set lacks has ended. The page ends a workflow on the same three
+ * (`chatTasks`): its folder is watched no longer than its card runs.
+ */
+export function endedWorkflows(
+  message: object,
+  watched: Iterable<string>,
+): string[] {
+  const m = message as {
+    type?: unknown;
+    subtype?: unknown;
+    task_id?: unknown;
+    patch?: { status?: unknown } | null;
+    tasks?: unknown;
+  };
+  if (m.type !== "system") return [];
+  const ids = [...watched];
+  switch (m.subtype) {
+    case "task_notification":
+      return ids.filter((id) => id === m.task_id);
+    case "task_updated":
+      return ENDS.has(String(m.patch?.status))
+        ? ids.filter((id) => id === m.task_id)
+        : [];
+    case "background_tasks_changed": {
+      const live = new Set(
+        (Array.isArray(m.tasks) ? m.tasks : []).map(
+          (t: unknown) => (t as { task_id?: unknown } | null)?.task_id,
+        ),
+      );
+      return ids.filter((id) => !live.has(id));
+    }
+    default:
+      return [];
+  }
+}
+
 /** How often a running workflow's folder is looked at. */
 const POLL_MS = 1_500;
 
