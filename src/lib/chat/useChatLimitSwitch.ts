@@ -106,10 +106,11 @@ function waitForTurnEnd(chatId: string, timeoutMs: number): Promise<boolean> {
  * whose turn the usage limit refuses moves, once its turn ended (a minute at
  * most), to the free account whose quota resets soonest
  * (`planChatLimitSwitch`), and goes on with « continue ». What runs behind
- * (shells, subagents, workflows) stops with the move. The account is
- * marked blocked until its reset either way; with the setting off, nothing
- * moves. Bounded: blocked accounts are never chosen, and one conversation
- * moves at most 3 times in 30 min.
+ * (shells, subagents, workflows) ends with the move; its subagents stay
+ * resumable, Claude takes them up again there (`stopAndCloseChat`). The
+ * account is marked blocked until its reset either way; with the setting
+ * off, nothing moves. Bounded: blocked accounts are never chosen, and one
+ * conversation moves at most 3 times in 30 min.
  */
 export function useChatLimitSwitch({
   enabledRef,

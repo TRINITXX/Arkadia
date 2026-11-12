@@ -1964,8 +1964,9 @@ export function App() {
         pushToast("info", `Volet chat gardé sur son compte : ${nowBusy}`);
         return "skipped";
       }
-      // At work (forced): its turn and tasks stopped, its queued messages
-      // back in the input, its Claude Code gone before the new pane resumes.
+      // At work (forced): its turn and shells stopped, its queued messages
+      // back in the input, its Claude Code gone before the new pane resumes
+      // (its subagents die with it, resumable: `stopAndCloseChat`).
       if (
         force &&
         chatBusyReason(chatActivity(old.id), chatReplaying(old.id)) !== null

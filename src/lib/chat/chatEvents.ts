@@ -190,10 +190,18 @@ const FORCED_CLOSE_WAIT_MS = 10_000;
 /**
  * Closes a chat at work (a forced account switch): its queued messages are
  * withdrawn first (their text comes back to the input, `queued_removed`),
- * its turn, tasks, shells and `!` commands stopped, then it waits for its
+ * its turn, shells and `!` commands stopped, then it waits for its
  * Claude Code to be gone (`closed`). Closing its input alone lets a turn
  * run on for seconds, the SDK kills it only 7 s later: the new pane would
  * resume the session under a Claude still at work on it.
+ *
+ * Never a `stop_task` for a subagent or a workflow (`tasks`): they die with
+ * their Claude Code, and Claude takes a subagent up again in the resumed
+ * session (SendMessage), as after a terminal's switch. Stopped by id, Claude
+ * Code records an agent as stopped by the user (`stoppedByUser` in its
+ * sidecar) and refuses every later message to it (measured on a subagent,
+ * 12/11/2026). Left running, they keep their Claude Code alive for seconds:
+ * the server says `closed` once the kit killed it (`closedDelayMs`).
  */
 export async function stopAndCloseChat(
   accountId: string | undefined,
@@ -207,9 +215,7 @@ export async function stopAndCloseChat(
     await send({ type: "cancel_queued", chatId, uuid });
   await Promise.all([
     send({ type: "interrupt", chatId }),
-    ...[...a.tasks, ...a.shells].map((taskId) =>
-      send({ type: "stop_task", chatId, taskId }),
-    ),
+    ...a.shells.map((taskId) => send({ type: "stop_task", chatId, taskId })),
     ...a.bangs.map((id) => send({ type: "bash_stop", chatId, id })),
   ]);
   const gone = new Promise<void>((resolve) => {

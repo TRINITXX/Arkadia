@@ -63,6 +63,7 @@ import {
 } from "./handoff.ts";
 import {
   atRest,
+  closedDelayMs,
   cronCount,
   DEFAULT_SLEEP_MS,
   notShell,
@@ -810,6 +811,8 @@ class Chat {
   private idleTried: number | null = null;
   /** Background subagents and workflows, shells and monitors aside: a compaction waits for them. */
   private agentTasks: readonly string[] = [];
+  /** Closed under a subagent or a workflow: its Claude Code killed by then (`closedDelayMs`). */
+  private killed: Promise<void> | null = null;
   /** The artifacts its Claude Code listens to (`watchedAfter`): their replies come by themselves. */
   private watched: readonly string[] = [];
   /**
@@ -1610,9 +1613,12 @@ class Chat {
           void this.reportMcp(q);
         }
       }
+      // Closed under its subagents: `closed` says its Claude Code is gone.
+      await this.killed;
       // Asleep: the chat stays, says nothing (no `closed`, no notification).
       if (this.query === q) this.out({ type: "closed", chatId: this.chatId });
     } catch (e) {
+      await this.killed;
       if (this.query === q) this.out({ type: "closed", chatId: this.chatId, error: String(e) });
     } finally {
       // Stopped for a relaunch: its successor takes the place. Asleep: it stays.
@@ -2710,6 +2716,10 @@ class Chat {
     clearTimeout(this.compactTimer);
     for (const timer of this.signIns.values()) clearTimeout(timer);
     this.signIns.clear();
+    // Its subagents are never stopped by id (Claude Code would refuse to
+    // resume them): they keep it alive past its last message.
+    const wait = closedDelayMs(this.agentTasks);
+    if (wait > 0) this.killed ??= new Promise((resolve) => setTimeout(resolve, wait));
     this.input.end();
     this.query?.close();
     // Still booting: close the query as soon as it exists.

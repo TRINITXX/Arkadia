@@ -125,6 +125,23 @@ export function tasksAfter(
 }
 
 /**
+ * Its input ended, a Claude Code with a subagent or a workflow still running
+ * waits for it, and the kit kills it only then: 2 s of grace, 5 s more on
+ * Windows (`ProcessTransport.close`, kit 0.3.314), while its messages end
+ * after 2 s. Measured 12/11/2026: gone 7.1 s after the close.
+ */
+const TASKS_KILL_WAIT_MS = 8_000;
+
+/**
+ * How long a closed chat waits to say `closed` (ms): with a subagent or a
+ * workflow running, until the kit killed its Claude Code. The page resumes
+ * the session elsewhere on `closed` (an account switch): never two on one.
+ */
+export function closedDelayMs(agentTasks: readonly string[]): number {
+  return agentTasks.length > 0 ? TASKS_KILL_WAIT_MS : 0;
+}
+
+/**
  * Messages sent and not yet taken: a lifecycle frame past « queued » takes
  * one (started, or cancelled: gone either way), a turn's frames list those it
  * consumed, and a turn's end lets the rest go to its successor.

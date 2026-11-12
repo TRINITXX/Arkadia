@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SLEEP_MS } from "@chat-server/sleep";
+import { closedDelayMs, DEFAULT_SLEEP_MS } from "@chat-server/sleep";
 import { parseSleepAfter, sleepChoiceLabel } from "@/lib/chat/chatSleep";
 import { EMPTY_CHAT, reduceChat, type ChatState } from "@/lib/chat/chatState";
 import type { ChatEvent } from "@/lib/chat/chatProtocol";
@@ -94,5 +94,15 @@ describe("the chats' sleep (chatSleep)", () => {
         .asleep,
     ).toBe(false);
     expect(fold([{ type: "closed", chatId }], asleep).asleep).toBe(false);
+  });
+});
+
+describe("a closed chat says so (closedDelayMs)", () => {
+  it("waits past the kit kill under a subagent or a workflow, not otherwise", () => {
+    expect(closedDelayMs([])).toBe(0);
+    // Its Claude Code lives 7.1 s after the close (measured 12/11/2026).
+    expect(closedDelayMs(["agent1"])).toBeGreaterThan(7_100);
+    // The page gives up on `closed` after 10 s (`FORCED_CLOSE_WAIT_MS`).
+    expect(closedDelayMs(["agent1"])).toBeLessThan(10_000);
   });
 });
