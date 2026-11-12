@@ -1159,8 +1159,33 @@ fn on_destroyed(app: &AppHandle, hwnd: isize) {
         Some(key)
     });
     if let Some(key) = key {
+        if let Some(pane) = key.strip_prefix("chrome:") {
+            forget_asked(pane);
+        }
         let _ = app.emit_to("main", "chrome-closed", ChromeKey { key });
     }
+}
+
+/// The file whose age lets pane `pane_id` ask for its window at most every
+/// 20 s (`chrome-profile-open.ps1`, the chat server's `askedMarker`): its
+/// name is the pane's id stripped of all but `[\w-]`.
+fn asked_marker(temp: &std::path::Path, pane_id: &str) -> PathBuf {
+    let name: String = pane_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    temp.join("claude-chrome-panel").join(name)
+}
+
+/// Pane `pane_id`'s window closed (Claude closed its last tab, or Alexis
+/// did): its next call asks for a new window at once. Within the 20 s, it
+/// asked nothing and the extension put its new group in the profile's
+/// last-focused window, the parked anchor or another session's (12/11/2026).
+fn forget_asked(pane_id: &str) {
+    let temp = std::env::var_os("TEMP")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let _ = std::fs::remove_file(asked_marker(&temp, pane_id));
 }
 
 /// Starts the inbox watcher and the window hooks. Windows a crashed
@@ -2955,6 +2980,21 @@ mod tests {
         );
         // UI Automation saw no tab: nothing is known.
         assert_eq!(launch_tab_state(&[], page), None);
+    }
+
+    #[test]
+    fn names_the_ask_marker_as_the_hook_does() {
+        // `$env:ARKADIA_PANE_ID -replace '[^\w-]', ''` in the PowerShell hook.
+        let temp = std::path::Path::new("T");
+        assert_eq!(
+            asked_marker(temp, "631e166b-34b4-424e-81da-6deed7dea66e"),
+            temp.join("claude-chrome-panel")
+                .join("631e166b-34b4-424e-81da-6deed7dea66e")
+        );
+        assert_eq!(
+            asked_marker(temp, "../a b"),
+            temp.join("claude-chrome-panel").join("ab")
+        );
     }
 
     #[test]

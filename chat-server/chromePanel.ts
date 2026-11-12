@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 /**
  * Whether a Claude in Chrome call's result names one of the session's tabs:
  * only then does the session's group exist, so the pane's window may close
@@ -21,4 +23,17 @@ export function callShowsTab(response: unknown): boolean {
   // A tab's number, not the bare word: an error tells Claude to « get a
   // tabId first » with no tab anywhere.
   return /\btab ?id\b\\?"?\s*[:=]?\s*\d/i.test(text);
+}
+
+/**
+ * The file whose age lets a pane ask for its Chrome window at most every
+ * 20 s: the marker `~/.claude/hooks/chrome-profile-open.ps1` keeps for a
+ * terminal, same folder, same name. Arkadia deletes it when the pane's
+ * window closes (`forget_asked` in `src-tauri/src/chrome_view.rs`): Claude's
+ * next call asks for a new window at once, else its new tab group was born
+ * in the profile's last-focused window, the parked anchor or another
+ * session's (12/11/2026).
+ */
+export function askedMarker(tmp: string, paneId: string): string {
+  return join(tmp, "claude-chrome-panel", paneId.replace(/[^\w-]/g, ""));
 }

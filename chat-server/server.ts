@@ -10,10 +10,16 @@
 
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import {
@@ -76,7 +82,7 @@ import {
   turnAfter,
   type SleepFacts,
 } from "./sleep.ts";
-import { callShowsTab } from "./chromePanel.ts";
+import { askedMarker, callShowsTab } from "./chromePanel.ts";
 import { unwrapPastedContent } from "./pastedContent.ts";
 import { needsReread, outputFiles, readConsoleTail } from "./taskOutput.ts";
 import { sessionTitle, TITLE_LOOKS_MS } from "./title.ts";
@@ -339,9 +345,6 @@ async function reportChromeCallRan(
   return {};
 }
 
-/** When each chat last asked for its Chrome window: at most every 20 s. */
-const chromeAskedAt = new Map<string, number>();
-
 /**
  * Claude in Chrome (`src-tauri/src/chrome_view.rs`): before its tool calls,
  * Arkadia lays this chat's own Chrome window in the artifact panel and makes
@@ -352,6 +355,7 @@ const chromeAskedAt = new Map<string, number>();
  * twice and paid a PowerShell start (06/11/2026).
  * Waits 12 s at most for Arkadia's answer, 6 s more when the profile had no
  * window (its extension is only starting). Never blocks the call otherwise.
+ * Asks at most every 20 s (`askedMarker`), sooner once the window closed.
  */
 async function askChromePanel(
   paneId: string | undefined,
@@ -360,15 +364,27 @@ async function askChromePanel(
   const local = process.env.LOCALAPPDATA;
   if (!paneId || !local) return {};
   const inbox = chromeInbox(local, lab);
-  const last = chromeAskedAt.get(paneId) ?? 0;
-  if (Date.now() - last < 20_000) return {};
-  chromeAskedAt.set(paneId, Date.now());
+  const marker = askedMarker(tmpdir(), paneId);
+  // Checked and written in one go, before any await: two calls run at once
+  // (read-only tools) ask once, as with the Map this marker replaced.
   try {
-    const pid = Number((await readFile(join(inbox, "ready"), "utf8")).trim());
+    if (Date.now() - statSync(marker).mtimeMs < 20_000) return {};
+  } catch {
+    // No marker: never asked, or the pane's window closed since.
+  }
+  try {
+    const pid = Number(readFileSync(join(inbox, "ready"), "utf8").trim());
     // Throws when no such process: an Arkadia gone since.
     process.kill(pid, 0);
   } catch {
     return {};
+  }
+  // Only once Arkadia is known to run, as the PowerShell hook does.
+  try {
+    mkdirSync(dirname(marker), { recursive: true });
+    writeFileSync(marker, "");
+  } catch {
+    // Unwritten: the next call asks again, answered at once.
   }
   const id = randomUUID().replace(/-/g, "");
   const tmp = join(inbox, `${id}.tmp`);

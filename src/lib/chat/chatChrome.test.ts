@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { callShowsTab } from "@chat-server/chromePanel";
+import { join } from "node:path";
+import { askedMarker, callShowsTab } from "@chat-server/chromePanel";
 
 describe("callShowsTab", () => {
   it("counts a call whose result names one of the session's tabs", () => {
@@ -61,5 +62,17 @@ describe("callShowsTab", () => {
       ]),
     ).toBe(false);
     expect(callShowsTab(undefined)).toBe(false);
+  });
+});
+
+describe("askedMarker", () => {
+  it("names the 20 s marker as the PowerShell hook and Arkadia do", () => {
+    // `$env:ARKADIA_PANE_ID -replace '[^\w-]', ''`, and `asked_marker`.
+    expect(askedMarker("T", "631e166b-34b4-424e-81da-6deed7dea66e")).toBe(
+      join("T", "claude-chrome-panel", "631e166b-34b4-424e-81da-6deed7dea66e"),
+    );
+    expect(askedMarker("T", "../a b")).toBe(
+      join("T", "claude-chrome-panel", "ab"),
+    );
   });
 });
