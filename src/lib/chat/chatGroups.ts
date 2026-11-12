@@ -224,6 +224,17 @@ export function foldActivity(units: ChatUnit[]): ChatUnit[] {
   return out;
 }
 
+/**
+ * The units a conversation draws: Claude's work folded between two messages
+ * (`foldActivity`), or `unfolded`, each thought and each run of tool calls
+ * where it happened. A subagent's sheet reads unfolded: it writes nothing
+ * before its report, so folded, its whole work was one line and one thought
+ * (the user's report of 12/11/2026).
+ */
+export function drawnUnits(units: ChatUnit[], unfolded: boolean): ChatUnit[] {
+  return unfolded ? units : foldActivity(units);
+}
+
 /** The tool calls of an activity line, in order. */
 export function activityTools(units: FoldedUnit[]): ToolItem[] {
   return units.flatMap((u) => (u.kind === "work" ? u.tools : [u.item]));

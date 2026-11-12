@@ -21,6 +21,7 @@ import { ChatThumbStrip } from "@/components/chat/chat-read-thumbs";
 import { ChatReplyText } from "@/components/chat/chat-reply-text";
 import { ChatStepReply } from "@/components/chat/chat-step-reply";
 import { ChatThoughtBulb } from "@/components/chat/chat-thought-bulb";
+import { ChatToolRow } from "@/components/chat/chat-tool-row";
 import { ChatWorkIcon } from "@/components/chat/chat-work-icon";
 import { ChatActivityLine } from "@/components/chat/chat-activity-line";
 import { ChatUserBody } from "@/components/chat/chat-user-body";
@@ -28,6 +29,7 @@ import { ChatVisualCard } from "@/components/chat/chat-visual-card";
 import { ChatWorkGroup } from "@/components/chat/chat-work-group";
 import { ChatLiveThought } from "@/components/chat/chat-live-thought";
 import {
+  drawnUnits,
   foldActivity,
   groupChatItems,
   messagesOnly as onlyMessages,
@@ -69,6 +71,9 @@ interface ChatTimelineProps {
   pendingToolIds: Set<string>;
   /** « Messages seuls » (`messagesOnly` in `chatGroups`). */
   messagesOnly?: boolean;
+  /** A subagent's sheet: each thought in full and each tool call on its
+   *  line, in order, nothing folded (`drawnUnits`). */
+  unfolded?: boolean;
   /** A subagent row's conversation (a row whose agent isn't known has none). */
   onOpenAgents: (agent: Subagent) => void;
   onOpen: (content: LightboxContent) => void;
@@ -125,6 +130,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   subagents,
   pendingToolIds,
   messagesOnly = false,
+  unfolded = false,
   onOpenAgents,
   onOpen,
   onToast,
@@ -149,8 +155,9 @@ export const ChatTimeline = memo(function ChatTimeline({
   };
   const { units, steps, places } = useMemo(() => {
     const all = groupChatItems(items);
-    const shown = foldActivity(
+    const shown = drawnUnits(
       messagesOnly ? onlyMessages(all, pendingToolIds) : all,
+      unfolded,
     );
     return {
       // « Aujourd'hui », « Hier », « lun. 27 oct. » where the day changes.
@@ -160,7 +167,7 @@ export const ChatTimeline = memo(function ChatTimeline({
       // Thinking and tools behind Claude's replies (« Récit »).
       places: placeWork(shown, working),
     };
-  }, [items, messagesOnly, pendingToolIds, working]);
+  }, [items, messagesOnly, unfolded, pendingToolIds, working]);
   const [whole, setWhole] = useState(!tailFirst);
   useEffect(() => {
     if (!whole) startTransition(() => setWhole(true));
@@ -328,10 +335,10 @@ export const ChatTimeline = memo(function ChatTimeline({
           </div>
         ) : null;
       }
-      // Never at the top since `foldActivity` gathers it into `thoughts`;
-      // kept for the switch to stay whole.
+      // At the top only `unfolded` (a subagent's sheet), in full where it
+      // came: `foldActivity` gathers it into `thoughts` otherwise.
       case "thinking":
-        return null;
+        return <ChatLiveThought key={unit.item.id} items={[unit.item]} />;
       // « Récit » (the user's picks of 02/11/2026): the latest thought in
       // full while Claude works, the others behind the bulb of the reply
       // they led to (`placeWork`), or a bulb of their own.
@@ -387,6 +394,15 @@ export const ChatTimeline = memo(function ChatTimeline({
           />
         );
       case "work":
+        // A subagent's sheet: each call on its line, its output on click.
+        if (unfolded)
+          return (
+            <div key={unit.id} className="chat-unit chat-tools flat">
+              {unit.tools.map((tool) => (
+                <ChatToolRow key={tool.id} tool={tool} cwd={cwd} />
+              ))}
+            </div>
+          );
         return <ChatWorkGroup key={unit.id} tools={unit.tools} cwd={cwd} />;
       case "edit":
         return (

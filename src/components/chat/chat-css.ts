@@ -86,6 +86,8 @@ export const CHAT_CSS = `
 .chat-bottom.sheet-open > .chat-col > * { flex-shrink: 0; }
 .chat-bottom.sheet-open > .chat-col > .chat-sheet-q { flex-shrink: 1; min-height: 120px; }
 .chat-tools { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 0 7px; padding-left: 14px; border-left: 1px solid var(--chat-line); }
+/* A subagent's sheet: its calls on their lines, not under a folded line; their icons under its thoughts' bulbs. */
+.chat-tools.flat { margin: 0 0 0 30px; padding-left: 0; border-left: 0; }
 .chat-tool .row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--chat-dim); cursor: pointer; padding: 2px 4px; border-radius: 6px; min-width: 0; }
 .chat-tool .row:hover { background: #202327; }
 .chat-tool .row .name { color: #d4d4d8; flex-shrink: 0; }

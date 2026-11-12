@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   activityCounts,
+  drawnUnits,
   foldActivity,
   groupChatItems,
   messagesOnly,
@@ -171,6 +172,41 @@ describe("foldActivity", () => {
       "1 fichier lu",
       "1 fichier modifié",
       "1 sous-agent",
+    ]);
+  });
+});
+
+describe("drawnUnits", () => {
+  it("keeps each thought and each run of tools in place for a subagent's sheet", () => {
+    const thinking = (id: string): ChatItem => ({
+      kind: "thinking",
+      id,
+      text: id,
+      streaming: false,
+    });
+    // A subagent at work: its prompt, then thinking and tools, no reply yet.
+    const units = groupChatItems([
+      { kind: "user", id: "u", text: "Relis le diff", images: 0 },
+      thinking("th1"),
+      tool("Read", { file_path: "C:/a.ts" }, "r1"),
+      tool("Grep", { pattern: "x" }, "g1"),
+      thinking("th2"),
+      tool("Bash", { command: "git diff" }, "b1"),
+      thinking("th3"),
+    ]);
+    expect(drawnUnits(units, true).map((u) => u.kind)).toEqual([
+      "user",
+      "thinking",
+      "work",
+      "thinking",
+      "work",
+      "thinking",
+    ]);
+    // The column's own: one gathered thinking, one line of counts.
+    expect(drawnUnits(units, false).map((u) => u.kind)).toEqual([
+      "user",
+      "thoughts",
+      "activity",
     ]);
   });
 });

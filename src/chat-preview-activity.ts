@@ -13,6 +13,7 @@ import activity from "../chat-server/fixtures/activity.jsonl?raw";
  *   for 30 s after the page loads (`doneAgentsUntil`).
  * - `activity-resumed`: the session reopened while they ran: its subagent
  *   rows say « interrompu ».
+ * - `agent-live`: one background subagent at work (not recorded): its sheet.
  */
 
 const all = activity
@@ -154,9 +155,130 @@ function turnEvents(withTool: boolean): ChatEvent[] {
   ];
 }
 
+/**
+ * A background subagent at work: thinking then tool calls, eight times, no
+ * sentence yet. Its pill opens its sheet, its whole conversation unfolded.
+ */
+function agentAtWork(): ChatEvent[] {
+  const CALL = "agent-live";
+  const prompt =
+    "Review round 2 of the iPhone-Control fixes. Check each defect against the code before reporting it.\n\nReport: start with the count, then per bug `file:line`, a concrete failure scenario and its severity.";
+  const sub = (type: "assistant" | "user", content: JsonObject[], i: number) =>
+    sdkAt(60 - i, {
+      type,
+      uuid: `agent-live-${type}-${i}`,
+      parent_tool_use_id: CALL,
+      message: { id: `agent-live-m${i}`, content },
+    });
+  const steps: [string, string, JsonObject][] = [
+    [
+      "I'm starting with the diff of the fixes, to know which files the second round touched before reading any of them.",
+      "Bash",
+      {
+        command: "git diff HEAD~3 --stat",
+        description: "Lister les fichiers du lot",
+      },
+    ],
+    [
+      "serve() now wraps the session in try/finally. I'm reading it to see whether a cancel during unlock can skip the lock of the phone.",
+      "Read",
+      { file_path: "tools/iphone/serve.py" },
+    ],
+    [
+      "The finally block awaits lock(). If the task is cancelled again there, the phone stays unlocked: I'm looking for a shield around it.",
+      "Grep",
+      { pattern: "asyncio.shield|CancelledError" },
+    ],
+    [
+      "No shield, but run_script catches CancelledError and re-raises after cleanup, which covers it. Next, the unlock-failure counter.",
+      "Read",
+      { file_path: "tools/iphone/passcode.py" },
+    ],
+    [
+      "I'm checking whether set-passcode resets the unlock-failures counter, since a stale count could block unlock after the owner changes the passcode.",
+      "Grep",
+      { pattern: "unlock_failures" },
+    ],
+    [
+      "It doesn't, so the counter stays at 2 until the phone is unlocked by hand, and the tool's message covers that case.",
+      "Read",
+      { file_path: "tools/iphone/core_device/hid_service.py" },
+    ],
+    [
+      "I'm checking whether an exception from tap_normalised could leak the passcode digit through a step error.",
+      "Grep",
+      { pattern: "raise .*coordinates|tap_normalised" },
+    ],
+    [
+      "The keypad coordinates could reveal it if they show up in a message, so I'm going to look at whether send_touchscreen ever raises with coordinates in the text.",
+      "Read",
+      { file_path: "tools/iphone/core_device/touchscreen.py" },
+    ],
+  ];
+  return [
+    {
+      type: "user_sent",
+      chatId: "preview",
+      text: "Relis les corrections du lot iPhone-Control.",
+      images: 0,
+      at: Date.now() - 70_000,
+    } as ChatEvent,
+    sdkAt(66, {
+      type: "assistant",
+      uuid: "agent-live-call",
+      message: {
+        id: "agent-live-main",
+        content: [
+          {
+            type: "tool_use",
+            id: CALL,
+            name: "Agent",
+            input: {
+              description: "Review round 2 iPhone-Control fixes",
+              prompt,
+              run_in_background: true,
+            },
+          },
+        ],
+      },
+    }),
+    sdkAt(65, {
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-live-task",
+      tool_use_id: CALL,
+      description: "Review round 2 iPhone-Control fixes",
+      subagent_type: "general-purpose",
+      is_backgrounded: true,
+      task_type: "local_agent",
+      prompt,
+    }),
+    ...steps.flatMap(([thought, name, input], i) => {
+      const id = `agent-live-tool-${i}`;
+      // Its last call still runs.
+      const result =
+        i === steps.length - 1
+          ? []
+          : [
+              sub(
+                "user",
+                [{ type: "tool_result", tool_use_id: id, content: "ok" }],
+                i * 6 + 4,
+              ),
+            ];
+      return [
+        sub("assistant", [{ type: "thinking", thinking: thought }], i * 6),
+        sub("assistant", [{ type: "tool_use", id, name, input }], i * 6 + 2),
+        ...result,
+      ];
+    }),
+  ];
+}
+
 export function activityScenarios(): Record<string, () => ChatState> {
   return {
     activity: () => replayNow(untilFirstEnd()),
+    "agent-live": () => replayAsIs(agentAtWork()),
     // A big fan-out: the agents' list scrolls, under an opaque line.
     "activity-crowded": () => crowded(replayNow(untilFirstEnd())),
     "activity-done": () => replayNow(live),

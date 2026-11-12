@@ -831,6 +831,8 @@ function ChatViewBody({
       </div>
       {agentSheet.sheet && (
         <ChatAgentSheet
+          // Another agent's sheet opens at its own place (`useFollowEnd`).
+          key={agentSheet.sheet.taskId}
           agent={agentSheet.sheet}
           conversation={agentSheet.conversation}
           cwd={cwd}
