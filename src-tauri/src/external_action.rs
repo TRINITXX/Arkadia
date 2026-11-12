@@ -12,6 +12,14 @@ pub struct ExternalAction {
     pub message: Option<String>,
 }
 
+impl ExternalAction {
+    /// True for an action that must not bring Arkadia's window to the front:
+    /// `--tab-add` comes from a script while Alexis may be typing elsewhere.
+    pub fn stays_in_background(&self) -> bool {
+        self.kind == "tab"
+    }
+}
+
 /// Reads the value following `flag` in `argv` (e.g. `--path C:\x` → `Some("C:\\x")`).
 fn value_after(argv: &[String], flag: &str) -> Option<String> {
     argv.iter()
@@ -21,7 +29,11 @@ fn value_after(argv: &[String], flag: &str) -> Option<String> {
 }
 
 /// Parses Arkadia's external-action argv vocabulary. Returns `None` when no
-/// `--wt-*` action flag is present (i.e. an ordinary launch / focus forward).
+/// action flag is present (i.e. an ordinary launch / focus forward).
+///
+/// `--wt-add` adds a project (a worktree); `--tab-add` opens one more tab in
+/// the project already open on `--path` and runs `--run` in it. There `--name`
+/// only labels the toast: the tab's title follows its terminal.
 pub fn parse_external_action(argv: &[String]) -> Option<ExternalAction> {
     let kind = if argv.iter().any(|a| a == "--wt-add") {
         "add"
@@ -29,6 +41,8 @@ pub fn parse_external_action(argv: &[String]) -> Option<ExternalAction> {
         "remove"
     } else if argv.iter().any(|a| a == "--wt-notify") {
         "notify"
+    } else if argv.iter().any(|a| a == "--tab-add") {
+        "tab"
     } else {
         return None;
     };
@@ -106,6 +120,34 @@ mod tests {
         assert_eq!(a.kind, "notify");
         assert_eq!(a.level.as_deref(), Some("info"));
         assert_eq!(a.message.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn parses_tab_add() {
+        let a = parse_external_action(&argv(&[
+            "arkadia.exe",
+            "--tab-add",
+            "--path",
+            "C:\\dev\\vtc-mobile",
+            "--name",
+            "Serveur dev",
+            "--run",
+            "npx expo start --dev-client",
+        ]))
+        .expect("should parse");
+        assert_eq!(a.kind, "tab");
+        assert_eq!(a.path.as_deref(), Some("C:\\dev\\vtc-mobile"));
+        assert_eq!(a.name.as_deref(), Some("Serveur dev"));
+        assert_eq!(a.run.as_deref(), Some("npx expo start --dev-client"));
+    }
+
+    #[test]
+    fn only_tab_add_stays_in_background() {
+        let action = |flag: &str| parse_external_action(&argv(&["arkadia.exe", flag])).unwrap();
+        assert!(action("--tab-add").stays_in_background());
+        assert!(!action("--wt-add").stays_in_background());
+        assert!(!action("--wt-remove").stays_in_background());
+        assert!(!action("--wt-notify").stays_in_background());
     }
 
     #[test]

@@ -328,11 +328,12 @@ export const SCROLLBACK_LINES_DEFAULT = 20_000;
 
 /**
  * Payload forwarded from the Rust single-instance callback when Arkadia is
- * relaunched with a `--wt-*` argv (from the `/w` and `/m` skills). Mirrors the
- * Rust `ExternalAction` struct field-for-field.
+ * relaunched with an action argv: `--wt-*` (from the `/w` and `/m` skills) or
+ * `--tab-add` (kind "tab": one more tab in an open project, running `run`).
+ * Mirrors the Rust `ExternalAction` struct field-for-field.
  */
 export interface ExternalAction {
-  kind: "add" | "remove" | "notify";
+  kind: "add" | "remove" | "notify" | "tab";
   path?: string;
   name?: string;
   color?: string;

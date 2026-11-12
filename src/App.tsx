@@ -2965,7 +2965,7 @@ export function App() {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, color } : p)));
   };
 
-  // ─── External-action listener (/w and /m skills) ──────────────
+  // ─── External-action listener (/w and /m skills, --tab-add) ───
   //
   // The listener must always act on the freshest projects/handlers, but keying
   // an effect on them would re-subscribe every render: `projects` changes often
@@ -3009,6 +3009,36 @@ export function App() {
 
       if (a.kind === "notify") {
         pushToast(a.level ?? "info", a.message ?? "");
+        return;
+      }
+
+      if (a.kind === "tab") {
+        // One more tab in a project that is already open (a dev server
+        // started by a script): it must outlive the session that asked for
+        // it, and stay visible next to the project's other tabs.
+        if (!a.path || !a.run) {
+          pushToast("error", "--tab-add : --path et --run sont requis");
+          return;
+        }
+        const project = findProjectsByPath(projects, a.path)[0];
+        if (!project) {
+          pushToast("error", `Projet introuvable pour ${a.path}`);
+          return;
+        }
+        // Not activated: the desktop view stays on the tab Alexis is in.
+        const spawned = await spawnTabFor(
+          project,
+          a.run,
+          undefined,
+          undefined,
+          false,
+        );
+        pushToast(
+          spawned ? "info" : "error",
+          spawned
+            ? `➕ ${a.name ?? a.run} lancé dans ${project.name}`
+            : `Onglet non créé dans ${project.name}`,
+        );
         return;
       }
 
