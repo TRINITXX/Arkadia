@@ -85,6 +85,35 @@ function optionKey(letter: string, options: RoundOption[]): string | null {
   return options.find((o) => o.key.toLowerCase() === lower)?.key ?? null;
 }
 
+/** « Je pencherais pour oui : … »: the leaning of a yes-or-no question. */
+const YES_NO_LEANING =
+  /je pencherais pour\s*\(?(oui|non)(?![\p{L}-])\)?\s*[:,-]?\s*(.*)$/iu;
+const isLeaning = (line: string) =>
+  LEANING.test(line) || YES_NO_LEANING.test(line);
+
+/** A leaning's recommendation, and the option it names: by its letter, or
+ *  the one whose label starts with its « oui » / « non ». */
+function leaningOf(
+  line: string,
+  options: RoundOption[],
+): { recommendation: string; key: string | null } | null {
+  const said = YES_NO_LEANING.exec(line);
+  if (said) {
+    const why = said[2].replace(/^[\s.,:;-]+/, "").trim();
+    const word = new RegExp(String.raw`^${said[1]}(?![\p{L}])`, "iu");
+    return {
+      recommendation: why ? `${said[1]} : ${why}` : said[1],
+      key: options.find((o) => word.test(o.label))?.key ?? null,
+    };
+  }
+  const letter = LEANING.exec(line);
+  if (!letter) return null;
+  return {
+    recommendation: `${letter[1]}) ${letter[2]}`.trim(),
+    key: optionKey(letter[1], options),
+  };
+}
+
 /** The option a recommendation names first: `b) …`, `(b)`, `b :`. */
 function namedKey(reco: string, options: RoundOption[]): string | null {
   const m = /^\s*(?:\*\*)?\(?([a-hA-H])(?:\)|\s*[:.,-]|\s*$)/.exec(reco);
@@ -160,12 +189,26 @@ const OPEN_EDGE =
 /** An alternative: « Le violet ou le vert ? », never « Je poste ou pas ? ». */
 const EITHER = /(?<![\p{L}])ou(?![\p{L}])(?!\s+(?:pas|non)(?![\p{L}]))/iu;
 
+/** Whether `s` ends with a « ? », a quote's or an emphasis' end aside. */
+const endsAsking = (s: string) => s.replace(/[\s»”")*_]+$/, "").endsWith("?");
+
+/** Whether each line sits in a ``` block, its fences included. */
+function inCode(lines: string[]): boolean[] {
+  let open = false;
+  return lines.map((line) => {
+    const fence = /^\s*(?:```|~~~)/.test(line);
+    const was = open;
+    if (fence) open = !open;
+    return fence || was;
+  });
+}
+
 /** Whether `text` asks only yes-or-no questions, one at least. */
 function closedQuestion(text: string): boolean {
   const asks = unbold(text)
     .split(/\n+|(?<=[.!?…])\s+/)
     .map((s) => s.replace(/^[\s>*_•-]+/, "").replace(/[\s»”")*_]+$/, ""))
-    .filter((s) => s.endsWith("?"));
+    .filter(endsAsking);
   return (
     asks.length > 0 &&
     asks.every(
@@ -400,15 +443,18 @@ function seriesRead(
     ...lines.slice(start + 1, stop),
   ];
   // The options come before the leaning, whose « (a) » is none.
-  const leanAt = after.findIndex((l) => LEANING.test(l));
+  const leanAt = after.findIndex(isLeaning);
   const scope = leanAt >= 0 ? after.slice(0, leanAt) : after;
   const found = optionsIn(scope);
-  if (found.options.length === 0) return null;
+  if (found.options.length === 0)
+    return QUESTION_MARK.test(lines[start])
+      ? bareSeriesRead(n, after, start, start + skip)
+      : null;
   const last = leanAt >= 0 ? leanAt : found.lastAt;
   const { options, lines: kept } = optionsIn(scope.slice(0, last + 1));
-  const lean = leanAt >= 0 ? LEANING.exec(after[leanAt]) : null;
-  const recommendedKey = lean ? optionKey(lean[1], options) : null;
-  const recommendation = lean ? `${lean[1]}) ${lean[2]}`.trim() : null;
+  const lean = leanAt >= 0 ? leaningOf(after[leanAt], options) : null;
+  const recommendedKey = lean?.key ?? null;
+  const recommendation = lean?.recommendation ?? null;
   const prose = kept.filter((line) => line.trim()).map(unbold);
   // The question is its line ending with « ? », the rest is context.
   let qi = -1;
@@ -431,6 +477,57 @@ function seriesRead(
     },
     start,
     end: start + skip + last + 1,
+  };
+}
+
+/**
+ * A ❓ « Question n sur N » Claude wrote no options for (the user's ask of
+ * 12/11/2026), `after` its lines from line `from`: its question is its last
+ * line ending with a « ? » (before its leaning), code aside; with none, the
+ * line asking a word back. That word for an action, else Oui / Non when it
+ * asks yes or no, or its leaning says oui / non. With neither, the header
+ * heads a report.
+ */
+function bareSeriesRead(
+  n: string,
+  after: string[],
+  start: number,
+  from: number,
+): { question: ParsedQuestion; start: number; end: number } | null {
+  const leanAt = after.findIndex(isLeaning);
+  const scope = leanAt >= 0 ? after.slice(0, leanAt) : after;
+  const code = inCode(scope);
+  let qi = -1;
+  scope.forEach((l, i) => {
+    if (!code[i] && endsAsking(unbold(l))) qi = i;
+  });
+  if (qi < 0)
+    qi = scope.findIndex((l, i) => !code[i] && REPLY_WORD.test(unbold(l)));
+  if (qi < 0) return null;
+  const line = unbold(scope[qi]).trim();
+  const saysYesNo = leanAt >= 0 && YES_NO_LEANING.test(after[leanAt]);
+  const options =
+    actionChoice(line, null) ??
+    (saysYesNo || closedQuestion(line) ? YES_NO : []);
+  const lean = leanAt >= 0 ? leaningOf(after[leanAt], options) : null;
+  // Every line it takes from the message shows, the question's aside.
+  const last = leanAt >= 0 ? leanAt : qi + 1;
+  return {
+    question: {
+      id: `Q${n}`,
+      numbered: true,
+      title: line,
+      body: scope
+        .slice(0, last)
+        .filter((l, i) => i !== qi && l.trim())
+        .map(unbold)
+        .join("\n"),
+      options,
+      recommendation: lean?.recommendation ?? null,
+      recommendedKey: lean?.key ?? null,
+    },
+    start,
+    end: from + (leanAt >= 0 ? leanAt : qi) + 1,
   };
 }
 

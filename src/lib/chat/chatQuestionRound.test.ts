@@ -334,6 +334,98 @@ describe("question rounds in Claude's reply", () => {
     expect(withoutQuestions(two)).toBe("Bilan.");
   });
 
+  it("reads a ❓ « Question n sur N » written without options", () => {
+    const yesNo = [
+      "❓ Question 1 sur 1.",
+      "",
+      "Le complément est prêt.",
+      "",
+      "Je poste ce complément tel quel ?",
+      "",
+      "Je pencherais pour oui : il répond à sa question.",
+      "",
+      "Autre chose après.",
+    ].join("\n");
+    expect(parseQuestionRound(yesNo)).toMatchObject([
+      {
+        id: "Q1",
+        title: "Je poste ce complément tel quel ?",
+        body: "Le complément est prêt.",
+        options: [
+          { key: "a", label: "Oui" },
+          { key: "b", label: "Non" },
+        ],
+        recommendation: "oui : il répond à sa question.",
+        recommendedKey: "a",
+      },
+    ]);
+    expect(withoutQuestions(yesNo)).toBe("Autre chose après.");
+    const labels = (text: string) =>
+      parseQuestionRound(text).map((q) => q.options.map((o) => o.label));
+    expect(
+      labels(
+        "❓ Question 1 sur 1.\n\nConnecte-toi à KDP, puis réponds « fait ».",
+      ),
+    ).toEqual([["Fait"]]);
+    // An open question still shows, its field alone.
+    expect(labels("❓ Question 1 sur 1.\n\nQuel nom on garde ?")).toEqual([[]]);
+    // Without its ❓, or asking nothing: a report.
+    expect(labels("Question 1 sur 1.\n\nJe poste ?")).toEqual([]);
+    expect(labels("❓ Question 2 sur 2 : réglée.\n\nFin.")).toEqual([]);
+  });
+
+  it("keeps every line of a bare « Question n sur N » in view, code aside", () => {
+    // A line between the question and the leaning shows in the sheet.
+    const [between] = parseQuestionRound(
+      [
+        "❓ Question 1 sur 1.",
+        "Je poste ce complément ?",
+        "Il fait trois lignes.",
+        "Je pencherais pour oui.",
+      ].join("\n"),
+    );
+    expect(between).toMatchObject({
+      title: "Je poste ce complément ?",
+      body: "Il fait trois lignes.",
+      recommendation: "oui",
+      recommendedKey: "a",
+    });
+    // A « ? » in code is not the question.
+    const code = [
+      "❓ Question 1 sur 1.",
+      "```ts",
+      "const x = ok ?",
+      "```",
+      "Je corrige ?",
+    ].join("\n");
+    expect(parseQuestionRound(code)[0].title).toBe("Je corrige ?");
+    // A leaning « oui » makes it yes or no, whatever its words.
+    expect(
+      parseQuestionRound(
+        "❓ Question 1 sur 1.\nJe range le fichier où tu l'as mis ?\nJe pencherais pour oui : c'est plus simple.",
+      )[0],
+    ).toMatchObject({
+      options: [{ label: "Oui" }, { label: "Non" }],
+      recommendedKey: "a",
+    });
+    // Steps after a leaning « oui » are Claude's words, not options.
+    const steps = [
+      "❓ Question 1 sur 1.",
+      "Je poste ce complément ?",
+      "Je pencherais pour oui : il répond.",
+      "Ensuite :",
+      "a) je relance le serveur",
+      "b) je lance les tests",
+    ].join("\n");
+    expect(parseQuestionRound(steps)[0]).toMatchObject({
+      options: [{ label: "Oui" }, { label: "Non" }],
+      recommendation: "oui : il répond.",
+    });
+    expect(withoutQuestions(steps)).toBe(
+      "Ensuite :\na) je relance le serveur\nb) je lance les tests",
+    );
+  });
+
   it("leaves a « Question n sur N » report with words on its line as prose", () => {
     // No dot or colon after the number: a sentence.
     expect(
