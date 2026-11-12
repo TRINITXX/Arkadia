@@ -32,7 +32,8 @@ export interface ReattachedTab {
 export interface ReattachPlan {
   tabs: ReattachedTab[];
   /** Snapshot tabs that kept nothing alive, left to the manual restore button
-   *  (null when every tab was re-attached, so the button stops offering). */
+   *  (null when nothing is left to offer, so the button stops offering).
+   *  Never a tab opened for a command: see `namesACommand`. */
   leftover: SessionSnapshot | null;
 }
 
@@ -112,6 +113,26 @@ function reattachTab(
 }
 
 /**
+ * A tab opened for a command (`--tab-add --name`) and used for nothing else:
+ * every pane carries a label and none ran Claude. A restore does not relaunch
+ * that command, so it would bring the tab back as an empty, nameless shell.
+ * The label outlives what the pane becomes: one that ran Claude since (in its
+ * terminal or as a chat) comes back on its conversation, so it is restored.
+ */
+function namesACommand(tab: SnapshotTab): boolean {
+  return tab.panes.every((p) => !!p.label && !p.wasClaude);
+}
+
+/** The snapshot without the tabs a restore must not bring back (the same
+ *  object when it drops none, null when it drops them all). */
+function restorable(snapshot: SessionSnapshot | null): SessionSnapshot | null {
+  if (!snapshot) return null;
+  const tabs = snapshot.tabs.filter((tab) => !namesACommand(tab));
+  if (tabs.length === snapshot.tabs.length) return snapshot;
+  return tabs.length > 0 ? { savedAt: snapshot.savedAt, tabs } : null;
+}
+
+/**
  * Splits the snapshot into what can be re-attached to live sessions and what
  * remains for the manual restore path.
  */
@@ -120,7 +141,7 @@ export function planReattach(
   liveIds: readonly string[],
 ): ReattachPlan {
   if (!snapshot || liveIds.length === 0) {
-    return { tabs: [], leftover: snapshot };
+    return { tabs: [], leftover: restorable(snapshot) };
   }
   const live = new Set(liveIds);
   const tabs: ReattachedTab[] = [];
@@ -132,9 +153,10 @@ export function planReattach(
   }
   return {
     tabs,
-    leftover:
+    leftover: restorable(
       orphaned.length > 0
         ? { savedAt: snapshot.savedAt, tabs: orphaned }
         : null,
+    ),
   };
 }

@@ -99,4 +99,50 @@ describe("planReattach", () => {
     expect(plan.tabs).toEqual([]);
     expect(plan.leftover).toBe(snap);
   });
+
+  describe("a tab opened for a command (--tab-add --name)", () => {
+    /** The split tab, plus a single-pane tab named "Serveur dev". */
+    function withDevServer(extra: Partial<SnapshotPane> = {}): SessionSnapshot {
+      const snap = split();
+      snap.tabs.push({
+        projectId: "proj",
+        tree: { kind: "leaf", pane: 0 },
+        activePane: 0,
+        panes: [{ ...pane("dev"), label: "Serveur dev", ...extra }],
+      });
+      return snap;
+    }
+
+    it("is not offered to the restore after a relaunch: its command is not relaunched", () => {
+      const snap = withDevServer();
+      expect(planReattach(snap, []).leftover?.tabs).toEqual([snap.tabs[0]]);
+    });
+
+    it("is not offered either after a reload that found its shell dead", () => {
+      const plan = planReattach(withDevServer(), ["a", "b"]);
+      expect(plan.tabs).toHaveLength(1);
+      expect(plan.leftover).toBeNull();
+    });
+
+    it("leaves nothing to restore when it is the only tab", () => {
+      const alone = { savedAt: 1, tabs: [withDevServer().tabs[1]] };
+      expect(planReattach(alone, []).leftover).toBeNull();
+    });
+
+    it("is restored once Claude ran in it: it comes back on its conversation", () => {
+      const terminal = withDevServer({ wasClaude: true });
+      expect(planReattach(terminal, []).leftover).toBe(terminal);
+      const chat = withDevServer({
+        wasClaude: true,
+        chat: { cwd: "C:\\p", resume: "s1" },
+      });
+      expect(planReattach(chat, []).leftover).toBe(chat);
+    });
+
+    it("is restored whole when only one pane of its split has a fixed name", () => {
+      const snap = split();
+      snap.tabs[0].panes[1].label = "Serveur dev";
+      expect(planReattach(snap, []).leftover).toBe(snap);
+    });
+  });
 });
