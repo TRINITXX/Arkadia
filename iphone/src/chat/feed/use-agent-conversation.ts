@@ -1,5 +1,9 @@
 import { useEffect, useMemo } from "react";
-import { agentConversation, currentAgent } from "@/lib/chat/chatAgentView";
+import {
+  agentConversation,
+  currentAgent,
+  withRunningCalls,
+} from "@/lib/chat/chatAgentView";
 import type { ChatState, Subagent } from "@/lib/chat/chatState";
 
 /** A running subagent's transcript is read again this often while shown. */
@@ -41,10 +45,15 @@ export function useAgentConversation(
     () => (messages?.length ? agentConversation(messages, prompt) : undefined),
     [messages, prompt],
   );
-  const conversation = streamed ?? (agent ? agents[agent.taskId] : undefined);
+  const read = streamed ?? (agent ? agents[agent.taskId] : undefined);
 
   const taskId = agent?.taskId;
   const running = agent?.status === "running";
+  // At work: its call under way runs, « En cours… » (`withRunningCalls`).
+  const conversation = useMemo(
+    () => (read && running ? withRunningCalls(read) : read),
+    [read, running],
+  );
   const live = streamed !== undefined;
   useEffect(() => {
     if (taskId && shown) openAgent(taskId);

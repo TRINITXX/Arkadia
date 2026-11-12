@@ -1,5 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { FOLLOW_ZONE_PX, followsAfterScroll } from "@/lib/followBottom";
+import {
+  FOLLOW_ZONE_PX,
+  followsAfterScroll,
+  placeAfterResize,
+} from "@/lib/followBottom";
+
+describe("placeAfterResize", () => {
+  it("keeps a followed scroller at its end, hidden meanwhile or not", () => {
+    expect(placeAfterResize(true, false)).toBe("end");
+    expect(placeAfterResize(true, true)).toBe("end");
+  });
+
+  it("puts the reader's place back after a hidden tab, else leaves it", () => {
+    // Sized to nothing, its scroll fell to 0: never left at the top.
+    expect(placeAfterResize(false, true)).toBe("saved");
+    expect(placeAfterResize(false, false)).toBe("stay");
+  });
+});
 
 describe("followsAfterScroll", () => {
   it("keeps following when rows grow under a pin that just landed", () => {

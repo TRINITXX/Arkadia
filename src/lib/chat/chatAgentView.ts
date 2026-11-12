@@ -54,6 +54,23 @@ export function agentConversation(
 const obj = (v: unknown): JsonObject =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as JsonObject) : {};
 
+/**
+ * A running agent's conversation: its calls left without a result run. Read
+ * as a past (live messages or transcript, both through `history`), they came
+ * out `stale`, and the call under way said « (sans résultat) ».
+ */
+export function withRunningCalls(conversation: ChatState): ChatState {
+  const held = (x: ChatItem) =>
+    x.kind === "tool" && !x.result && x.stale === true;
+  if (!conversation.items.some(held)) return conversation;
+  return {
+    ...conversation,
+    items: conversation.items.map((x) =>
+      x.kind === "tool" && held(x) ? { ...x, stale: false } : x,
+    ),
+  };
+}
+
 /** A workflow agent as the sheet takes it: its conversation is its transcript. */
 export function workflowAgentSubagent(agent: WorkflowAgent): Subagent {
   return {

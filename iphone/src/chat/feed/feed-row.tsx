@@ -11,9 +11,11 @@ import {
 } from "@/lib/chat/phoneFeed";
 import { C, T } from "~/chat/chat-theme";
 import { ActivityLine } from "~/chat/feed/activity-line";
+import { AgentRow } from "~/chat/feed/agent-row";
 import { BashCard } from "~/chat/feed/bash-card";
 import { ChatVisualCard } from "~/chat/feed/chat-visual-card";
 import { CommandCard } from "~/chat/feed/command-card";
+import { EditCard } from "~/chat/feed/edit-card";
 import type { FeedEnv } from "~/chat/feed/feed-env";
 import { CHAT_TONE } from "~/chat/feed/feed-style";
 import { MessageFrame } from "~/chat/feed/message-frame";
@@ -23,6 +25,7 @@ import { PeekAlone, PeekIcon } from "~/chat/feed/peek-icon";
 import { PlanCard } from "~/chat/feed/plan-card";
 import { QuestionRow } from "~/chat/feed/question-row";
 import { ReplyMessage } from "~/chat/feed/reply-message";
+import { ToolDetailRow } from "~/chat/feed/tool-detail-row";
 import { UserMessage } from "~/chat/feed/user-message";
 import { MarkdownText } from "~/messages/markdown-text";
 import { tap } from "~/ui/haptics";
@@ -174,9 +177,10 @@ export const FeedRowView = memo(function FeedRowView({
     }
     case "turn":
       return <Text style={styles.done}>{row.turn}</Text>;
-    // Gathered into `thoughts` by `foldActivity`, left out by `feedRows`.
+    // A row only in a subagent's sheet (`unfolded`): each thought where it
+    // came, a tap reading it whole. `foldActivity` gathers it otherwise.
     case "thinking":
-      return null;
+      return <LiveThought items={[unit.item]} onOpen={open("thoughts")} />;
     // The latest thought in full while Claude works; one with no reply in
     // its exchange behind a bulb of its own (the others are a reply's).
     case "thoughts":
@@ -220,13 +224,22 @@ export const FeedRowView = memo(function FeedRowView({
           onOpen={open("activity")}
         />
       );
-    // Gathered into `activity` by `foldActivity`; kept for the switch.
+    // Rows only in a subagent's sheet (`unfolded`), as the desktop's draws
+    // them: each call on its line, a file change's card, a subagent's line.
+    // `foldActivity` gathers them into `activity` otherwise.
     case "work":
-    case "edit":
-    case "agent":
       return (
-        <ActivityLine units={[unit]} cwd={env.cwd} onOpen={open("activity")} />
+        <View style={styles.tools}>
+          {unit.tools.map((tool) => (
+            <ToolDetailRow key={tool.id} tool={tool} cwd={env.cwd} />
+          ))}
+        </View>
       );
+    case "edit":
+      return <EditCard tool={unit.item} cwd={env.cwd} />;
+    // Its own subagent: no conversation to open from here.
+    case "agent":
+      return <AgentRow tool={unit.item} agent={undefined} />;
     case "question":
       return <QuestionRow tool={unit.item} pending={pending} />;
     case "visual":
@@ -256,4 +269,6 @@ const styles = StyleSheet.create({
   rule: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: C.line },
   dayText: { color: C.mute, fontSize: 11.5, letterSpacing: 0.2 },
   done: { color: C.mute, fontSize: 12.5, paddingHorizontal: 2 },
+  // Its calls' icons under its thoughts' bulbs (`LiveThought`).
+  tools: { marginLeft: 20 },
 });

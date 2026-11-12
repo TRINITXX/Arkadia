@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   agentConversation,
   currentAgent,
+  withRunningCalls,
   workflowAgentSubagent,
 } from "@/lib/chat/chatAgentView";
 import type { ChatState, Subagent } from "@/lib/chat/chatState";
@@ -46,10 +47,14 @@ export function useAgentSheet(
     () => (messages?.length ? agentConversation(messages, prompt) : undefined),
     [messages, prompt],
   );
-  const conversation =
-    liveConversation ?? (sheet ? agents[sheet.taskId] : undefined);
+  const read = liveConversation ?? (sheet ? agents[sheet.taskId] : undefined);
 
   const running = sheet?.status === "running";
+  // At work: its call under way runs, « En cours… » (`withRunningCalls`).
+  const conversation = useMemo(
+    () => (read && running ? withRunningCalls(read) : read),
+    [read, running],
+  );
   const streamed = liveConversation !== undefined;
   const taskId = sheet?.taskId;
   useEffect(() => {

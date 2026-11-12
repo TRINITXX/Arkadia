@@ -1,5 +1,6 @@
 import {
   activityTools,
+  drawnUnits,
   foldActivity,
   groupChatItems,
   messagesOnly as onlyMessages,
@@ -48,6 +49,9 @@ export interface FeedOptions {
   messagesOnly?: boolean;
   /** The tool calls a request waits on: « Messages seuls » keeps their plan. */
   pending?: Set<string>;
+  /** A subagent's sheet: each thought and each run of tool calls a row of
+   *  its own, in order, nothing folded (`drawnUnits`). */
+  unfolded?: boolean;
   now?: number;
 }
 
@@ -89,15 +93,18 @@ export function lastThought(items: readonly ThinkingItem[]): string {
 /**
  * Whether the column draws a unit (`chat-timeline.tsx`): a long turn's
  * « Terminé en » only, a thinking with words in full while live or behind
- * its own bulb, the tool line under way or tools behind their own wrench. The others are behind a reply's icon, or nothing.
+ * its own bulb, the tool line under way or tools behind their own wrench.
+ * The others are behind a reply's icon, or nothing. `unfolded` (a subagent's
+ * sheet), each thought and each run of tools is a unit of its own, drawn.
  */
 function drawn(u: ChatUnit, places: WorkPlaces, turn: string | null): boolean {
   switch (u.kind) {
     case "turn":
       return turn !== null;
-    // Gathered into `thoughts` by `foldActivity`.
+    // A row of its own only `unfolded`: `foldActivity` gathers it into
+    // `thoughts` otherwise. Never empty (`groupChatItems`).
     case "thinking":
-      return false;
+      return true;
     case "thoughts":
       return (
         (places.live === u.id || places.alone.has(u.id)) &&
@@ -118,14 +125,20 @@ function drawn(u: ChatUnit, places: WorkPlaces, turn: string | null): boolean {
 export function feedRows(
   items: ChatItem[],
   working: boolean,
-  { messagesOnly = false, pending, now = Date.now() }: FeedOptions = {},
+  {
+    messagesOnly = false,
+    pending,
+    unfolded = false,
+    now = Date.now(),
+  }: FeedOptions = {},
 ): FeedRow[] {
   const all = groupChatItems(items);
   const folded = foldActivity(all);
   const steps = stepReplyIds(folded, working);
-  const shown = messagesOnly
-    ? foldActivity(onlyMessages(all, pending))
-    : folded;
+  const shown =
+    messagesOnly || unfolded
+      ? drawnUnits(messagesOnly ? onlyMessages(all, pending) : all, unfolded)
+      : folded;
   const places = placeWork(shown, working);
   const turnOf = (u: ChatUnit) =>
     u.kind === "turn"

@@ -129,6 +129,37 @@ describe("feedRows « Récit »", () => {
   });
 });
 
+describe("feedRows of a subagent's sheet", () => {
+  it("gives each thought and each run of tools a row, in order", () => {
+    // A subagent at work: thinking and tools, no reply before its report.
+    const items = [
+      user("u"),
+      think("t1"),
+      tool("Read", "r1"),
+      tool("Grep", "g1"),
+      think("t2"),
+      tool("Bash", "b1"),
+    ];
+    const rows = feedRows(items, true, { unfolded: true });
+    expect(rows.map((r) => r.key)).toEqual(["b1", "t2", "r1", "t1", "u"]);
+    expect(rows.map((r) => r.unit.kind)).toEqual([
+      "work",
+      "thinking",
+      "work",
+      "thinking",
+      "user",
+    ]);
+    // None behind an icon: all in full.
+    expect(rows.some((r) => r.alone)).toBe(false);
+    // The chat's own feed: its latest thought and one line of counts.
+    expect(feedRows(items, true).map((r) => r.unit.kind)).toEqual([
+      "activity",
+      "thoughts",
+      "user",
+    ]);
+  });
+});
+
 describe("feedRows « Messages seuls »", () => {
   it("keeps the words and drops the work, thinking and « Terminé en »", () => {
     const rows = feedRows(

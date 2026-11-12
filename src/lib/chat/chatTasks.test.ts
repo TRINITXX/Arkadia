@@ -6,7 +6,11 @@ import {
   type ChatItem,
   type ChatState,
 } from "@/lib/chat/chatState";
-import { currentAgent } from "@/lib/chat/chatAgentView";
+import {
+  agentConversation,
+  currentAgent,
+  withRunningCalls,
+} from "@/lib/chat/chatAgentView";
 import {
   agentCards,
   agentElapsed,
@@ -396,6 +400,43 @@ describe("subagent cards", () => {
     ).toBe("completed");
     const gone = { ...opened, taskId: "x", status: "failed" as const };
     expect(currentAgent(s, gone)).toBe(gone);
+  });
+
+  it("keeps a running agent's call under way running in its sheet", () => {
+    const call = (id: string) => ({
+      type: "assistant",
+      uuid: `a-${id}`,
+      message: {
+        id: `m-${id}`,
+        content: [{ type: "tool_use", id, name: "Read", input: {} }],
+      },
+    });
+    // Its first call answered, its second under way.
+    const read = agentConversation([
+      call("r1"),
+      {
+        type: "user",
+        uuid: "u-r1",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "r1", content: "ok" }],
+        },
+      },
+      call("r2"),
+    ]);
+    const stale = (s: typeof read) =>
+      s.items.flatMap((x) => (x.kind === "tool" ? [[x.id, !!x.stale]] : []));
+    // Read as a past: an agent that ended left it without a result.
+    expect(stale(read)).toEqual([
+      ["r1", false],
+      ["r2", true],
+    ]);
+    expect(stale(withRunningCalls(read))).toEqual([
+      ["r1", false],
+      ["r2", false],
+    ]);
+    // Nothing held: the same conversation, no row drawn again.
+    const none = agentConversation([]);
+    expect(withRunningCalls(none)).toBe(none);
   });
 
   it("takes its last action and keeps its messages for the sheet", () => {

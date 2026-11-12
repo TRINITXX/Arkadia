@@ -12,6 +12,7 @@ const LINES = 6;
  * Claude's latest thinking while it works and no reply follows it yet
  * (`chat-live-thought.tsx`): plain, after a bulb. Once a reply comes, it
  * goes behind that reply's bulb. Past six lines a tap opens it whole.
+ * In a subagent's sheet, each of its thoughts where it came.
  */
 export function LiveThought({
   items,

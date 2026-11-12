@@ -24,9 +24,11 @@ const STATUS: Record<Subagent["status"], string> = {
 
 /**
  * A subagent's own conversation over the chat (`chat-agent-sheet.tsx`), with
- * the feed's rows, newest at the bottom. Read only: its marks and stops are
- * the chat's. A running agent's pill opens it with its detail on top (what
- * the desktop's pill shows on hover: summary, last action, stop).
+ * the feed's rows, newest at the bottom, unfolded: each thought and each
+ * tool call in order (it writes nothing before its report, so folded, its
+ * whole work was one line). Read only: its marks and stops are the chat's.
+ * A running agent's pill opens it with its detail on top (what the
+ * desktop's pill shows on hover: summary, last action, stop).
  */
 export function AgentSheet({
   agent: opened,
@@ -61,7 +63,10 @@ export function AgentSheet({
   );
   const running = agent?.status === "running";
   const rows = useMemo(
-    () => (conversation ? feedRows(conversation.items, running) : []),
+    () =>
+      conversation
+        ? feedRows(conversation.items, running, { unfolded: true })
+        : [],
     [conversation, running],
   );
   const figures = agent

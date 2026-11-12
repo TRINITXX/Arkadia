@@ -16,6 +16,19 @@ export const FOLLOW_ZONE_PX = 80;
  */
 export const UNFOLD_WINDOW_MS = 400;
 
+/**
+ * Where a scroller goes when its size or its content's changes: its `end`
+ * while it follows it; the reader's `saved` place on the way back from a
+ * hidden tab (sized to nothing, its scroll fallen to 0); else it stays.
+ */
+export function placeAfterResize(
+  following: boolean,
+  wasHidden: boolean,
+): "end" | "saved" | "stay" {
+  if (following) return "end";
+  return wasHidden ? "saved" : "stay";
+}
+
 /** Below this gap (px) the view is at the bottom, sub-pixel rounding aside. */
 const AT_BOTTOM_PX = 2;
 
