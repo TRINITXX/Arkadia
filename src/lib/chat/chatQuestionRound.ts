@@ -141,6 +141,69 @@ function inlineOptions(
   return { options, rest: line.slice(0, marks[0].at).trim() };
 }
 
+/** The choices of a closed question Claude wrote none for: never a question
+ *  without two at least (the user's ask of 12/11/2026). */
+const YES_NO: RoundOption[] = [
+  { key: "a", label: "Oui" },
+  { key: "b", label: "Non" },
+];
+
+/** A word that opens a question anywhere in it: « Quel nom ? », « On le
+ *  range où ? », « On fait quoi ? ». « Tel quel » is no question word. */
+const OPEN_WORD =
+  /(?<![\p{L}])(?<!tel(?:le)?s?\s+)(?:quel(?:le)?s?|lequel|laquelle|lesquel(?:le)?s|auquel|duquel|auxquel(?:le)?s|desquel(?:le)?s|comment|combien|pourquoi|où|quoi)(?![\p{L}])/iu;
+/** A word that opens a question at its start or ends it: « Qui s'en
+ *  charge ? », « On publie quand ? », never « Je supprime le fichier qui
+ *  bloque ? ». */
+const OPEN_EDGE =
+  /^(?:(?:et|alors|du coup|donc)[\s,]+)?(?:(?:à|de|pour|par|avec|chez|sur|depuis)\s+)?(?:(?:qui|que|quand)(?![\p{L}])|qu['’])|(?<![\p{L}])(?:qui|quand)\s*\?$/iu;
+/** An alternative: « Le violet ou le vert ? », never « Je poste ou pas ? ». */
+const EITHER = /(?<![\p{L}])ou(?![\p{L}])(?!\s+(?:pas|non)(?![\p{L}]))/iu;
+
+/** Whether `text` asks only yes-or-no questions, one at least. */
+function closedQuestion(text: string): boolean {
+  const asks = unbold(text)
+    .split(/\n+|(?<=[.!?…])\s+/)
+    .map((s) => s.replace(/^[\s>*_•-]+/, "").replace(/[\s»”")*_]+$/, ""))
+    .filter((s) => s.endsWith("?"));
+  return (
+    asks.length > 0 &&
+    asks.every(
+      (s) => !OPEN_WORD.test(s) && !OPEN_EDGE.test(s) && !EITHER.test(s),
+    )
+  );
+}
+
+/** The word Claude asks the user to send back: « réponds « fait » ». */
+const REPLY_WORD =
+  /(?<![\p{L}])(?:réponds|répondez|dis|dites|écris|écrivez|tape|tapez)(?:-moi)?\s+[«"“]\s*([^»"”\n]{1,30}?)\s*[»"”]/iu;
+
+/**
+ * The one choice of an action Claude asks for (« Connecte-toi à KDP, puis
+ * réponds « fait » »), the user's words below it (his ask of 12/11/2026):
+ * the word it asks back, else « Fait ». Never with a « ? », its
+ * recommendation's too: that is a question. Bare, never with a
+ * recommendation nor a question word either (« Dis-moi quel nom… »).
+ */
+function actionChoice(
+  text: string,
+  recommendation: string | null,
+): RoundOption[] | null {
+  if (`${text}\n${recommendation ?? ""}`.includes("?")) return null;
+  const word = REPLY_WORD.exec(unbold(text))?.[1];
+  if (word) return [{ key: "a", label: word[0].toUpperCase() + word.slice(1) }];
+  if (recommendation !== null || OPEN_WORD.test(text)) return null;
+  return [{ key: "a", label: "Fait" }];
+}
+
+/** The yes-or-no choice a recommendation names first: « Oui, … », « non »,
+ *  never « Non-bloquant ». */
+function yesNoKey(reco: string): string | null {
+  const m = /^\s*\(?(oui|non)(?![\p{L}-])/iu.exec(reco);
+  if (!m) return null;
+  return m[1].toLowerCase() === "oui" ? "a" : "b";
+}
+
 /** A question's options, one per line or all on one line, its lines without
  *  them, and the last line that held one (-1 for none). */
 function optionsIn(lines: string[]): {
@@ -293,14 +356,27 @@ function grillingRound(lines: string[]): ParsedQuestion[] {
     const asked = marks.length > 0 ? marks[marks.length - 1].index : -1;
     const lead = asked >= 0 ? first.slice(0, asked + 1) : first;
     const more = asked >= 0 ? first.slice(asked + 1).trim() : "";
+    const shownBody = title ? text : [more, ...others].join("\n").trim();
+    // No options written: the one an action asks for, else Oui / Non when
+    // it asks yes or no.
+    const asks = `${title || lead}\n${shownBody}`;
+    const action =
+      options.length === 0 ? actionChoice(asks, recommendation) : null;
+    const yesNo = options.length === 0 && !action && closedQuestion(asks);
+    const choices = action ?? (yesNo ? YES_NO : options);
+    // An action's one choice names no reco: it shows as a choice of its own.
+    let recommendedKey: string | null = null;
+    if (recommendation && yesNo) recommendedKey = yesNoKey(recommendation);
+    else if (recommendation && !action)
+      recommendedKey = namedKey(recommendation, options);
     return {
       id: `Q${number?.[1] ?? i + 1}`,
       numbered: !!number,
       title: title || lead,
-      body: title ? text : [more, ...others].join("\n").trim(),
-      options,
+      body: shownBody,
+      options: choices,
       recommendation,
-      recommendedKey: recommendation ? namedKey(recommendation, options) : null,
+      recommendedKey,
     };
   });
 }

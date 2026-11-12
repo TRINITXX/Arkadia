@@ -55,10 +55,74 @@ describe("question rounds in Claude's reply", () => {
     expect(q1.body).toContain("dans le store ou dans le navigateur ?");
     expect(q2).toMatchObject({
       id: "Q2",
-      options: [],
+      options: [
+        { key: "a", label: "Oui" },
+        { key: "b", label: "Non" },
+      ],
       recommendation: "Quatre au plus par volet.",
       recommendedKey: null,
     });
+  });
+
+  it("offers Oui / Non for a yes-or-no question written without choices", () => {
+    const labels = (text: string) =>
+      parseQuestionRound(text)[0].options.map((o) => o.label);
+    const [asked] = parseQuestionRound(
+      [
+        "❓ Je poste ce complément tel quel ?",
+        "",
+        "Si oui, connectez-vous au forum dans Chrome.",
+        "",
+        "➡️ Non, j'ajoute d'abord la capture.",
+      ].join("\n"),
+    );
+    expect(asked).toMatchObject({
+      title: "Je poste ce complément tel quel ?",
+      options: [
+        { key: "a", label: "Oui" },
+        { key: "b", label: "Non" },
+      ],
+      recommendedKey: "b",
+    });
+    expect(labels("❓ Je publie ou pas ?")).toEqual(["Oui", "Non"]);
+    // An open question, or a choice between two: no Oui / Non.
+    expect(labels("❓ Quel nom on garde ?")).toEqual([]);
+    expect(labels("❓ On le range où ?")).toEqual([]);
+    expect(labels("❓ Qui s'en charge ?")).toEqual([]);
+    expect(labels("❓ Le violet ou le vert ?")).toEqual([]);
+    expect(labels("❓ On publie quand ?")).toEqual([]);
+    expect(labels("❓ C'est pour qui ?")).toEqual([]);
+    // Choices written stay the only ones.
+    expect(labels("❓ On part sur ? a) Violet b) Vert")).toEqual([
+      "Violet",
+      "Vert",
+    ]);
+  });
+
+  it("offers one choice for an action Claude asks for, the word it asks back", () => {
+    const labels = (text: string) =>
+      parseQuestionRound(text)[0].options.map((o) => o.label);
+    expect(
+      labels(
+        "❓ Connecte-toi à KDP dans cette fenêtre, puis réponds « fait » : je relance la tâche.",
+      ),
+    ).toEqual(["Fait"]);
+    expect(labels("❓ Lance le script, puis dis « c'est bon ».")).toEqual([
+      "C'est bon",
+    ]);
+    expect(labels("❓ Colle la clé dans le Bloc-notes et enregistre.")).toEqual(
+      ["Fait"],
+    );
+    // A question stays one, whatever word it asks back.
+    expect(labels("❓ Je publie ? Réponds « oui » ou « non ».")).toEqual([
+      "Oui",
+      "Non",
+    ]);
+    // Asked with a recommendation or a question word: no « Fait ».
+    expect(
+      labels("❓ **Q3** - **Budget** : le montant max par mois.\n➡️ 20 €"),
+    ).toEqual([]);
+    expect(labels("❓ Dis-moi quel nom tu préfères.")).toEqual([]);
   });
 
   it("reads « Question n sur N » with its options and leaning", () => {
@@ -316,8 +380,12 @@ describe("question rounds in Claude's reply", () => {
       numbered: true,
       title: "Je mets en ligne la page Projets ?",
       body: "L'image montre le quiz.",
-      options: [],
+      options: [
+        { key: "a", label: "Oui" },
+        { key: "b", label: "Non" },
+      ],
       recommendation: "oui.",
+      recommendedKey: "a",
     });
     expect(q3).toMatchObject({
       id: "Q3",
@@ -328,6 +396,7 @@ describe("question rounds in Claude's reply", () => {
     expect(q4).toMatchObject({
       id: "Q4",
       title: "Les duels : ta sélection dans le visuel au-dessus.",
+      options: [],
       recommendation: "les 5 cochés par site.",
     });
     expect(withoutQuestions(four)).toBe(
