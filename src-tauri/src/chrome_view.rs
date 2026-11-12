@@ -173,26 +173,59 @@ struct Win {
     at: Option<Layout>,
     /// The tab of the page it was launched on, still open.
     launch: Option<LaunchTab>,
+    /// A thread is closing or replacing the launch tab: it alone decides.
+    launch_busy: bool,
+    /// A tab of Claude's was seen beside the launch tab: its group stays
+    /// in this window, whatever a later steer finds.
+    proven: bool,
+    /// The last steer made it the profile's last-focused window: Claude's
+    /// group lands here. All a call can go by once the launch tab was
+    /// replaced by a new tab page (`clear_launch_page`).
+    steered: bool,
+    /// A call that ran found Claude's group in another window: a group
+    /// stays where it was born, whatever a later steer finds.
+    elsewhere: bool,
 }
 
-/// Claude in Chrome adds its own tab (in the background) to the window:
-/// the launch page's tab closes once Claude Code reports a call that ran
-/// (PostToolUse), so the window holds Claude's tabs only (Alexis,
-/// 05/11/2026). A guess on timing could close the window's last tab, and
-/// the window with it (third review of 05/11/2026).
+/// Claude in Chrome adds its own tab to the window: the launch page's tab
+/// closes once Claude Code reports a call that ran (PostToolUse), so the
+/// window holds Claude's tabs only (Alexis, 05/11/2026). Closed by its own
+/// button (UI Automation), in front or not: Claude's tab comes forward by
+/// itself, and closing the active tab left the launch tab beside it, or
+/// alone once Claude closed its own (12/11/2026).
 #[derive(Clone, Debug)]
 struct LaunchTab {
     title: String,
-    /// Claude's group lands in this window: steered there, or the profile's
-    /// only window, when its first call was let through.
-    landed: bool,
 }
 
-/// Whether the launch tab may close after one of Claude's calls ran: its
-/// group is in this window (so is its tab), and the launch page is still
-/// the window's active tab (Chrome closes the active tab).
-fn may_close_launch_tab(landed: bool, window_title: &str, page_title: &str) -> bool {
-    landed && is_launched_window(window_title, page_title)
+/// What a window's tabs say of its launch tab.
+#[derive(Debug, PartialEq, Eq)]
+enum LaunchTabState {
+    /// At this index, beside another tab: it may close, the window stays.
+    Beside(usize),
+    /// The window's only tab: closing it would close the window.
+    Alone,
+    /// Closed already (by hand): the window holds other tabs only.
+    Gone,
+}
+
+/// Where the launch page's tab is among a window's tabs (their UI
+/// Automation names, "<page> - <memory used>…" when Chrome adds to them).
+/// None when no tab was seen at all: nothing is known then.
+fn launch_tab_state(tab_names: &[String], page_title: &str) -> Option<LaunchTabState> {
+    if tab_names.is_empty() {
+        return None;
+    }
+    Some(
+        match tab_names
+            .iter()
+            .position(|name| is_launched_window(name, page_title))
+        {
+            None => LaunchTabState::Gone,
+            Some(_) if tab_names.len() < 2 => LaunchTabState::Alone,
+            Some(i) => LaunchTabState::Beside(i),
+        },
+    )
 }
 
 #[derive(Default)]
@@ -223,10 +256,6 @@ struct Inner {
     /// Arkadia does not run (a scheduled task, another terminal) go there
     /// too: nothing shows (`prepare_outside`).
     spares: HashMap<String, Win>,
-    /// Launch tabs just closed: their window going away means it was its
-    /// last tab (Claude's group was elsewhere). Never again for that pane.
-    closing: HashMap<String, std::time::Instant>,
-    no_autoclose: HashSet<String>,
     /// The panel's place, last time a window was laid there: a window of
     /// Alexis's opened at it (`copies_laid`) is moved and maximized.
     last_laid: Option<Layout>,
@@ -259,8 +288,10 @@ struct ChromeRequest {
     pane_id: String,
 }
 
+/// `chrome-closed`, and `chrome-ready`: a tab of Claude's is in the pane's
+/// window, which may come forward (never on its launch page alone).
 #[derive(Serialize, Clone)]
-struct ChromeClosed {
+struct ChromeKey {
     key: String,
 }
 
@@ -584,8 +615,11 @@ fn launch(state: &ChromeView, dir: &str) -> Result<(Win, bool), String> {
         at: None,
         launch: Some(LaunchTab {
             title: title.clone(),
-            landed: false,
         }),
+        launch_busy: false,
+        proven: false,
+        steered: false,
+        elsewhere: false,
     };
     Ok((win, profile_started))
 }
@@ -658,6 +692,8 @@ pub async fn chrome_view_show(
         // Alexis just asked for it: Arkadia is in front, the group of the
         // next Claude call lands here.
         let steered = steer(&state, &win, created);
+        note_steered(&state, &key, steered);
+        clear_launch_page(&state, &key);
         Ok(Prepared {
             profile: profile_label(&account),
             steered,
@@ -682,7 +718,7 @@ pub async fn chrome_view_prepare(
         let state = worker.state::<ChromeView>();
         let (win, created, profile_started) = ensure(&worker, &state, &key, &account)?;
         let steered = steer(&state, &win, created);
-        note_landed(&state, &key, steered);
+        note_steered(&state, &key, steered);
         Ok::<_, String>(Prepared {
             profile: profile_label(&account),
             steered,
@@ -699,56 +735,150 @@ pub async fn chrome_view_prepare(
     result
 }
 
-/// Claude's call in pane `key` is let through: when its group lands in
-/// the pane's window, the launch tab may go once a call ran.
-fn note_landed(state: &ChromeView, key: &str, steered: bool) {
-    if !steered {
-        return;
-    }
-    if let Some(launch) = state
-        .inner
-        .lock()
-        .ok()
-        .as_mut()
-        .and_then(|inner| inner.windows.get_mut(key))
-        .and_then(|win| win.launch.as_mut())
-    {
-        launch.landed = true;
+/// One of Claude's calls in pane `key` ran (PostToolUse): its tab exists.
+/// The launch tab closes once another tab keeps the window open, and the
+/// pane's window may come forward (`chrome-ready`). Holding its launch tab
+/// alone (Claude's group went elsewhere, or no tab yet), it stays parked:
+/// the panel never shows that page by itself (Alexis, 12/11/2026).
+fn note_ran(app: &AppHandle, key: String) {
+    let app = app.clone();
+    // Off the inbox watcher: UI Automation waits on Chrome.
+    std::thread::spawn(move || {
+        let state = app.state::<ChromeView>();
+        // Another thread holds the launch tab (the panel's new tab page,
+        // 3 s at most): this call's proof waits for it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        let (hwnd, taken) = loop {
+            match take_launch_tab(&state, &key) {
+                None => return,
+                Some((_, Taken::Busy)) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Some(found) => break found,
+            }
+        };
+        let ready = match taken {
+            Taken::Busy => return,
+            Taken::Settled(here) => {
+                // This call ran: its group is not here, for good.
+                if !here {
+                    release_launch_tab(&state, &key, hwnd, None, false, true);
+                }
+                here
+            }
+            Taken::Launch(launch) => {
+                let found = win::close_launch_tab(hwnd, &launch.title);
+                let ready = match found {
+                    Some(LaunchTabState::Alone) => false,
+                    Some(_) => true,
+                    // UI Automation failed: another tab in front means the
+                    // window holds one; the launch tab is tried again later.
+                    None => !is_launched_window(&win::window_title(hwnd), &launch.title),
+                };
+                let proven = matches!(found, Some(LaunchTabState::Beside(_)));
+                let elsewhere = found == Some(LaunchTabState::Alone);
+                let left = (!launch_tab_gone(&found)).then_some(launch);
+                release_launch_tab(&state, &key, hwnd, left, proven, elsewhere);
+                ready
+            }
+        };
+        // Its window may be gone meanwhile (Claude closed its last tab):
+        // `chrome-closed` has the last word, nothing comes forward.
+        let alive = state
+            .inner
+            .lock()
+            .is_ok_and(|inner| inner.windows.get(&key).is_some_and(|w| w.hwnd == hwnd));
+        if ready && alive && win::alive(hwnd) {
+            let _ = app.emit_to("main", "chrome-ready", ChromeKey { key });
+        }
+    });
+}
+
+/// A pane's launch tab, as `take_launch_tab` finds it.
+enum Taken {
+    /// Another thread holds it.
+    Busy,
+    /// Taken by this thread, which closes it, then `release_launch_tab`.
+    Launch(LaunchTab),
+    /// Closed or replaced already: whether Claude's group is in the window.
+    Settled(bool),
+}
+
+/// Pane `key`'s window and its launch tab, taken: one thread at a time
+/// closes it. A second press on a closing tab's button closes the next
+/// tab, Claude's (Chromium's `TabContainer`, read 12/11/2026).
+fn take_launch_tab(state: &ChromeView, key: &str) -> Option<(isize, Taken)> {
+    let mut inner = state.inner.lock().ok()?;
+    let win = inner.windows.get_mut(key)?;
+    let taken = if win.launch_busy {
+        Taken::Busy
+    } else if let Some(launch) = win.launch.take() {
+        win.launch_busy = true;
+        Taken::Launch(launch)
+    } else {
+        Taken::Settled(win.proven || (win.steered && !win.elsewhere))
+    };
+    Some((win.hwnd, taken))
+}
+
+/// The thread holding the launch tab is done: still open (`left`), it is
+/// tried again later.
+fn release_launch_tab(
+    state: &ChromeView,
+    key: &str,
+    hwnd: isize,
+    left: Option<LaunchTab>,
+    proven: bool,
+    elsewhere: bool,
+) {
+    if let Ok(mut inner) = state.inner.lock() {
+        if let Some(win) = inner.windows.get_mut(key).filter(|w| w.hwnd == hwnd) {
+            win.launch_busy = false;
+            win.launch = left;
+            win.proven |= proven;
+            win.elsewhere |= elsewhere;
+        }
     }
 }
 
-/// One of Claude's calls in pane `key` ran (PostToolUse): its tab is in the
-/// window, the launch tab closes. Any other tab in front (Alexis clicked
-/// one): the launch tab stays, Chrome would close that other tab.
-fn note_ran(state: &ChromeView, key: &str) {
-    let Ok(mut inner) = state.inner.lock() else {
+fn launch_tab_gone(found: &Option<LaunchTabState>) -> bool {
+    matches!(
+        found,
+        Some(LaunchTabState::Beside(_) | LaunchTabState::Gone)
+    )
+}
+
+/// Pane `key`'s window was steered, or could not be: where Claude's group
+/// goes when nothing else tells (`Taken::Settled`).
+fn note_steered(state: &ChromeView, key: &str, steered: bool) {
+    if let Ok(mut inner) = state.inner.lock() {
+        if let Some(win) = inner.windows.get_mut(key) {
+            win.steered = steered;
+        }
+    }
+}
+
+/// The panel shows pane `key`'s window, never on its launch page: beside
+/// another tab, the launch tab closes; alone (the globe's empty window, or
+/// Claude's tab not there yet), Chrome's new tab page comes in front first
+/// (Alexis, 12/11/2026).
+fn clear_launch_page(state: &ChromeView, key: &str) {
+    let Some((hwnd, Taken::Launch(launch))) = take_launch_tab(state, key) else {
         return;
     };
-    if inner.no_autoclose.contains(key) {
-        return;
+    let mut found = win::close_launch_tab(hwnd, &launch.title);
+    if found == Some(LaunchTabState::Alone) {
+        win::new_tab(hwnd);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while is_launched_window(&win::window_title(hwnd), &launch.title)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        found = win::close_launch_tab(hwnd, &launch.title);
     }
-    let Some(win) = inner.windows.get_mut(key) else {
-        return;
-    };
-    let hwnd = win.hwnd;
-    let Some(launch) = win.launch.take() else {
-        return;
-    };
-    if !launch.landed {
-        // Its group went elsewhere: this window may hold the launch tab
-        // only. Kept for a later call that lands here.
-        win.launch = Some(launch);
-        return;
-    }
-    if may_close_launch_tab(launch.landed, &win::window_title(hwnd), &launch.title) {
-        win::close_active_tab(hwnd);
-        inner
-            .closing
-            .insert(key.to_string(), std::time::Instant::now());
-    } else {
-        // Another tab in front: tried again after the next call.
-        win.launch = Some(launch);
-    }
+    let left = (!launch_tab_gone(&found)).then_some(launch);
+    release_launch_tab(state, key, hwnd, left, false, false);
 }
 
 /// Lays the windows out again on a worker thread: laying a window out may
@@ -1026,17 +1156,10 @@ fn on_destroyed(app: &AppHandle, hwnd: isize) {
             .find(|(_, w)| w.hwnd == hwnd)
             .map(|(k, _)| k.clone())?;
         inner.windows.remove(&key);
-        let closed_launch_tab = inner
-            .closing
-            .remove(&key)
-            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(3));
-        if closed_launch_tab {
-            inner.no_autoclose.insert(key.clone());
-        }
         Some(key)
     });
     if let Some(key) = key {
-        let _ = app.emit_to("main", "chrome-closed", ChromeClosed { key });
+        let _ = app.emit_to("main", "chrome-closed", ChromeKey { key });
     }
 }
 
@@ -1141,7 +1264,7 @@ fn run_inbox(app: AppHandle) -> Result<(), String> {
                     .is_ok_and(|inner| inner.windows.contains_key(&key))
                 {
                     let _ = std::fs::remove_file(&path);
-                    note_ran(&state, &key);
+                    note_ran(&app, key);
                 }
                 continue;
             }
@@ -2130,19 +2253,73 @@ mod win {
         title(hwnd(raw))
     }
 
-    /// Closes the window's active tab: Chrome maps APPCOMMAND_CLOSE to
-    /// "close tab", with no foreground nor keyboard needed (verified
-    /// 05/11/2026 on Chrome 156).
-    pub(super) fn close_active_tab(raw: isize) {
-        const APPCOMMAND_CLOSE: isize = 31;
+    /// Opens Chrome's new tab page in front: Chrome maps APPCOMMAND_NEW to
+    /// "new tab", with no foreground nor keyboard needed (verified
+    /// 12/11/2026 on Chrome 157, in a parked window).
+    pub(super) fn new_tab(raw: isize) {
+        const APPCOMMAND_NEW: isize = 29;
         // SAFETY: a posted message, never waited on.
         unsafe {
             let _ = PostMessageW(
                 Some(hwnd(raw)),
                 WM_APPCOMMAND,
                 WPARAM(raw as usize),
-                LPARAM(APPCOMMAND_CLOSE << 16),
+                LPARAM(APPCOMMAND_NEW << 16),
             );
+        }
+    }
+
+    /// Closes the launch page's tab by its own close button (UI
+    /// Automation), in front or not, only beside another tab: the window
+    /// stays. No foreground, no keyboard (verified 12/11/2026 on Chrome 157,
+    /// in a parked window). Returns what was found; None when UI Automation
+    /// saw no tab or failed.
+    pub(super) fn close_launch_tab(raw: isize, page_title: &str) -> Option<super::LaunchTabState> {
+        use windows::Win32::System::Variant::VARIANT;
+        use windows::Win32::UI::Accessibility::{
+            CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
+            TreeScope_Children, TreeScope_Descendants, UIA_ButtonControlTypeId,
+            UIA_ControlTypePropertyId, UIA_InvokePatternId, UIA_TabControlTypeId,
+            UIA_TabItemControlTypeId,
+        };
+        // SAFETY: COM calls on this thread's apartment, on objects it holds.
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let uia =
+                CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+                    .ok()?;
+            let of_type = |id: i32| {
+                uia.CreatePropertyCondition(UIA_ControlTypePropertyId, &VARIANT::from(id))
+            };
+            let root = uia.ElementFromHandle(hwnd(raw)).ok()?;
+            // The tab strip comes before the page in the tree: the search
+            // stops there, never walking a page's own tabs.
+            let strip = root
+                .FindFirst(TreeScope_Descendants, &of_type(UIA_TabControlTypeId.0).ok()?)
+                .ok()?;
+            let found = strip
+                .FindAll(TreeScope_Descendants, &of_type(UIA_TabItemControlTypeId.0).ok()?)
+                .ok()?;
+            let tabs: Vec<IUIAutomationElement> = (0..found.Length().ok()?)
+                .map(|i| found.GetElement(i).ok())
+                .collect::<Option<Vec<_>>>()?;
+            // A name unread would pass for another page's: nothing known.
+            let names = tabs
+                .iter()
+                .map(|t| t.CurrentName().ok().map(|n| n.to_string()))
+                .collect::<Option<Vec<String>>>()?;
+            let state = super::launch_tab_state(&names, page_title)?;
+            if let super::LaunchTabState::Beside(i) = state {
+                let close = tabs[i]
+                    .FindFirst(TreeScope_Children, &of_type(UIA_ButtonControlTypeId.0).ok()?)
+                    .ok()?;
+                close
+                    .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+                    .ok()?
+                    .Invoke()
+                    .ok()?;
+            }
+            Some(state)
         }
     }
 
@@ -2617,7 +2794,10 @@ mod win {
     pub(super) fn window_title(_: isize) -> String {
         String::new()
     }
-    pub(super) fn close_active_tab(_: isize) {}
+    pub(super) fn new_tab(_: isize) {}
+    pub(super) fn close_launch_tab(_: isize, _: &str) -> Option<super::LaunchTabState> {
+        None
+    }
     pub(super) fn hand_back(_: isize, _: Option<isize>) {}
     pub(super) fn make_most_recent(_: isize) {}
     pub(super) fn steering_done() {}
@@ -2754,21 +2934,27 @@ mod tests {
     }
 
     #[test]
-    fn closes_the_launch_tab_only_when_claude_s_tab_is_there() {
+    fn closes_the_launch_tab_only_beside_another_one() {
         let page = "Arkadia-1-2";
-        assert!(may_close_launch_tab(
-            true,
-            "Arkadia-1-2 - Google Chrome",
-            page
-        ));
-        // Claude's group went elsewhere: the launch tab is the only one.
-        assert!(!may_close_launch_tab(
-            false,
-            "Arkadia-1-2 - Google Chrome",
-            page
-        ));
-        // Another tab is in front: closing would close that one.
-        assert!(!may_close_launch_tab(true, "Stripe - Google Chrome", page));
+        let tabs = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        // Claude's tab in front, the launch tab behind it (seen 12/11/2026),
+        // its name lengthened by Chrome's memory figure.
+        assert_eq!(
+            launch_tab_state(
+                &tabs(&["Arkadia-1-2 - Utilisation de la mémoire - 19,1 Mo", "KDP Connexion"]),
+                page
+            ),
+            Some(LaunchTabState::Beside(0))
+        );
+        // Claude's group went elsewhere: closing it would close the window.
+        assert_eq!(launch_tab_state(&tabs(&["Arkadia-1-2"]), page), Some(LaunchTabState::Alone));
+        // Another launch's page is no match.
+        assert_eq!(
+            launch_tab_state(&tabs(&["Arkadia-1-22", "Stripe"]), page),
+            Some(LaunchTabState::Gone)
+        );
+        // UI Automation saw no tab: nothing is known.
+        assert_eq!(launch_tab_state(&[], page), None);
     }
 
     #[test]

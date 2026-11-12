@@ -777,11 +777,16 @@ export function App() {
   // A pane's Chrome window in the panel (`chrome_view.rs`). Claude in Chrome
   // asks for it before its tool calls (`chrome-request`, answered once the
   // window is ready); the globe asks for it too. Its tab comes forward by
-  // itself the first time only: later calls never take the panel back from
-  // what Alexis chose. Panes that got a window: it closes with them.
+  // itself once a tab of Claude's is in it (`chrome-ready`), never on its
+  // launch page alone (12/11/2026), and the first time only: later calls
+  // never take the panel back from what Alexis chose. Panes that got a
+  // window: it closes with them.
   const chromePanes = useRef(new Set<string>());
   // Panes whose Chrome tab came forward by itself since this page loaded.
   const chromeShownOnce = useRef(new Set<string>());
+  // Panes whose window holds a tab of Claude's (`chrome-ready`): no note
+  // says Claude may work elsewhere, whatever a later steer found.
+  const chromeReady = useRef(new Set<string>());
   // Bumped once the windows of before a page reload are known again.
   const [chromeKnown, setChromeKnown] = useState(0);
   // A reload of this page (watchdog repair) forgets the panel, not Rust:
@@ -810,13 +815,28 @@ export function App() {
       changeArtifacts((state) => ({
         state: updateChrome(state, key, {
           title: `Chrome, ${shown.profile}`,
-          ...(shown.steered ? {} : { note: CHROME_ELSEWHERE }),
+          ...(shown.steered || chromeReady.current.has(key.slice(7))
+            ? {}
+            : { note: CHROME_ELSEWHERE }),
         }),
         closed: [],
       })),
     [changeArtifacts],
   );
   useEffect(() => {
+    const comeForwardOnce = (paneId: string) => {
+      if (chromeShownOnce.current.has(paneId)) return;
+      const owner = artifactTabsRef.current.find((t) =>
+        Object.prototype.hasOwnProperty.call(t.panes, paneId),
+      );
+      if (!owner) return;
+      chromeShownOnce.current.add(paneId);
+      const accountId = paneAccountId(owner.panes[paneId]?.accountId);
+      changeArtifacts((state) => ({
+        state: showChrome(state, owner.id, paneId, accountId),
+        closed: [],
+      }));
+    };
     const stops = [
       subscribeStable<{ id: string; paneId: string }>(
         listen,
@@ -831,33 +851,25 @@ export function App() {
           const accountId = paneAccountId(tab.panes[paneId]?.accountId);
           const key = chromeKey(paneId);
           chromePanes.current.add(paneId);
-          const comeForwardOnce = () => {
-            if (chromeShownOnce.current.has(paneId)) return;
-            const owner = artifactTabsRef.current.find((t) =>
-              Object.prototype.hasOwnProperty.call(t.panes, paneId),
-            );
-            if (!owner) return;
-            chromeShownOnce.current.add(paneId);
-            changeArtifacts((state) => ({
-              state: showChrome(state, owner.id, paneId, accountId),
-              closed: [],
-            }));
-          };
-          comeForwardOnce();
           invoke<ChromeShown>("chrome_view_prepare", {
             id,
             key,
             account: accountId,
           })
             .then((shown) => {
-              setChromePane(paneId, true);
-              // The window before closed while this one was launching: this
-              // one comes forward in its place.
-              comeForwardOnce();
+              // Not steered, Claude's tabs may land in another window: the
+              // panel comes forward at once, its note says so.
+              if (!shown.steered) {
+                setChromePane(paneId, true);
+                comeForwardOnce(paneId);
+              }
               changeArtifacts((state) => ({
                 state: updateChrome(state, key, {
                   title: `Chrome, ${shown.profile}`,
-                  ...(shown.steered ? {} : { note: CHROME_ELSEWHERE }),
+                  // Claude's group already in this window stays there.
+                  ...(shown.steered || chromeReady.current.has(paneId)
+                    ? {}
+                    : { note: CHROME_ELSEWHERE }),
                 }),
                 closed: [],
               }));
@@ -867,6 +879,18 @@ export function App() {
             );
         },
       ),
+      // A tab of Claude's is in the pane's window, its launch tab gone.
+      subscribeStable<{ key: string }>(listen, "chrome-ready", ({ key }) => {
+        if (!key.startsWith("chrome:")) return;
+        const paneId = key.slice(7);
+        chromeReady.current.add(paneId);
+        setChromePane(paneId, true);
+        comeForwardOnce(paneId);
+        changeArtifacts((state) => ({
+          state: updateChrome(state, key, { note: null }),
+          closed: [],
+        }));
+      }),
       // Closed in Chrome itself (Claude closed its last tab, Ctrl+Shift+W):
       // its tab leaves the panel, which closes when it held nothing else.
       // Still in the panel then, the pane's next window comes forward by
@@ -874,6 +898,7 @@ export function App() {
       subscribeStable<{ key: string }>(listen, "chrome-closed", ({ key }) => {
         if (!key.startsWith("chrome:")) return;
         const paneId = key.slice(7);
+        chromeReady.current.delete(paneId);
         setChromePane(paneId, false);
         const inPanel = Object.values(artifactsRef.current).some((t) =>
           t.items.some((i) => i.key === key),
@@ -893,6 +918,7 @@ export function App() {
     for (const paneId of [...chromePanes.current]) {
       if (live.has(paneId)) continue;
       chromePanes.current.delete(paneId);
+      chromeReady.current.delete(paneId);
       setChromePane(paneId, false);
       void invoke("chrome_view_close", { key: chromeKey(paneId) }).catch(
         () => {},

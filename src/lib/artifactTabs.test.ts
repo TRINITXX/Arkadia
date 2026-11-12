@@ -395,6 +395,11 @@ describe("artifact tabs", () => {
         note: "x",
       });
       expect(updateChrome(shown, "chrome:nope", { note: "x" })).toBe(shown);
+      // Told again what it knows: the same state, no redraw.
+      expect(
+        updateChrome(named, "chrome:p1", { title: "Chrome, Minifashion" }),
+      ).toBe(named);
+      expect(updateChrome(shown, "chrome:p1", { note: null })).toBe(shown);
     });
 
     it("leaves with its window, the panel too when it held nothing else", () => {

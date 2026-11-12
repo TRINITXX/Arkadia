@@ -299,7 +299,13 @@ export function updateChrome(
   patch: Pick<Partial<ArtifactItem>, "title" | "note">,
 ): ArtifactsByTab {
   for (const [tabId, current] of Object.entries(state)) {
-    if (!current.items.some((i) => i.key === key)) continue;
+    const item = current.items.find((i) => i.key === key);
+    if (!item) continue;
+    // Nothing new: the same state, no redraw (each Claude call tells it).
+    const same = (Object.keys(patch) as (keyof typeof patch)[]).every(
+      (k) => (item[k] ?? null) === (patch[k] ?? null),
+    );
+    if (same) return state;
     const items = current.items.map((i) =>
       i.key === key ? { ...i, ...patch } : i,
     );
