@@ -652,9 +652,36 @@ describe("workflow card", () => {
       "interrupted",
       "failed",
     ]);
+    const stopped = task("task_notification", {
+      task_id: "w1",
+      status: "stopped",
+    });
+    expect(ended([stopped])).toEqual(["stopped", "failed"]);
+    // An end guessed first (done), then its notification: it says.
     expect(
-      ended([task("task_notification", { task_id: "w1", status: "stopped" })]),
+      ended([task("background_tasks_changed", { tasks: [] }), stopped]),
     ).toEqual(["stopped", "failed"]);
+    // A frame or a look that comes after its end starts no agent again.
+    const killed = task("task_updated", {
+      task_id: "w1",
+      patch: { status: "killed" },
+    });
+    expect(ended([killed, progress("start")])).toEqual(["stopped", "failed"]);
+    const late = run(
+      [
+        killed,
+        {
+          type: "workflow_live",
+          chatId: "c",
+          taskId: "w1",
+          agents: [{ agentId: "a9", label: "tard", phase: "Un", done: false }],
+        },
+      ],
+      running,
+    ).workflows[0];
+    expect(late.agents.map((a) => a.state)).toEqual(["failed", "failed"]);
+    // An agent that ended on its own keeps its state.
+    expect(ended([progress("done"), stopped])).toEqual(["stopped", "done"]);
   });
 
   it("adds the journal's live tokens and last write, the SDK's end figures win", () => {

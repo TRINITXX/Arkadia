@@ -64,8 +64,8 @@ export function useAgentSheet(
     return () => window.clearInterval(id);
   }, [taskId, running, streamed, shown, onOpenAgent]);
   // Its end: one more read, its report came after the latest. Never to a
-  // chat ended (its agents turn « interrompu »): its server may be gone,
-  // and Rust would start one again for the read.
+  // chat ended (its agents end with it): its server may be gone, and Rust
+  // would start one again for the read.
   const mayRead = !streamed && shown && state.closed === null;
   useReadAtEnd(taskId, running, mayRead, onOpenAgent);
 

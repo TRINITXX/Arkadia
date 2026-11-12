@@ -42,6 +42,10 @@ export interface WorkflowAgent {
   /** Its last write: the idle time counts from there. */
   lastActivityAt?: number;
   lastTool?: string;
+  /** Its state came from its workflow's end, not its own (`endAgents`): a
+   *  later end of the workflow says it again (a guessed end, then its
+   *  notification). */
+  byWorkflow?: boolean;
 }
 
 export interface Workflow {
@@ -91,26 +95,34 @@ function kindOf(taskType: unknown): Kind | null {
 type Ended = "completed" | "failed" | "stopped";
 
 /** A task's end as the SDK words it: `killed` is a stop. */
-/**
- * A workflow ended takes its agents with it: those still running or waiting
- * are done if it completed, failed otherwise (stopped, or cut by its chat's
- * end). Every way a workflow ends goes through here: left running, their
- * lines turned for good and their sheets read on every 2 s.
- */
-function endAgents(wf: Workflow): Workflow {
-  const open = (a: WorkflowAgent) =>
-    a.state === "running" || a.state === "queued";
-  if (wf.status === "running" || !wf.agents.some(open)) return wf;
-  const state = wf.status === "completed" ? "done" : "failed";
-  return {
-    ...wf,
-    agents: wf.agents.map((a) => (open(a) ? { ...a, state } : a)),
-  };
-}
-
 function endedStatus(v: unknown): Ended | null {
   if (v === "completed" || v === "failed" || v === "stopped") return v;
   return v === "killed" ? "stopped" : null;
+}
+
+/**
+ * A workflow ended takes its agents with it: those still running or waiting
+ * are done if it completed, failed otherwise (stopped, or cut by its chat's
+ * end). Whatever changes a workflow goes through here, its ends and the
+ * frames that come after them: left running, its agents' lines turned for
+ * good and their sheets read on every 2 s. An agent ended here follows a
+ * later end of its workflow (`byWorkflow`): one that ended on its own keeps
+ * its state.
+ */
+function endAgents(wf: Workflow): Workflow {
+  if (wf.status === "running") return wf;
+  const state = wf.status === "completed" ? "done" : "failed";
+  const held = (a: WorkflowAgent) =>
+    a.state === "running" ||
+    a.state === "queued" ||
+    (a.byWorkflow === true && a.state !== state);
+  if (!wf.agents.some(held)) return wf;
+  return {
+    ...wf,
+    agents: wf.agents.map((a) =>
+      held(a) ? { ...a, state, byWorkflow: true } : a,
+    ),
+  };
 }
 
 function upsert<T extends { taskId: string }>(
@@ -338,13 +350,15 @@ export function addWorkflowLive(
             ? prev.lastActivityAt
             : (a.lastActivityAt ?? prev?.lastActivityAt),
           lastTool: prev?.lastTool,
+          byWorkflow: prev?.byWorkflow,
         };
         agents =
           i < 0
             ? [...agents, next]
             : agents.map((x, j) => (j === i ? next : x));
       }
-      return { ...wf, phases, agents };
+      // A look that comes after its end starts no agent again.
+      return endAgents({ ...wf, phases, agents });
     }),
   };
 }
@@ -389,7 +403,10 @@ export function addTaskEvent(
             toolUses: num(usage.tool_uses) ?? w.toolUses,
             durationMs: num(usage.duration_ms) ?? w.durationMs,
           };
-          return progress.length > 0 ? workflowProgress(next, progress) : next;
+          // A frame that comes after its end starts no agent again.
+          return progress.length > 0
+            ? endAgents(workflowProgress(next, progress))
+            : next;
         }),
       };
     }

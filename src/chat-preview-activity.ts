@@ -13,8 +13,8 @@ import activity from "../chat-server/fixtures/activity.jsonl?raw";
  *   for 30 s after the page loads (`doneAgentsUntil`).
  * - `activity-resumed`: the session reopened while they ran: its subagent
  *   rows say « interrompu ».
- * - `activity-cut`: the chat ended while they ran: the workflow card's
- *   agents no longer turn.
+ * - `activity-cut`: the chat ended while they ran: the workflow card counts
+ *   its agents ended, for 2.5 s after the page loads (`CARD_LINGER_MS`).
  * - `agent-live`: one background subagent at work (not recorded): its sheet.
  */
 
