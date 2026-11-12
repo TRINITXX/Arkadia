@@ -3,8 +3,14 @@ import { GitBranch, Timer } from "lucide-react";
 import { ChatContextGauge } from "@/components/chat/chat-context-gauge";
 import { ChatMcpChip } from "@/components/chat/chat-mcp-chip";
 import { ChatRing } from "@/components/chat/chat-ring";
+import {
+  ChatWeekGauge,
+  type WeekModelShare,
+} from "@/components/chat/chat-week-gauge";
+import { useAccountLabel, useModelQuota } from "@/lib/accountQuota";
+import { modelFamily } from "@/lib/accounts";
 import type { ContextDetail } from "@/lib/chat/chatProtocol";
-import type { ChatState } from "@/lib/chat/chatState";
+import { liveWindow, type ChatState } from "@/lib/chat/chatState";
 import { statusFigures } from "@/lib/chat/chatStatus";
 import { useChatShown } from "@/lib/chat/useChatShown";
 
@@ -21,10 +27,13 @@ const pct = (n: number) => `${Math.round(n)} %`;
  */
 export function ChatStatusBar({
   state,
+  accountId,
   onContextDetail,
   onMcpOpen,
 }: {
   state: ChatState;
+  /** The pane's account: its name and Fable's share in the week's card. */
+  accountId?: string;
   /** The context by category, for the ring's hover (`ChatContextGauge`). */
   onContextDetail?: () => Promise<ContextDetail>;
   /** The MCP list opened: their state asked again. */
@@ -49,6 +58,21 @@ export function ChatStatusBar({
     state,
     now,
   );
+  // Fable's share: the chat's own `/usage` first, else the 30-min poll's;
+  // a refusal holding it out comes from the limit switch's blocks.
+  const quota = useModelQuota(accountId);
+  const account = useAccountLabel(accountId);
+  const own = state.limits.models?.find((m) => modelFamily(m.model) === "fable");
+  const ownNow = own ? liveWindow(own, now) : undefined;
+  const fable: WeekModelShare | null =
+    own || quota
+      ? {
+          model: own?.model ?? quota?.model ?? "Fable",
+          percent: ownNow ? ownNow.utilization * 100 : (quota?.pct ?? null),
+          resetsAt: ownNow ? ownNow.resetsAt : quota?.resetsAt,
+          outUntil: quota?.blockedUntil ?? null,
+        }
+      : null;
   return (
     <div className="chat-status">
       {context && (
@@ -65,10 +89,12 @@ export function ChatStatusBar({
         </span>
       )}
       {sevenDay && (
-        <span title={`Semaine utilisée : ${pct(sevenDay.percent)}`}>
-          <ChatRing percent={sevenDay.percent} hot={sevenDay.hot} />
-          Semaine
-        </span>
+        <ChatWeekGauge
+          week={sevenDay}
+          fable={fable}
+          account={account}
+          now={now}
+        />
       )}
       {reset && (
         <span title={`Reset de la session dans ${resetFull}`}>

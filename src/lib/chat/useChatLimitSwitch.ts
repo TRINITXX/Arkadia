@@ -1,6 +1,9 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  blockedFor,
+  modelBlockKey,
+  modelFamily,
   paneAccountId,
   type AccountsState,
   type BlockedUntil,
@@ -14,11 +17,18 @@ import {
 } from "@/lib/chat/chatEvents";
 import {
   chatLimitHit,
+  modelLimitUntil,
+  modelName,
   nextFreeAccountAt,
   planChatLimitSwitch,
+  type ChatLimitHit,
 } from "@/lib/chat/chatLimit";
 import { resetClock } from "@/lib/chat/chatQuota";
-import { attachLiveChat, startLiveChat } from "@/lib/chat/chatLive";
+import {
+  attachLiveChat,
+  liveChatState,
+  startLiveChat,
+} from "@/lib/chat/chatLive";
 import { chatTurnHolds } from "@/lib/chat/usePaneChats";
 import type { PaneChat, PaneState, Tab } from "@/types";
 
@@ -173,18 +183,26 @@ export function useChatLimitSwitch({
         tick();
       });
 
-    const handle = async (chatId: string, resetsAt?: number) => {
+    const handle = async (chatId: string, hit: ChatLimitHit) => {
       const { onToast, block } = deps.current;
       const found = find(chatId);
       if (!found) return;
       const from = paneAccountId(found.pane.accountId);
       const now = Date.now();
-      const known = accountsRef.current?.accounts.find((a) => a.id === from)
-        ?.usage?.fiveHour?.resetsAt;
-      const reset = (resetsAt ?? known ?? 0) * 1000 + 60_000;
+      const account = accountsRef.current?.accounts.find((a) => a.id === from);
+      const known = account?.usage?.fiveHour?.resetsAt;
+      const reset = (hit.resetsAt ?? known ?? 0) * 1000 + 60_000;
       // A reset already past (clock skew) must not let it retry at once.
-      const until = reset > now ? reset : now + 5 * 60_000;
-      block(from, until);
+      let until = reset > now ? reset : now + 5 * 60_000;
+      // One model's limit (Fable's): that model alone is out, the account's
+      // others stay free; a model not known blocks the whole account.
+      // Its date is not trusted (`modelLimitUntil`), even for a model not
+      // known yet (the init still being folded): never till Sunday.
+      const family = hit.family ?? modelFamily(liveChatState(chatId).model);
+      if (hit.scope === "model") {
+        until = modelLimitUntil(hit.resetsAt, account, now);
+        block(family ? modelBlockKey(from, family) : from, until);
+      } else block(from, until);
       if (!enabledRef.current) {
         logSwitch(`${chatId} on ${from}: setting off`);
         return;
@@ -265,9 +283,18 @@ export function useChatLimitSwitch({
         }
         const accounts = accountsRef.current?.accounts ?? [];
         const blocked = deps.current.blocked();
-        const plan = planChatLimitSwitch(accounts, blocked, from, Date.now());
+        // Its model now: Opus after a move off Fable, unknown (the safe
+        // side) for a chat not started again since a restart.
+        const family = modelFamily(liveChatState(chatId).model);
+        const plan = planChatLimitSwitch(
+          accounts,
+          blocked,
+          from,
+          Date.now(),
+          family,
+        );
         if (plan.kind === "switch") {
-          if (waited && (blocked[from] ?? 0) <= Date.now()) {
+          if (waited && blockedFor(blocked, from, family) <= Date.now()) {
             // Its account came back meanwhile: it stays, goes on if at rest.
             save(null);
             logSwitch(`${chatId} on ${from}: account back, no move`);
@@ -284,10 +311,18 @@ export function useChatLimitSwitch({
             continue;
           }
           save(null);
-          await move(chatId, again, from, plan.accountId, key, recent);
+          await move(
+            chatId,
+            again,
+            from,
+            plan.accountId,
+            key,
+            recent,
+            plan.model,
+          );
           return;
         }
-        const state = `blocked ${JSON.stringify(blocked)}, ${accounts
+        const state = `model ${family ?? "?"}, blocked ${JSON.stringify(blocked)}, ${accounts
           .map(
             (a) =>
               `${a.id}${a.loggedIn ? "" : " logged out"} 5h ${a.usage?.fiveHour?.pct ?? "?"}% reset ${a.usage?.fiveHour?.resetsAt ?? "?"}`,
@@ -296,7 +331,13 @@ export function useChatLimitSwitch({
         // None free now: the first account back takes the chat (the user's
         // report of 01/11/2026: one came back at 07:20, the chat never
         // moved), else its own account at its reset, as the terminal does.
-        const next = nextFreeAccountAt(accounts, blocked, from, Date.now());
+        const next = nextFreeAccountAt(
+          accounts,
+          blocked,
+          from,
+          Date.now(),
+          family,
+        );
         if (next === null || next >= until) {
           logSwitch(
             `${chatId} on ${from}: no free account, continues here at ${new Date(until).toISOString()} (${state})`,
@@ -353,7 +394,12 @@ export function useChatLimitSwitch({
       logSwitch(`${chatId} on ${from}: continued after its reset`);
     };
 
-    /** The chat to `to`, « continue » in its input. */
+    /**
+     * The chat to `to`, « continue » in its input. `model`: started on it,
+     * its own being out (Fable's limit); `to` may then be its own account,
+     * relaunched rather than switched in place, where the model's change
+     * could reach Claude Code after « continue ».
+     */
     const move = async (
       chatId: string,
       at: NonNullable<ReturnType<typeof find>>,
@@ -361,8 +407,13 @@ export function useChatLimitSwitch({
       to: string,
       key: string,
       recent: number[],
+      model?: string,
     ) => {
       const { relaunch, onSwitched, onToast } = deps.current;
+      // The model it runs goes with it (Opus after Fable's limit): the plan
+      // checked the account for it, the default would be Fable again. Read
+      // now, the relaunch drops this chat.
+      const startOn = model ?? liveChatState(chatId).model ?? undefined;
       const stillThere = () =>
         (tabsRef.current ?? []).some(
           (t) => t.id === at.tab.id && t.panes[chatId] !== undefined,
@@ -395,17 +446,26 @@ export function useChatLimitSwitch({
       }
       moves.current.set(key, [...recent, Date.now()]);
       // Started here, its pane shown or not: « continue » waits in its input.
-      await startLiveChat(next.id, next.account, next.chat);
+      await startLiveChat(
+        next.id,
+        next.account,
+        startOn ? { ...next.chat, model: startOn } : next.chat,
+      );
       await chatCommand(
         next.account,
         { type: "send", chatId: next.id, text: "continue", images: [] },
         "auto",
       ).catch(() => {});
-      onSwitched(to);
-      logSwitch(`${chatId} on ${from}: moved to ${to}`);
+      if (to !== from) onSwitched(to);
+      logSwitch(
+        `${chatId} on ${from}: moved to ${to}${model ? ` on ${model}` : ""}`,
+      );
+      const on = model ? ` en ${modelName(model)}` : "";
       onToast(
         "info",
-        `⟳ limite atteinte sur ${label(from)} · reprise sur ${label(to)}`,
+        to === from
+          ? `⟳ limite du modèle atteinte sur ${label(from)} · reprise${on}`
+          : `⟳ limite atteinte sur ${label(from)} · reprise sur ${label(to)}${on}`,
       );
     };
 
@@ -435,7 +495,11 @@ export function useChatLimitSwitch({
             }
             if (handling.current.has(pane.id)) continue;
             const from = paneAccountId(pane.accountId);
-            const until = Math.max(deps.current.blocked()[from] ?? 0, at);
+            // Any of its blocks: a model's (Fable's) held the chat too.
+            const until = Math.max(
+              blockedFor(deps.current.blocked(), from, null),
+              at,
+            );
             logSwitch(`${pane.id} on ${from}: wait picked up after restart`);
             handling.current.add(pane.id);
             const recent = (moves.current.get(sid) ?? []).filter(
@@ -459,7 +523,7 @@ export function useChatLimitSwitch({
       if (typeof at === "number" && Date.now() - at > FRESH_MS) return;
       if (handling.current.has(event.chatId)) return;
       handling.current.add(event.chatId);
-      void handle(event.chatId, hit.resetsAt).finally(() =>
+      void handle(event.chatId, hit).finally(() =>
         handling.current.delete(event.chatId),
       );
     });

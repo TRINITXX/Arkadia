@@ -577,7 +577,15 @@ export interface LimitState {
    * account (`useChatLimitSwitch`): a restart picks the wait up again.
    */
   chatWaits: Record<string, number>;
+  /**
+   * `LIMIT_STATE_VERSION` once written by this code: an older save may hold
+   * a whole-account block taken from a « Fable limit » (12/11/2026).
+   */
+  version?: number;
 }
+
+/** 2: a model's limit blocks that model alone (`modelBlockKey`). */
+export const LIMIT_STATE_VERSION = 2;
 
 function numberRecord(raw: unknown): Record<string, number> {
   if (!raw || typeof raw !== "object") return {};
@@ -594,11 +602,13 @@ export async function loadLimitState(): Promise<LimitState> {
     waits?: unknown;
     blocked?: unknown;
     chatWaits?: unknown;
+    version?: unknown;
   }>(KEY_LIMIT_STATE);
   return {
     waits: numberRecord(raw?.waits),
     blocked: numberRecord(raw?.blocked),
     chatWaits: numberRecord(raw?.chatWaits),
+    version: typeof raw?.version === "number" ? raw.version : undefined,
   };
 }
 

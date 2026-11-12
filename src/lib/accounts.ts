@@ -25,9 +25,17 @@ export interface UsageWindow {
   resetsAt?: number | null;
 }
 
+/** The week's share one model may use (Fable), as the last poll read it. */
+export interface ModelUsage extends UsageWindow {
+  /** As the endpoint names it: `Fable`. */
+  model: string;
+}
+
 export interface AccountUsage {
   fiveHour?: UsageWindow | null;
   sevenDay?: UsageWindow | null;
+  /** Per-model weekly shares (the poll's alone, every 30 min). */
+  models?: ModelUsage[];
   /** Unix milliseconds. */
   updatedAt: number;
   source: string;
@@ -96,8 +104,63 @@ export function claudePanesToSwitch(tab: Tab, accountId: string): string[] {
     .map((p) => p.id);
 }
 
-/** Unix ms until which each account is known to be at its usage limit. */
+/**
+ * Unix ms until which each account is known to be at its usage limit. A key
+ * `<account>:<family>` (`modelBlockKey`) holds one model only: the « Fable
+ * limit » of 12/11/2026 left Opus free on that account.
+ */
 export type BlockedUntil = Record<string, number>;
+
+/** `1e37cada:fable`: a limit on one model family of an account. */
+export function modelBlockKey(accountId: string, family: string): string {
+  return `${accountId}:${family}`;
+}
+
+/** The model family of an id or alias (`claude-fable-5-2` → `fable`). */
+export function modelFamily(model: string | null | undefined): string | null {
+  const m = /(fable|opus|sonnet|haiku)/i.exec(model ?? "");
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** An account's weekly share for one model family, if the poll read one. */
+export function modelUsage(
+  usage: AccountUsage | null | undefined,
+  family: string,
+): ModelUsage | null {
+  return usage?.models?.find((m) => modelFamily(m.model) === family) ?? null;
+}
+
+/**
+ * Until when (ms) a limit hit keeps an account from a model family: its
+ * whole-account block or that model's. A model not known (`null`): any of
+ * its model blocks counts, the safe side.
+ */
+export function blockedFor(
+  blocked: BlockedUntil,
+  accountId: string,
+  family: string | null,
+): number {
+  let until = blocked[accountId] ?? 0;
+  const prefix = `${accountId}:`;
+  for (const [key, at] of Object.entries(blocked)) {
+    if (!key.startsWith(prefix)) continue;
+    if (family === null || key === prefix + family) until = Math.max(until, at);
+  }
+  return until;
+}
+
+/**
+ * Per account, its blocks of every model folded in: the terminal knows no
+ * model, so a model's limit keeps its Claude off that account as before.
+ */
+export function accountBlocks(blocked: BlockedUntil): BlockedUntil {
+  const out: BlockedUntil = {};
+  for (const [key, at] of Object.entries(blocked)) {
+    const id = key.split(":")[0];
+    out[id] = Math.max(out[id] ?? 0, at);
+  }
+  return out;
+}
 
 export type AutoSwitchPlan =
   | { kind: "switch"; accountId: string }
@@ -169,6 +232,43 @@ export function formatCountdown(
   const min = Math.ceil((resetsAt * 1000 - nowMs) / 60000);
   if (min <= 0) return null;
   return `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}`;
+}
+
+/** Time left before a reset in words: « dans 2 h 15 », « dans 45 min ». */
+export function formatIn(
+  resetsAt: number | null | undefined,
+  nowMs: number = Date.now(),
+): string | null {
+  if (!resetsAt) return null;
+  const min = Math.floor((resetsAt * 1000 - nowMs) / 60000);
+  if (resetsAt * 1000 <= nowMs) return null;
+  if (min < 1) return "dans < 1 min";
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h === 0) return `dans ${m} min`;
+  return m === 0 ? `dans ${h} h` : `dans ${h} h ${String(m).padStart(2, "0")}`;
+}
+
+/** A weekly return in full: « dim. 15/11 à 08:00 », « demain à 08:00 ». */
+export function formatReturnDate(
+  resetsAt: number | null | undefined,
+  now: Date = new Date(),
+): string | null {
+  if (!resetsAt) return null;
+  const d = new Date(resetsAt * 1000);
+  const time = d.toLocaleTimeString("fr-FR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  if (d.toDateString() === now.toDateString()) return `aujourd'hui à ${time}`;
+  const tomorrow = new Date(now.getTime() + 86_400_000);
+  if (d.toDateString() === tomorrow.toDateString()) return `demain à ${time}`;
+  const day = d.toLocaleDateString("fr-FR", { weekday: "short" });
+  const date = d.toLocaleDateString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+  });
+  return `${day} ${date} à ${time}`;
 }
 
 /** "il y a 12 min" for the age of a usage figure. */

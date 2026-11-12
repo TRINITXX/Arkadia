@@ -12,13 +12,17 @@ import { ChatModeToggle } from "@/components/chat/chat-mode-toggle";
 import { AccountsPanel } from "@/components/AccountsPanel";
 import { AccountChip } from "@/components/AccountChip";
 import { useAccounts } from "@/lib/useAccounts";
+import { publishAccountQuota } from "@/lib/accountQuota";
+import { isModelLimit, modelLimitUntil } from "@/lib/chat/chatLimit";
 import {
   MAIN_ACCOUNT_ID,
+  accountBlocks,
   claudePanesToSwitch,
   formatReset,
   paneAccountId,
   planAutoSwitch,
   tabAccountMarks,
+  type BlockedUntil,
 } from "@/lib/accounts";
 import { FloatingPromptBar } from "@/components/PromptBar";
 import { PaneTreeView } from "@/components/PaneTreeView";
@@ -71,6 +75,7 @@ import {
   type ConvFilters,
 } from "@/components/ModernConversationView";
 import {
+  LIMIT_STATE_VERSION,
   loadLimitState,
   loadState,
   saveLimitState,
@@ -2245,7 +2250,14 @@ export function App() {
     waits: {},
     blocked: {},
     chatWaits: {},
+    version: LIMIT_STATE_VERSION,
   });
+  // The blocks as the Comptes menu shows them (a model's limit: « Fable »).
+  const [limitBlocked, setLimitBlocked] = useState<BlockedUntil>({});
+  // The chats' footers read their account's Fable share from here.
+  useEffect(() => {
+    publishAccountQuota(accounts.state?.accounts ?? [], limitBlocked);
+  }, [accounts.state, limitBlocked]);
   // Saves wait for the load, which would otherwise read back their write.
   const limitStateLoaded = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
@@ -2256,12 +2268,23 @@ export function App() {
         for (const [sid, at] of Object.entries(saved.waits)) {
           if (at > stale && !(sid in waits)) waits[sid] = at;
         }
+        // An older save's waits were timed by its blocks: looked at again
+        // at once, as a block until Sunday may be what held them.
+        const old = saved.version !== LIMIT_STATE_VERSION;
         for (const [sid, at] of Object.entries(saved.chatWaits)) {
-          if (at > stale && !(sid in chatWaits)) chatWaits[sid] = at;
+          if (at > stale && !(sid in chatWaits))
+            chatWaits[sid] = old ? Math.min(at, Date.now()) : at;
         }
+        // An older save: a block past one 5-hour window came from a « Fable
+        // limit » taken for the whole account until Sunday (12/11/2026), or
+        // from the week's limit, which its figure at 100 % keeps anyway.
+        const longest = Date.now() + 5 * 3600_000 + 2 * 60_000;
         for (const [id, until] of Object.entries(saved.blocked)) {
+          if (saved.version !== LIMIT_STATE_VERSION && until > longest)
+            continue;
           blocked[id] = Math.max(blocked[id] ?? 0, until);
         }
+        setLimitBlocked({ ...blocked });
       })
       .catch(() => {});
   }, []);
@@ -2273,6 +2296,7 @@ export function App() {
         for (const [id, until] of Object.entries(state.blocked)) {
           if (until <= now) delete state.blocked[id];
         }
+        setLimitBlocked({ ...state.blocked });
         return saveLimitState(state);
       })
       .catch(() => {});
@@ -2337,9 +2361,10 @@ export function App() {
       const label = (id: string) =>
         state.accounts.find((a) => a.id === id)?.label ?? id;
       const from = paneAccountId(tab.panes[paneId].accountId);
+      // The terminal knows no model: a model's limit blocks its account.
       const plan = planAutoSwitch(
         state.accounts,
-        limitState.current.blocked,
+        accountBlocks(limitState.current.blocked),
         now,
       );
       if (plan.kind === "none") return;
@@ -2466,11 +2491,22 @@ export function App() {
           // past (clock skew) must not let the same account retry at once.
           const now = Date.now();
           const reset = hit.resetsAt * 1000 + 60_000;
+          // A model's limit (« Fable limit »): the whole account for the
+          // terminal, which knows no model, but never past one 5-hour
+          // window (`modelLimitUntil`), not till Sunday.
+          const until = isModelLimit(hit.limitType)
+            ? modelLimitUntil(
+                hit.resetsAt,
+                accountsStateRef.current?.accounts.find(
+                  (a) => a.id === account,
+                ),
+                now,
+              )
+            : reset > now
+              ? reset
+              : now + 5 * 60_000;
           const blocked = limitState.current.blocked;
-          blocked[account] = Math.max(
-            blocked[account] ?? 0,
-            reset > now ? reset : now + 5 * 60_000,
-          );
+          blocked[account] = Math.max(blocked[account] ?? 0, until);
           persistLimitState();
           if (autoSwitchOnLimitRef.current) {
             await resumeAfterLimitRef.current(paneId);

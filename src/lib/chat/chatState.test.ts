@@ -229,6 +229,45 @@ describe("reduceChat on the status bar's figures", () => {
     expect(state.limits.sevenDay).toBeUndefined();
   });
 
+  it("reads Fable's weekly share, from the SDK's list else the server's row", () => {
+    const fable = {
+      model: "Fable",
+      utilization: 0.33,
+      resetsAt: Date.parse("2026-11-15T07:00:00Z") / 1000,
+    };
+    const fromSdk = reduceChat(
+      EMPTY_CHAT,
+      usage({
+        model_scoped: [
+          {
+            display_name: "Fable",
+            utilization: 33,
+            resets_at: "2026-11-15T07:00:00+00:00",
+          },
+        ],
+        limits: [sessionRow],
+      }),
+      0,
+    );
+    expect(fromSdk.limits.models).toEqual([fable]);
+    const fromRow = reduceChat(
+      EMPTY_CHAT,
+      usage({
+        limits: [
+          sessionRow,
+          {
+            ...fableRow,
+            percent: 33,
+            resets_at: "2026-11-15T07:00:00+00:00",
+            scope: { model: { id: null, display_name: "Fable" } },
+          },
+        ],
+      }),
+      0,
+    );
+    expect(fromRow.limits.models).toEqual([fable]);
+  });
+
   it("takes a row's reset given in epoch seconds", () => {
     const state = reduceChat(
       EMPTY_CHAT,

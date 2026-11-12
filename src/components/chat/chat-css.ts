@@ -650,6 +650,19 @@ export const CHAT_CSS = `
 .chat-ctx-pop .row .n, .chat-ctx-pop .row .p { text-align: right; font-variant-numeric: tabular-nums; }
 .chat-ctx-pop .sub { display: flex; justify-content: space-between; gap: 8px; padding: 0 0 1px 12px; color: var(--chat-mute); font-size: 11.5px; }
 .chat-ctx-pop .sub span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-week { position: relative; cursor: default; }
+.chat-week-pop { position: absolute; bottom: calc(100% + 8px); left: -6px; z-index: 7; width: 260px; max-width: 80vw; border-radius: 12px; background: #202327; border: 1px solid #31353b; box-shadow: 0 2px 6px rgba(0,0,0,.3); padding: 8px 10px; font-size: 12px; color: var(--chat-dim); white-space: normal; }
+.chat-week-pop .head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.chat-week-pop .head b { color: #e4e4e7; font-weight: 600; flex-shrink: 0; }
+.chat-week-pop .head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--chat-mute); }
+.chat-week-pop .row { display: grid; grid-template-columns: 56px minmax(0, 1fr) 44px; align-items: center; gap: 8px; padding: 2px 0; }
+.chat-week-pop .row .l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #d4d4d8; }
+.chat-week-pop .row .bar { height: 5px; border-radius: 3px; background: #2f3238; overflow: hidden; }
+.chat-week-pop .row .bar i { display: block; height: 100%; min-width: 2px; background: var(--chat-dim); border-radius: 3px; }
+.chat-week-pop .row.model .bar i { background: var(--chat-accent); }
+.chat-week-pop .row .p { text-align: right; font-variant-numeric: tabular-nums; }
+.chat-week-pop .row.out .p { color: #f87171; }
+.chat-week-pop .when { color: var(--chat-mute); font-size: 11.5px; padding: 0 0 3px; }
 .chat-mcp-chip { font-size: 11.5px; padding: 1px 9px; }
 .chat-mcp-list { position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 7; width: 340px; max-width: 86vw; max-height: 300px; overflow: auto; scrollbar-width: thin; border-radius: 12px; background: #202327; border: 1px solid #31353b; box-shadow: 0 2px 6px rgba(0,0,0,.3); padding: 6px 10px; white-space: normal; }
 .chat-mcp-list .row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 2px 8px; padding: 3px 0; font-size: 12px; }

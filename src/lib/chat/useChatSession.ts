@@ -28,6 +28,8 @@ export interface ChatStart {
   continue?: boolean;
   /** No Claude Code until woken (`PaneChat.asleep`). */
   asleep?: boolean;
+  /** The model it starts on: Opus when Fable is out (`useChatLimitSwitch`). */
+  model?: string;
 }
 
 export interface ChatImage {

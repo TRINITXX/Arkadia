@@ -52,6 +52,9 @@ import { tallEvents, visualNext, visualStart } from "@/chat-preview-visuals";
 import { sleepScenarios } from "@/chat-preview-sleep";
 import { rememberPastes } from "@/lib/chat/chatPastes";
 import { createVisualProbe } from "@/lib/chat/chatVisualDom";
+import { AccountsPanel } from "@/components/AccountsPanel";
+import { publishAccountQuota } from "@/lib/accountQuota";
+import { modelBlockKey, type Account } from "@/lib/accounts";
 
 /**
  * Dev-only page (`/chat-preview.html?s=<scenario>`): the chat view fed with
@@ -709,8 +712,48 @@ const state = {
   limits: {
     fiveHour: { utilization: 0.37, resetsAt: nowSeconds + 135 * 60 + 30 },
     sevenDay: { utilization: 0.12, resetsAt: nowSeconds + 4 * 86_400 },
+    models: [
+      { model: "Fable", utilization: 0.33, resetsAt: nowSeconds + 4 * 86_400 },
+    ],
   },
 };
+
+/** The accounts of the user's screenshot of 12/11/2026 (`&accounts=1`). */
+const previewAccount = (
+  id: string,
+  label: string,
+  color: string,
+  five: [number, number],
+  week: [number, number],
+  fable: number,
+): Account => ({
+  id,
+  label,
+  customLabel: true,
+  color,
+  email: null,
+  plan: null,
+  loggedIn: true,
+  stale: false,
+  usage: {
+    fiveHour: { pct: five[0], resetsAt: nowSeconds + five[1] * 60 },
+    sevenDay: { pct: week[0], resetsAt: nowSeconds + week[1] * 3600 },
+    models: [
+      { model: "Fable", pct: fable, resetsAt: nowSeconds + week[1] * 3600 },
+    ],
+    updatedAt: Date.now(),
+    source: "live",
+  },
+});
+const PREVIEW_ACCOUNTS = [
+  previewAccount("main", "1 Perso", "#a78bfa", [100, 135], [11, 165], 14),
+  previewAccount("b", "2 Boutique", "#f472b6", [100, 155], [73, 95], 58),
+  previewAccount("c", "3 Équipe", "#22d3ee", [64, 65], [54, 66], 33),
+];
+// Account 2: a « Fable limit » refusal holds Fable till its 5-hour reset.
+publishAccountQuota(PREVIEW_ACCOUNTS, {
+  [modelBlockKey("b", "fable")]: Date.now() + 155 * 60_000,
+});
 
 function Preview() {
   const [chat, setChat] = useState<ChatState>(state);
@@ -795,9 +838,26 @@ function Preview() {
   };
   return (
     <div style={{ position: "relative", height: "100%" }}>
+      {params.get("accounts") === "1" && (
+        <div
+          style={{ position: "fixed", left: 16, bottom: 16, width: 300, zIndex: 30 }}
+        >
+          <AccountsPanel
+            state={{ current: "main", max: 5, accounts: PREVIEW_ACCOUNTS }}
+            onSelect={() => {}}
+            onAdd={() => {}}
+            onLogin={() => {}}
+            onRename={() => {}}
+            onRecolor={() => {}}
+            onRemove={() => {}}
+            openPanesByAccount={{}}
+          />
+        </div>
+      )}
       <ChatView
         key={mount}
         paneId="preview"
+        accountId="c"
         state={chat}
         agents={{}}
         cwd={"C:\\Users\\TRINITX\\Desktop\\Claude Desktop\\Arkadia-lab"}

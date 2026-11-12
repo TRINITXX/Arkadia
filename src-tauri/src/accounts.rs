@@ -118,11 +118,28 @@ pub struct UsageWindow {
     pub resets_at: Option<f64>,
 }
 
+/// The week's share one model may use (`limits`, kind `weekly_scoped`):
+/// Fable on the plans of 12/11/2026, with its own figure and reset.
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelWindow {
+    /// As the endpoint names it (`Fable`).
+    pub model: String,
+    pub pct: f64,
+    /// Unix seconds.
+    pub resets_at: Option<f64>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
     pub five_hour: Option<UsageWindow>,
     pub seven_day: Option<UsageWindow>,
+    /// Per-model weekly shares: only the poll knows them, so they live in
+    /// their own file (`models_path`), which a live report never rewrites
+    /// (the status line script writes the usage file whole).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelWindow>,
     /// Unix milliseconds.
     pub updated_at: i64,
     /// "live" (status line of a running session) or "poll".
@@ -174,6 +191,10 @@ fn arkadia_dir() -> PathBuf {
 
 fn registry_path() -> PathBuf {
     arkadia_dir().join("accounts.json")
+}
+
+fn models_path(id: &str) -> PathBuf {
+    arkadia_dir().join("usage").join(format!("{id}.models.json"))
 }
 
 fn usage_path(id: &str) -> PathBuf {
@@ -783,8 +804,32 @@ pub fn pin_memory_dir(cwd: &Path) {
 
 // ─── Usage ──────────────────────────────────────────────────────────
 
+/// The per-model shares as the last poll read them.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct StoredModels {
+    models: Vec<ModelWindow>,
+    /// Unix milliseconds of that poll.
+    updated_at: i64,
+}
+
+fn stored_models(id: &str) -> Option<StoredModels> {
+    serde_json::from_value(read_json(&models_path(id))?).ok()
+}
+
+fn store_models(id: &str, models: Vec<ModelWindow>) {
+    let stored = StoredModels {
+        models,
+        updated_at: now_ms(),
+    };
+    if let Ok(value) = serde_json::to_value(&stored) {
+        let _ = write_json(&models_path(id), &value);
+    }
+}
+
 fn read_usage(id: &str) -> Option<Usage> {
     let mut usage: Usage = serde_json::from_value(read_json(&usage_path(id))?).ok()?;
+    usage.models = stored_models(id).map(|s| s.models).unwrap_or_default();
     // A window whose reset has passed is back to zero.
     let now_s = (now_ms() / 1000) as f64;
     for w in [&mut usage.five_hour, &mut usage.seven_day].into_iter().flatten() {
@@ -793,18 +838,52 @@ fn read_usage(id: &str) -> Option<Usage> {
             w.resets_at = None;
         }
     }
+    for w in &mut usage.models {
+        if w.resets_at.is_some_and(|r| r <= now_s) {
+            w.pct = 0.0;
+            w.resets_at = None;
+        }
+    }
     Some(usage)
+}
+
+fn parse_reset(v: Option<&Value>) -> Option<f64> {
+    v.and_then(Value::as_str)
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.timestamp() as f64)
 }
 
 fn parse_window(v: Option<&Value>) -> Option<UsageWindow> {
     let v = v?;
     let pct = v.get("utilization").and_then(Value::as_f64)?;
-    let resets_at = v
-        .get("resets_at")
-        .and_then(Value::as_str)
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|d| d.timestamp() as f64);
+    let resets_at = parse_reset(v.get("resets_at"));
     Some(UsageWindow { pct, resets_at })
+}
+
+/// The endpoint's per-model weekly shares: `limits` entries of kind
+/// `weekly_scoped` naming a model (`scope.model.display_name`).
+fn parse_model_windows(body: &Value) -> Vec<ModelWindow> {
+    let Some(limits) = body.get("limits").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    limits
+        .iter()
+        .filter(|l| l.get("kind").and_then(Value::as_str) == Some("weekly_scoped"))
+        .filter_map(|l| {
+            let model = l
+                .pointer("/scope/model/display_name")
+                .and_then(Value::as_str)?
+                .trim();
+            if model.is_empty() {
+                return None;
+            }
+            Some(ModelWindow {
+                model: model.to_string(),
+                pct: l.get("percent").and_then(Value::as_f64)?,
+                resets_at: parse_reset(l.get("resets_at")),
+            })
+        })
+        .collect()
 }
 
 /// One call to the subscription usage endpoint, with the account's current
@@ -838,6 +917,7 @@ fn poll_usage(id: &str) -> Option<Usage> {
     Some(Usage {
         five_hour,
         seven_day,
+        models: parse_model_windows(&body),
         updated_at: now_ms(),
         source: "poll".into(),
     })
@@ -951,7 +1031,8 @@ fn send_hello(id: &str) -> bool {
 fn read_back_window(id: &str) -> bool {
     for _ in 0..READ_BACK_TRIES {
         std::thread::sleep(READ_BACK_EVERY);
-        if let Some(usage) = poll_usage(id) {
+        if let Some(mut usage) = poll_usage(id) {
+            store_models(id, std::mem::take(&mut usage.models));
             store_usage(id, &usage);
             if !needs_window(Some(&usage), (now_ms() / 1000) as f64) {
                 return true;
@@ -962,7 +1043,8 @@ fn read_back_window(id: &str) -> bool {
 }
 
 /// Background loop: every account whose usage is older than 30 min (no live
-/// session reporting it) gets one poll, at most once per 30 min per account.
+/// session reporting it), or whose per-model shares are (only a poll reads
+/// them), gets one poll, at most once per 30 min per account.
 /// Then every signed-in account with no 5-hour window running gets a hello.
 /// `should_run` is asked each minute: Arkadia Lab stands in only while the
 /// daily Arkadia is closed, else the hellos would go out twice.
@@ -985,13 +1067,21 @@ pub fn spawn_usage_poller(should_run: fn() -> bool) {
             let every = POLL_EVERY.as_millis() as i64;
             for id in &ids {
                 let fresh = stored_usage(id).is_some_and(|u| now - u.updated_at < every);
+                // A live session keeps the usage fresh, never the per-model
+                // shares: those ask for a poll on their own.
+                let models_fresh =
+                    stored_models(id).is_some_and(|m| now - m.updated_at < every);
                 let tried = last_attempt.get(id).is_some_and(|t| now - t < every);
-                if fresh || tried {
+                if (fresh && models_fresh) || tried {
                     continue;
                 }
                 last_attempt.insert(id.clone(), now);
-                if let Some(usage) = poll_usage(id) {
-                    store_usage(id, &usage);
+                if let Some(mut usage) = poll_usage(id) {
+                    store_models(id, std::mem::take(&mut usage.models));
+                    // Live figures, fresher than a poll, keep their place.
+                    if !fresh {
+                        store_usage(id, &usage);
+                    }
                 }
             }
             for id in &ids {
@@ -1104,6 +1194,8 @@ pub fn account_report_usage(
         &Usage {
             five_hour,
             seven_day,
+            // Kept in their own file (`store_models`): only the poll has them.
+            models: Vec::new(),
             updated_at: now_ms(),
             source: "live".into(),
         },
@@ -1350,6 +1442,33 @@ mod tests {
             ..week.clone()
         };
         assert_eq!(merge_live(Some(week.clone()), Some(lower)), Some(week));
+    }
+
+    #[test]
+    fn the_polls_model_shares_come_from_the_scoped_weekly_limits() {
+        // Shaped like the endpoint's answer of 12/11/2026 (account 3).
+        let body = serde_json::json!({
+            "limits": [
+                { "kind": "session", "percent": 64, "scope": null,
+                  "resets_at": "2026-11-12T14:10:00.221218+00:00" },
+                { "kind": "weekly_all", "percent": 54, "scope": null,
+                  "resets_at": "2026-11-15T06:59:59.221240+00:00" },
+                { "kind": "weekly_scoped", "percent": 33,
+                  "resets_at": "2026-11-15T07:00:00.221404+00:00",
+                  "scope": { "model": { "id": null, "display_name": "Fable" }, "surface": null } },
+                { "kind": "weekly_scoped", "percent": 10,
+                  "scope": { "model": null, "surface": "cowork" } }
+            ]
+        });
+        assert_eq!(
+            parse_model_windows(&body),
+            vec![ModelWindow {
+                model: "Fable".into(),
+                pct: 33.0,
+                resets_at: Some(1_794_726_000.0),
+            }]
+        );
+        assert!(parse_model_windows(&serde_json::json!({ "limits": null })).is_empty());
     }
 
     #[test]

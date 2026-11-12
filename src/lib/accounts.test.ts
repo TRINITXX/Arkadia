@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  accountBlocks,
+  blockedFor,
   claudePanesToSwitch,
   formatCountdown,
+  formatIn,
   formatPct,
+  formatReturnDate,
   planAutoSwitch,
   tabAccountMarks,
   type Account,
@@ -148,6 +152,22 @@ describe("planAutoSwitch", () => {
   });
 });
 
+describe("a limit on one model", () => {
+  const blocked = { main: 5, "c:fable": 9, "c:opus": 7 };
+
+  it("keeps the account's other models free", () => {
+    expect(blockedFor(blocked, "c", "fable")).toBe(9);
+    expect(blockedFor(blocked, "c", "sonnet")).toBe(0);
+    // A model not known: the safe side, any of its blocks.
+    expect(blockedFor(blocked, "c", null)).toBe(9);
+    expect(blockedFor(blocked, "main", "fable")).toBe(5);
+  });
+
+  it("blocks the whole account for the terminal, which knows no model", () => {
+    expect(accountBlocks(blocked)).toEqual({ main: 5, c: 9 });
+  });
+});
+
 describe("formatPct", () => {
   it("rounds and shows -- when unknown", () => {
     expect(formatPct({ pct: 61.6 })).toBe("62 %");
@@ -163,5 +183,33 @@ describe("formatCountdown", () => {
     expect(formatCountdown(at(9 * 60_000 + 1), now)).toBe("0:10");
     expect(formatCountdown(at(-1000), now)).toBeNull();
     expect(formatCountdown(null, now)).toBeNull();
+  });
+});
+
+describe("a card's return times", () => {
+  it("says the 5 hours' wait in words, nothing once past", () => {
+    const now = 1_000_000_000_000;
+    const at = (min: number) => now / 1000 + min * 60;
+    expect(formatIn(at(135), now)).toBe("dans 2 h 15");
+    expect(formatIn(at(65), now)).toBe("dans 1 h 05");
+    expect(formatIn(at(120), now)).toBe("dans 2 h");
+    expect(formatIn(at(45), now)).toBe("dans 45 min");
+    expect(formatIn(at(0.5), now)).toBe("dans < 1 min");
+    expect(formatIn(at(-1), now)).toBeNull();
+    expect(formatIn(null, now)).toBeNull();
+  });
+
+  it("dates the week's return, today and tomorrow in words", () => {
+    const now = new Date(2026, 10, 12, 14, 0);
+    const at = (d: Date) => d.getTime() / 1000;
+    expect(formatReturnDate(at(new Date(2026, 10, 12, 16, 0)), now)).toBe(
+      "aujourd'hui à 16:00",
+    );
+    expect(formatReturnDate(at(new Date(2026, 10, 13, 8, 0)), now)).toBe(
+      "demain à 08:00",
+    );
+    expect(formatReturnDate(at(new Date(2026, 10, 15, 8, 0)), now)).toBe(
+      "dim. 15/11 à 08:00",
+    );
   });
 });

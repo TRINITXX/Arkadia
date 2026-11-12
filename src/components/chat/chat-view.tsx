@@ -85,6 +85,8 @@ export interface ChatViewProps {
   state: ChatState;
   /** The pane's id: its Chrome window, when Claude drives one. */
   paneId: string;
+  /** The pane's account: the week's card names it, with Fable's share. */
+  accountId?: string;
   /** Subagent conversations loaded so far, by agent id. */
   agents: Record<string, ChatState>;
   cwd: string | null;
@@ -157,6 +159,7 @@ export const ChatView = memo(ChatViewBody, restsWhileHidden);
 function ChatViewBody({
   state,
   paneId,
+  accountId,
   agents,
   cwd,
   isActive,
@@ -507,6 +510,7 @@ function ChatViewBody({
       />
       <ChatStatusBar
         state={state}
+        accountId={accountId}
         onContextDetail={sdkActions?.contextDetail}
         onMcpOpen={sdkActions?.refreshMcp}
       />

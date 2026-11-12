@@ -6,12 +6,12 @@ import {
   ACCOUNT_COLORS,
   MAIN_ACCOUNT_ID,
   accountTooltip,
-  formatCountdown,
-  formatPct,
+  formatIn,
+  formatReset,
   type Account,
   type AccountsState,
-  type UsageWindow,
 } from "@/lib/accounts";
+import { useModelQuota } from "@/lib/accountQuota";
 
 interface AccountsPanelProps {
   state: AccountsState;
@@ -26,8 +26,8 @@ interface AccountsPanelProps {
 }
 
 /**
- * "Comptes" button of the sidepanel. Clicking it opens a popover with one line
- * per Claude account and its 5-hour and weekly usage. Clicking a line makes it
+ * "Comptes" button of the sidepanel. Clicking it opens a popover with one card
+ * per Claude account: its 5-hour, weekly and Fable usage, each with its return. Clicking a line makes it
  * the account new tabs open on; right-click for login / rename / colour /
  * remove.
  */
@@ -112,29 +112,14 @@ export function AccountsPanel({
             style={{
               left: anchor.left,
               bottom: window.innerHeight - anchor.top + 4,
-              width: Math.max(anchor.width, 260),
+              width: Math.max(anchor.width, 300),
+              // Cards are tall: a low window scrolls them, never cuts the top.
+              maxHeight: Math.max(120, anchor.top - 8),
+              overflowY: "auto",
             }}
           >
             <div className="mb-0.5 flex items-center gap-1 px-1.5 text-[10px] uppercase tracking-wide text-zinc-500">
               <span className="flex-1">Comptes</span>
-              <span
-                className="w-9 text-right normal-case"
-                title="Limite des 5 heures"
-              >
-                5 h
-              </span>
-              <span
-                className="w-8 text-right normal-case"
-                title="Temps restant avant la remise à zéro des 5 heures"
-              >
-                reset
-              </span>
-              <span
-                className="w-9 text-right normal-case"
-                title="Limite de la semaine"
-              >
-                sem.
-              </span>
               <button
                 type="button"
                 onClick={onAdd}
@@ -150,24 +135,26 @@ export function AccountsPanel({
                 <Plus size={12} />
               </button>
             </div>
-            {state.accounts.map((account) => (
-              <AccountRow
-                key={account.id}
-                account={account}
-                current={account.id === state.current}
-                renaming={renamingId === account.id}
-                now={now}
-                onSelect={() => {
-                  onSelect(account.id);
-                  setAnchor(null);
-                }}
-                onContextMenu={(x, y) => setMenu({ account, x, y })}
-                onRenameDone={(label) => {
-                  setRenamingId(null);
-                  if (label !== null) onRename(account.id, label);
-                }}
-              />
-            ))}
+            <div className="flex flex-col gap-1">
+              {state.accounts.map((account) => (
+                <AccountRow
+                  key={account.id}
+                  account={account}
+                  current={account.id === state.current}
+                  renaming={renamingId === account.id}
+                  now={now}
+                  onSelect={() => {
+                    onSelect(account.id);
+                    setAnchor(null);
+                  }}
+                  onContextMenu={(x, y) => setMenu({ account, x, y })}
+                  onRenameDone={(label) => {
+                    setRenamingId(null);
+                    if (label !== null) onRename(account.id, label);
+                  }}
+                />
+              ))}
+            </div>
           </div>,
           document.body,
         )}
@@ -210,6 +197,11 @@ function AccountRow({
   onRenameDone,
 }: AccountRowProps) {
   const u = account.usage;
+  const fable = useModelQuota(account.id);
+  // A refusal holds it out (a « Fable limit »), whatever the poll's figure.
+  const fableOut =
+    fable?.blockedUntil && fable.blockedUntil > now ? fable.blockedUntil : null;
+  const at = new Date(now);
   return (
     <div
       role="button"
@@ -225,88 +217,109 @@ function AccountRow({
       title={`${accountTooltip(account)}${
         current ? "\n\nLes nouveaux onglets s'ouvrent sur ce compte" : ""
       }`}
-      className={`flex cursor-pointer items-center gap-1 rounded px-1.5 py-[3px] text-xs ${
+      className={`cursor-pointer rounded border px-2 py-1.5 text-xs ${
         current
-          ? "bg-zinc-800 text-zinc-100"
-          : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+          ? "border-zinc-700 bg-zinc-900 text-zinc-100"
+          : "border-zinc-800/70 text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200"
       }`}
     >
-      <AccountDot color={account.color} label={account.label} />
-      {renaming ? (
-        <RenameInput
-          initial={account.customLabel ? account.label : ""}
-          placeholder={account.label}
-          onDone={onRenameDone}
-        />
+      <div className="flex items-center gap-1.5">
+        <AccountDot color={account.color} label={account.label} />
+        {renaming ? (
+          <RenameInput
+            initial={account.customLabel ? account.label : ""}
+            placeholder={account.label}
+            onDone={onRenameDone}
+          />
+        ) : (
+          <span
+            className={`min-w-0 flex-1 truncate ${account.loggedIn ? "" : "italic text-zinc-500"}`}
+          >
+            {account.label}
+          </span>
+        )}
+        {current && !renaming && (
+          <span className="shrink-0 rounded-full border border-zinc-700 px-1.5 text-[9.5px] leading-[14px] text-zinc-400">
+            nouveaux onglets
+          </span>
+        )}
+      </div>
+      {account.loggedIn ? (
+        <div className={account.stale ? "opacity-40" : ""}>
+          <QuotaLine
+            label="5 heures"
+            pct={u?.fiveHour?.pct}
+            color={account.color}
+            when={formatIn(u?.fiveHour?.resetsAt, now)}
+          />
+          <QuotaLine
+            label="Semaine"
+            pct={u?.sevenDay?.pct}
+            color={account.color}
+            when={formatReset(u?.sevenDay?.resetsAt, at)}
+          />
+          {fable && (
+            <QuotaLine
+              label={fable.model}
+              pct={fableOut ? 100 : fable.pct}
+              color={MODEL_SHARE_COLOR}
+              out={fableOut !== null}
+              when={
+                fableOut
+                  ? `retour ${formatReset(fableOut / 1000, at) ?? ""}`
+                  : formatReset(fable.resetsAt, at)
+              }
+            />
+          )}
+        </div>
       ) : (
-        <span
-          className={`min-w-0 flex-1 truncate ${account.loggedIn ? "" : "italic text-zinc-500"}`}
-        >
-          {account.label}
-        </span>
+        <div className="mt-1 text-[10.5px] text-zinc-500">
+          Non connecté · clic droit pour se connecter
+        </div>
       )}
-      <Gauge window={u?.fiveHour} color={account.color} stale={account.stale} />
-      <Countdown
-        resetsAt={u?.fiveHour?.resetsAt}
-        now={now}
-        stale={account.stale}
-      />
-      <Gauge window={u?.sevenDay} color={account.color} stale={account.stale} />
-      {/* Keeps the gauges aligned under the header's "+" column. */}
-      <span className="ml-0.5 w-4 shrink-0" />
     </div>
   );
 }
 
-function Gauge({
-  window,
+/** A model's own share (Fable): the chat's accent, apart from the account's colour. */
+const MODEL_SHARE_COLOR = "#e2865f";
+
+/**
+ * One quota of a card (the user's pick B of 12/11/2026): its name, its bar,
+ * its figure, red from 90 %, and when it comes back.
+ */
+function QuotaLine({
+  label,
+  pct,
   color,
-  stale,
+  when,
+  out = false,
 }: {
-  window: UsageWindow | null | undefined;
+  label: string;
+  pct: number | null | undefined;
   color: string;
-  stale: boolean;
+  when: string | null;
+  /** A refusal holds it: « épuisé », whatever the figure. */
+  out?: boolean;
 }) {
-  const pct = window ? Math.min(100, Math.max(0, window.pct)) : 0;
-  const high = pct >= 90;
+  const shown =
+    pct === null || pct === undefined ? null : Math.min(100, Math.max(0, pct));
+  const high = out || (shown ?? 0) >= 90;
   return (
-    <div
-      className={`flex w-9 shrink-0 flex-col items-end ${stale ? "opacity-40" : ""}`}
-    >
-      <span
-        className={`text-[10px] leading-3 tabular-nums ${high ? "text-red-400" : ""}`}
-      >
-        {formatPct(window)}
-      </span>
-      <span className="mt-[1px] h-[2px] w-full rounded-full bg-zinc-800">
+    <div className="mt-1 grid grid-cols-[52px_minmax(0,1fr)_40px_72px] items-center gap-1.5 text-[10.5px]">
+      <span className="truncate text-zinc-500">{label}</span>
+      <span className="h-1 overflow-hidden rounded-full bg-zinc-800">
         <span
           className="block h-full rounded-full"
-          style={{ width: `${pct}%`, backgroundColor: color }}
+          style={{ width: `${shown ?? 0}%`, backgroundColor: color }}
         />
       </span>
-    </div>
-  );
-}
-
-/** Time left before the 5-hour reset, laid out like a gauge's figure. */
-function Countdown({
-  resetsAt,
-  now,
-  stale,
-}: {
-  resetsAt: number | null | undefined;
-  now: number;
-  stale: boolean;
-}) {
-  return (
-    <div
-      className={`flex w-8 shrink-0 flex-col items-end ${stale ? "opacity-40" : ""}`}
-    >
-      <span className="text-[10px] leading-3 tabular-nums">
-        {formatCountdown(resetsAt, now) ?? "--"}
+      <span
+        className={`text-right tabular-nums ${high ? "text-red-400" : "text-zinc-300"}`}
+      >
+        {out ? "épuisé" : shown === null ? "--" : `${Math.round(shown)} %`}
       </span>
-      {/* The gauges' bar height, so the figures line up. */}
-      <span className="mt-[1px] h-[2px]" />
+      <span className="truncate text-right text-zinc-500">{when ?? ""}</span>
     </div>
   );
 }

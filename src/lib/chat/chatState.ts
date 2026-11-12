@@ -229,6 +229,12 @@ export interface RateWindow {
   resetsAt?: number;
 }
 
+/** The week's share one model may use (Fable), from `/usage`. */
+export interface ModelRateWindow extends RateWindow {
+  /** As the server names it: « Fable ». */
+  model: string;
+}
+
 export interface ChatState {
   items: ChatItem[];
   sessionId: string | null;
@@ -258,7 +264,12 @@ export interface ChatState {
   thinkingTokens: number;
   /** 0-100 of the window usable before auto-compact. */
   context: { percentage: number } | null;
-  limits: { fiveHour?: RateWindow; sevenDay?: RateWindow };
+  limits: {
+    fiveHour?: RateWindow;
+    sevenDay?: RateWindow;
+    /** Per-model weekly shares (Fable): `/usage` alone says them. */
+    models?: ModelRateWindow[];
+  };
   historyLoaded: boolean;
   historyTruncated: boolean;
   /** The oldest past message loaded: the next older page ends before it. */
@@ -1008,8 +1019,45 @@ function addUsage(state: ChatState, rateLimits: JsonObject | null): ChatState {
       fiveHour: read(rateLimits.five_hour, "session") ?? state.limits.fiveHour,
       sevenDay:
         read(rateLimits.seven_day, "weekly_all") ?? state.limits.sevenDay,
+      models: modelWindows(rateLimits, rows) ?? state.limits.models,
     },
   };
+}
+
+/**
+ * The per-model weekly shares: the SDK's `model_scoped`, else the server's
+ * `weekly_scoped` rows naming a model. Undefined: nothing said of them.
+ */
+function modelWindows(
+  rateLimits: JsonObject,
+  rows: JsonObject[],
+): ModelRateWindow[] | undefined {
+  const window = (
+    model: unknown,
+    percent: unknown,
+    resetsAt: unknown,
+  ): ModelRateWindow[] => {
+    const name = str(model)?.trim();
+    const pct = num(percent);
+    return name && pct !== undefined
+      ? [
+          {
+            model: name,
+            utilization: pct / 100,
+            resetsAt: epochSeconds(resetsAt),
+          },
+        ]
+      : [];
+  };
+  if (Array.isArray(rateLimits.model_scoped))
+    return rateLimits.model_scoped
+      .map(obj)
+      .flatMap((m) => window(m.display_name, m.utilization, m.resets_at));
+  const scoped = rows.filter((r) => r.kind === "weekly_scoped");
+  if (scoped.length === 0) return undefined;
+  return scoped.flatMap((r) =>
+    window(obj(obj(r.scope).model).display_name, r.percent, r.resets_at),
+  );
 }
 
 /**
