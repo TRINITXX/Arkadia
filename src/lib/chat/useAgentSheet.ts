@@ -7,6 +7,7 @@ import {
 } from "@/lib/chat/chatAgentView";
 import type { ChatState, Subagent } from "@/lib/chat/chatState";
 import type { WorkflowAgent } from "@/lib/chat/chatTasks";
+import { useReadAtEnd } from "@/lib/chat/useReadAtEnd";
 
 /** A running workflow agent's transcript is read again this often while shown. */
 const REFRESH_MS = 2_000;
@@ -16,7 +17,7 @@ const REFRESH_MS = 2_000;
  * workflow card or the drawer. A subagent this chat ran shows from its live
  * messages (`agentMessages`), so it follows the agent as it works; any other
  * (a resumed session's, a workflow's) from its transcript, read again every
- * 2 s while it runs and its tab shows.
+ * 2 s while it runs and its tab shows, and once more when it ends.
  */
 export function useAgentSheet(
   state: ChatState,
@@ -62,6 +63,11 @@ export function useAgentSheet(
     const id = window.setInterval(() => onOpenAgent(taskId), REFRESH_MS);
     return () => window.clearInterval(id);
   }, [taskId, running, streamed, shown, onOpenAgent]);
+  // Its end: one more read, its report came after the latest. Never to a
+  // chat ended (its agents turn « interrompu »): its server may be gone,
+  // and Rust would start one again for the read.
+  const mayRead = !streamed && shown && state.closed === null;
+  useReadAtEnd(taskId, running, mayRead, onOpenAgent);
 
   const openSheet = useCallback(
     (agent: Subagent) => {

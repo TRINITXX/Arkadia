@@ -1,10 +1,11 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   agentConversation,
   currentAgent,
   withRunningCalls,
 } from "@/lib/chat/chatAgentView";
 import type { ChatState, Subagent } from "@/lib/chat/chatState";
+import { useReadAtEnd } from "@/lib/chat/useReadAtEnd";
 
 /** A running subagent's transcript is read again this often while shown. */
 const REFRESH_MS = 2_000;
@@ -13,9 +14,9 @@ const REFRESH_MS = 2_000;
  * A subagent's conversation, as the desktop's sheet builds it
  * (`useAgentSheet`): from its live messages while this chat runs it, so it
  * follows the agent as it works; else from its transcript (`agent_history`,
- * `PhoneChatLive.agents`), asked on open and every 2 s while it runs. The
- * ask on open is the user's (a finished chat's agents read too); the
- * refresh, the app's own, waits on a running chat.
+ * `PhoneChatLive.agents`), asked on open, every 2 s while it runs and once
+ * more when it ends. The ask on open is the user's (a finished chat's
+ * agents read too); the others, the app's own, wait on a running chat.
  */
 export function useAgentConversation(
   state: ChatState,
@@ -65,6 +66,19 @@ export function useAgentConversation(
     const id = setInterval(() => openAgent(taskId, true), REFRESH_MS);
     return () => clearInterval(id);
   }, [taskId, running, live, shown, readable, openAgent]);
+  // Its end: one more read, the app's own too, its report came after the
+  // latest. A sheet down forgets it: it keeps its agent, and opening it
+  // again reads already.
+  const readQuiet = useCallback(
+    (id: string) => openAgent(id, true),
+    [openAgent],
+  );
+  useReadAtEnd(
+    shown ? taskId : undefined,
+    running,
+    !live && readable,
+    readQuiet,
+  );
 
   return { agent, conversation };
 }

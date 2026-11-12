@@ -71,6 +71,26 @@ export function withRunningCalls(conversation: ChatState): ChatState {
   };
 }
 
+/**
+ * Whether a sheet fed by its agent's transcript reads it once more: the
+ * refresh stops with the agent, and its report and its last call's result
+ * are written after the latest read. `ran`: the agent the sheet saw running,
+ * kept until that read is made. `ready`: the sheet may ask now (shown, not
+ * fed live); an end met meanwhile is read once it is. An agent opened
+ * already ended was read on open: no other read.
+ */
+export function readAtEnd(
+  ran: string | null,
+  taskId: string | undefined,
+  running: boolean,
+  ready: boolean,
+): { ran: string | null; read: boolean } {
+  if (!taskId) return { ran: null, read: false };
+  if (running) return { ran: taskId, read: false };
+  if (ran !== taskId) return { ran: null, read: false };
+  return ready ? { ran: null, read: true } : { ran, read: false };
+}
+
 /** A workflow agent as the sheet takes it: its conversation is its transcript. */
 export function workflowAgentSubagent(agent: WorkflowAgent): Subagent {
   return {

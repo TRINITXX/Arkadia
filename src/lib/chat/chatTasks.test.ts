@@ -9,6 +9,7 @@ import {
 import {
   agentConversation,
   currentAgent,
+  readAtEnd,
   withRunningCalls,
 } from "@/lib/chat/chatAgentView";
 import {
@@ -437,6 +438,30 @@ describe("subagent cards", () => {
     // Nothing held: the same conversation, no row drawn again.
     const none = agentConversation([]);
     expect(withRunningCalls(none)).toBe(none);
+  });
+
+  it("reads a transcript-fed sheet once more when its agent ends", () => {
+    // Seen running, then ended: one read, its report came after the latest.
+    const ran = readAtEnd(null, "a1", true, true);
+    expect(ran).toEqual({ ran: "a1", read: false });
+    const ended = readAtEnd(ran.ran, "a1", false, true);
+    expect(ended).toEqual({ ran: null, read: true });
+    expect(readAtEnd(ended.ran, "a1", false, true).read).toBe(false);
+    // Ended while its tab was hidden: read once it shows again.
+    const hidden = readAtEnd("a1", "a1", false, false);
+    expect(hidden).toEqual({ ran: "a1", read: false });
+    expect(readAtEnd(hidden.ran, "a1", false, true).read).toBe(true);
+    // Opened already ended (read on open), or another agent's sheet: none.
+    expect(readAtEnd(null, "a1", false, true).read).toBe(false);
+    expect(readAtEnd("a1", "a2", false, true)).toEqual({
+      ran: null,
+      read: false,
+    });
+    // No sheet (the iPhone's, down): its end is forgotten, opening it
+    // again reads already.
+    const down = readAtEnd("a1", undefined, false, true);
+    expect(down.ran).toBeNull();
+    expect(readAtEnd(down.ran, "a1", false, true).read).toBe(false);
   });
 
   it("takes its last action and keeps its messages for the sheet", () => {
