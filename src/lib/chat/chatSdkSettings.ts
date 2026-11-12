@@ -148,10 +148,20 @@ function compareVersions(a: number[], b: number[]): number {
   return 0;
 }
 
+/** The menu's order of the families (the user's pick of 12/11/2026). */
+const FAMILY_ORDER = ["fable", "opus", "sonnet", "haiku"];
+
+const familyRank = (id: string) => {
+  const family = familyVersion(id)?.family;
+  const rank = family ? FAMILY_ORDER.indexOf(family) : -1;
+  return rank < 0 ? FAMILY_ORDER.length : rank;
+};
+
 /**
- * The menu's rows: the latest version of each family (Opus, Sonnet, Haiku,
- * Fable), with its wide-window row; no « Par défaut », no older version
- * (the user's pick of 31/10/2026). A row naming no family stays.
+ * The menu's rows: the latest version of each family, Fable, Opus, Sonnet
+ * then Haiku, each with its wide-window row; no « Par défaut », no older
+ * version (the user's pick of 31/10/2026). A row naming no family stays,
+ * last.
  */
 export function latestModels(models: ModelChoice[]): ModelChoice[] {
   const rows = models
@@ -169,7 +179,8 @@ export function latestModels(models: ModelChoice[]): ModelChoice[] {
       const best = v && latest.get(v.family);
       return !v || !best || compareVersions(v.version, best) === 0;
     })
-    .map(({ m }) => m);
+    .map(({ m }) => m)
+    .sort((a, b) => familyRank(a.model) - familyRank(b.model));
 }
 
 /**

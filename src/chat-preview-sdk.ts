@@ -15,7 +15,7 @@ const MODELS: JsonObject[] = [
   ["default", "claude-opus-5-5", "Default (recommended)", ALL],
   ["opus", "claude-opus-5-5", "Opus 5.5", ALL],
   ["opus[1m]", "claude-opus-5-5[1m]", "Opus 5.5 (1M context)", ALL],
-  ["fable", "claude-fable-5-1", "Fable 5.1", ALL],
+  ["fable", "claude-fable-5-2", "Fable 5.2", ALL],
   ["sonnet", "claude-sonnet-5-5", "Sonnet 5.5", ALL],
   ["haiku", "claude-haiku-5-5", "Haiku 5.5", ALL],
   ["claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001", "Haiku 4.5", []],

@@ -93,13 +93,27 @@ describe("model menu", () => {
           resolvedModel: "claude-sonnet-5-5",
           displayName: "Sonnet 5.5",
         },
+        {
+          value: "fable",
+          resolvedModel: "claude-fable-5-2",
+          displayName: "Fable 5.2",
+        },
+        {
+          value: "claude-fable-5-1",
+          resolvedModel: "claude-fable-5-1",
+          displayName: "Fable 5.1",
+        },
+        { value: "custom", resolvedModel: "custom", displayName: "Custom" },
       ]),
     );
+    // Fable first, then Opus, Sonnet, Haiku: not Claude Code's order.
     expect(rows.map((m) => m.value)).toEqual([
+      "fable",
       "opus",
       "opus[1m]",
-      "haiku",
       "sonnet",
+      "haiku",
+      "custom",
     ]);
   });
 
