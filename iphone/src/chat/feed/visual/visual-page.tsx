@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ComponentRef,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Linking, StyleSheet, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
@@ -102,6 +108,7 @@ export function VisualPage({
   const laidHeight = useRef(0);
   const verifiedRef = useRef(verified);
   const chooseRef = useRef(onChoose);
+  const webRef = useRef<ComponentRef<typeof WebView>>(null);
   useEffect(() => {
     verifiedRef.current = verified;
     chooseRef.current = onChoose;
@@ -121,7 +128,13 @@ export function VisualPage({
           !verifiedRef.current,
         ),
       );
-    } else if (m.kind === "choose") chooseRef.current(m.text);
+    } else if (m.kind === "choose") {
+      chooseRef.current(m.text);
+      // The page may say so (the choice kit's « Ajouté »): it went in.
+      webRef.current?.injectJavaScript(
+        'window.dispatchEvent(new Event("arkadia-chosen"));true;',
+      );
+    }
     else if (m.kind === "link") openLink(m.url);
   };
 
@@ -136,6 +149,7 @@ export function VisualPage({
       }}
     >
       <WebView
+        ref={webRef}
         key={life}
         source={source}
         style={styles.web}

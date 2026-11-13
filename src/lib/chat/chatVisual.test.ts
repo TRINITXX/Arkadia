@@ -38,6 +38,7 @@ import {
   type VisualReport,
 } from "@/lib/chat/chatVisual";
 import { createVisualProbe, type VisualCheck } from "@/lib/chat/chatVisualDom";
+import { usesChoiceKit, VISUAL_KIT_JS } from "@/lib/chat/visualKit";
 import { visualResult } from "@chat-server/visualHtml";
 
 const tool = (patch: Partial<ToolItem> = {}): ToolItem => ({
@@ -60,6 +61,22 @@ describe("visualDocument", () => {
     expect(csp).toBeGreaterThan(0);
     expect(theme).toBeGreaterThan(csp);
     expect(page).toBeGreaterThan(doc.indexOf("window.parent"));
+  });
+
+  it("adds the choice kit after the bootstrap, only to a page that uses it", () => {
+    const page = '<div class="ark-choice"><div class="ark-question"></div></div>';
+    const doc = visualDocument(page, "t");
+    const kit = doc.indexOf('id="arkadia-kit"');
+    expect(kit).toBeGreaterThan(doc.indexOf("window.parent"));
+    expect(kit).toBeLessThan(doc.indexOf('class="ark-choice"'));
+    expect(visualDocument("<p>ark-choice in a sentence</p>")).not.toContain(
+      "arkadia-kit",
+    );
+    expect(usesChoiceKit("<div class='box ark-choice wide'>")).toBe(true);
+    // Its script stays one tag, whatever it holds.
+    expect(VISUAL_KIT_JS).not.toMatch(/<\/script/i);
+    // It moves the page's nodes, never parses their text again.
+    expect(VISUAL_KIT_JS).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML/);
   });
 
   it("gives a page without a doctype one, so it never renders in quirks mode", () => {

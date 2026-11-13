@@ -181,9 +181,14 @@ export function ChatVisualFrame({
         // the pointer is over the visual (the user's report of 01/11/2026).
         else if (m.kind === "wheel") scrollAround(iframe, m);
         // Only the user's click in this frame acts (`frameGestureOk`).
-        else if (m.kind === "choose" && frameGestureNow(iframe))
-          handlers.current.onChoose?.(m.text);
-        else if (m.kind === "link" && frameGestureNow(iframe))
+        else if (m.kind === "choose" && frameGestureNow(iframe)) {
+          const choose = handlers.current.onChoose;
+          if (choose) {
+            choose(m.text);
+            // The page may say so (the choice kit's « Ajouté »): it went in.
+            iframe.contentWindow?.postMessage({ arkadiaVisualChosen: 1 }, "*");
+          }
+        } else if (m.kind === "link" && frameGestureNow(iframe))
           handlers.current.onLink?.(m.url);
       },
       fill ? undefined : (roomRef.current ?? undefined),

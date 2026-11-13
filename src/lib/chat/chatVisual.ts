@@ -2,6 +2,11 @@ import shell from "@/lib/chat/visual-frame.html?raw";
 import { CHAT_FONTS, CHAT_TOKENS as T } from "@/lib/chat/chatTheme";
 import type { ToolItem } from "@/lib/chat/chatGroups";
 import {
+  usesChoiceKit,
+  VISUAL_KIT_CSS,
+  VISUAL_KIT_JS,
+} from "@/lib/chat/visualKit";
+import {
   VISUAL_CHECKED_CLEAN,
   VISUAL_TOOL_NAME,
   type VisualReport,
@@ -155,7 +160,7 @@ function report(){var r=document.documentElement,im=document.images;for(var i=0;
 return{errors:errors,consoleErrors:consoleErrors,blocked:blocked,height:height(),width:r.clientWidth,scrollWidth:r.scrollWidth,empty:!visible(),followsFrame:false,unfinished:!loaded};}
 try{dp(window,"arkadia",{value:Object.freeze({choose:function(t){post("choose",String(t==null?"":t).slice(0,4000));}})});}catch(x){}
 if(framed){
-window.addEventListener("message",function(e){var d=e.data;if(e.source!==P||!d)return;if(d.arkadiaVisualProbe===1)post("report",report());
+window.addEventListener("message",function(e){var d=e.data;if(e.source!==P||!d)return;if(d.arkadiaVisualProbe===1)post("report",report());if(d.arkadiaVisualChosen===1)window.dispatchEvent(new Event("arkadia-chosen"));
 if(d.arkadiaVisualFit===1&&typeof d.height==="number"){if(isFinite(d.height))document.documentElement.style.setProperty("--ark-fit-h",Math.max(${VISUAL_MIN_ROOM},Math.round(d.height))+"px");}});
 document.addEventListener("click",function(e){if(!e.isTrusted||e.defaultPrevented||e.button!==0)return;var a=e.target&&e.target.closest?e.target.closest("a[href]"):null,u;if(!a)return;
 try{u=new URL(a.getAttribute("href"),document.baseURI);}catch(x){return;}if(u.href.split("#")[0]===location.href.split("#")[0])return;e.preventDefault();if(/^https?:$/.test(u.protocol))post("link",u.href);});
@@ -183,7 +188,12 @@ export const VISUAL_BOOTSTRAP = visualBootstrap("");
 const bootstrapTag = (token: string) =>
   `<script>${visualBootstrap(token).replace(/<\/script/gi, "<\\/script")}</script>`;
 
-const head = (token: string, fit?: number, card = false) =>
+/** The choice kit (`visualKit.ts`), after the bootstrap whose `arkadia.choose` it uses. */
+const kitTags = () =>
+  `<style id="arkadia-kit">${VISUAL_KIT_CSS}</style>` +
+  `<script>${VISUAL_KIT_JS.replace(/<\/script/gi, "<\\/script")}</script>`;
+
+const head = (token: string, fit?: number, card = false, kit = false) =>
   '<meta charset="utf-8">' +
   `<meta http-equiv="Content-Security-Policy" content="${VISUAL_PAGE_CSP}">` +
   // No DNS lookups ahead of links: a name looked up can carry data out.
@@ -199,7 +209,9 @@ const head = (token: string, fit?: number, card = false) =>
   // scrollbar) is cut at its margin. The probe still measures the real
   // width and tells Claude; « Agrandir » shows the page as written.
   (card ? '<style id="arkadia-card">html{overflow-x:hidden}</style>' : "") +
-  bootstrapTag(token);
+  bootstrapTag(token) +
+  // Only a page that offers options the house way gets the kit.
+  (kit ? kitTags() : "");
 
 /**
  * The page's markup as the shell's policy leaves it (`visual-frame.html`):
@@ -231,12 +243,13 @@ export function visualDocument(
   card = false,
 ): string {
   const page = inertFrames(html);
+  const top = head(token, fit, card, usesChoiceKit(page));
   const doctype = /^\uFEFF?\s*<!doctype[^>]*>/i.exec(page);
   if (doctype) {
     const at = doctype[0].length;
-    return `${page.slice(0, at)}${head(token, fit, card)}${page.slice(at)}`;
+    return `${page.slice(0, at)}${top}${page.slice(at)}`;
   }
-  return `<!doctype html>${head(token, fit, card)}${page}`;
+  return `<!doctype html>${top}${page}`;
 }
 
 /**
