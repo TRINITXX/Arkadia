@@ -7,6 +7,12 @@
  * figures and letters, one tab card per group of questions, « Valider mes
  * choix » at the bottom right. Every session's choices look the same.
  *
+ * A picture in an option (a mockup) takes its card's width, up to its own
+ * size: it drops the cap that fits media to the pane's height, and a max-width
+ * the page's CSS gives it, which together left a phone screenshot a third of
+ * its card wide (Alexis, 13/11/2026). One with a width, height or style
+ * attribute stays as the page sized it.
+ *
  * Added to a page only when it uses the kit (`usesChoiceKit`). The kit moves
  * the page's own nodes into its cards, never re-parses their text, and keeps
  * whatever it has no slot for where the page put it.
@@ -69,6 +75,8 @@ export const VISUAL_KIT_CSS = `
 .ark-body{border-top:1px solid var(--border);padding-top:12px;font-size:15px;line-height:1.6;color:var(--ark-read);text-wrap:pretty;min-width:0}
 .ark-body>:first-child{margin-top:0}.ark-body>:last-child{margin-bottom:0}
 .ark-body p{margin:0 0 9px}
+.ark-opt :where(img,video):not([width]):not([height]):not([style]){max-width:100%;max-height:none}
+:where(.ark-opt :is(img,video):not([width]):not([height]):not([style])){display:block;margin-inline:auto}
 .ark-reco{position:absolute;top:-10px;right:16px;font-size:11.5px;font-weight:600;letter-spacing:.02em;line-height:18px;color:var(--accent);background:var(--bg);border:1px solid color-mix(in srgb,var(--accent) 50%,transparent);border-radius:999px;padding:0 9px;pointer-events:none}
 .ark-note{font-size:15px;line-height:1.55;color:var(--muted);text-wrap:pretty;background:var(--card);border-radius:14px;padding:14px 18px;box-shadow:var(--ark-ring)}
 .ark-note>:first-child{margin-top:0}.ark-note>:last-child{margin-bottom:0}

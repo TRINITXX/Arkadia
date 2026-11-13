@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Window } from "happy-dom";
-import { VISUAL_KIT_JS } from "@/lib/chat/visualKit";
+import { VISUAL_THEME_CSS } from "@/lib/chat/chatVisual";
+import { VISUAL_KIT_CSS, VISUAL_KIT_JS } from "@/lib/chat/visualKit";
 
 /** A page with the kit run over it, in a window of its own; `sent`: what it chose. */
 function page(body: string, framed = true) {
@@ -59,13 +60,15 @@ const GROUPS = `<div class="ark-choice" data-intro="Mes choix pour les mails">
 
 describe("the choice kit", () => {
   it("takes the width its options need, not the whole pane", () => {
-    const few = page(`<div class="ark-choice"><div class="ark-question" data-title="Hébergement">
+    const few =
+      page(`<div class="ark-choice"><div class="ark-question" data-title="Hébergement">
       <div class="ark-option" data-reco>Vercel, gratuit</div><div class="ark-option">Le VPS 1</div><div class="ark-option">Cloudflare Pages</div>
     </div></div>`);
     const fewWidth = parseInt(few.q(".ark-choice").style.maxWidth, 10);
     expect(fewWidth).toBeLessThan(600);
     // Mockups or pictures: the frame's width, never a guess from their text.
-    const mocks = page(`<div class="ark-choice"><div class="ark-question" data-title="Design">
+    const mocks =
+      page(`<div class="ark-choice"><div class="ark-question" data-title="Design">
       <div class="ark-option" data-title="A"><img src="data:," alt=""></div><div class="ark-option" data-title="B"><svg></svg></div>
     </div></div>`);
     expect(mocks.q(".ark-choice").style.maxWidth).toBe("");
@@ -73,6 +76,25 @@ describe("the choice kit", () => {
     expect(parseInt(wide.q(".ark-choice").style.maxWidth, 10)).toBeGreaterThan(
       fewWidth,
     );
+  });
+
+  it("lets a mockup in an option fill its card, never the pane-height cap", () => {
+    const win = new Window({ url: "http://localhost/" });
+    const doc = win.document;
+    // The page's own class narrowed the shot as a session wrote it.
+    doc.head.innerHTML = `<style>${VISUAL_THEME_CSS}</style><style>${VISUAL_KIT_CSS}</style><style>.shot{width:100%;max-width:260px}</style>`;
+    doc.body.innerHTML = `<button class="ark-opt"><div class="ark-body"><img id="shot" class="shot" src="data:,"></div></button>
+      <img id="lone" src="data:,"><button class="ark-opt"><img id="icon" width="20" src="data:,"></button>`;
+    const css = (id: string) => {
+      const el = doc.getElementById(id);
+      if (!el) throw new Error(`no #${id}`);
+      return win.getComputedStyle(el);
+    };
+    expect(css("shot").maxHeight).toBe("none");
+    expect(css("shot").maxWidth).toBe("100%");
+    // Outside a choice the cap holds; a sized picture stays as sized.
+    expect(css("lone").maxHeight).not.toBe("none");
+    expect(css("icon").maxHeight).toBe("");
   });
 
   it("keeps what sits beside options wrapped in a container", () => {
