@@ -744,6 +744,13 @@ export const CHAT_CSS = `
 .chat-edit-confirm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; padding: 8px 10px 8px 14px; border: 1px solid #5a3a2c; border-radius: 14px; background: #241f1c; font-size: 13px; color: #e4e4e7; }
 .chat-edit-confirm > .lucide { width: 15px; height: 15px; color: var(--chat-accent); flex-shrink: 0; }
 .chat-edit-confirm > span { flex: 1; min-width: 200px; }
+/* The usage limit with no account free: what comes next, and the API credits (the user's pick C of 13/11/2026). */
+.chat-limit-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; padding: 8px 10px 8px 14px; border: 1px solid #5a3a2c; border-radius: 14px; background: #241f1c; font-size: 13px; color: #e4e4e7; }
+.chat-limit-banner > .lucide { width: 15px; height: 15px; color: var(--chat-accent); flex-shrink: 0; }
+.chat-limit-banner > span { flex: 1; min-width: 200px; }
+/* A chat on the API credits: their pill where the quota rings were (the user's pick A of 13/11/2026). */
+.chat-status > .chat-credits-pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px; border: 1px solid rgba(52,211,153,.35); background: rgba(52,211,153,.08); color: #6ee7b7; }
+.chat-credits-pill b { color: #d1fae5; font-weight: 600; }
 /* The question sheet (the user's pick A of 31/10/2026): its progress on top, the options as a list with Claude's reco inside its own, the mic left of a field that shows only a caret, then the send. As tall as its question needs: it scrolls only in a pane too short for it, never under 160px (the user's ask of 02/11/2026). */
 .chat-sheet-q { display: flex; flex-direction: column; max-height: max(160px, calc(100cqh - 140px)); margin-bottom: 8px; border: 1px solid #5a3a2c; border-radius: 16px; background: #1d2024; box-shadow: 0 2px 6px rgba(0,0,0,.3); overflow: hidden; }
 .chat-sheet-q .hd { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 8px; border-bottom: 1px solid #2b2e33; flex-shrink: 0; }
@@ -844,6 +851,7 @@ export const CHAT_CSS = `
   .chat-tools-row .chat-chip:has(> .lucide) .lbl { display: none; }
   .chat-tools-row .chat-chip:has(> .lucide) { padding: 3px 7px; }
   .chat-edit-confirm > span { min-width: 0; flex-basis: 100%; }
+  .chat-limit-banner > span { min-width: 0; flex-basis: 100%; }
 }
 /* Attachments: cards above the input and in the user's frame (an image whole, its width following it; any other file by its icon and name), × on hover; the images Claude reads, small in their tool line. */
 .chat-files { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }

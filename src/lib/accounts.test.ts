@@ -8,6 +8,7 @@ import {
   formatPct,
   formatReturnDate,
   planAutoSwitch,
+  subscriptionAccount,
   tabAccountMarks,
   type Account,
   type AccountsState,
@@ -64,6 +65,14 @@ describe("tabAccountMarks", () => {
 
   it("falls back to the main account for a removed account", () => {
     expect(tabAccountMarks([tab("t1", "gone")], two).t1?.label).toBe("Max 5x");
+  });
+});
+
+describe("subscriptionAccount", () => {
+  it("puts a split, a terminal or an artifact of a credits chat on main", () => {
+    expect(subscriptionAccount("api")).toBeUndefined();
+    expect(subscriptionAccount("b2")).toBe("b2");
+    expect(subscriptionAccount(undefined)).toBeUndefined();
   });
 });
 

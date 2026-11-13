@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { GitBranch, Timer } from "lucide-react";
 import { ChatContextGauge } from "@/components/chat/chat-context-gauge";
+import { ChatCreditsPill } from "@/components/chat/chat-credits-pill";
 import { ChatMcpChip } from "@/components/chat/chat-mcp-chip";
 import { ChatRing } from "@/components/chat/chat-ring";
 import {
@@ -13,6 +14,7 @@ import type { ContextDetail } from "@/lib/chat/chatProtocol";
 import { liveWindow, type ChatState } from "@/lib/chat/chatState";
 import { statusFigures } from "@/lib/chat/chatStatus";
 import { useChatShown } from "@/lib/chat/useChatShown";
+import { CREDITS_ACCOUNT_ID } from "@/lib/creditsAccount";
 
 /** The countdown moves by the minute: a look every 30 s keeps it current. */
 const TICK_MS = 30_000;
@@ -23,7 +25,8 @@ const pct = (n: number) => `${Math.round(n)} %`;
  * The terminal's status line, in the input's bottom row after the session's
  * button (`ChatSessionMenu`): context, quotas, reset, branch.
  * Context and quotas as rings with their figure inside (the user's pick of
- * 30/10/2026), the reset as a short countdown.
+ * 30/10/2026), the reset as a short countdown. On the API credits, no
+ * quota: their pill instead (`ChatCreditsPill`).
  */
 export function ChatStatusBar({
   state,
@@ -62,7 +65,9 @@ export function ChatStatusBar({
   // a refusal holding it out comes from the limit switch's blocks.
   const quota = useModelQuota(accountId);
   const account = useAccountLabel(accountId);
-  const own = state.limits.models?.find((m) => modelFamily(m.model) === "fable");
+  const own = state.limits.models?.find(
+    (m) => modelFamily(m.model) === "fable",
+  );
   const ownNow = own ? liveWindow(own, now) : undefined;
   const fable: WeekModelShare | null =
     own || quota
@@ -73,6 +78,8 @@ export function ChatStatusBar({
           outUntil: quota?.blockedUntil ?? null,
         }
       : null;
+  // Rings the session had on a subscription would mislead here.
+  const onCredits = accountId === CREDITS_ACCOUNT_ID;
   return (
     <div className="chat-status">
       {context && (
@@ -82,13 +89,14 @@ export function ChatStatusBar({
           onDetail={onContextDetail}
         />
       )}
-      {fiveHour && (
+      {onCredits && <ChatCreditsPill />}
+      {!onCredits && fiveHour && (
         <span title={`Session de 5 h utilisée : ${pct(fiveHour.percent)}`}>
           <ChatRing percent={fiveHour.percent} hot={fiveHour.hot} />
           Session
         </span>
       )}
-      {sevenDay && (
+      {!onCredits && sevenDay && (
         <ChatWeekGauge
           week={sevenDay}
           fable={fable}
@@ -96,7 +104,7 @@ export function ChatStatusBar({
           now={now}
         />
       )}
-      {reset && (
+      {!onCredits && reset && (
         <span title={`Reset de la session dans ${resetFull}`}>
           <Timer size={13} />
           <b>{reset}</b>

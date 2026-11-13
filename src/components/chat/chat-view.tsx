@@ -37,6 +37,7 @@ import { useScrollbarGutter } from "@/lib/chat/useScrollbarGutter";
 import { warmHiddenVoice } from "@/lib/useHiddenVoice";
 import { glideBy, scrollsItself, wheelPixels } from "@/lib/chat/glideScroll";
 import { ChatEditConfirm } from "@/components/chat/chat-edit-confirm";
+import { ChatLimitBanner } from "@/components/chat/chat-limit-banner";
 import { ChatOlderButton } from "@/components/chat/chat-older-button";
 import { ChatQuestionSheet } from "@/components/chat/chat-question-sheet";
 import { lastReplyRound, roundShowsNow } from "@/lib/chat/chatQuestionRound";
@@ -825,6 +826,9 @@ function ChatViewBody({
               onStop={onStopTask}
             />
           )}
+          {/* The usage limit holds it, no account free: the wait and the
+              API credits, just above the input. */}
+          <ChatLimitBanner chatId={paneId} />
           {bottom}
           {!inInput && <div className="chat-status-row">{sessionItems}</div>}
         </div>

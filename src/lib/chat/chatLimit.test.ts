@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { Account } from "@/lib/accounts";
 import {
   chatLimitHit,
+  chatLimitStep,
+  creditsFailure,
   modelLimitUntil,
   nextFreeAccountAt,
   planChatLimitSwitch,
@@ -224,5 +226,82 @@ describe("a chat at its usage limit", () => {
         "opus",
       ),
     ).toEqual({ kind: "none" });
+  });
+});
+
+describe("the API credits when no account is free", () => {
+  // Every account at its limit: the chat's own back in 2 h, another in 30 min.
+  const accounts = [
+    account("main", 100, 120),
+    account("b", 100, 30),
+    account("c", 100, 300),
+  ];
+  const blocked = {
+    main: NOW + 120 * 60_000,
+    b: NOW + 30 * 60_000,
+    c: NOW + 300 * 60_000,
+  };
+
+  it("offers them while the chat waits, for an account back or its own reset", () => {
+    expect(
+      chatLimitStep(accounts, blocked, "main", NOW + 120 * 60_000, NOW),
+    ).toEqual({ kind: "wait", at: NOW + 30 * 60_000, here: false, credits: true });
+    // Its own reset first: « reprise ici ».
+    expect(
+      chatLimitStep(accounts, blocked, "main", NOW + 20 * 60_000, NOW),
+    ).toEqual({ kind: "wait", at: NOW + 20 * 60_000, here: true, credits: true });
+    // A free account: no wait, no offer.
+    const freeB = [account("main", 100, 120), account("b", 40, 30)];
+    expect(
+      chatLimitStep(freeB, { main: NOW + 1 }, "main", NOW + 1, NOW),
+    ).toEqual({ kind: "switch", accountId: "b" });
+  });
+
+  it("takes a chat on them back to the first subscription account free", () => {
+    // Account b came back (a new window): the credits' chat goes there.
+    const back = [
+      account("main", 100, 120),
+      account("b", 5, 290),
+      account("c", 100, 300),
+    ];
+    const stillOut = { main: blocked.main, c: blocked.c };
+    expect(chatLimitStep(back, stillOut, "api", Infinity, NOW)).toEqual({
+      kind: "switch",
+      accountId: "b",
+    });
+    expect(planChatLimitSwitch(back, stillOut, "api", NOW)).toEqual({
+      kind: "switch",
+      accountId: "b",
+    });
+    // None yet: it waits for the first one back, never for « its own »
+    // reset, and the credits are not offered again.
+    expect(chatLimitStep(accounts, blocked, "api", Infinity, NOW)).toEqual({
+      kind: "wait",
+      at: NOW + 30 * 60_000,
+      here: false,
+      credits: false,
+    });
+    expect(chatLimitStep([], {}, "api", Infinity, NOW)).toEqual({
+      kind: "stuck",
+    });
+  });
+
+  it("knows the API's refusals of a chat on them", () => {
+    const refused = (error: string) => ({
+      type: "assistant",
+      error,
+      message: { content: [] },
+    });
+    expect(creditsFailure(refused("billing_error"))).toBe(
+      "solde épuisé ou plafond atteint",
+    );
+    expect(creditsFailure(refused("authentication_failed"))).toBe(
+      "clé API refusée",
+    );
+    expect(creditsFailure(refused("overloaded"))).toBeNull();
+    expect(
+      creditsFailure({ ...refused("billing_error"), parent_tool_use_id: "t" }),
+    ).toBeNull();
+    expect(creditsFailure({ type: "result", error: "billing_error" })).toBeNull();
   });
 });

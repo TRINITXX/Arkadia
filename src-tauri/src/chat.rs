@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
@@ -156,26 +157,71 @@ fn with_chat_env(mut command: Value) -> Value {
     command
 }
 
-/// Starts the account's server. A secondary account runs with its own
-/// `CLAUDE_CONFIG_DIR`, the main one without it (rule of `accounts`).
-fn spawn_server(app: &AppHandle, account_id: Option<&str>) -> Result<Server, String> {
-    keep_claude_current();
+/// What a chat server's Claude Code pays with.
+enum Launch {
+    /// A subscription: a secondary account's `CLAUDE_CONFIG_DIR`, none for
+    /// the main one (rule of `accounts`).
+    Subscription(Option<PathBuf>),
+    /// The API credits (`credits::ACCOUNT`): the main config dir, so its
+    /// sessions are the others', and the key, which Claude Code then takes
+    /// over the claude.ai sign-in.
+    Credits(String),
+}
+
+/// The credits' server alone gets the key; a subscription account never
+/// does, a key on disk or not. Read here, at the server's start only.
+fn launch_for(
+    account: &str,
+    key: impl FnOnce() -> Option<String>,
+    config_dir: impl FnOnce() -> Option<PathBuf>,
+) -> Result<Launch, String> {
+    if account == crate::credits::ACCOUNT {
+        return key()
+            .map(Launch::Credits)
+            .ok_or_else(|| "clé API des crédits absente ou invalide".to_string());
+    }
+    Ok(Launch::Subscription(config_dir()))
+}
+
+/// The server's process: its account key, and the env of its [`Launch`].
+fn server_command(account: &str, launch: &Launch) -> Command {
     let mut cmd = Command::new("node");
     cmd.arg(SERVER_SCRIPT)
         // Its own account key: a visual's check names it, so a reloaded page
         // sends its report back here (`chatCommandFor`).
-        .env("ARKADIA_CHAT_ACCOUNT", account_key(account_id))
+        .env("ARKADIA_CHAT_ACCOUNT", account)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    match crate::accounts::prepare_launch(account_id) {
-        Some(dir) => {
-            cmd.env("CLAUDE_CONFIG_DIR", dir);
+    match launch {
+        Launch::Subscription(dir) => {
+            match dir {
+                Some(dir) => cmd.env("CLAUDE_CONFIG_DIR", dir),
+                None => cmd.env_remove("CLAUDE_CONFIG_DIR"),
+            };
+            crate::credits::scrub(&mut cmd);
         }
-        None => {
-            cmd.env_remove("CLAUDE_CONFIG_DIR");
+        Launch::Credits(key) => {
+            cmd.env_remove("CLAUDE_CONFIG_DIR")
+                // A token would win over the key.
+                .env_remove("ANTHROPIC_AUTH_TOKEN")
+                .env(crate::credits::KEY_VAR, key)
+                // Subagents ask for `opus`, or `fable`: Opus 5.5 there too.
+                .env(crate::credits::OPUS_ALIAS_VAR, crate::credits::MODEL)
+                .env(crate::credits::FABLE_ALIAS_VAR, crate::credits::MODEL);
         }
     }
+    cmd
+}
+
+/// Starts the account's server.
+fn spawn_server(app: &AppHandle, account_id: Option<&str>) -> Result<Server, String> {
+    keep_claude_current();
+    let account = account_key(account_id);
+    let launch = launch_for(&account, crate::credits::api_key, || {
+        crate::accounts::prepare_launch(account_id)
+    })?;
+    let mut cmd = server_command(&account, &launch);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -188,7 +234,6 @@ fn spawn_server(app: &AppHandle, account_id: Option<&str>) -> Result<Server, Str
     let stdin = child.stdin.take().ok_or("chat : pas d'entrée")?;
     let stdout = child.stdout.take().ok_or("chat : pas de sortie")?;
     let stderr = child.stderr.take().ok_or("chat : pas de sortie d'erreur")?;
-    let account = account_key(account_id);
 
     let out_app = app.clone();
     let out_account = account.clone();
@@ -295,6 +340,39 @@ mod tests {
         assert_eq!(start["cwd"], "C:/x");
         let send = json!({ "type": "send", "chatId": "p1", "text": "t" });
         assert_eq!(with_chat_env(send.clone()), send);
+    }
+
+    /// The env a server gets: `Some(value)` set, `None` removed, absent untouched.
+    fn env_of(cmd: &Command, name: &str) -> Option<Option<String>> {
+        cmd.get_envs()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
+    }
+
+    #[test]
+    fn only_the_credits_server_gets_the_api_key() {
+        let key = || Some("sk-ant-test".to_string());
+        let dir = || Some(PathBuf::from("C:/acc"));
+        for account in ["main", "1e37cada"] {
+            let launch = launch_for(account, key, dir).unwrap();
+            let cmd = server_command(account, &launch);
+            // Removed, even when Arkadia itself inherited one.
+            assert_eq!(env_of(&cmd, crate::credits::KEY_VAR), Some(None), "{account}");
+            assert_eq!(env_of(&cmd, "CLAUDE_CONFIG_DIR"), Some(Some("C:/acc".into())));
+        }
+        let launch = launch_for(crate::credits::ACCOUNT, key, dir).unwrap();
+        let cmd = server_command(crate::credits::ACCOUNT, &launch);
+        assert_eq!(env_of(&cmd, crate::credits::KEY_VAR), Some(Some("sk-ant-test".into())));
+        // The main config dir: its sessions are every account's.
+        assert_eq!(env_of(&cmd, "CLAUDE_CONFIG_DIR"), Some(None));
+        for alias in [crate::credits::OPUS_ALIAS_VAR, crate::credits::FABLE_ALIAS_VAR] {
+            assert_eq!(env_of(&cmd, alias), Some(Some(crate::credits::MODEL.into())), "{alias}");
+        }
+        assert_eq!(env_of(&cmd, "ARKADIA_CHAT_ACCOUNT"), Some(Some("api".into())));
+        // Never on its command line.
+        assert!(!cmd.get_args().any(|a| a.to_string_lossy().contains("sk-ant")));
+        // No key on disk: the credits' server does not start.
+        assert!(launch_for(crate::credits::ACCOUNT, || None, dir).is_err());
     }
 
     #[test]

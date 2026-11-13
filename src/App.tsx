@@ -12,6 +12,7 @@ import { ChatModeToggle } from "@/components/chat/chat-mode-toggle";
 import { AccountsPanel } from "@/components/AccountsPanel";
 import { AccountChip } from "@/components/AccountChip";
 import { useAccounts } from "@/lib/useAccounts";
+import { useCreditsPoll } from "@/lib/credits";
 import { publishAccountQuota } from "@/lib/accountQuota";
 import { isModelLimit, modelLimitUntil } from "@/lib/chat/chatLimit";
 import {
@@ -21,6 +22,7 @@ import {
   formatReset,
   paneAccountId,
   planAutoSwitch,
+  subscriptionAccount,
   tabAccountMarks,
   type BlockedUntil,
 } from "@/lib/accounts";
@@ -450,6 +452,9 @@ export function App() {
   // ─── Claude accounts ───────────────────────────────────────────
 
   const accounts = useAccounts();
+  // The API credits (key, Console balance) for the menu, a chat's banner
+  // and its status bar.
+  useCreditsPoll();
   // Read at spawn time through a ref: the 15 s state refresh must not churn
   // the identity of every spawn callback.
   const currentAccountRef = useRef(MAIN_ACCOUNT_ID);
@@ -730,7 +735,8 @@ export function App() {
           state,
           tab.id,
           artifactPageUrl(url),
-          paneAccountId(pane?.accountId),
+          // claude.ai's sign-in: a chat on the credits has none of its own.
+          paneAccountId(subscriptionAccount(pane?.accountId)),
           () => {
             artifactSeq.current += 1;
             return `artifact-${artifactSeq.current}`;
@@ -836,7 +842,9 @@ export function App() {
       );
       if (!owner) return;
       chromeShownOnce.current.add(paneId);
-      const accountId = paneAccountId(owner.panes[paneId]?.accountId);
+      const accountId = paneAccountId(
+        subscriptionAccount(owner.panes[paneId]?.accountId),
+      );
       changeArtifacts((state) => ({
         state: showChrome(state, owner.id, paneId, accountId),
         closed: [],
@@ -853,7 +861,9 @@ export function App() {
           // Another Arkadia's pane (`tauri dev` shares the folder): its
           // own instance answers.
           if (!tab) return;
-          const accountId = paneAccountId(tab.panes[paneId]?.accountId);
+          const accountId = paneAccountId(
+            subscriptionAccount(tab.panes[paneId]?.accountId),
+          );
           const key = chromeKey(paneId);
           chromePanes.current.add(paneId);
           invoke<ChromeShown>("chrome_view_prepare", {
@@ -950,7 +960,9 @@ export function App() {
         return;
       }
       chromePanes.current.add(paneId);
-      const accountId = paneAccountId(tab.panes[paneId]?.accountId);
+      const accountId = paneAccountId(
+        subscriptionAccount(tab.panes[paneId]?.accountId),
+      );
       changeArtifacts((state) => ({
         state: showChrome(state, tab.id, paneId, accountId),
         closed: [],
@@ -2489,7 +2501,10 @@ export function App() {
           const paneId = await findClaudePane(hit.sessionId);
           const tab = tabsRef.current.find((t) => paneId && paneId in t.panes);
           if (!paneId || !tab) return; // not a Claude running in Arkadia
-          const account = paneAccountId(tab.panes[paneId].accountId);
+          // The subscription it ran on, never the credits' account.
+          const account = paneAccountId(
+            subscriptionAccount(tab.panes[paneId].accountId),
+          );
           // A minute past the reset, for the server's clock. A reset already
           // past (clock skew) must not let the same account retry at once.
           const now = Date.now();
@@ -2563,8 +2578,9 @@ export function App() {
       if (!project) return;
       // Inherit the live cwd of the parent pane if known (OSC 7 reported); else fall back to project root.
       const parentCwd = tab.panes[paneId]?.cwd ?? project.path;
-      // A split stays on its tab's account, so a tab never mixes two.
-      const accountId = tab.panes[paneId]?.accountId;
+      // A split stays on its tab's account, so a tab never mixes two; a
+      // shell beside a chat on the credits, on the main account.
+      const accountId = subscriptionAccount(tab.panes[paneId]?.accountId);
       const newPaneId = await spawnPane(parentCwd, undefined, accountId);
       if (!newPaneId) return;
       paneToTab.current.set(newPaneId, tabId);

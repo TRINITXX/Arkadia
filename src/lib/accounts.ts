@@ -7,6 +7,11 @@
 
 import type { Tab } from "@/types";
 import { stateFromTitle } from "@/lib/agentState";
+import {
+  CREDITS_ACCOUNT_ID,
+  CREDITS_COLOR,
+  CREDITS_LABEL,
+} from "@/lib/creditsAccount";
 
 export const MAIN_ACCOUNT_ID = "main";
 
@@ -70,6 +75,18 @@ export function paneAccountId(accountId: string | undefined): string {
 }
 
 /**
+ * A pane's account where only a subscription serves: a split, the terminal a
+ * chat turns back into, claude.ai's sign-in for artifacts, a Chrome profile,
+ * a terminal's quota. A chat on the API credits counts as the main account's
+ * there (its shell runs on it). Undefined: the main account, as panes hold it.
+ */
+export function subscriptionAccount(
+  accountId: string | undefined,
+): string | undefined {
+  return accountId === CREDITS_ACCOUNT_ID ? undefined : accountId;
+}
+
+/**
  * Account mark of each tab (its focused pane's account), or an empty map while
  * there is a single account — one account needs no marking.
  */
@@ -82,6 +99,11 @@ export function tabAccountMarks(
   const marks: Record<string, AccountMark> = {};
   for (const tab of tabs) {
     const id = paneAccountId(tab.panes[tab.activePaneId]?.accountId);
+    // A chat on the API credits: their mark, not the main account's.
+    if (id === CREDITS_ACCOUNT_ID) {
+      marks[tab.id] = { color: CREDITS_COLOR, label: CREDITS_LABEL };
+      continue;
+    }
     const account = byId.get(id) ?? byId.get(MAIN_ACCOUNT_ID);
     if (account) marks[tab.id] = { color: account.color, label: account.label };
   }

@@ -7,6 +7,7 @@ import {
   type UsageWindow,
 } from "@/lib/accounts";
 import type { JsonObject } from "@/lib/chat/chatProtocol";
+import { CREDITS_ACCOUNT_ID } from "@/lib/creditsAccount";
 
 /**
  * A chat stopped by the account's usage limit, and where it goes next (the
@@ -208,4 +209,64 @@ export function planChatLimitSwitch(
     accountId: (here ?? best(other)).id,
     model: fallback,
   };
+}
+
+/** What a chat at its limit does next (`useChatLimitSwitch`'s loop). */
+export type ChatLimitStep =
+  | Extract<ChatLimitPlan, { kind: "switch" }>
+  /**
+   * No account free: it waits till `at`. `here`: its own account's reset
+   * (« reprise ici »), else the first account back (« bascule »).
+   * `credits`: the banner offers the API credits meanwhile.
+   */
+  | { kind: "wait"; at: number; here: boolean; credits: boolean }
+  /** On the credits, refused, and no subscription account to go back to. */
+  | { kind: "stuck" };
+
+/**
+ * The limit switch's rule, one step: a free account takes the chat now;
+ * else it waits for the first account back, or for its own reset (`until`)
+ * when that comes first. A chat on the API credits (`from` = `api`) never
+ * waits for « its own » reset: the credits have none, it goes back to a
+ * subscription account, and the credits are not offered again.
+ */
+export function chatLimitStep(
+  accounts: readonly Account[],
+  blocked: BlockedUntil,
+  from: string,
+  until: number,
+  now: number,
+  family: string | null = null,
+): ChatLimitStep {
+  const plan = planChatLimitSwitch(accounts, blocked, from, now, family);
+  if (plan.kind === "switch") return plan;
+  const next = nextFreeAccountAt(accounts, blocked, from, now, family);
+  if (from === CREDITS_ACCOUNT_ID)
+    return next === null
+      ? { kind: "stuck" }
+      : { kind: "wait", at: next, here: false, credits: false };
+  if (next === null || next >= until)
+    return { kind: "wait", at: until, here: true, credits: true };
+  return { kind: "wait", at: next, here: false, credits: true };
+}
+
+/** Why the API refused a chat on the credits, in the banner's words. */
+const CREDITS_ERRORS: Record<string, string> = {
+  billing_error: "solde épuisé ou plafond atteint",
+  authentication_failed: "clé API refusée",
+  rate_limit: "limite de débit de l'API",
+};
+
+/**
+ * A request of a chat on the credits that the API refused, or null: its
+ * reply replaced by an error (`billing_error`, a bad key, a 429). A session
+ * on a key gets no subscription limit (`rate_limit_event`).
+ */
+export function creditsFailure(message: JsonObject): string | null {
+  if (message.parent_tool_use_id) return null;
+  if (message.type !== "assistant" || typeof message.error !== "string")
+    return null;
+  return Object.prototype.hasOwnProperty.call(CREDITS_ERRORS, message.error)
+    ? CREDITS_ERRORS[message.error]
+    : null;
 }

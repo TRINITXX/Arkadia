@@ -179,6 +179,18 @@ fn friendly_error(stdout: &str, stderr: &str) -> String {
     format!("L'appel a échoué : {}", crate::sessions::truncate_for_ui(line, 160))
 }
 
+/// The search's `claude`, billed to the account selected for new tabs
+/// (`config_dir`), never to the API credits: an inherited key is dropped.
+fn search_command(bin: &std::path::Path, config_dir: Option<PathBuf>) -> Command {
+    let mut command = Command::new(bin);
+    match config_dir {
+        Some(dir) => command.env("CLAUDE_CONFIG_DIR", dir),
+        None => command.env_remove("CLAUDE_CONFIG_DIR"),
+    };
+    crate::credits::scrub(&mut command);
+    command
+}
+
 /// Runs one sanitised headless call, prompt on stdin, and returns the `result`
 /// text of the CLI's JSON envelope.
 fn run_claude(system: &str, prompt: &str, timeout: Duration) -> Result<String, String> {
@@ -189,12 +201,7 @@ fn run_claude(system: &str, prompt: &str, timeout: Duration) -> Result<String, S
     let cwd = workspace_dir()
         .ok_or_else(|| "Impossible de créer le dossier de travail de la recherche IA.".to_string())?;
 
-    let mut command = Command::new(&bin);
-    // Billed to the account currently selected for new tabs.
-    match crate::accounts::current_launch_dir() {
-        Some(dir) => command.env("CLAUDE_CONFIG_DIR", dir),
-        None => command.env_remove("CLAUDE_CONFIG_DIR"),
-    };
+    let mut command = search_command(&bin, crate::accounts::current_launch_dir());
     let mut child = command
         .current_dir(&cwd)
         .args([
@@ -414,6 +421,14 @@ pub fn search_terms(query: String) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_search_never_pays_with_the_api_credits() {
+        let cmd = search_command(std::path::Path::new("claude"), None);
+        assert!(cmd
+            .get_envs()
+            .any(|(k, v)| k == crate::credits::KEY_VAR && v.is_none()));
+    }
 
     #[test]
     fn unfence_handles_both_shapes() {

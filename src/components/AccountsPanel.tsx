@@ -12,6 +12,8 @@ import {
   type AccountsState,
 } from "@/lib/accounts";
 import { useModelQuota } from "@/lib/accountQuota";
+import { refreshCredits, showsCreditsCard, useCredits } from "@/lib/credits";
+import { CreditsCard } from "./credits-card";
 
 interface AccountsPanelProps {
   state: AccountsState;
@@ -29,7 +31,8 @@ interface AccountsPanelProps {
  * "Comptes" button of the sidepanel. Clicking it opens a popover with one card
  * per Claude account: its 5-hour, weekly and Fable usage, each with its return. Clicking a line makes it
  * the account new tabs open on; right-click for login / rename / colour /
- * remove.
+ * remove. Below them, the API credits (`CreditsCard`), read again from the
+ * Console each time the menu opens.
  */
 export function AccountsPanel({
   state,
@@ -52,6 +55,7 @@ export function AccountsPanel({
   const popoverRef = useRef<HTMLDivElement>(null);
   const open = anchor !== null;
   const current = state.accounts.find((a) => a.id === state.current);
+  const credits = useCredits();
   // Countdown clock: set on opening, then ticks while the popover is up.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -89,6 +93,7 @@ export function AccountsPanel({
         type="button"
         onClick={() => {
           setNow(Date.now());
+          if (!open) refreshCredits();
           setAnchor(
             open ? null : (buttonRef.current?.getBoundingClientRect() ?? null),
           );
@@ -154,6 +159,9 @@ export function AccountsPanel({
                   }}
                 />
               ))}
+              {showsCreditsCard(credits) && (
+                <CreditsCard credits={credits} now={now} />
+              )}
             </div>
           </div>,
           document.body,

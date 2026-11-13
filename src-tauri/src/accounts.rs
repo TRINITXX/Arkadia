@@ -201,8 +201,13 @@ fn usage_path(id: &str) -> PathBuf {
     arkadia_dir().join("usage").join(format!("{id}.json"))
 }
 
+/// A subscription account's id. Never the credits' pseudo-account: it has no
+/// login, no usage, no hello, and its server alone holds the API key.
 fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 16 && id.chars().all(|c| c.is_ascii_alphanumeric())
+    !id.is_empty()
+        && id.len() <= 16
+        && id.chars().all(|c| c.is_ascii_alphanumeric())
+        && id != crate::credits::ACCOUNT
 }
 
 /// Config dir of a secondary account (`None` for the main one).
@@ -886,6 +891,23 @@ fn parse_model_windows(body: &Value) -> Vec<ModelWindow> {
         .collect()
 }
 
+/// The usage endpoint's request, with no API key in its env.
+fn usage_command(token: &str) -> Command {
+    let mut cmd = Command::new("curl.exe");
+    cmd.args(["-s", "-m", "15", "https://api.anthropic.com/api/oauth/usage"])
+        .args(["-H", &format!("Authorization: Bearer {token}")])
+        .args(["-H", "anthropic-beta: oauth-2025-04-20"])
+        .args(["-H", "anthropic-version: 2023-06-01"])
+        .args(["-H", "User-Agent: claude-code/2.1.292"]);
+    crate::credits::scrub(&mut cmd);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd
+}
+
 /// One call to the subscription usage endpoint, with the account's current
 /// access token. Never refreshes the token: the refresh token is single-use,
 /// and spending it here would sign out the running Claude Code.
@@ -896,18 +918,7 @@ fn poll_usage(id: &str) -> Option<Usage> {
     if oauth.get("expiresAt").and_then(Value::as_i64).unwrap_or(0) <= now_ms() {
         return None;
     }
-    let mut cmd = Command::new("curl.exe");
-    cmd.args(["-s", "-m", "15", "https://api.anthropic.com/api/oauth/usage"])
-        .args(["-H", &format!("Authorization: Bearer {token}")])
-        .args(["-H", "anthropic-beta: oauth-2025-04-20"])
-        .args(["-H", "anthropic-version: 2023-06-01"])
-        .args(["-H", "User-Agent: claude-code/2.1.292"]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
-    let out = cmd.output().ok()?;
+    let out = usage_command(token).output().ok()?;
     let body: Value = serde_json::from_slice(&out.stdout).ok()?;
     let five_hour = parse_window(body.get("five_hour"));
     let seven_day = parse_window(body.get("seven_day"));
@@ -986,27 +997,7 @@ fn send_hello(id: &str) -> bool {
     };
     let cwd = arkadia_dir().join("quota-ping");
     let _ = fs::create_dir_all(&cwd);
-    let mut cmd = Command::new(bin);
-    match secondary_dir(id) {
-        Some(dir) => cmd.env("CLAUDE_CONFIG_DIR", dir),
-        None => cmd.env_remove("CLAUDE_CONFIG_DIR"),
-    };
-    cmd.current_dir(&cwd)
-        .args(["-p", "--model", "haiku", "--no-session-persistence"])
-        .args(["--tools", "", "--strict-mcp-config", "--mcp-config"])
-        .arg(r#"{"mcpServers":{}}"#)
-        .args(["--settings", r#"{"disableAllHooks":true}"#])
-        // The prompt follows a one-value option: after a list option such as
-        // `--tools`, it would be read as one more item of the list.
-        .args(["--system-prompt", "Reply with one word.", "hello"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
+    let mut cmd = hello_command(&bin, id, &cwd);
     let Ok(mut child) = cmd.spawn() else {
         return false;
     };
@@ -1024,6 +1015,34 @@ fn send_hello(id: &str) -> bool {
             }
         }
     }
+}
+
+/// The hello's `claude -p`, on the account's subscription: never an API key,
+/// which Claude Code would take over the claude.ai sign-in.
+fn hello_command(bin: &Path, id: &str, cwd: &Path) -> Command {
+    let mut cmd = Command::new(bin);
+    match secondary_dir(id) {
+        Some(dir) => cmd.env("CLAUDE_CONFIG_DIR", dir),
+        None => cmd.env_remove("CLAUDE_CONFIG_DIR"),
+    };
+    crate::credits::scrub(&mut cmd);
+    cmd.current_dir(cwd)
+        .args(["-p", "--model", "haiku", "--no-session-persistence"])
+        .args(["--tools", "", "--strict-mcp-config", "--mcp-config"])
+        .arg(r#"{"mcpServers":{}}"#)
+        .args(["--settings", r#"{"disableAllHooks":true}"#])
+        // The prompt follows a one-value option: after a list option such as
+        // `--tools`, it would be read as one more item of the list.
+        .args(["--system-prompt", "Reply with one word.", "hello"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd
 }
 
 /// Reads the usage back after a hello until the new window shows, so the
@@ -1495,6 +1514,23 @@ mod tests {
         assert_eq!(hello_pause_ms(5), 160 * min);
         assert_eq!(hello_pause_ms(6), 300 * min);
         assert_eq!(hello_pause_ms(u32::MAX), 300 * min);
+    }
+
+    #[test]
+    fn the_credits_account_is_no_subscription_and_pays_no_hello() {
+        // Never in the registry: no hello, no usage poll, no login check.
+        assert!(!valid_id(crate::credits::ACCOUNT));
+        assert!(secondary_dir(crate::credits::ACCOUNT).is_none());
+        assert!(valid_id("1e37cada"));
+        let removed = |cmd: &Command| {
+            cmd.get_envs()
+                .any(|(k, v)| k == crate::credits::KEY_VAR && v.is_none())
+        };
+        // A key Arkadia inherited never reaches the hello nor the poll.
+        let hello = hello_command(Path::new("claude"), "1e37cada", Path::new("."));
+        assert!(removed(&hello));
+        assert!(!hello.get_args().any(|a| a.to_string_lossy().contains("sk-ant")));
+        assert!(removed(&usage_command("token")));
     }
 
     /// Sends one real message. Run it on an account with no window running

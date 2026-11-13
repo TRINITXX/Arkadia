@@ -55,6 +55,12 @@ import { createVisualProbe } from "@/lib/chat/chatVisualDom";
 import { AccountsPanel } from "@/components/AccountsPanel";
 import { publishAccountQuota } from "@/lib/accountQuota";
 import { modelBlockKey, type Account } from "@/lib/accounts";
+import {
+  creditsScenarios,
+  onCredits,
+  PREVIEW_ACCOUNT_ID,
+  setupCreditsPreview,
+} from "@/chat-preview-credits";
 
 /**
  * Dev-only page (`/chat-preview.html?s=<scenario>`): the chat view fed with
@@ -620,6 +626,8 @@ Object.assign(
 Object.assign(SCENARIOS, activityScenarios());
 // Chats at rest: asleep, `!` commands, resumed after the server stopped.
 Object.assign(SCENARIOS, sleepScenarios(SCENARIOS.tools, SCENARIOS.live));
+// A request the session limit refuses (`&credits=banner|exhausted`).
+Object.assign(SCENARIOS, creditsScenarios(SCENARIOS.tools));
 
 /** /resume's and /rewind's lists, without a chat server. */
 const ago = (min: number) => Date.now() - min * 60_000;
@@ -703,7 +711,8 @@ const name = params.get("s") ?? "tools";
 const PREVIEW_DICTATION =
   "Refais la vue lecture pour qu'elle garde la place du lecteur quand un message arrive.";
 const nowSeconds = Math.round(Date.now() / 1000);
-const state = {
+// `&credits=pill`: on the API credits, no quotas.
+const state = onCredits({
   ...(SCENARIOS[name] ?? SCENARIOS.tools)(),
   title: "Refonte de la vue lecture",
   gitBranch: "master-lab",
@@ -716,7 +725,7 @@ const state = {
       { model: "Fable", utilization: 0.33, resetsAt: nowSeconds + 4 * 86_400 },
     ],
   },
-};
+});
 
 /** The accounts of the user's screenshot of 12/11/2026 (`&accounts=1`). */
 const previewAccount = (
@@ -754,6 +763,8 @@ const PREVIEW_ACCOUNTS = [
 publishAccountQuota(PREVIEW_ACCOUNTS, {
   [modelBlockKey("b", "fable")]: Date.now() + 155 * 60_000,
 });
+// `&credits=…`: the API credits, and the limit's banner (`chat-preview-credits`).
+setupCreditsPreview();
 
 function Preview() {
   const [chat, setChat] = useState<ChatState>(state);
@@ -857,7 +868,7 @@ function Preview() {
       <ChatView
         key={mount}
         paneId="preview"
-        accountId="c"
+        accountId={PREVIEW_ACCOUNT_ID}
         state={chat}
         agents={{}}
         cwd={"C:\\Users\\TRINITX\\Desktop\\Claude Desktop\\Arkadia-lab"}

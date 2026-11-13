@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { UsageWindow } from "@/lib/accounts";
 import type { ChatState, RateWindow } from "@/lib/chat/chatState";
+import { CREDITS_ACCOUNT_ID } from "@/lib/creditsAccount";
 
 type Limits = ChatState["limits"];
 
@@ -29,6 +30,8 @@ export function reportChatUsage(
   before: Limits,
   after: Limits,
 ): void {
+  // The API credits have no subscription quota to report.
+  if (accountId === CREDITS_ACCOUNT_ID) return;
   const usage = usageOfLimits(after);
   if (!usage) return;
   if (JSON.stringify(usageOfLimits(before)) === JSON.stringify(usage)) return;

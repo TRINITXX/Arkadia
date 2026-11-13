@@ -9,6 +9,7 @@ mod chrome_profile;
 mod chrome_view;
 mod claude_watcher;
 mod conversation;
+mod credits;
 // Only consumed by the release-only single-instance block below; in debug the
 // cfg removes that call site, so silence the resulting dead-code lint there.
 #[cfg_attr(debug_assertions, allow(dead_code))]
@@ -215,6 +216,9 @@ pub fn run() {
                 // Claude in Chrome calls of the panes: their Chrome window
                 // goes in the artifact panel (chrome_view).
                 chrome_view::spawn(app_handle.clone());
+                // The API credits' balance, read from the Console every 30 min
+                // once signed in there (`credits`).
+                credits::spawn_poller(app_handle.clone());
                 // Background-task count per pane, for the sidebar badge.
                 {
                     let panes_app = app_handle.clone();
@@ -305,6 +309,9 @@ pub fn run() {
             accounts::account_update,
             accounts::account_set_current,
             accounts::account_report_usage,
+            credits::credits_state,
+            credits::credits_refresh,
+            credits::credits_console_login,
             artifact_view::artifact_view_show,
             artifact_view::artifact_view_place,
             artifact_view::artifact_view_reload,

@@ -13,6 +13,7 @@ import {
   subscribeChatActivity,
   type ChatActivity,
 } from "@/lib/chat/chatEvents";
+import { subscriptionAccount } from "@/lib/accounts";
 import { folderOf } from "@/lib/chat/chatLabels";
 import {
   dropLiveChat,
@@ -335,7 +336,13 @@ export function usePaneChats({
       labelsRef.current.delete(pane.id);
       // The full path, as a shell titles itself: a folder named `.claude`
       // would read as a busy Claude's glyph (`stateFromTitle`).
-      patchPane(pane.id, (p) => ({ ...p, chat: undefined, title: chat.cwd }));
+      // Its shell runs on a subscription: off the credits, the main account.
+      patchPane(pane.id, (p) => ({
+        ...p,
+        chat: undefined,
+        title: chat.cwd,
+        accountId: subscriptionAccount(p.accountId),
+      }));
       // Its column is over: a later switch back starts a new one.
       dropLiveChat(pane.id);
       // `ccd` is the user's pwsh alias for Claude; it forwards --resume.

@@ -83,6 +83,7 @@ import {
   type SleepFacts,
 } from "./sleep.ts";
 import { answerDeadline, askedMarker, callShowsTab } from "./chromePanel.ts";
+import { bangEnv, sessionArgs, sessionModel, strayModel } from "./onCredits.ts";
 import { unwrapPastedContent } from "./pastedContent.ts";
 import { needsReread, outputFiles, readConsoleTail } from "./taskOutput.ts";
 import { sessionTitle, TITLE_LOOKS_MS } from "./title.ts";
@@ -957,12 +958,13 @@ class Chat {
     this.cwd = start.cwd;
     this.start = start;
     this.mode = start.permissionMode;
-    this.model = start.model;
+    // Opus 5.5 on the API credits, whatever the pane asked (`onCredits`).
+    this.model = sessionModel(ACCOUNT, start.model);
     this.effort = start.effort;
     this.cutBefore = start.historyBefore;
     this.whole = start.whole === true;
     // A restart on a model picked in the menu: an asleep chat would never say it.
-    if (start.model) this.out({ type: "info", chatId, model: start.model });
+    if (this.model) this.out({ type: "info", chatId, model: this.model });
     if (start.notice) this.out({ type: "notice", chatId, text: start.notice, tone: "info" });
     if (start.cut) this.out({ type: "notice", chatId, text: RESTART_CUT, tone: "error" });
     // The page keeps the cut: a restart after the server stopped resumes at it.
@@ -1152,11 +1154,8 @@ class Chat {
         // (`showThinkingSummaries`), an SDK session gets empty thinking
         // blocks unless `--thinking-display summarized` (checked 01/11/2026:
         // 0 characters without, 245 with). It keeps the model's own thinking.
-        extraArgs: {
-          "replay-user-messages": null,
-          chrome: null,
-          "thinking-display": "summarized",
-        },
+        // On the API credits, no `--chrome`: a key turns it off (`onCredits`).
+        extraArgs: sessionArgs(ACCOUNT),
         // Another session's message always comes in, whatever the sender's
         // mode: the user's choice (31/10/2026), and the chat has no accept
         // button for a held one. Session only, never written to a file.
@@ -1365,7 +1364,8 @@ class Chat {
     const slot: Extract<Outgoing, { kind: "bash" }> = { kind: "bash", id, entries: null };
     this.outbox.push(slot);
     const chatId = this.chatId;
-    const env = { ...process.env, ...this.start.env } as Record<string, string>;
+    // Never the credits' key: the user's own shell (`onCredits`).
+    const env = bangEnv({ ...process.env, ...this.start.env } as Record<string, string>);
     let stdout: Kept = NOTHING_KEPT;
     let stderr: Kept = NOTHING_KEPT;
     this.out({ type: "bash", chatId, id, command, state: "running" });
@@ -1608,7 +1608,7 @@ class Chat {
           // Another session (after a handoff, a /clear): its facts start over.
           if (message.session_id !== this.sessionId) this.knownFacts = null;
           this.sessionId = message.session_id;
-          this.model = message.model;
+          this.model = this.keptModel(q, message.model);
           this.mode = message.permissionMode;
           // A session no message named yet: a slow start (wake, many MCP),
           // or a plan approved with its context cleared, opened by no `send`.
@@ -1959,18 +1959,31 @@ class Chat {
   ): Promise<void> {
     try {
       const usage = await q.getContextUsage({ detail });
-      this.model = usage.model;
+      this.model = this.keptModel(q, usage.model);
       this.out({
         type: "context",
         chatId: this.chatId,
         percentage: usage.percentage,
         totalTokens: usage.totalTokens,
         maxTokens: usage.rawMaxTokens,
-        model: usage.model,
+        model: this.model,
       });
     } catch {
       // The chat closed meanwhile.
     }
+  }
+
+  /**
+   * The model a report names, kept on the API credits: another one there
+   * (`/model fable` typed in the chat) goes back to Opus 5.5, and a wake
+   * never starts on it (`onCredits`).
+   */
+  private keptModel(q: Query, reported: string): string {
+    const back = strayModel(ACCOUNT, reported);
+    if (!back) return reported;
+    void q.setModel(back).catch(() => {});
+    this.out({ type: "info", chatId: this.chatId, model: back });
+    return back;
   }
 
   /** The account's 5-hour and weekly windows, as the terminal's `/usage`. */
@@ -2572,7 +2585,9 @@ class Chat {
   }
 
   /** For this session alone: `setModel` writes no settings file (checked 12/11/2026). */
-  async setModel(model: string): Promise<void> {
+  async setModel(asked: string): Promise<void> {
+    // On the API credits, Opus 5.5 stays (`onCredits`).
+    const model = sessionModel(ACCOUNT, asked) ?? asked;
     this.model = model;
     // The menu follows the click at once, even while an asleep chat wakes:
     // before this, nothing said it until the next turn's end.
