@@ -58,6 +58,23 @@ const GROUPS = `<div class="ark-choice" data-intro="Mes choix pour les mails">
 </div>`;
 
 describe("the choice kit", () => {
+  it("takes the width its options need, not the whole pane", () => {
+    const few = page(`<div class="ark-choice"><div class="ark-question" data-title="Hébergement">
+      <div class="ark-option" data-reco>Vercel, gratuit</div><div class="ark-option">Le VPS 1</div><div class="ark-option">Cloudflare Pages</div>
+    </div></div>`);
+    const fewWidth = parseInt(few.q(".ark-choice").style.maxWidth, 10);
+    expect(fewWidth).toBeLessThan(600);
+    // Mockups or pictures: the frame's width, never a guess from their text.
+    const mocks = page(`<div class="ark-choice"><div class="ark-question" data-title="Design">
+      <div class="ark-option" data-title="A"><img src="data:," alt=""></div><div class="ark-option" data-title="B"><svg></svg></div>
+    </div></div>`);
+    expect(mocks.q(".ark-choice").style.maxWidth).toBe("");
+    const wide = page(GROUPS);
+    expect(parseInt(wide.q(".ark-choice").style.maxWidth, 10)).toBeGreaterThan(
+      fewWidth,
+    );
+  });
+
   it("keeps what sits beside options wrapped in a container", () => {
     const { q, all } = page(`<div class="ark-choice">
       <div class="ark-question" data-title="Q"><div class="cols"><h4 id="h1">Court</h4><div class="ark-option">A</div><h4 id="h2">Long</h4><div class="ark-option">B</div></div></div>
