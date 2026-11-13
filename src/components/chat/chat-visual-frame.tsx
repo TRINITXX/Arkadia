@@ -4,7 +4,6 @@ import {
   firstFrameGrowth,
   nextFrameHeight,
   refitFrameGrowth,
-  visualFit,
 } from "@/lib/chat/chatVisual";
 import { frameGestureNow, loadVisualFrame } from "@/lib/chat/chatVisualDom";
 import { glideBy, wheelPixels } from "@/lib/chat/glideScroll";
@@ -13,7 +12,7 @@ interface ChatVisualFrameProps {
   /** The page, its local images in (`ChatState.visuals`). */
   html: string;
   title: string;
-  /** Fills its box (« Agrandir »), the page as written: no fit, no scale. */
+  /** Fills its box (« Agrandir »), the page as written: its media not fitted. */
   fill?: boolean;
   /** The probe checked it clean: its growth is never stopped (`nextFrameHeight`). */
   verified?: boolean;
@@ -75,28 +74,24 @@ function roomIn(box: HTMLElement): number | null {
 }
 
 /**
- * The page's own height on the frame, scaled from its top centre. True
- * when the frame's height changed: the page may answer it (`nextFrameHeight`).
+ * The page's own height on the frame. True when it changed: the page may
+ * answer it (`nextFrameHeight`).
  */
-function applySize(
-  iframe: HTMLIFrameElement,
-  { height, scale }: { height: number; scale: number },
-): boolean {
+function applySize(iframe: HTMLIFrameElement, height: number): boolean {
   const resized = iframe.style.height !== `${height}px`;
   iframe.style.height = `${height}px`;
-  iframe.style.transform = scale < 1 ? `scale(${scale})` : "";
-  iframe.style.transformOrigin = "top center";
   return resized;
 }
 
 /**
- * A visual's sandboxed frame (`loadVisualFrame`). In the column it fits the
- * pane's height when it can (Alexis, 31/10/2026): its media take the room
- * the card has (`--ark-fit-h`), then a page still taller is scaled down, no
- * further than readable (`visualFit`), and the conversation scrolls past
- * that. Never a scrollbar inside: the frame is the page's whole height,
- * except a page that grows with its frame, stopped (`nextFrameHeight`). A
- * new page gets a new frame, never the old one's state.
+ * A visual's sandboxed frame (`loadVisualFrame`). In the column its media
+ * take the room the card has (`--ark-fit-h`); the page itself is never
+ * scaled down (Alexis, 13/11/2026: scaled from its centre, it no longer
+ * took the card's width): a page taller than the pane keeps its size and
+ * the conversation scrolls. Never a scrollbar inside: the frame is the
+ * page's whole height, except a page that grows with its frame, stopped
+ * (`nextFrameHeight`). A new page gets a new frame, never the old one's
+ * state.
  */
 export function ChatVisualFrame({
   html,
@@ -113,8 +108,8 @@ export function ChatVisualFrame({
   const [room, setRoom] = useState<number | null>(null);
   /** The room as last measured, for a frame created before the next render. */
   const roomRef = useRef<number | null>(null);
-  /** The page's own height and its scale, for whichever frame is there. */
-  const sizeRef = useRef({ height: FIRST_HEIGHT, scale: 1 });
+  /** The page's own height, for whichever frame is there. */
+  const sizeRef = useRef(FIRST_HEIGHT);
   /** Read by the frame's listener: a check that comes later counts at once. */
   const verifiedRef = useRef(verified);
   useEffect(() => {
@@ -130,7 +125,6 @@ export function ChatVisualFrame({
   useEffect(() => {
     handlers.current = { onChoose, onLink };
   });
-  const fit = visualFit(growth.height, fill ? null : room);
   // The pane's height, as it changes (resize, split, the input growing).
   useLayoutEffect(() => {
     const box = boxRef.current;
@@ -150,9 +144,9 @@ export function ChatVisualFrame({
     ro.observe(scroller);
     return () => ro.disconnect();
   }, [fill]);
-  // The frame keeps the page's own height, scaled from its top centre.
+  // The frame keeps the page's own height.
   useLayoutEffect(() => {
-    sizeRef.current = { height: growth.height, scale: fit.scale };
+    sizeRef.current = growth.height;
     if (frameRef.current && !fill) resize(frameRef.current);
   });
   useEffect(() => {
@@ -163,9 +157,9 @@ export function ChatVisualFrame({
     box.appendChild(iframe);
     frameRef.current = iframe;
     // A new page starts its own count, at the height shown.
-    setGrowth(firstFrameGrowth(sizeRef.current.height));
-    // Its size and scale before its first report: until then no render
-    // would give them, and a frame left at 100% scrolls inside.
+    setGrowth(firstFrameGrowth(sizeRef.current));
+    // Its size before its first report: until then no render would give
+    // it, and a frame left at 100% scrolls inside.
     if (!fill) resize(iframe);
     const { stop, setFit } = loadVisualFrame(
       iframe,
@@ -213,7 +207,7 @@ export function ChatVisualFrame({
     <div
       ref={boxRef}
       className="chat-visual-box"
-      style={fill ? undefined : { height: fit.height }}
+      style={fill ? undefined : { height: growth.height }}
     />
   );
 }

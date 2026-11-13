@@ -3,7 +3,6 @@ import { CHAT_FONTS, CHAT_TOKENS as T } from "@/lib/chat/chatTheme";
 import type { ToolItem } from "@/lib/chat/chatGroups";
 import {
   VISUAL_CHECKED_CLEAN,
-  VISUAL_FIT_FLOOR,
   VISUAL_TOOL_NAME,
   type VisualReport,
 } from "@chat-server/visualHtml";
@@ -192,7 +191,9 @@ const head = (token: string, fit?: number, card = false) =>
   '<meta name="viewport" content="width=device-width, initial-scale=1">' +
   `<style id="arkadia-theme">${VISUAL_THEME_CSS}</style>` +
   // The room the card has at first; the bootstrap takes its changes.
-  (usableRoom(fit) ? `<style id="arkadia-fit">:root{--ark-fit-h:${usableRoom(fit)}px}</style>` : "") +
+  (usableRoom(fit)
+    ? `<style id="arkadia-fit">:root{--ark-fit-h:${usableRoom(fit)}px}</style>`
+    : "") +
   // In the column's card, never a sideways scroll (the user's ask of
   // 01/11/2026): a page a few pixels too wide (a 100vw beside a
   // scrollbar) is cut at its margin. The probe still measures the real
@@ -205,7 +206,8 @@ const head = (token: string, fit?: number, card = false) =>
  * frame tags inert, declarative shadow roots plain templates. Also done
  * here so the copy opened in the browser holds no frame either.
  */
-export const INERT_FRAME_TAGS = /<(\/?)(iframe|frame|frameset|object|embed|fencedframe|portal)\b/gi;
+export const INERT_FRAME_TAGS =
+  /<(\/?)(iframe|frame|frameset|object|embed|fencedframe|portal)\b/gi;
 export const INERT_FRAME_TAG = "<$1x-blocked-$2";
 export const INERT_SHADOW_ROOTS = /\bshadowroot(mode)?(\s*=)/gi;
 export const INERT_SHADOW_ROOT = "data-shadowroot$1$2";
@@ -238,8 +240,8 @@ export function visualDocument(
 }
 
 /**
- * The card's frame is the page's height (scaled, `visualFit`), never a
- * scrollbar inside; this only stops a page that grows without end.
+ * The card's frame is the page's height, never a scrollbar inside; this
+ * only stops a page that grows without end.
  */
 export const VISUAL_MAX_HEIGHT = 12_000;
 export const VISUAL_MIN_HEIGHT = 48;
@@ -271,22 +273,6 @@ export function mergeProbeReports(
     height: first.height,
     followsFrame: tall.height - first.height >= 0.8 * growth,
   };
-}
-
-/**
- * How the card shows a page `content` px tall in `room` px (the pane's
- * height less the card's band): whole if it fits, else scaled down to fit,
- * but never under `VISUAL_FIT_FLOOR` (smaller no longer reads well): past
- * that, at the floor, and the conversation scrolls. `height`: the card's.
- */
-export function visualFit(
-  content: number,
-  room: number | null,
-): { scale: number; height: number } {
-  const usable = usableRoom(room);
-  if (usable === null || content <= usable) return { scale: 1, height: content };
-  const scale = Math.max(VISUAL_FIT_FLOOR, usable / content);
-  return { scale, height: Math.ceil(content * scale) };
 }
 
 /** A frame's height as the page's reports move it (`nextFrameHeight`). */
@@ -336,14 +322,19 @@ export function nextFrameHeight(
   mayFreeze: boolean,
 ): FrameGrowth {
   const delta = reported - prev.height;
-  if (delta <= 0) return { ...prev, height: reported, step: 0, streak: 0, ignored: null };
+  if (delta <= 0)
+    return { ...prev, height: reported, step: 0, streak: 0, ignored: null };
   if (prev.frozen) return { ...prev, ignored: reported };
   const follows =
     mayFreeze &&
     delta <= FOLLOW_STEP &&
     sinceFrameResize !== null &&
     sinceFrameResize <= FOLLOW_MS;
-  const streak = !follows ? 0 : Math.abs(delta - prev.step) <= 1 ? prev.streak + 1 : 1;
+  const streak = !follows
+    ? 0
+    : Math.abs(delta - prev.step) <= 1
+      ? prev.streak + 1
+      : 1;
   return {
     height: reported,
     step: delta,
@@ -372,7 +363,9 @@ export function refitFrameGrowth(prev: FrameGrowth): FrameGrowth {
 /** The probe checked the page clean: its height never follows its frame. */
 export function visualVerified(tool: ToolItem): boolean {
   const result = tool.result;
-  return !!result && !result.isError && result.text.startsWith(VISUAL_CHECKED_CLEAN);
+  return (
+    !!result && !result.isError && result.text.startsWith(VISUAL_CHECKED_CLEAN)
+  );
 }
 
 /** What a visual's frame says to the Lab. */
@@ -403,7 +396,10 @@ const delta = (v: unknown): number | null =>
  * bootstrap holds (its script removes itself before the page runs): a page
  * can't say « down » for a press it never got.
  */
-export function readFrameMessage(data: unknown, token: string): FrameMessage | null {
+export function readFrameMessage(
+  data: unknown,
+  token: string,
+): FrameMessage | null {
   if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
   if (d.arkadiaVisual !== 1) return null;
@@ -416,7 +412,9 @@ export function readFrameMessage(data: unknown, token: string): FrameMessage | n
     case "down":
       return { kind: d.kind };
     case "size":
-      return typeof v === "number" && Number.isFinite(v) ? { kind: "size", height: v } : null;
+      return typeof v === "number" && Number.isFinite(v)
+        ? { kind: "size", height: v }
+        : null;
     case "link":
       return typeof v === "string" && /^https?:\/\//i.test(v)
         ? { kind: "link", url: v.slice(0, 4000) }
@@ -428,11 +426,14 @@ export function readFrameMessage(data: unknown, token: string): FrameMessage | n
     case "report":
       return { kind: "report", report: v };
     case "wheel": {
-      const w = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+      const w =
+        v && typeof v === "object" ? (v as Record<string, unknown>) : {};
       const dx = delta(w.dx);
       const dy = delta(w.dy);
       const mode = w.m === 1 || w.m === 2 ? w.m : 0;
-      return dx === null || dy === null ? null : { kind: "wheel", dx, dy, mode };
+      return dx === null || dy === null
+        ? null
+        : { kind: "wheel", dx, dy, mode };
     }
     default:
       return null;
@@ -448,7 +449,10 @@ export const ACTIVATION_MS = 5_000;
  * the pointer in that frame, not another. Then always, even just after
  * typing in the Lab: the user's next keys are for what they clicked.
  */
-export function frameFocusOk(o: { activation: boolean; onFrame: boolean }): boolean {
+export function frameFocusOk(o: {
+  activation: boolean;
+  onFrame: boolean;
+}): boolean {
   return o.activation && o.onFrame;
 }
 

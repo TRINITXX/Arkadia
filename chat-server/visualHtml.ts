@@ -9,15 +9,15 @@ export const VISUAL_TOOL = "show_visual";
 export const VISUAL_TOOL_NAME = `mcp__${VISUAL_SERVER}__${VISUAL_TOOL}`;
 
 /**
- * A visual fits the chat's height (Alexis, 31/10/2026: « les visuels rentrent
- * dans une fenêtre en hauteur sans que j'aie besoin de scroller »). The card
- * fits its images to the room it has, then scales the whole page down to
- * `VISUAL_FIT_FLOOR` at most (smaller would no longer read well); past
- * that, the conversation scrolls. The probe renders with this room, about
- * what a pane shows, and Claude reads it in the tool's description.
+ * A visual best fits the chat's height (Alexis, 31/10/2026: « les visuels
+ * rentrent dans une fenêtre en hauteur sans que j'aie besoin de scroller »).
+ * The card fits its images to the room it has; the page itself is never
+ * scaled down (Alexis, 13/11/2026: it no longer took the card's width), a
+ * taller one makes the conversation scroll. The probe renders with this
+ * room, about what a pane shows, and Claude reads it in the tool's
+ * description.
  */
 export const VISUAL_FIT_HEIGHT = 700;
-export const VISUAL_FIT_FLOOR = 0.75;
 
 /** How the result of a page Arkadia checked clean opens (`visualVerified`). */
 export const VISUAL_CHECKED_CLEAN = "Shown in the chat (checked: no error";
@@ -377,8 +377,8 @@ export function visualResult(
       isError: false,
     };
   }
-  // Taller than fits even scaled down: a hint, never a problem.
-  if (report.height > VISUAL_FIT_HEIGHT / VISUAL_FIT_FLOOR) {
+  // Taller than the pane: a hint, never a problem.
+  if (report.height > VISUAL_FIT_HEIGHT) {
     notes.push(
       `Note: the page is ${report.height}px tall; the chat shows about ${VISUAL_FIT_HEIGHT}px without scrolling. Next time prefer a more compact layout (side by side, smaller images, fewer lines).`,
     );

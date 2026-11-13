@@ -90,12 +90,17 @@ describe("image places", () => {
       "<style>.a{background:url('C:/sheet.png')}</style>",
       '<div style="background:url(C:/attr.png)"></div>',
     ].join("");
-    expect(localImageRefs(html).map((r) => r.path)).toEqual(["C:/sheet.png", "C:/attr.png"]);
+    expect(localImageRefs(html).map((r) => r.path)).toEqual([
+      "C:/sheet.png",
+      "C:/attr.png",
+    ]);
   });
 
   it("counts each mention: every one carries the whole image", () => {
     const html = Array(31).fill('<img src="C:/big.png">').join("");
-    expect(localImageRefs(html)).toEqual([{ raw: "C:/big.png", path: "C:/big.png", mentions: 31 }]);
+    expect(localImageRefs(html)).toEqual([
+      { raw: "C:/big.png", path: "C:/big.png", mentions: 31 },
+    ]);
     // One 8 Mo image named 31 times is 248 Mo: refused, saying why.
     expect(imageVerdict(8_000_000, 0, null, 31)).toMatchObject({
       reason: expect.stringContaining("named 31 times"),
@@ -104,7 +109,9 @@ describe("image places", () => {
 
   it("refuses a page too heavy to travel, with a clear reason", () => {
     expect(pageSizeError("x".repeat(1000))).toBeNull();
-    expect(pageSizeError("x".repeat(VISUAL_PAGE_MAX + 1))).toContain("Not shown");
+    expect(pageSizeError("x".repeat(VISUAL_PAGE_MAX + 1))).toContain(
+      "Not shown",
+    );
   });
 
   it("prunes kept copies past 30 days, then the oldest past 400 Mo", () => {
@@ -115,7 +122,10 @@ describe("image places", () => {
       { name: "new.html", mtimeMs: now - day, size: 300 * 1024 * 1024 },
       { name: "older.html", mtimeMs: now - 2 * day, size: 200 * 1024 * 1024 },
     ];
-    expect(staleVisualFiles(files, now).sort()).toEqual(["old.html", "older.html"]);
+    expect(staleVisualFiles(files, now).sort()).toEqual([
+      "old.html",
+      "older.html",
+    ]);
   });
 });
 
@@ -177,11 +187,13 @@ describe("visualResult", () => {
     expect(r.text).toContain("Note: local image not inlined: C:\\x.png");
   });
 
-  it("notes a page taller than the pane fits even scaled down, without folding it", () => {
-    const r = visualResult({ ...clean, height: 1400 }, []);
+  it("notes a page taller than the pane, without folding it", () => {
+    const r = visualResult({ ...clean, height: 900 }, []);
     expect(r.isError).toBe(false);
-    expect(r.text).toContain("Note: the page is 1400px tall");
-    expect(visualResult({ ...clean, height: 900 }, []).text).not.toContain("Note:");
+    expect(r.text).toContain("Note: the page is 900px tall");
+    expect(visualResult({ ...clean, height: 600 }, []).text).not.toContain(
+      "Note:",
+    );
   });
 
   it("only notes a local file left out: an image it breaks shows in the report", () => {

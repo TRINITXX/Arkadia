@@ -23,7 +23,6 @@ import {
   VISUAL_PAGE_CSP,
   VISUAL_SHELL,
   visualBootstrap,
-  visualFit,
   firstFrameGrowth,
   nextFrameHeight,
   refitFrameGrowth,
@@ -66,8 +65,12 @@ describe("visualDocument", () => {
   it("gives a page without a doctype one, so it never renders in quirks mode", () => {
     expect(visualDocument("<p>x</p>")).toMatch(/^<!doctype html><meta charset/);
     // In the column's card, never a sideways scroll; « Agrandir » as written.
-    expect(visualDocument("<p>x</p>", "t", 400, true)).toContain("html{overflow-x:hidden}");
-    expect(visualDocument("<p>x</p>", "t", 400)).not.toContain("overflow-x:hidden");
+    expect(visualDocument("<p>x</p>", "t", 400, true)).toContain(
+      "html{overflow-x:hidden}",
+    );
+    expect(visualDocument("<p>x</p>", "t", 400)).not.toContain(
+      "overflow-x:hidden",
+    );
   });
 
   it("closes what the CSP can't: DNS prefetch, WebRTC, frames in a closed shadow root", () => {
@@ -113,34 +116,30 @@ describe("the wall against a frame of the page's own", () => {
 
   it("makes frame tags and declarative shadow roots inert in the markup", () => {
     expect(
-      inertFrames('<IFRAME srcdoc="x"></iframe><object></object><template shadowrootmode="closed">'),
-    ).toBe('<x-blocked-IFRAME srcdoc="x"></x-blocked-iframe><x-blocked-object></x-blocked-object><template data-shadowrootmode="closed">');
+      inertFrames(
+        '<IFRAME srcdoc="x"></iframe><object></object><template shadowrootmode="closed">',
+      ),
+    ).toBe(
+      '<x-blocked-IFRAME srcdoc="x"></x-blocked-iframe><x-blocked-object></x-blocked-object><template data-shadowrootmode="closed">',
+    );
   });
 });
 
 describe("fitting the pane's height", () => {
-  it("shows a page whole when it fits, scaled down to fit, never under the readable floor", () => {
-    expect(visualFit(600, 770)).toEqual({ scale: 1, height: 600 });
-    // 864 px of steps in 770: scaled to fit exactly.
-    expect(visualFit(864, 770).height).toBe(770);
-    expect(visualFit(864, 770).scale).toBeCloseTo(0.891, 3);
-    // Far taller: the floor, and the conversation scrolls.
-    expect(visualFit(2000, 770)).toEqual({ scale: 0.75, height: 1500 });
-    // No room known (a hidden tab, « Agrandir »): as written.
-    expect(visualFit(2000, null)).toEqual({ scale: 1, height: 2000 });
-  });
-
   it("never fits to less than 240 px: a small pane keeps the visual fitted, never unfitted", () => {
     expect(usableRoom(0)).toBe(VISUAL_MIN_ROOM);
     expect(usableRoom(213)).toBe(VISUAL_MIN_ROOM);
     expect(usableRoom(770)).toBe(770);
     // Unknown (a hidden tab): no fit at all.
     expect(usableRoom(null)).toBeNull();
-    // The input grows to 7 lines: the screenshot stays fitted, at the floor scale at most.
-    expect(visualFit(600, 150)).toEqual({ scale: 0.75, height: 450 });
-    expect(visualDocument("<img src=x>", "t", 150)).toContain(":root{--ark-fit-h:240px}");
+    // The input grows to 7 lines: the screenshot stays fitted.
+    expect(visualDocument("<img src=x>", "t", 150)).toContain(
+      ":root{--ark-fit-h:240px}",
+    );
     // The boot script reads the same floor for a room sent later.
-    expect(visualBootstrap("t")).toContain(`Math.max(${VISUAL_MIN_ROOM},Math.round(d.height))`);
+    expect(visualBootstrap("t")).toContain(
+      `Math.max(${VISUAL_MIN_ROOM},Math.round(d.height))`,
+    );
   });
 
   it("caps media to the room the card has, a caption's room kept, at no specificity", () => {
@@ -151,7 +150,10 @@ describe("fitting the pane's height", () => {
   });
 
   it("caps only images and videos the page left unsized, never an svg or a canvas", () => {
-    const rule = /:where\(([^)]*\)[^{]*)\)\{max-width:100%;max-height:var\(--ark-fit-media\)/.exec(VISUAL_THEME_CSS);
+    const rule =
+      /:where\(([^)]*\)[^{]*)\)\{max-width:100%;max-height:var\(--ark-fit-media\)/.exec(
+        VISUAL_THEME_CSS,
+      );
     expect(rule?.[1]).toBe(
       "img:not([width]):not([height]):not([style]),video:not([width]):not([height]):not([style])",
     );
@@ -161,7 +163,8 @@ describe("fitting the pane's height", () => {
   it("stops an unverified page that answers each resize of its frame with its gutter more", () => {
     // body{min-height:100vh}: each height the Lab gives comes back 32 px taller, at once.
     let g = firstFrameGrowth(160);
-    for (let i = 0; i < 10; i++) g = nextFrameHeight(g, g.height + 32, 30, true);
+    for (let i = 0; i < 10; i++)
+      g = nextFrameHeight(g, g.height + 32, 30, true);
     expect(g).toMatchObject({ frozen: true, height: 256, ignored: 288 });
     // A page that shrinks still does.
     expect(nextFrameHeight(g, 200, 30, true).height).toBe(200);
@@ -170,11 +173,13 @@ describe("fitting the pane's height", () => {
   it("never stops a page the probe checked clean, whatever pace it grows at", () => {
     // A list revealed every 80 ms: each growth lands right after the frame's resize.
     let p = firstFrameGrowth(160);
-    for (let i = 0; i < 10; i++) p = nextFrameHeight(p, p.height + 22, 30, false);
+    for (let i = 0; i < 10; i++)
+      p = nextFrameHeight(p, p.height + 22, 30, false);
     expect(p).toMatchObject({ height: 380, frozen: false });
     // Unverified, a slow reveal (no resize just before) never stops either.
     let q = firstFrameGrowth(160);
-    for (let i = 0; i < 10; i++) q = nextFrameHeight(q, q.height + 22, 400, true);
+    for (let i = 0; i < 10; i++)
+      q = nextFrameHeight(q, q.height + 22, 400, true);
     expect(q.frozen).toBe(false);
   });
 
@@ -190,11 +195,16 @@ describe("fitting the pane's height", () => {
     let f = firstFrameGrowth(160);
     for (let i = 0; i < 4; i++) f = nextFrameHeight(f, f.height + 32, 30, true);
     expect(f).toMatchObject({ frozen: true, height: 256, ignored: 288 });
-    expect(refitFrameGrowth(f)).toMatchObject({ frozen: false, height: 288, ignored: null });
+    expect(refitFrameGrowth(f)).toMatchObject({
+      frozen: false,
+      height: 288,
+      ignored: null,
+    });
   });
 
   it("knows a page the probe checked clean from its result", () => {
-    const shown = (text: string, isError = false) => tool({ result: { text, isError } });
+    const shown = (text: string, isError = false) =>
+      tool({ result: { text, isError } });
     const clean: VisualReport = {
       errors: [],
       consoleErrors: [],
@@ -206,7 +216,11 @@ describe("fitting the pane's height", () => {
       followsFrame: false,
     };
     expect(visualVerified(shown(visualResult(clean, []).text))).toBe(true);
-    expect(visualVerified(shown("Shown in the chat, not verified: Arkadia did not report"))).toBe(false);
+    expect(
+      visualVerified(
+        shown("Shown in the chat, not verified: Arkadia did not report"),
+      ),
+    ).toBe(false);
     expect(visualVerified(shown("- Script error", true))).toBe(false);
     expect(visualVerified(tool({ stale: true }))).toBe(false);
   });
@@ -264,23 +278,37 @@ describe("VISUAL_CSP", () => {
 });
 
 describe("readFrameMessage", () => {
-  const msg = (kind: string, v?: unknown, k = "t0k") => ({ arkadiaVisual: 1, k, kind, v });
+  const msg = (kind: string, v?: unknown, k = "t0k") => ({
+    arkadiaVisual: 1,
+    k,
+    kind,
+    v,
+  });
   it("takes only the frame's own kinds, an http(s) link and a non-empty choice", () => {
-    expect(readFrameMessage(msg("size", 320), "t0k")).toEqual({ kind: "size", height: 320 });
+    expect(readFrameMessage(msg("size", 320), "t0k")).toEqual({
+      kind: "size",
+      height: 320,
+    });
     expect(readFrameMessage(msg("link", "file:///C:/x"), "t0k")).toBeNull();
-    expect(readFrameMessage(msg("link", "javascript:alert(1)"), "t0k")).toBeNull();
+    expect(
+      readFrameMessage(msg("link", "javascript:alert(1)"), "t0k"),
+    ).toBeNull();
     expect(readFrameMessage(msg("choose", "  "), "t0k")).toBeNull();
     expect(readFrameMessage({ kind: "choose", v: "B" }, "t0k")).toBeNull();
   });
 
   it("passes a wheel the page left unused on, its deltas bounded", () => {
-    expect(readFrameMessage(msg("wheel", { dx: 0, dy: 120, m: 0 }), "t0k")).toEqual({
+    expect(
+      readFrameMessage(msg("wheel", { dx: 0, dy: 120, m: 0 }), "t0k"),
+    ).toEqual({
       kind: "wheel",
       dx: 0,
       dy: 120,
       mode: 0,
     });
-    expect(readFrameMessage(msg("wheel", { dx: 0, dy: 1e9, m: 9 }), "t0k")).toEqual({
+    expect(
+      readFrameMessage(msg("wheel", { dx: 0, dy: 1e9, m: 9 }), "t0k"),
+    ).toEqual({
       kind: "wheel",
       dx: 0,
       dy: 4000,
@@ -294,11 +322,15 @@ describe("readFrameMessage", () => {
     expect(readFrameMessage(msg("down", undefined, "guess"), "t0k")).toBeNull();
     expect(readFrameMessage(msg("choose", "B", ""), "")).toBeNull();
     // The shell speaks before the page exists, without a token.
-    expect(readFrameMessage({ arkadiaVisual: 1, kind: "shell" }, "t0k")).toEqual({ kind: "shell" });
+    expect(
+      readFrameMessage({ arkadiaVisual: 1, kind: "shell" }, "t0k"),
+    ).toEqual({ kind: "shell" });
     // The bootstrap removes its own script, token and all, before the page runs.
     const boot = visualBootstrap("t0k");
     expect(boot).toContain('var K="t0k"');
-    expect(boot.indexOf("removeChild(me)")).toBeLessThan(boot.indexOf('var K="t0k"'));
+    expect(boot.indexOf("removeChild(me)")).toBeLessThan(
+      boot.indexOf('var K="t0k"'),
+    );
   });
 });
 
@@ -311,7 +343,12 @@ describe("frameFocusOk and frameGestureOk", () => {
     expect(frameFocusOk({ activation: false, onFrame: true })).toBe(false);
   });
 
-  const ok = { activation: true, frameFocused: true, onFrame: true, sinceHostInput: 60_000 };
+  const ok = {
+    activation: true,
+    frameFocused: true,
+    onFrame: true,
+    sinceHostInput: 60_000,
+  };
   it("lets a link or choice act only on the user's click in that frame", () => {
     expect(frameGestureOk(ok)).toBe(true);
     // A page posting by itself: no activation.
@@ -417,7 +454,16 @@ describe("visuals in the chat's state", () => {
     // After a reload: no page yet, a copy was kept, so the card asks for it.
     let s = reduceChat(EMPTY_CHAT, stub, 1);
     expect(visualHtml(tool(), s.visuals.toolu_1)).toBeUndefined();
-    s = reduceChat(s, { type: "visual_html", chatId: "c", toolUseId: "toolu_1", html: "<p>kept</p>" }, 2);
+    s = reduceChat(
+      s,
+      {
+        type: "visual_html",
+        chatId: "c",
+        toolUseId: "toolu_1",
+        html: "<p>kept</p>",
+      },
+      2,
+    );
     expect(visualHtml(tool(), s.visuals.toolu_1)).toBe("<p>kept</p>");
     // The page sent live, then its stub replayed: the page stays.
     s = reduceChat(reduceChat(EMPTY_CHAT, check, 1), stub, 2);
@@ -464,7 +510,16 @@ describe("createVisualProbe", () => {
 
   it("never checks a replayed check without its page", () => {
     const { started, onEvent } = setup();
-    onEvent(ev("visual_check", { checkId: "s", toolUseId: "s", html: null, title: "t", wide: false }), false);
+    onEvent(
+      ev("visual_check", {
+        checkId: "s",
+        toolUseId: "s",
+        html: null,
+        title: "t",
+        wide: false,
+      }),
+      false,
+    );
     expect(started).toEqual([]);
   });
 

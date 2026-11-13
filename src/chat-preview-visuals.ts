@@ -231,7 +231,15 @@ function phoneShot(): string {
   g.fillStyle = "#e4e4e7";
   g.font = "600 46px Segoe UI, sans-serif";
   g.fillText("Projets", 48, 140);
-  const rows = ["Arkadia", "Arkadia Lab", "VTC Planner", "Assets IA", "Site ARIA", "Ferme à sites", "Notes"];
+  const rows = [
+    "Arkadia",
+    "Arkadia Lab",
+    "VTC Planner",
+    "Assets IA",
+    "Site ARIA",
+    "Ferme à sites",
+    "Notes",
+  ];
   rows.forEach((name, i) => {
     const y = 240 + i * 190;
     g.fillStyle = "#1c1e22";
@@ -264,34 +272,65 @@ figcaption{font-size:13px;color:var(--muted);text-align:center}
 </body></html>`;
   const id = "vis-tall";
   return [
-    ev("user_sent", { text: "Montre-moi la capture de la liste des projets.", images: 0 }),
+    ev("user_sent", {
+      text: "Montre-moi la capture de la liste des projets.",
+      images: 0,
+    }),
     sdk({
       type: "assistant",
       uuid: "tall-a1",
       message: {
         id: "tall-m1",
-        content: [{ type: "tool_use", id, name: VISUAL_TOOL_NAME, input: { html, title: "Galerie" } }],
+        content: [
+          {
+            type: "tool_use",
+            id,
+            name: VISUAL_TOOL_NAME,
+            input: { html, title: "Galerie" },
+          },
+        ],
       },
     }),
-    ev("visual_check", { checkId: id, toolUseId: id, html, title: "Galerie", wide: false }),
+    ev("visual_check", {
+      checkId: id,
+      toolUseId: id,
+      html,
+      title: "Galerie",
+      wide: false,
+    }),
     ev("visual_checked", { checkId: id }),
     sdk({
       type: "user",
       message: {
-        content: [{ type: "tool_result", tool_use_id: id, content: "Shown in the chat (checked: no error).", is_error: false }],
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: id,
+            content: "Shown in the chat (checked: no error).",
+            is_error: false,
+          },
+        ],
       },
     }),
     ...stepsEvents(),
     sdk({
       type: "assistant",
       uuid: "tall-a2",
-      message: { id: "tall-m2", content: [{ type: "text", text: "Voici la capture, puis les étapes de la reprise." }] },
+      message: {
+        id: "tall-m2",
+        content: [
+          {
+            type: "text",
+            text: "Voici la capture, puis les étapes de la reprise.",
+          },
+        ],
+      },
     }),
     sdk({ type: "result", subtype: "success", duration_ms: 6_000 }),
   ];
 }
 
-/** Text that no image fit can shorten: 14 steps, scaled down to fit the pane. */
+/** Text that no image fit can shorten: 14 steps, the conversation scrolls past them. */
 function stepsEvents(): ChatEvent[] {
   const steps = [
     "Le volet lit sa carte de session",
@@ -320,13 +359,38 @@ span{color:var(--text)}
     sdk({
       type: "assistant",
       uuid: "steps-a1",
-      message: { id: "steps-m1", content: [{ type: "tool_use", id, name: VISUAL_TOOL_NAME, input: { html, title: "Reprise d'un chat en 14 étapes" } }] },
+      message: {
+        id: "steps-m1",
+        content: [
+          {
+            type: "tool_use",
+            id,
+            name: VISUAL_TOOL_NAME,
+            input: { html, title: "Reprise d'un chat en 14 étapes" },
+          },
+        ],
+      },
     }),
-    ev("visual_check", { checkId: id, toolUseId: id, html, title: "Reprise d'un chat en 14 étapes", wide: false }),
+    ev("visual_check", {
+      checkId: id,
+      toolUseId: id,
+      html,
+      title: "Reprise d'un chat en 14 étapes",
+      wide: false,
+    }),
     ev("visual_checked", { checkId: id }),
     sdk({
       type: "user",
-      message: { content: [{ type: "tool_result", tool_use_id: id, content: "Shown in the chat (checked: no error).", is_error: false }] },
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: id,
+            content: "Shown in the chat (checked: no error).",
+            is_error: false,
+          },
+        ],
+      },
     }),
   ];
 }
