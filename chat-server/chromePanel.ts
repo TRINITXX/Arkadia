@@ -26,6 +26,17 @@ export function callShowsTab(response: unknown): boolean {
 }
 
 /**
+ * When a pane stops waiting for Arkadia's answer to its Chrome request:
+ * 12 s, or 60 s once Arkadia said it launches a window (`<id>.wait`,
+ * `write_wait` in `src-tauri/src/chrome_view.rs`). A profile that is not
+ * running takes seconds to start: at 12 s, the call went on without its
+ * window and Claude's tabs opened outside the panel (13/11/2026).
+ */
+export function answerDeadline(askedAt: number, launching: boolean): number {
+  return askedAt + (launching ? 60_000 : 12_000);
+}
+
+/**
  * The file whose age lets a pane ask for its Chrome window at most every
  * 20 s: the marker `~/.claude/hooks/chrome-profile-open.ps1` keeps for a
  * terminal, same folder, same name. Arkadia deletes it when the pane's

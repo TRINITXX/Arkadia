@@ -82,7 +82,7 @@ import {
   turnAfter,
   type SleepFacts,
 } from "./sleep.ts";
-import { askedMarker, callShowsTab } from "./chromePanel.ts";
+import { answerDeadline, askedMarker, callShowsTab } from "./chromePanel.ts";
 import { unwrapPastedContent } from "./pastedContent.ts";
 import { needsReread, outputFiles, readConsoleTail } from "./taskOutput.ts";
 import { sessionTitle, TITLE_LOOKS_MS } from "./title.ts";
@@ -353,7 +353,8 @@ async function reportChromeCallRan(
  * makes in a terminal. A chat loads the user's settings and runs their
  * hooks too: that script skips chats (`ARKADIA_CHAT`), or every call asked
  * twice and paid a PowerShell start (06/11/2026).
- * Waits 12 s at most for Arkadia's answer, 6 s more when the profile had no
+ * Waits 12 s at most for Arkadia's answer, 60 s when Arkadia says it
+ * launches a window (`answerDeadline`), 6 s more when the profile had no
  * window (its extension is only starting). Never blocks the call otherwise.
  * Asks at most every 20 s (`askedMarker`), sooner once the window closed.
  */
@@ -391,24 +392,31 @@ async function askChromePanel(
   await writeFile(tmp, JSON.stringify({ id, paneId }));
   await rename(tmp, join(inbox, `${id}.json`));
   const ack = join(inbox, `${id}.ack`);
-  const deadline = Date.now() + 12_000;
-  while (Date.now() < deadline) {
-    const raw = await readFile(ack, "utf8").catch(() => null);
-    if (raw !== null) {
-      await unlink(ack).catch(() => {});
-      const answer = (() => {
-        try {
-          return JSON.parse(raw) as { profileStarted?: boolean };
-        } catch {
-          return {};
-        }
-      })();
-      if (answer.profileStarted) await new Promise((r) => setTimeout(r, 6_000));
-      return {};
+  const wait = join(inbox, `${id}.wait`);
+  const askedAt = Date.now();
+  let launching = false;
+  try {
+    while (Date.now() < answerDeadline(askedAt, launching)) {
+      const raw = await readFile(ack, "utf8").catch(() => null);
+      if (raw !== null) {
+        await unlink(ack).catch(() => {});
+        const answer = (() => {
+          try {
+            return JSON.parse(raw) as { profileStarted?: boolean };
+          } catch {
+            return {};
+          }
+        })();
+        if (answer.profileStarted) await new Promise((r) => setTimeout(r, 6_000));
+        return {};
+      }
+      launching ||= existsSync(wait);
+      await new Promise((r) => setTimeout(r, 100));
     }
-    await new Promise((r) => setTimeout(r, 100));
+    return {};
+  } finally {
+    await unlink(wait).catch(() => {});
   }
-  return {};
 }
 delete process.env.ARKADIA_CHAT_ACCOUNT;
 
@@ -1099,6 +1107,9 @@ class Chat {
           PreToolUse: [
             {
               matcher: "mcp__claude-in-chrome__.*",
+              // 60 s for a window being launched, 6 s more for its
+              // extension (`askChromePanel`).
+              timeout: 80,
               hooks: [
                 async () =>
                   askChromePanel(

@@ -147,6 +147,37 @@ fn valid_id(id: &str) -> bool {
 /// Launches so far, for a unique first page per launched window.
 static NEXT_LAUNCH: AtomicU64 = AtomicU64::new(1);
 
+/// How long a launch waits for its window. A profile with no window open
+/// starts first, extensions and all: its window came after 10 s, Chrome
+/// left it on Alexis's screen and Claude's tabs went there (13/11/2026,
+/// Chrome reopened after it went down).
+fn launch_deadline(profile_started: bool) -> std::time::Duration {
+    std::time::Duration::from_secs(if profile_started { 40 } else { 10 })
+}
+
+/// A launch that gave up on its window (`launch_deadline`).
+const NO_WINDOW: &str = "Chrome opened no window";
+
+/// How long a window is still looked for once its launch gave up: caught,
+/// it is parked instead of staying on Alexis's screen (`catch_late`).
+const LATE_WINDOW_WATCH: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The app, for threads that outlive the command that started them.
+static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// The panel's lines in `popup.log`: each request, launch, steer and call
+/// that ran, so a Chrome that opened outside the panel can be explained
+/// after the fact (nothing was logged before 13/11/2026).
+fn log(msg: &str) {
+    crate::popup::log_line(&format!("[chrome] {msg}"));
+}
+
+/// The start of an id or a pane key, enough to follow it in the log.
+fn short(id: &str) -> &str {
+    let id = id.strip_prefix("chrome:").unwrap_or(id);
+    id.get(..8).unwrap_or(id)
+}
+
 /// The title of a launched window's first page: unique to this launch.
 fn launch_title(pid: u32, n: u64) -> String {
     format!("Arkadia-{pid}-{n}")
@@ -338,6 +369,15 @@ fn write_ack(id: &str, prepared: Option<&Prepared>) {
     }
 }
 
+/// Tells the hook waiting on request `id` that a window is being launched:
+/// it waits for the answer longer than 12 s then (a profile that is not
+/// running takes seconds to start), and never opens Chrome itself.
+fn write_wait(id: &str) {
+    if valid_id(id) {
+        let _ = std::fs::write(inbox_dir().join(format!("{id}.wait")), "");
+    }
+}
+
 fn main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     app.get_webview_window("main")
 }
@@ -463,8 +503,15 @@ fn ensure(
     // next to a parked one, in the corner. And launched last, the session's
     // window is the profile's last focused one, where Claude's tabs go: a
     // spare launched after it took them (05/11/2026).
-    let profile_started = anchor_of(state, &dir).is_ok_and(|(_, _, started)| started);
-    let (win, started) = launch(state, &dir)?;
+    let profile_started = match anchor_of(state, &dir) {
+        Ok((_, _, started)) => started,
+        // Chrome too slow to open the anchor: the pane's window would wait
+        // as long again, past what the hooks wait. The anchor is caught when
+        // it comes (`catch_late`), the next call launches the pane's window.
+        Err(e) if e == NO_WINDOW => return Err(e),
+        Err(_) => false,
+    };
+    let (win, started) = launch(state, &dir, Some(key))?;
     let profile_started = profile_started || started;
     let hwnd = win.hwnd;
     let pane_gone = state.inner.lock().is_ok_and(|mut inner| {
@@ -495,7 +542,7 @@ fn anchor_of(state: &ChromeView, dir: &str) -> Result<(Win, bool, bool), String>
     if let Some(anchor) = existing {
         return Ok((anchor, false, false));
     }
-    let (anchor, started) = launch(state, dir)?;
+    let (anchor, started) = launch(state, dir, None)?;
     if let Ok(mut inner) = state.inner.lock() {
         inner.spares.insert(dir.to_string(), anchor.clone());
     }
@@ -512,14 +559,25 @@ fn anchor_of(state: &ChromeView, dir: &str) -> Result<(Win, bool, bool), String>
 /// launch here borrows the foreground as every launch does
 /// (`make_most_recent`), and the anchor, its tabs with it, closes with
 /// Arkadia (exit, rebuild).
-fn prepare_outside(state: &ChromeView, email: &str) -> Result<Prepared, String> {
+fn prepare_outside(state: &ChromeView, email: &str, id: &str) -> Result<Prepared, String> {
     let dir = crate::chrome_profile::profile_dir_for_email(email)
         .ok_or_else(|| "no Chrome profile paired with this account".to_string())?;
+    let has_anchor = state
+        .inner
+        .lock()
+        .is_ok_and(|inner| inner.spares.get(&dir).is_some_and(|a| win::alive(a.hwnd)));
+    if !has_anchor {
+        write_wait(id);
+    }
     let (anchor, created, profile_started) = {
         let _launch = state.launching.lock().map_err(|e| e.to_string())?;
         anchor_of(state, &dir)?
     };
     let steered = steer(state, &anchor, created);
+    log(&format!(
+        "request {} outside Arkadia: anchor of {dir}, steered {steered}",
+        short(id)
+    ));
     Ok(Prepared {
         profile: dir,
         steered,
@@ -530,8 +588,9 @@ fn prepare_outside(state: &ChromeView, email: &str) -> Result<Prepared, String> 
 /// Launches a window in profile folder `dir` and makes it the panel's:
 /// found by its first page's unique title, parked, shown again only once
 /// off-screen. The caller holds `state.launching`. Returns it with whether
-/// no window of the profile was open before.
-fn launch(state: &ChromeView, dir: &str) -> Result<(Win, bool), String> {
+/// no window of the profile was open before. `pane`: the pane key it is
+/// for, None for an anchor (where a window that comes too late goes).
+fn launch(state: &ChromeView, dir: &str, pane: Option<&str>) -> Result<(Win, bool), String> {
     let dir = dir.to_string();
     // The new window opens where the profile's last active window is: off
     // the screen while Arkadia launches (arrange lays them back after).
@@ -561,6 +620,15 @@ fn launch(state: &ChromeView, dir: &str) -> Result<(Win, bool), String> {
         std::process::id(),
         NEXT_LAUNCH.fetch_add(1, Ordering::Relaxed),
     );
+    log(&format!(
+        "launch {title} in {dir} for {}{}",
+        pane.map_or("an anchor", short),
+        if profile_started {
+            ", profile not running"
+        } else {
+            ""
+        }
+    ));
     // Chrome puts a window launched from the command line in front, over
     // whatever Alexis uses: the foreground goes back to it.
     let before = win::foreground();
@@ -584,9 +652,11 @@ fn launch(state: &ChromeView, dir: &str) -> Result<(Win, bool), String> {
     }
     if !crate::chrome_profile::launch_window(&dir, &title) {
         win::steering_done();
+        log(&format!("launch {title}: Chrome could not be started"));
         return Err("Chrome could not be started".into());
     }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let started = std::time::Instant::now();
+    let deadline = started + launch_deadline(profile_started);
     let hwnd = loop {
         let found = win::browser_windows()
             .into_iter()
@@ -595,10 +665,20 @@ fn launch(state: &ChromeView, dir: &str) -> Result<(Win, bool), String> {
             break h;
         }
         if std::time::Instant::now() > deadline {
-            return Err("Chrome opened no window".into());
+            win::steering_done();
+            log(&format!(
+                "launch {title}: no window after {} s",
+                started.elapsed().as_secs()
+            ));
+            catch_late(dir, title, pane.map(str::to_owned), before);
+            return Err(NO_WINDOW.into());
         }
         std::thread::sleep(std::time::Duration::from_millis(120));
     };
+    log(&format!(
+        "launch {title}: window in {} ms",
+        started.elapsed().as_millis()
+    ));
     win::adopt(hwnd);
     win::park(hwnd);
     // The park is async on Chrome's thread: the window shows again only
@@ -622,6 +702,125 @@ fn launch(state: &ChromeView, dir: &str) -> Result<(Win, bool), String> {
         elsewhere: false,
     };
     Ok((win, profile_started))
+}
+
+/// What a window that came after its launch gave up becomes.
+#[derive(Debug, PartialEq, Eq)]
+enum LateFate {
+    /// The pane's window, which it still lacks.
+    Pane,
+    /// Its profile's anchor, which it still lacks.
+    Anchor,
+    /// Not needed any more: it closes, parked first.
+    Close,
+}
+
+/// `pane`: the pane the launch was for (None: an anchor). The window a
+/// later request launched, or a closed pane, wins over the late one.
+fn late_fate(
+    pane: Option<&str>,
+    pane_has_window: bool,
+    pane_closed: bool,
+    has_anchor: bool,
+) -> LateFate {
+    match pane {
+        Some(_) if !pane_has_window && !pane_closed => LateFate::Pane,
+        None if !has_anchor => LateFate::Anchor,
+        _ => LateFate::Close,
+    }
+}
+
+/// A launch gave up on its window (`launch_deadline`): Chrome may still
+/// open it, on Alexis's screen, and the extension put Claude's tabs in it,
+/// Chrome having activated it (13/11/2026). Found by its title within
+/// `LATE_WINDOW_WATCH`, it is parked like any launched window and kept by
+/// its pane or as its profile's anchor, else closed. Until then, a new
+/// window of the profile counts as a launch's (`win::expect_late`): the
+/// foreground never goes back to it, nor is it rescued full screen.
+fn catch_late(dir: String, title: String, pane: Option<String>, before: Option<isize>) {
+    let app_id = app_id_of(&dir);
+    win::expect_late(&app_id);
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let hwnd = loop {
+            let found = win::browser_windows()
+                .into_iter()
+                .find(|(_, _, text)| is_launched_window(text, &title));
+            if let Some((h, _, _)) = found {
+                break h;
+            }
+            if started.elapsed() > LATE_WINDOW_WATCH {
+                win::late_done(&app_id);
+                log(&format!("launch {title}: never came"));
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        };
+        win::adopt(hwnd);
+        win::late_done(&app_id);
+        win::park(hwnd);
+        win::wait_parked(hwnd, std::time::Duration::from_secs(1));
+        win::unveil(hwnd);
+        win::hand_back(hwnd, before);
+        win::watch_process(hwnd);
+        let Some(app) = APP.get() else {
+            win::close(hwnd);
+            return;
+        };
+        let state = app.state::<ChromeView>();
+        let late = Win {
+            hwnd,
+            profile_dir: dir.clone(),
+            at: None,
+            launch: Some(LaunchTab {
+                title: title.clone(),
+            }),
+            launch_busy: false,
+            proven: false,
+            steered: false,
+            elsewhere: false,
+        };
+        // Decided under the launch lock, as every other write to `windows`
+        // and `spares`: a launch for the same pane or profile that runs
+        // meanwhile either finds this window or makes it the extra one.
+        let Ok(launching) = state.launching.lock() else {
+            win::close(hwnd);
+            return;
+        };
+        let fate = state.inner.lock().map_or(LateFate::Close, |mut inner| {
+            let pane_has_window = pane
+                .as_ref()
+                .is_some_and(|key| inner.windows.get(key).is_some_and(|w| win::alive(w.hwnd)));
+            let pane_closed = pane.as_ref().is_some_and(|key| inner.closed.contains(key));
+            let has_anchor = inner.spares.get(&dir).is_some_and(|a| win::alive(a.hwnd));
+            let fate = late_fate(pane.as_deref(), pane_has_window, pane_closed, has_anchor);
+            match (&fate, &pane) {
+                (LateFate::Pane, Some(key)) => {
+                    inner.windows.insert(key.clone(), late);
+                }
+                (LateFate::Anchor, _) => {
+                    inner.spares.insert(dir.clone(), late);
+                }
+                _ => {}
+            }
+            fate
+        });
+        drop(launching);
+        log(&format!(
+            "launch {title}: window came {} s after the launch gave up, {fate:?}",
+            started.elapsed().as_secs()
+        ));
+        match fate {
+            LateFate::Close => win::close(hwnd),
+            // Its next call asks at once, and is steered to it.
+            LateFate::Pane => {
+                if let Some(id) = pane.as_deref().and_then(|k| k.strip_prefix("chrome:")) {
+                    forget_asked(id);
+                }
+            }
+            LateFate::Anchor => {}
+        }
+    });
 }
 
 /// Makes `win` its profile's last-focused window when that may be needed
@@ -653,12 +852,25 @@ fn steer(state: &ChromeView, win: &Win, created: bool) -> bool {
         .filter(|(_, id, _)| id.as_deref() == Some(app_id.as_str()))
         .all(|(h, _, _)| *h == win.hwnd);
     if !alone && !win::activate_briefly(win.hwnd) {
+        log(&format!(
+            "steer {}: not steered, Arkadia not in front",
+            win.profile_dir
+        ));
         return false;
     }
     if let Ok(mut inner) = state.inner.lock() {
         inner.dirty.remove(&win.profile_dir);
         inner.steered.insert(win.profile_dir.clone(), win.hwnd);
     }
+    log(&format!(
+        "steer {}: {}",
+        win.profile_dir,
+        if alone {
+            "the profile's only window"
+        } else {
+            "activated"
+        }
+    ));
     true
 }
 
@@ -714,8 +926,19 @@ pub async fn chrome_view_prepare(
     account: String,
 ) -> Result<Prepared, String> {
     let worker = app.clone();
+    let wait_id = id.clone();
+    let pane = key.clone();
+    let asked = std::time::Instant::now();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let state = worker.state::<ChromeView>();
+        // A window to launch: the hook waits for it (`write_wait`).
+        let has_window = state
+            .inner
+            .lock()
+            .is_ok_and(|inner| inner.windows.get(&key).is_some_and(|w| win::alive(w.hwnd)));
+        if !has_window {
+            write_wait(&wait_id);
+        }
         let (win, created, profile_started) = ensure(&worker, &state, &key, &account)?;
         let steered = steer(&state, &win, created);
         note_steered(&state, &key, steered);
@@ -732,6 +955,21 @@ pub async fn chrome_view_prepare(
         let _ = std::fs::remove_file(inbox_dir().join(format!("{id}.json")));
     }
     write_ack(&id, result.as_ref().ok());
+    let elapsed = asked.elapsed().as_millis();
+    match &result {
+        Ok(p) => log(&format!(
+            "request {} of pane {}: answered in {elapsed} ms, steered {}, profile started {}",
+            short(&id),
+            short(&pane),
+            p.steered,
+            p.profile_started
+        )),
+        Err(e) => log(&format!(
+            "request {} of pane {}: failed in {elapsed} ms: {e}",
+            short(&id),
+            short(&pane)
+        )),
+    }
     result
 }
 
@@ -782,6 +1020,15 @@ fn note_ran(app: &AppHandle, key: String) {
                 ready
             }
         };
+        log(&format!(
+            "call ran in pane {}: Claude's tab {}",
+            short(&key),
+            if ready {
+                "in its window"
+            } else {
+                "not in its window"
+            }
+        ));
         // Its window may be gone meanwhile (Claude closed its last tab):
         // `chrome-closed` has the last word, nothing comes forward.
         let alive = state
@@ -965,7 +1212,7 @@ fn keep_a_spare(state: &ChromeView, closing: &Win) {
     // The new window opens where this one is: off the screen.
     win::park(closing.hwnd);
     win::wait_parked(closing.hwnd, std::time::Duration::from_millis(500));
-    if let Ok((spare, _)) = launch(state, &closing.profile_dir) {
+    if let Ok((spare, _)) = launch(state, &closing.profile_dir, None) {
         if let Ok(mut inner) = state.inner.lock() {
             inner.spares.insert(closing.profile_dir.clone(), spare);
         }
@@ -1159,6 +1406,7 @@ fn on_destroyed(app: &AppHandle, hwnd: isize) {
         Some(key)
     });
     if let Some(key) = key {
+        log(&format!("window of pane {} closed in Chrome", short(&key)));
         if let Some(pane) = key.strip_prefix("chrome:") {
             forget_asked(pane);
         }
@@ -1191,6 +1439,7 @@ fn forget_asked(pane_id: &str) {
 /// Starts the inbox watcher and the window hooks. Windows a crashed
 /// Arkadia left behind (they carry its mark) close first.
 pub fn spawn(app: AppHandle) {
+    let _ = APP.set(app.clone());
     win::close_orphans();
     let hooks_app = app.clone();
     std::thread::spawn(move || win::run_hooks(hooks_app));
@@ -1273,7 +1522,13 @@ fn run_inbox(app: AppHandle) -> Result<(), String> {
                     let id = request.id;
                     // Off the watcher: a launch takes seconds.
                     std::thread::spawn(move || {
-                        let prepared = prepare_outside(&app.state::<ChromeView>(), &email);
+                        let prepared = prepare_outside(&app.state::<ChromeView>(), &email, &id);
+                        if let Err(e) = &prepared {
+                            log(&format!(
+                                "request {} outside Arkadia failed: {e}",
+                                short(&id)
+                            ));
+                        }
                         write_ack(&id, prepared.as_ref().ok());
                     });
                 }
@@ -1293,6 +1548,11 @@ fn run_inbox(app: AppHandle) -> Result<(), String> {
                 }
                 continue;
             }
+            log(&format!(
+                "request {} of pane {}",
+                short(&request.id),
+                short(&request.pane_id)
+            ));
             let _ = app.emit_to(
                 "main",
                 "chrome-request",
@@ -1742,6 +2002,7 @@ mod win {
             || other_launching()
             || left_button_down()
             || !is_chrome_exe(h)
+            || late_launch(h)
         {
             return false;
         }
@@ -2357,6 +2618,44 @@ mod win {
     /// Chrome windows taking the foreground during a launch are the new
     /// window, never a place to go back to.
     static LAUNCHES: AtomicU32 = AtomicU32::new(0);
+    /// Profiles (their AppUserModelID) with a launch that gave up while its
+    /// window may still come (`catch_late`), with the windows they had then:
+    /// until it is caught, a window of theirs born since is that launch's,
+    /// neither the place the foreground goes back to nor one of Alexis's to
+    /// rescue full screen. His windows open before stay his.
+    static LATE: Mutex<Vec<(String, Vec<isize>)>> = Mutex::new(Vec::new());
+
+    pub(super) fn expect_late(app_id: &str) {
+        let before: Vec<isize> = browser_windows()
+            .into_iter()
+            .filter(|(_, id, _)| id.as_deref() == Some(app_id))
+            .map(|(h, _, _)| h)
+            .collect();
+        LATE.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((app_id.to_owned(), before));
+    }
+
+    pub(super) fn late_done(app_id: &str) {
+        let mut late = LATE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = late.iter().position(|(a, _)| a == app_id) {
+            late.remove(i);
+        }
+    }
+
+    /// A Chrome window not adopted yet, born after a launch of its profile
+    /// gave up while that launch's window is awaited.
+    fn late_launch(h: HWND) -> bool {
+        if is_panel_window(h) {
+            return false;
+        }
+        let Some(id) = app_id(h) else { return false };
+        let raw = h.0 as isize;
+        LATE.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .any(|(a, before)| *a == id && !before.contains(&raw))
+    }
 
     /// A launch in progress. Chrome shows the new window at once, often
     /// maximized, before Arkadia finds and parks it: a full-screen flash,
@@ -2769,7 +3068,11 @@ mod win {
                     // panel window (the daily and the Lab side by side would
                     // hand the foreground to each other forever).
                     let chrome = is_chrome_class(h);
-                    if !(chrome && (LAUNCHES.load(Ordering::SeqCst) > 0 || is_panel_window(h))) {
+                    if !(chrome
+                        && (LAUNCHES.load(Ordering::SeqCst) > 0
+                            || is_panel_window(h)
+                            || late_launch(h)))
+                    {
                         LAST_OTHER.store(raw, Ordering::SeqCst);
                     }
                     if chrome {
@@ -2854,6 +3157,8 @@ mod win {
     }
     pub(super) fn close_orphans() {}
     pub(super) fn watch_process(_: isize) {}
+    pub(super) fn expect_late(_: &str) {}
+    pub(super) fn late_done(_: &str) {}
     pub(super) fn run_hooks(_: AppHandle) {}
 }
 
@@ -3032,5 +3337,24 @@ mod tests {
         assert_eq!(r.pane_id, "");
         assert_eq!(r.email.as_deref(), Some("minifashion83@hotmail.fr"));
         assert!(!r.ran);
+    }
+
+    #[test]
+    fn waits_longer_for_a_profile_that_is_not_running() {
+        // Chrome reopened after going down: the profile's first window came
+        // after 10 s and stayed on Alexis's screen (13/11/2026).
+        assert!(launch_deadline(true) >= std::time::Duration::from_secs(25));
+        assert_eq!(launch_deadline(false), std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_late_window_is_kept_only_where_one_is_missing() {
+        let pane = Some("chrome:p1");
+        assert_eq!(late_fate(pane, false, false, true), LateFate::Pane);
+        // A later request launched the pane's window, or the pane closed.
+        assert_eq!(late_fate(pane, true, false, true), LateFate::Close);
+        assert_eq!(late_fate(pane, false, true, true), LateFate::Close);
+        assert_eq!(late_fate(None, false, false, false), LateFate::Anchor);
+        assert_eq!(late_fate(None, false, false, true), LateFate::Close);
     }
 }

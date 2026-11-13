@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { askedMarker, callShowsTab } from "@chat-server/chromePanel";
+import {
+  answerDeadline,
+  askedMarker,
+  callShowsTab,
+} from "@chat-server/chromePanel";
+
+describe("answerDeadline", () => {
+  it("waits for a window being launched far longer than for a plain answer", () => {
+    // Chrome reopened after going down: the profile took over 12 s to
+    // start, the call went on and Claude's tabs opened outside the panel
+    // (13/11/2026).
+    expect(answerDeadline(1_000, false)).toBe(13_000);
+    expect(answerDeadline(1_000, true)).toBeGreaterThanOrEqual(1_000 + 40_000);
+  });
+});
 
 describe("callShowsTab", () => {
   it("counts a call whose result names one of the session's tabs", () => {
