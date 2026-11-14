@@ -584,8 +584,12 @@ export interface LimitState {
   version?: number;
 }
 
-/** 2: a model's limit blocks that model alone (`modelBlockKey`). */
-export const LIMIT_STATE_VERSION = 2;
+/**
+ * 2: a model's limit blocks that model alone (`modelBlockKey`).
+ * 3: no block holds past one 5-hour window (`limitUntil`): the waits an
+ * older save timed by a block till Monday are looked at again at once.
+ */
+export const LIMIT_STATE_VERSION = 3;
 
 function numberRecord(raw: unknown): Record<string, number> {
   if (!raw || typeof raw !== "object") return {};

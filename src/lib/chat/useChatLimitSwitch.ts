@@ -19,6 +19,7 @@ import {
   chatLimitHit,
   chatLimitStep,
   creditsFailure,
+  limitUntil,
   modelLimitUntil,
   modelName,
   planChatLimitSwitch,
@@ -266,18 +267,19 @@ export function useChatLimitSwitch({
       const now = Date.now();
       const account = accountsRef.current?.accounts.find((a) => a.id === from);
       const known = account?.usage?.fiveHour?.resetsAt;
-      const reset = (hit.resetsAt ?? known ?? 0) * 1000 + 60_000;
-      // A reset already past (clock skew) must not let it retry at once.
-      let until = reset > now ? reset : now + 5 * 60_000;
+      // Its date is trusted up to one 5-hour window only, a model's limit's
+      // as the account's (`limitUntil`): never till Sunday, nor till Monday
+      // for a week not used up.
+      const until =
+        hit.scope === "model"
+          ? modelLimitUntil(hit.resetsAt, account, now)
+          : limitUntil(hit.resetsAt ?? known ?? undefined, account, now);
       // One model's limit (Fable's): that model alone is out, the account's
       // others stay free; a model not known blocks the whole account.
-      // Its date is not trusted (`modelLimitUntil`), even for a model not
-      // known yet (the init still being folded): never till Sunday.
       const family = hit.family ?? modelFamily(liveChatState(chatId).model);
-      if (hit.scope === "model") {
-        until = modelLimitUntil(hit.resetsAt, account, now);
+      if (hit.scope === "model")
         block(family ? modelBlockKey(from, family) : from, until);
-      } else block(from, until);
+      else block(from, until);
       if (!enabledRef.current) {
         logSwitch(`${chatId} on ${from}: setting off`);
         return;
@@ -497,15 +499,17 @@ export function useChatLimitSwitch({
             text: `${CREDITS_LABEL} refusés${why ? ` : ${why}` : ""} · retour sur un abonnement ${clock(step.at)}`,
           });
         } else if (step.here) {
+          // `step.at`, not `until`: its own account's figure (the week used
+          // up) may hold it past its block, which lasts 5 hours at most.
           logSwitch(
-            `${chatId} on ${from}: no free account, continues here at ${new Date(until).toISOString()} (${state})`,
+            `${chatId} on ${from}: no free account, continues here at ${new Date(step.at).toISOString()} (${state})`,
           );
           setLimitNotice(chatId, {
-            text: `Limite atteinte sur ${label(from)} · aucun autre compte libre, reprise ici ${clock(until)}`,
+            text: `Limite atteinte sur ${label(from)} · aucun autre compte libre, reprise ici ${clock(step.at)}`,
             onCredits: offer,
           });
-          save(until + RESET_MARGIN_MS);
-          if (!(await sleepUntil(chatId, until + RESET_MARGIN_MS)))
+          save(step.at + RESET_MARGIN_MS);
+          if (!(await sleepUntil(chatId, step.at + RESET_MARGIN_MS)))
             return save(null);
           // Its reset came during a move to the credits: never « continue »
           // to the chat it closes.

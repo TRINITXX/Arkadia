@@ -14,7 +14,12 @@ import { AccountChip } from "@/components/AccountChip";
 import { useAccounts } from "@/lib/useAccounts";
 import { useCreditsPoll } from "@/lib/credits";
 import { publishAccountQuota } from "@/lib/accountQuota";
-import { isModelLimit, modelLimitUntil } from "@/lib/chat/chatLimit";
+import {
+  isModelLimit,
+  limitUntil,
+  LONGEST_BLOCK_MS,
+  modelLimitUntil,
+} from "@/lib/chat/chatLimit";
 import {
   MAIN_ACCOUNT_ID,
   accountBlocks,
@@ -2280,23 +2285,25 @@ export function App() {
       .then((saved) => {
         const { waits, blocked, chatWaits } = limitState.current;
         const stale = Date.now() - 5 * 60_000;
-        for (const [sid, at] of Object.entries(saved.waits)) {
-          if (at > stale && !(sid in waits)) waits[sid] = at;
-        }
-        // An older save's waits were timed by its blocks: looked at again
-        // at once, as a block until Sunday may be what held them.
+        // An older save's waits, the terminal's and the chats', were timed
+        // by its blocks: looked at again at once, as a block until Sunday or
+        // Monday may be what held them.
         const old = saved.version !== LIMIT_STATE_VERSION;
+        for (const [sid, at] of Object.entries(saved.waits)) {
+          if (at > stale && !(sid in waits))
+            waits[sid] = old ? Math.min(at, Date.now()) : at;
+        }
         for (const [sid, at] of Object.entries(saved.chatWaits)) {
           if (at > stale && !(sid in chatWaits))
             chatWaits[sid] = old ? Math.min(at, Date.now()) : at;
         }
-        // An older save: a block past one 5-hour window came from a « Fable
-        // limit » taken for the whole account until Sunday (12/11/2026), or
-        // from the week's limit, which its figure at 100 % keeps anyway.
-        const longest = Date.now() + 5 * 3600_000 + 2 * 60_000;
+        // A block past one 5-hour window is never written now (`limitUntil`):
+        // a saved one came from a « Fable limit » taken till Sunday
+        // (12/11/2026) or a week's limit taken till Monday (13/11/2026). The
+        // week really used up, its figure at 100 % keeps the account out.
+        const longest = Date.now() + LONGEST_BLOCK_MS;
         for (const [id, until] of Object.entries(saved.blocked)) {
-          if (saved.version !== LIMIT_STATE_VERSION && until > longest)
-            continue;
+          if (until > longest) continue;
           blocked[id] = Math.max(blocked[id] ?? 0, until);
         }
         setLimitBlocked({ ...blocked });
@@ -2505,24 +2512,17 @@ export function App() {
           const account = paneAccountId(
             subscriptionAccount(tab.panes[paneId].accountId),
           );
-          // A minute past the reset, for the server's clock. A reset already
-          // past (clock skew) must not let the same account retry at once.
+          // A minute past the reset, for the server's clock, never past one
+          // 5-hour window (`limitUntil`): not till Monday for a week the
+          // poll shows not used up. A model's limit (« Fable limit »): the
+          // whole account for the terminal, which knows no model.
           const now = Date.now();
-          const reset = hit.resetsAt * 1000 + 60_000;
-          // A model's limit (« Fable limit »): the whole account for the
-          // terminal, which knows no model, but never past one 5-hour
-          // window (`modelLimitUntil`), not till Sunday.
+          const acc = accountsStateRef.current?.accounts.find(
+            (a) => a.id === account,
+          );
           const until = isModelLimit(hit.limitType)
-            ? modelLimitUntil(
-                hit.resetsAt,
-                accountsStateRef.current?.accounts.find(
-                  (a) => a.id === account,
-                ),
-                now,
-              )
-            : reset > now
-              ? reset
-              : now + 5 * 60_000;
+            ? modelLimitUntil(hit.resetsAt, acc, now)
+            : limitUntil(hit.resetsAt, acc, now);
           const blocked = limitState.current.blocked;
           blocked[account] = Math.max(blocked[account] ?? 0, until);
           persistLimitState();

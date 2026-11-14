@@ -87,6 +87,9 @@ export function chatLimitHit(message: JsonObject): ChatLimitHit | null {
   return null;
 }
 
+/** At most one 5-hour window and a minute: no refusal's date holds longer. */
+const WINDOW_CAP_MS = 5 * 3600_000 + 60_000;
+
 /**
  * When a model limit lifts (ms). The refusal's own date is not trusted: on
  * 12/11/2026 the « Fable limit » said Sunday, and Fable came back at the
@@ -103,8 +106,29 @@ export function modelLimitUntil(
   const times = [resetsAt, five]
     .filter((t): t is number => typeof t === "number" && t * 1000 > now)
     .map((t) => t * 1000 + 60_000);
-  return Math.min(...times, now + 5 * 3600_000 + 60_000);
+  return Math.min(...times, now + WINDOW_CAP_MS);
 }
+
+/**
+ * When any limit lifts (ms), the account's whole as one model's: its date is
+ * trusted up to one 5-hour window only (`modelLimitUntil`). On 13/11/2026 a
+ * `seven_day` refusal said Monday while the week stood at 29 %, and the
+ * account served again the next morning: it stayed blocked till Monday. A
+ * week really used up shows in the poll's figure (`fullUntil`), which keeps
+ * the account out till its reset. A reset already past (clock skew) retries
+ * in 5 minutes, never at once.
+ */
+export function limitUntil(
+  resetsAt: number | undefined,
+  account: Account | undefined,
+  now: number,
+): number {
+  if (resetsAt === undefined || resetsAt * 1000 <= now) return now + 5 * 60_000;
+  return modelLimitUntil(resetsAt, account, now);
+}
+
+/** The longest a saved block can be: one 5-hour window and its margins. */
+export const LONGEST_BLOCK_MS = WINDOW_CAP_MS + 60_000;
 
 /**
  * The model a chat goes on with when its own is out on every account: Opus
@@ -245,8 +269,12 @@ export function chatLimitStep(
     return next === null
       ? { kind: "stuck" }
       : { kind: "wait", at: next, here: false, credits: false };
-  if (next === null || next >= until)
-    return { kind: "wait", at: until, here: true, credits: true };
+  // Its own account back: its block, and its figure, the week or the
+  // model's share really used up (blocks hold one 5-hour window at most).
+  const own = accounts.find((a) => a.id === from);
+  const back = own ? Math.max(until, freeAt(own, blocked, family)) : until;
+  if (next === null || next >= back)
+    return { kind: "wait", at: back, here: true, credits: true };
   return { kind: "wait", at: next, here: false, credits: true };
 }
 

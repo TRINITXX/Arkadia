@@ -4,6 +4,7 @@ import {
   chatLimitHit,
   chatLimitStep,
   creditsFailure,
+  limitUntil,
   modelLimitUntil,
   nextFreeAccountAt,
   planChatLimitSwitch,
@@ -176,6 +177,43 @@ describe("a chat at its usage limit", () => {
     );
   });
 
+  it("never keeps an account out past one 5-hour window, even on a week's refusal", () => {
+    // 13/11/2026: « weekly limit · resets Monday » with the week at 29 %.
+    const monday = NOW / 1000 + 3 * 86_400;
+    expect(limitUntil(monday, account("b", 5, 160), NOW)).toBe(
+      NOW + 161 * 60_000,
+    );
+    expect(limitUntil(monday, account("b", 5, null), NOW)).toBe(
+      NOW + 5 * 3600_000 + 60_000,
+    );
+    // A 5-hour refusal keeps its own reset; a reset already past retries soon.
+    expect(limitUntil(NOW / 1000 + 600, account("b", 100, 10), NOW)).toBe(
+      NOW + 11 * 60_000,
+    );
+    expect(limitUntil(NOW / 1000 - 600, account("b", 100, null), NOW)).toBe(
+      NOW + 5 * 60_000,
+    );
+    // Right at its reset (a few seconds of clock skew): 5 minutes, not 5 hours.
+    expect(limitUntil(NOW / 1000 - 30, account("b", 100, null), NOW)).toBe(
+      NOW + 5 * 60_000,
+    );
+    // The week really used up: its figure keeps the account out, not the block.
+    const full = account("b", 5, 160);
+    full.usage = {
+      ...full.usage!,
+      sevenDay: { pct: 100, resetsAt: monday },
+    };
+    expect(
+      planChatLimitSwitch([account("main", 100, 60), full], {}, "main", NOW),
+    ).toEqual({ kind: "none" });
+    // The chat's own week used up: it waits for the week, not 5 hours on.
+    const own = account("b", 5, 160);
+    own.usage = { ...own.usage!, sevenDay: { pct: 100, resetsAt: monday } };
+    expect(
+      chatLimitStep([own], {}, "b", limitUntil(monday, own, NOW), NOW),
+    ).toEqual({ kind: "wait", at: monday * 1000, here: true, credits: true });
+  });
+
   it("keeps Fable on an account free for it, else goes on in Opus", () => {
     // 12/11/2026 at 13:06: accounts 1 and 2 at 100 %, account 3 at 29 %.
     const accounts = [
@@ -245,11 +283,28 @@ describe("the API credits when no account is free", () => {
   it("offers them while the chat waits, for an account back or its own reset", () => {
     expect(
       chatLimitStep(accounts, blocked, "main", NOW + 120 * 60_000, NOW),
-    ).toEqual({ kind: "wait", at: NOW + 30 * 60_000, here: false, credits: true });
+    ).toEqual({
+      kind: "wait",
+      at: NOW + 30 * 60_000,
+      here: false,
+      credits: true,
+    });
     // Its own reset first: « reprise ici ».
+    const soon = [account("main", 100, 20), ...accounts.slice(1)];
     expect(
-      chatLimitStep(accounts, blocked, "main", NOW + 20 * 60_000, NOW),
-    ).toEqual({ kind: "wait", at: NOW + 20 * 60_000, here: true, credits: true });
+      chatLimitStep(
+        soon,
+        { ...blocked, main: NOW + 20 * 60_000 },
+        "main",
+        NOW + 20 * 60_000,
+        NOW,
+      ),
+    ).toEqual({
+      kind: "wait",
+      at: NOW + 20 * 60_000,
+      here: true,
+      credits: true,
+    });
     // A free account: no wait, no offer.
     const freeB = [account("main", 100, 120), account("b", 40, 30)];
     expect(
@@ -302,6 +357,8 @@ describe("the API credits when no account is free", () => {
     expect(
       creditsFailure({ ...refused("billing_error"), parent_tool_use_id: "t" }),
     ).toBeNull();
-    expect(creditsFailure({ type: "result", error: "billing_error" })).toBeNull();
+    expect(
+      creditsFailure({ type: "result", error: "billing_error" }),
+    ).toBeNull();
   });
 });
