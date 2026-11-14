@@ -131,6 +131,28 @@ describe("the choice kit", () => {
     ]);
   });
 
+  it("gives each question a remark field, sent in its line when filled", () => {
+    const { doc, all, click, sent } = page(GROUPS);
+    const fields = all(".ark-rmt") as HTMLTextAreaElement[];
+    expect(fields).toHaveLength(3);
+    // Capped: the bridge cuts the whole summary at 4000 characters.
+    expect(fields[0].maxLength).toBe(500);
+    fields[0].value = "  Trop long,\n à revoir ";
+    // A key typed in a remark is text, never a pick.
+    const key = new (doc.defaultView as unknown as typeof window).KeyboardEvent(
+      "keydown",
+      { key: "2", bubbles: true },
+    );
+    fields[0].dispatchEvent(key);
+    expect(
+      all(".ark-opt[aria-checked=true] .ark-mk").map((e) => e.textContent),
+    ).toEqual(["01", "A"]);
+    click(".ark-cta");
+    expect(sent).toEqual([
+      "Mes choix pour les mails :\nLoueurs : objet « Un complément de revenu » (remarque : Trop long, à revoir), texte « Mot pour mot »\nRelance : texte aucun choix",
+    ]);
+  });
+
   it("fills a preview from its question, whatever the case, and leaves an unknown one alone", () => {
     const { q, all } = page(GROUPS);
     expect(q(".ark-mail b[data-from]").textContent).toBe(
