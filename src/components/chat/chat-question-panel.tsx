@@ -1,10 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowRight,
   Check,
   ChevronLeft,
   ChevronRight,
   CircleHelp,
+  Mic,
   Send,
   Square,
   SquareCheck,
@@ -20,6 +27,11 @@ import {
   stepBy,
 } from "@/lib/chat/chatQuestions";
 import type { PendingRequest } from "@/lib/chat/chatState";
+import {
+  ChatDictationContext,
+  useFieldDictation,
+  usePushToTalk,
+} from "@/lib/chat/useFieldDictation";
 
 /**
  * Keys this soon after the question shows, or after a key it ignored, were
@@ -55,6 +67,35 @@ export function ChatQuestionPanel({
   const [other, setOther] = useState<string[]>(() => questions.map(() => ""));
   const rootRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
+
+  // Your own words dictated too (the mic, Space held, Ctrl+Space), as in
+  // the input it replaced (the user's ask of 14/11/2026). Its text goes to
+  // the question it was started from, after what that field holds.
+  const [dictatedFor, setDictatedFor] = useState(0);
+  const field = useFieldDictation(useContext(ChatDictationContext), (text) => {
+    setOther((o) =>
+      o.map((t, i) =>
+        i !== dictatedFor ? t : t.trim() ? `${t.trimEnd()} ${text}` : text,
+      ),
+    );
+    setPicked((p) => p.map((sel, i) => (i === dictatedFor ? [] : sel)));
+  });
+  // A dictation starts from the field shown: its question takes the text.
+  const aimHere = () => {
+    if (!field.mine) setDictatedFor(step);
+  };
+  const setOwn = (text: string) => {
+    setOther((o) => o.map((t, i) => (i === step ? text : t)));
+    if (text) setPicked((p) => p.map((sel, i) => (i === step ? [] : sel)));
+  };
+  const talk = usePushToTalk(field, other[step] ?? "", setOwn);
+  // The words so far, in grey after the field's text, the newest in view.
+  const wordsRef = useRef<HTMLDivElement>(null);
+  const liveWords = field.mine && dictatedFor === step ? field.interim : "";
+  useLayoutEffect(() => {
+    const twin = wordsRef.current;
+    if (twin) twin.scrollLeft = twin.scrollWidth;
+  }, [liveWords]);
 
   const answers = questions.map((_, i) => answerOf(picked[i], other[i]));
   const complete = answersOf(questions, answers);
@@ -111,6 +152,15 @@ export function ChatQuestionPanel({
     tabsRef.current
       ?.querySelector(".on")
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // On a step change only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+  // The field dictated into goes with its step (no blur nor keyup reaches it
+  // any more, the « Envoyer » step has no mic): the dictation stops, its
+  // words still land in the question it was started from.
+  useEffect(() => {
+    talk.blur();
+    field.stop();
     // On a step change only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
@@ -243,17 +293,48 @@ export function ChatQuestionPanel({
               </span>
             </button>
           ))}
-          <input
-            className="chat-ask-other"
-            placeholder="Autre réponse…"
-            value={other[step]}
-            onChange={(e) => {
-              const text = e.target.value;
-              setOther((o) => o.map((t, i) => (i === step ? text : t)));
-              if (text)
-                setPicked((p) => p.map((sel, i) => (i === step ? [] : sel)));
-            }}
-          />
+          <div className="chat-ask-free">
+            {field.can && (
+              <button
+                type="button"
+                className={`mic${field.mine ? " rec" : ""}`}
+                title={
+                  field.mine ? "Arrêter la dictée" : "Dicter ici (Ctrl+Espace)"
+                }
+                disabled={field.busy || field.status === "transcribing"}
+                onClick={() => {
+                  aimHere();
+                  field.toggle();
+                }}
+              >
+                {field.mine ? <Square /> : <Mic />}
+              </button>
+            )}
+            <div className="box">
+              <input
+                className="chat-ask-other"
+                placeholder="Autre réponse…"
+                value={other[step]}
+                onChange={(e) => setOwn(e.target.value)}
+                onKeyDown={(e) => {
+                  aimHere();
+                  talk.keyDown(e);
+                }}
+                onKeyUp={talk.keyUp}
+                // Space released elsewhere: the dictation still stops.
+                onBlur={talk.blur}
+              />
+              {liveWords && (
+                <div className="words" ref={wordsRef} aria-hidden="true">
+                  {other[step]}
+                  <i>
+                    {other[step] && !/\s$/.test(other[step]) ? " " : ""}
+                    {liveWords}
+                  </i>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       ) : (
         <div>

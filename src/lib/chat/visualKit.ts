@@ -67,6 +67,7 @@ export const VISUAL_KIT_CSS = `
 .ark-step:hover{color:var(--text)}
 .ark-cta:hover{filter:brightness(1.07)}
 .ark-next:hover,.ark-rmt:not(:focus):hover{box-shadow:inset 0 0 0 1px var(--border-strong)}
+.ark-mic:not(:disabled):not(.ark-rec):hover{background:var(--card-2);color:var(--text)}
 .ark-next:hover{color:var(--text)}}
 .ark-mk{flex-shrink:0;align-self:flex-start;font-size:24px;font-weight:750;line-height:1;letter-spacing:-.04em;font-variant-numeric:tabular-nums;color:var(--ark-mark);transition:color .15s var(--ark-ease)}
 .ark-th .ark-mk{font-size:20px}
@@ -82,11 +83,20 @@ export const VISUAL_KIT_CSS = `
 :where(.ark-opt :is(img,video):not([width]):not([height]):not([style])){display:block;margin-inline:auto}
 .ark-reco{position:absolute;top:-10px;right:16px;font-size:11.5px;font-weight:600;letter-spacing:.02em;line-height:18px;color:var(--accent);background:var(--bg);border:1px solid color-mix(in srgb,var(--accent) 50%,transparent);border-radius:999px;padding:0 9px;pointer-events:none}
 .ark-rm{position:relative;margin-top:14px}
-.ark-rm svg{position:absolute;left:15px;top:15px;width:16px;height:16px;color:var(--faint);pointer-events:none;transition:color .15s var(--ark-ease)}
-.ark-rm:focus-within svg{color:var(--muted)}
+.ark-rm>svg{position:absolute;left:15px;top:15px;width:16px;height:16px;color:var(--faint);pointer-events:none;transition:color .15s var(--ark-ease)}
+.ark-rm:focus-within>svg{color:var(--muted)}
+.ark-mic{all:unset;box-sizing:border-box;position:absolute;left:6px;top:6px;z-index:2;width:34px;height:34px;display:grid;place-items:center;border-radius:9px;color:var(--faint);cursor:pointer;transition:background-color .15s var(--ark-ease),color .15s var(--ark-ease)}
+.ark-mic[hidden]{display:none}
+.ark-mic svg{width:16px;height:16px}
+.ark-mic:disabled{opacity:.45;cursor:default}
+.ark-mic.ark-rec{background:#ef4444;color:#fff}
+.ark-rm:focus-within .ark-mic:not(.ark-rec){color:var(--muted)}
+.ark-rmw{position:absolute;inset:1px;z-index:1;box-sizing:border-box;border-radius:11px;background:var(--card);padding:11px 15px 11px 41px;font-size:15px;line-height:1.45;color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere;overflow:hidden;pointer-events:none}
+.ark-rmw[hidden]{display:none}
+.ark-rmw i{color:var(--faint)}
 .ark-rmt{display:block;width:100%;box-sizing:border-box;min-height:46px;margin:0;padding:12px 16px 12px 42px;resize:none;overflow:hidden;border:0;outline:0;border-radius:12px;font:inherit;font-size:15px;line-height:1.45;color:var(--text);background:transparent;box-shadow:var(--ark-ring);transition:box-shadow .15s var(--ark-ease),background-color .15s var(--ark-ease)}
 .ark-rmt::placeholder{color:var(--faint);opacity:1}
-@media (pointer:coarse){.ark-rmt{font-size:16px}}
+@media (pointer:coarse){.ark-rmt,.ark-rmw{font-size:16px}}
 .ark-rmt:focus{background:var(--card);box-shadow:inset 0 0 0 1px var(--border-strong)}
 .ark-note{font-size:15px;line-height:1.55;color:var(--muted);text-wrap:pretty;background:var(--card);border-radius:14px;padding:14px 18px;box-shadow:var(--ark-ring)}
 .ark-note>:first-child{margin-top:0}.ark-note>:last-child{margin-bottom:0}
@@ -130,8 +140,57 @@ function moveAll(from,to){while(from.firstChild)to.appendChild(from.firstChild);
 function same(a,b){return a.trim().toLowerCase()===b.trim().toLowerCase();}
 function head(title,sub){var h=el("div","ark-sh");if(title)h.appendChild(el("b",null,title));if(sub)h.appendChild(el("span",null,sub));return h;}
 function check(){var s=document.createElementNS(SVG,"svg");s.setAttribute("viewBox","0 0 24 24");s.setAttribute("fill","none");s.setAttribute("stroke","currentColor");s.setAttribute("stroke-width","2.6");s.setAttribute("stroke-linecap","round");s.setAttribute("stroke-linejoin","round");var p=document.createElementNS(SVG,"path");p.setAttribute("d","M5 12.5l4.5 4.5L19 7.5");s.appendChild(p);return s;}
-function bubble(){var s=document.createElementNS(SVG,"svg");s.setAttribute("viewBox","0 0 24 24");s.setAttribute("fill","none");s.setAttribute("stroke","currentColor");s.setAttribute("stroke-width","2");s.setAttribute("stroke-linecap","round");s.setAttribute("stroke-linejoin","round");var p=document.createElementNS(SVG,"path");p.setAttribute("d","M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z");s.appendChild(p);return s;}
+function icon(ds){var s=document.createElementNS(SVG,"svg");s.setAttribute("viewBox","0 0 24 24");s.setAttribute("fill","none");s.setAttribute("stroke","currentColor");s.setAttribute("stroke-width","2");s.setAttribute("stroke-linecap","round");s.setAttribute("stroke-linejoin","round");ds.forEach(function(d){var p=document.createElementNS(SVG,"path");p.setAttribute("d",d);s.appendChild(p);});return s;}
+function bubble(){return icon(["M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"]);}
+function micIcon(){return icon(["M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z","M19 10v2a7 7 0 0 1-14 0v-2","M12 19v3"]);}
+function stopIcon(){return icon(["M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"]);}
 function grow(t){if(!t.offsetParent)return;t.style.height="auto";t.style.height=t.scrollHeight+"px";}
+// The pane's dictation in a remark (the user's ask of 14/11/2026): Arkadia
+// says where it stands (\`arkadia-voice\`, no word of it: no mic), and the
+// text of the one this page started lands where its caret was.
+var voice={can:false,mine:false,status:"idle",interim:""},dict=null,remarks=[];
+function canTalk(){return voice.can&&!!(window.arkadia&&window.arkadia.dictate);}
+function talkAt(B,pos){dict={B:B,at:pos};window.arkadia.dictate(true);}
+function stopTalk(){if(window.arkadia&&window.arkadia.dictate)window.arkadia.dictate(false);}
+function toggleTalk(B,pos){if(!canTalk())return;if(voice.status==="idle")talkAt(B,pos);else if(voice.mine&&dict&&dict.B===B)stopTalk();}
+function mics(){remarks.forEach(function(B){
+ var ta=B.remark,here=voice.mine&&!!dict&&dict.B===B,rec=here&&voice.status!=="idle",on=canTalk();
+ B.mic.hidden=!on;B.bub.style.display=on?"none":"";
+ B.mic.className=rec?"ark-mic ark-rec":"ark-mic";
+ B.mic.disabled=voice.status==="transcribing"||(voice.status!=="idle"&&!here);
+ B.mic.title=rec?"Arr\\u00eater la dict\\u00e9e":"Dicter ici (Ctrl+Espace)";B.mic.setAttribute("aria-label",B.mic.title);
+ if(B.rec!==rec){B.rec=rec;B.mic.textContent="";B.mic.appendChild(rec?stopIcon():micIcon());}
+ var live=here?voice.interim:"";
+ // The words so far in grey where they will land (the caret), not after.
+ if(live){var v=ta.value,p=Math.max(0,Math.min(v.length,dict.at)),b=v.slice(0,p),a=v.slice(p);
+  B.twin.textContent=b;B.twin.appendChild(el("i",null,(b&&!/\\s$/.test(b)?" ":"")+live+(a&&!/^\\s/.test(a)?" ":"")));B.twin.appendChild(document.createTextNode(a));B.twin.hidden=false;ta.style.minHeight=(B.twin.scrollHeight+2)+"px";B.twin.scrollTop=B.twin.scrollHeight;}
+ else if(!B.twin.hidden){B.twin.hidden=true;ta.style.minHeight="";}
+});}
+function put(text){
+ if(!dict)return;var ta=dict.B.remark,v=ta.value,pos=Math.max(0,Math.min(v.length,dict.at)),t=String(text||"").trim();dict=null;if(!t)return;
+ var before=v.slice(0,pos),after=v.slice(pos),lead=before&&!/\\s$/.test(before)?" ":"",trail=after&&!/^\\s/.test(after)?" ":"";
+ var upTo=before+lead+t,nv=(upTo+trail+after).slice(0,ta.maxLength>0?ta.maxLength:500),c=Math.min(upTo.length,nv.length);ta.value=nv;
+ try{ta.setSelectionRange(c,c);}catch(x){}grow(ta);mics();
+}
+window.addEventListener("arkadia-voice",function(e){var d=e.detail||{};voice={can:d.can===true,mine:d.mine===true,status:String(d.status||"idle"),interim:String(d.interim||"")};mics();});
+window.addEventListener("arkadia-dictated",function(e){put(e.detail);});
+// Space held talks, as in the input: the tap's space goes, the release (or
+// the field left) stops it; Ctrl+Space toggles.
+function talkKeys(B){var ta=B.remark,talk=null;
+ function release(){var on=talk&&talk.on;talk=null;if(on)stopTalk();}
+ ta.addEventListener("keydown",function(e){
+  if(!canTalk())return;
+  if(e.key===" "&&e.ctrlKey&&!e.altKey&&!e.metaKey){e.preventDefault();if(!e.repeat)toggleTalk(B,ta.selectionStart);return;}
+  if(e.key!==" "||e.ctrlKey||e.altKey||e.metaKey||e.shiftKey)return;
+  if(!e.repeat){talk=ta.selectionStart===ta.selectionEnd?{on:false,at:ta.selectionStart}:null;return;}
+  if(!talk)return;e.preventDefault();
+  if(talk.on||voice.status!=="idle")return;talk.on=true;
+  if(ta.value.charAt(talk.at)===" "){ta.value=ta.value.slice(0,talk.at)+ta.value.slice(talk.at+1);try{ta.setSelectionRange(talk.at,talk.at);}catch(x){}grow(ta);}
+  talkAt(B,talk.at);
+ });
+ ta.addEventListener("keyup",function(e){if(e.key===" "&&talk)release();});
+ ta.addEventListener("blur",release);
+}
 function mark(kind,i){return kind==="letter"?String.fromCharCode(65+i):(i<9?"0":"")+(i+1);}
 function group(src){return {title:src?at(src,"data-title"):"",sub:src?at(src,"data-sub"):"",forLine:src?at(src,"data-for"):"",blocks:[],qs:[],previews:[],seen:false};}
 function question(c,G){
@@ -195,7 +254,14 @@ function mount(root){
    });
    sec.appendChild(grid);
    var rm=el("div","ark-rm"),ta=el("textarea","ark-rmt");ta.rows=1;ta.maxLength=500;ta.placeholder="Une remarque sur ce choix ?";ta.setAttribute("aria-label",B.title?"Remarque sur "+low(B.title):"Remarque");
-   ta.addEventListener("input",function(){grow(ta);});rm.appendChild(bubble());rm.appendChild(ta);B.remark=ta;sec.appendChild(rm);
+   ta.addEventListener("input",function(){grow(ta);});
+   var mic=el("button","ark-mic"),tw=el("div","ark-rmw");mic.type="button";mic.hidden=true;tw.hidden=true;tw.setAttribute("aria-hidden","true");
+   B.remark=ta;B.mic=mic;B.bub=bubble();B.twin=tw;B.rec=null;
+   // The caret before the click took the focus: the text lands there.
+   mic.addEventListener("pointerdown",function(){B.caret=document.activeElement===ta?ta.selectionStart:ta.value.length;});
+   mic.addEventListener("click",function(){var c=B.caret==null?ta.value.length:B.caret;B.caret=null;toggleTalk(B,c);ta.focus();try{ta.setSelectionRange(c,c);}catch(x){}});
+   talkKeys(B);remarks.push(B);
+   rm.appendChild(B.bub);rm.appendChild(mic);rm.appendChild(ta);rm.appendChild(tw);sec.appendChild(rm);
   }
   return sec;
  }
@@ -265,7 +331,7 @@ function mount(root){
   if(hit){root.classList.add("ark-nomo");requestAnimationFrame(function(){requestAnimationFrame(function(){root.classList.remove("ark-nomo");});});}
  });
  window.addEventListener("resize",regrow);
- idle();draw();
+ idle();draw();mics();
 }
 function start(){var all=document.querySelectorAll(".ark-choice");for(var i=0;i<all.length;i++)mount(all[i]);}
 document.addEventListener("keydown",function(e){

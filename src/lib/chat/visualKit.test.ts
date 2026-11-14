@@ -9,8 +9,12 @@ function page(body: string, framed = true) {
   const doc = win.document;
   doc.body.innerHTML = body;
   const sent: string[] = [];
+  const mic: boolean[] = [];
   Object.defineProperty(win, "arkadia", {
-    value: { choose: (t: string) => sent.push(t) },
+    value: {
+      choose: (t: string) => sent.push(t),
+      dictate: (on: boolean) => mic.push(on),
+    },
   });
   // The kit as the frame runs it, against this window's globals.
   new Function(
@@ -32,7 +36,27 @@ function page(body: string, framed = true) {
   const ack = () => {
     if (framed) win.dispatchEvent(new win.Event("arkadia-chosen"));
   };
-  return { doc, q, all, click, sent, ack };
+  /** What Arkadia says of the pane's dictation (`arkadia-voice`), or its text. */
+  const voice = (detail: Record<string, unknown>) =>
+    win.dispatchEvent(new win.CustomEvent("arkadia-voice", { detail }));
+  const dictated = (text: string) =>
+    win.dispatchEvent(
+      new win.CustomEvent("arkadia-dictated", { detail: text }),
+    );
+  const key = (
+    el: Element,
+    type: "keydown" | "keyup",
+    init: { key: string; repeat?: boolean; ctrlKey?: boolean },
+  ) => {
+    const e = new win.KeyboardEvent(type, {
+      ...init,
+      bubbles: true,
+      cancelable: true,
+    });
+    el.dispatchEvent(e);
+    return e.defaultPrevented;
+  };
+  return { doc, q, all, click, sent, ack, mic, voice, dictated, key };
 }
 
 const GROUPS = `<div class="ark-choice" data-intro="Mes choix pour les mails">
@@ -151,6 +175,43 @@ describe("the choice kit", () => {
     expect(sent).toEqual([
       "Mes choix pour les mails :\nLoueurs : objet « Un complément de revenu » (remarque : Trop long, à revoir), texte « Mot pour mot »\nRelance : texte aucun choix",
     ]);
+  });
+
+  it("dictates into a remark: mic, Space held or Ctrl+Space, the text at the caret", () => {
+    const p =
+      page(`<div class="ark-choice"><div class="ark-question" data-title="Prix">
+      <div class="ark-option" data-reco>6,99 €</div><div class="ark-option">9,99 €</div>
+    </div></div>`);
+    const field = p.q(".ark-rmt") as HTMLTextAreaElement;
+    const mic = p.q(".ark-mic") as HTMLButtonElement;
+    // No word from Arkadia (the iPhone, the browser copy): no mic.
+    expect(mic.hidden).toBe(true);
+    p.voice({ can: true, status: "idle" });
+    expect(mic.hidden).toBe(false);
+    // Space held: the tap's space goes, the repeat starts, the release stops.
+    field.value = "trop cher";
+    field.setSelectionRange(4, 4);
+    expect(p.key(field, "keydown", { key: " " })).toBe(false);
+    field.value = "trop  cher";
+    expect(p.key(field, "keydown", { key: " ", repeat: true })).toBe(true);
+    expect(field.value).toBe("trop cher");
+    expect(p.mic).toEqual([true]);
+    p.voice({ can: true, mine: true, status: "listening", interim: "pour" });
+    expect(mic.classList.contains("ark-rec")).toBe(true);
+    // Shown where they will land, the caret.
+    expect(p.q(".ark-rmw").textContent).toBe("trop pour cher");
+    p.key(field, "keyup", { key: " " });
+    expect(p.mic).toEqual([true, false]);
+    // The words land where the caret was, a space each side.
+    p.dictated("pour un mois");
+    p.voice({ can: true, status: "idle" });
+    expect(field.value).toBe("trop pour un mois cher");
+    expect((p.q(".ark-rmw") as HTMLElement).hidden).toBe(true);
+    // Ctrl+Space toggles; the mic of another dictation under way waits.
+    expect(p.key(field, "keydown", { key: " ", ctrlKey: true })).toBe(true);
+    expect(p.mic).toEqual([true, false, true]);
+    p.voice({ can: true, mine: false, status: "listening" });
+    expect(mic.disabled).toBe(true);
   });
 
   it("fills a preview from its question, whatever the case, and leaves an unknown one alone", () => {

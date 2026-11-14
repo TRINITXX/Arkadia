@@ -22,6 +22,10 @@ import { useAgentSheet } from "@/lib/chat/useAgentSheet";
 import { runningBash } from "@/lib/chat/chatBash";
 import { restsWhileHidden } from "@/lib/chat/chatHiddenView";
 import { ChatShownContext } from "@/lib/chat/useChatShown";
+import {
+  ChatDictationContext,
+  type ChatDictation,
+} from "@/lib/chat/useFieldDictation";
 import { useWakeOnInput } from "@/lib/chat/useWakeOnInput";
 import { useDoneAgentsLink } from "@/lib/chat/useDoneAgentsLink";
 import { useLiveActivity } from "@/lib/chat/useLiveActivity";
@@ -326,6 +330,15 @@ function ChatViewBody({
   const sheetOpen = sheetReply.length > 0;
   // A field of the sheet takes the dictation: its words show there, not here.
   const [sheetDictates, setSheetDictates] = useState(false);
+  // So does a visual's remark or the « Autre réponse » of Claude's questions.
+  const [fieldDictates, setFieldDictates] = useState(false);
+  const dictation = useMemo<ChatDictation | null>(
+    () =>
+      memoryKey
+        ? { paneKey: memoryKey, voice, onElsewhere: setFieldDictates }
+        : null,
+    [memoryKey, voice],
+  );
   // The input hidden under the sheet listens no more: its dictation stops,
   // its words land in the draft (anything that hides it stops the mic).
   const voiceRef = useRef(voice);
@@ -610,7 +623,7 @@ function ChatViewBody({
         draft={draft}
         onDraft={onDraft}
         voice={
-          sheetDictates
+          sheetDictates || fieldDictates
             ? { ...voice, interim: undefined, elsewhere: true }
             : voice
         }
@@ -855,11 +868,14 @@ function ChatViewBody({
     </div>
   );
   // Its menus, lists and sheets register their Esc here (`useChatLayer`),
-  // its clocks ask whether it shows (`useChatShown`).
+  // its clocks ask whether it shows (`useChatShown`), its other fields
+  // dictate through it (`useFieldDictation`).
   return (
     <ChatLayersContext.Provider value={layers}>
       <ChatShownContext.Provider value={shown}>
-        {view}
+        <ChatDictationContext.Provider value={dictation}>
+          {view}
+        </ChatDictationContext.Provider>
       </ChatShownContext.Provider>
     </ChatLayersContext.Provider>
   );

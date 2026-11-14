@@ -212,6 +212,17 @@ export const CHAT_CSS = `
 .chat-opt.sel .k { background: var(--chat-accent); color: var(--chat-accent-ink); font-weight: 700; }
 .chat-ask-other { width: 100%; margin-top: 6px; border: 1px solid #31353b; border-radius: 10px; background: #141619; color: var(--chat-ink); font: inherit; font-size: 13.5px; padding: 7px 10px; outline: none; }
 .chat-ask-other:focus { border-color: #5a3a2c; }
+/* Its mic on the left, as the question sheet's; the words dictated show in grey in a twin over the field, the newest in view. */
+.chat-ask-free { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.chat-ask-free .chat-ask-other { margin-top: 0; }
+.chat-ask-free .mic { width: 32px; height: 32px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 9px; background: #2a2d32; color: var(--chat-ink); cursor: pointer; }
+.chat-ask-free .mic:hover:not(:disabled):not(.rec) { background: #33363c; }
+.chat-ask-free .mic:disabled { opacity: .45; cursor: default; }
+.chat-ask-free .mic.rec { background: #ef4444; color: #fff; }
+.chat-ask-free .mic .lucide { width: 15px; height: 15px; }
+.chat-ask-free .box { position: relative; flex: 1; min-width: 0; }
+.chat-ask-free .words { position: absolute; inset: 1px; box-sizing: border-box; border-radius: 9px; background: #141619; color: var(--chat-ink); font-size: 13.5px; line-height: 1.5; padding: 6px 9px; white-space: pre; overflow: hidden; pointer-events: none; }
+.chat-ask-free .words i { color: #8b8f97; }
 .chat-ask-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #2b2e33; flex-wrap: wrap; }
 .chat-btn { border: 1px solid #31353b; background: #2a2d32; color: #e4e4e7; border-radius: 10px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .chat-btn:hover { border-color: #464a51; }
@@ -792,7 +803,7 @@ export const CHAT_CSS = `
 /* The field and its send stay in view at the list's bottom, however long the question. */
 .chat-sheet-q .free { display: flex; align-items: flex-end; gap: 8px; position: sticky; bottom: 0; padding: 4px 0 12px; background: #1d2024; }
 .chat-sheet-q .free .mic { width: 32px; height: 32px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 9px; background: #2a2d32; color: var(--chat-ink); cursor: pointer; }
-.chat-sheet-q .free .mic:hover:not(:disabled) { background: #33363c; }
+.chat-sheet-q .free .mic:hover:not(:disabled):not(.rec) { background: #33363c; }
 .chat-sheet-q .free .mic:disabled { opacity: .45; cursor: default; }
 .chat-sheet-q .free .mic.rec { background: #ef4444; color: #fff; }
 .chat-sheet-q .free .mic .lucide { width: 15px; height: 15px; }

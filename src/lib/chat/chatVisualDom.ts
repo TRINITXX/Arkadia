@@ -1,6 +1,7 @@
 import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import {
   ACTIVATION_MS,
+  frameDictationOk,
   frameFocusOk,
   frameGestureOk,
   mergeProbeReports,
@@ -126,7 +127,10 @@ if (typeof window !== "undefined") {
   document.addEventListener(
     "focusin",
     (e) => {
-      if (e.target instanceof HTMLElement && !(e.target instanceof HTMLIFrameElement))
+      if (
+        e.target instanceof HTMLElement &&
+        !(e.target instanceof HTMLIFrameElement)
+      )
         lastHostFocus = e.target;
     },
     true,
@@ -166,6 +170,17 @@ export function frameGestureNow(iframe: HTMLIFrameElement): boolean {
     frameFocused: document.activeElement === iframe,
     onFrame: pressedIn(iframe),
     sinceHostInput: Date.now() - lastHostInput,
+  });
+}
+
+/** The page's mic in `iframe`, now: the user's click or key in it (`frameDictationOk`). */
+export function frameDictationNow(iframe: HTMLIFrameElement): boolean {
+  return frameDictationOk({
+    activation: navigator.userActivation?.isActive ?? false,
+    frameFocused: document.activeElement === iframe,
+    sinceHostInput: Date.now() - lastHostInput,
+    lastPressHere: pressed?.frame === iframe,
+    pressedSinceHost: pressed?.frame === iframe && pressed.at >= lastHostInput,
   });
 }
 

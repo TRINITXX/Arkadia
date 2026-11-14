@@ -98,6 +98,17 @@ const MOCKUPS = `<!doctype html>
 </div>
 </body></html>`;
 
+/** A choice of the kit: its remark fields take the pane's dictation. */
+const KIT_CHOICE = `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"></head><body>
+<div class="ark-choice" data-intro="Mon choix pour l'appli">
+  <div class="ark-question" data-title="Prix" data-sub="Version sans pub">
+    <div class="ark-option" data-title="4,99 €" data-sub="Bas de la fourchette."><p>Le plus facile à payer.</p></div>
+    <div class="ark-option" data-reco data-title="6,99 €" data-sub="Milieu de la fourchette."><p>Dans la fourchette de la recherche (4,99 à 7,99 $).</p></div>
+  </div>
+</div>
+</body></html>`;
+
 interface Step {
   id: string;
   title: string;
@@ -126,6 +137,13 @@ const STEPS: Step[] = [
     html: MOCKUPS,
     wide: true,
     before: "Pour la saisie, trois placements possibles :",
+  },
+  {
+    id: "vis-kit",
+    title: "Prix de l'appli",
+    html: KIT_CHOICE,
+    wide: false,
+    before: "Quel prix pour la version sans pub ?",
   },
 ];
 

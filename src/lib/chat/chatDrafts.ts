@@ -164,11 +164,31 @@ export function insertDictation(
   return before + lead + dictated + trail + after;
 }
 
+/**
+ * A field leaving gives up its own target only: another field's (a visual's
+ * remark, « Autre réponse ») that holds the dictation now stays.
+ */
+export function releaseDictation(
+  paneId: string,
+  target: ((text: string) => void) | null,
+): void {
+  if (target && dictationTargets.get(current(paneId)) === target)
+    dictationTargets.delete(current(paneId));
+}
+
+/** The field a dictation goes to instead of the input, taken (one dictation). */
+export function takeDictationTarget(
+  paneId: string,
+): ((text: string) => void) | null {
+  const target = dictationTargets.get(current(paneId)) ?? null;
+  dictationTargets.delete(current(paneId));
+  return target;
+}
+
 /** A dictated text, after what the input already holds. */
 export function appendDictation(paneId: string, text: string): void {
-  const target = dictationTargets.get(current(paneId));
+  const target = takeDictationTarget(paneId);
   if (target) {
-    dictationTargets.delete(current(paneId));
     target(text);
     return;
   }

@@ -5,7 +5,11 @@ import ReactDOM from "react-dom/client";
 import { flushSync } from "react-dom";
 import { ChatView } from "@/components/chat/chat-view";
 import { setBridge } from "@/lib/bridge";
-import { EMPTY_DRAFT, type ChatDraft } from "@/lib/chat/chatDrafts";
+import {
+  EMPTY_DRAFT,
+  takeDictationTarget,
+  type ChatDraft,
+} from "@/lib/chat/chatDrafts";
 import type { ChatEvent, JsonObject } from "@/lib/chat/chatProtocol";
 import {
   EMPTY_CHAT,
@@ -827,7 +831,8 @@ function Preview() {
         : PREVIEW_DICTATION.split(" ").slice(0, heard).join(" "),
     // Listening at once, as `useHiddenVoice` says: the question sheet's
     // field shows the words as they come (its text still lands in the
-    // input: `stop` below writes the draft, no `redirectDictation`).
+    // input). A field that took the dictation (`useFieldDictation`: a
+    // visual's remark, « Autre réponse ») gets its text, as in the app.
     start: () => {
       setHeard(0);
       setStatus("listening");
@@ -837,10 +842,13 @@ function Preview() {
       setStatus("transcribing");
       return new Promise<DictationEnd>((resolve) =>
         setTimeout(() => {
-          setDraft((d) => ({
-            ...d,
-            text: `${d.text}${PREVIEW_DICTATION}`,
-          }));
+          const field = takeDictationTarget("preview");
+          if (field) field(PREVIEW_DICTATION);
+          else
+            setDraft((d) => ({
+              ...d,
+              text: `${d.text}${PREVIEW_DICTATION}`,
+            }));
           setStatus("idle");
           resolve({ ok: true });
         }, 3000),
@@ -851,7 +859,13 @@ function Preview() {
     <div style={{ position: "relative", height: "100%" }}>
       {params.get("accounts") === "1" && (
         <div
-          style={{ position: "fixed", left: 16, bottom: 16, width: 300, zIndex: 30 }}
+          style={{
+            position: "fixed",
+            left: 16,
+            bottom: 16,
+            width: 300,
+            zIndex: 30,
+          }}
         >
           <AccountsPanel
             state={{ current: "main", max: 5, accounts: PREVIEW_ACCOUNTS }}

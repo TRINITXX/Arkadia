@@ -158,9 +158,11 @@ var m=b.querySelectorAll("img,svg,canvas,video,picture,input,button,select,texta
 var all=b.querySelectorAll("*");for(var j=0;j<all.length&&j<3000;j++){var s=getComputedStyle(all[j]);if((s.backgroundColor!=="rgba(0, 0, 0, 0)"||s.backgroundImage!=="none"||parseFloat(s.borderTopWidth)>0)&&shows(all[j]))return true;}return false;}
 function report(){var r=document.documentElement,im=document.images;for(var i=0;i<im.length;i++){var src=im[i].getAttribute("src");if(src&&im[i].complete&&im[i].naturalWidth===0)push(blocked,"img "+src.slice(0,160));}
 return{errors:errors,consoleErrors:consoleErrors,blocked:blocked,height:height(),width:r.clientWidth,scrollWidth:r.scrollWidth,empty:!visible(),followsFrame:false,unfinished:!loaded};}
-try{dp(window,"arkadia",{value:Object.freeze({choose:function(t){post("choose",String(t==null?"":t).slice(0,4000));}})});}catch(x){}
+try{dp(window,"arkadia",{value:Object.freeze({choose:function(t){post("choose",String(t==null?"":t).slice(0,4000));},dictate:function(on){post("dictate",!!on);}})});}catch(x){}
 if(framed){
 window.addEventListener("message",function(e){var d=e.data;if(e.source!==P||!d)return;if(d.arkadiaVisualProbe===1)post("report",report());if(d.arkadiaVisualChosen===1)window.dispatchEvent(new Event("arkadia-chosen"));
+var vo=d.arkadiaVisualVoice;if(vo&&typeof vo==="object")window.dispatchEvent(new CustomEvent("arkadia-voice",{detail:{can:vo.can===true,mine:vo.mine===true,status:String(vo.status||"idle"),interim:String(vo.interim||"")}}));
+if(typeof d.arkadiaVisualDictated==="string")window.dispatchEvent(new CustomEvent("arkadia-dictated",{detail:d.arkadiaVisualDictated}));
 if(d.arkadiaVisualFit===1&&typeof d.height==="number"){if(isFinite(d.height))document.documentElement.style.setProperty("--ark-fit-h",Math.max(${VISUAL_MIN_ROOM},Math.round(d.height))+"px");}});
 document.addEventListener("click",function(e){if(!e.isTrusted||e.defaultPrevented||e.button!==0)return;var a=e.target&&e.target.closest?e.target.closest("a[href]"):null,u;if(!a)return;
 try{u=new URL(a.getAttribute("href"),document.baseURI);}catch(x){return;}if(u.href.split("#")[0]===location.href.split("#")[0])return;e.preventDefault();if(/^https?:$/.test(u.protocol))post("link",u.href);});
@@ -393,6 +395,8 @@ export type FrameMessage =
   | { kind: "size"; height: number }
   | { kind: "link"; url: string }
   | { kind: "choose"; text: string }
+  /** The page's mic (the choice kit's remark): start on the user's click, or stop. */
+  | { kind: "dictate"; on: boolean }
   /** A wheel the page doesn't use: the conversation scrolls by it. */
   | { kind: "wheel"; dx: number; dy: number; mode: number }
   | { kind: "report"; report: unknown };
@@ -436,6 +440,8 @@ export function readFrameMessage(
       return typeof v === "string" && v.trim()
         ? { kind: "choose", text: v.trim().slice(0, 4000) }
         : null;
+    case "dictate":
+      return typeof v === "boolean" ? { kind: "dictate", on: v } : null;
     case "report":
       return { kind: "report", report: v };
     case "wheel": {
@@ -484,6 +490,34 @@ export function frameGestureOk(o: {
   sinceHostInput: number;
 }): boolean {
   return frameFocusOk(o) && o.frameFocused && o.sinceHostInput > ACTIVATION_MS;
+}
+
+/**
+ * May a frame start the dictation (its page's mic)? The user's gesture in
+ * that frame, a key as well as a click (Space held in a remark typed into
+ * for a while): a fresh activation with the focus already on the frame
+ * (kept only after a click in it, `frameFocusOk`), and either nothing in the
+ * Lab clicked or typed within the activation's life, or the user's last
+ * press in this frame since then: the gesture is the frame's, not the Lab's.
+ */
+export function frameDictationOk(o: {
+  activation: boolean;
+  frameFocused: boolean;
+  /** Since the last pointer or key event in the Lab's own document. */
+  sinceHostInput: number;
+  /** The user's last press in a frame was in this one: a click in another
+   *  card activates the Lab too, and a page's own `focus()` could hold the
+   *  focus meanwhile. */
+  lastPressHere: boolean;
+  /** This frame was pressed in after the Lab's last pointer or key event. */
+  pressedSinceHost: boolean;
+}): boolean {
+  return (
+    o.activation &&
+    o.frameFocused &&
+    o.lastPressHere &&
+    (o.sinceHostInput > ACTIVATION_MS || o.pressedSinceHost)
+  );
 }
 
 /**

@@ -9,6 +9,7 @@ import { EMPTY_CHAT, reduceChat } from "@/lib/chat/chatState";
 import {
   clampVisualHeight,
   frameFocusOk,
+  frameDictationOk,
   frameGestureOk,
   INERT_FRAME_TAG,
   INERT_FRAME_TAGS,
@@ -64,7 +65,8 @@ describe("visualDocument", () => {
   });
 
   it("adds the choice kit after the bootstrap, only to a page that uses it", () => {
-    const page = '<div class="ark-choice"><div class="ark-question"></div></div>';
+    const page =
+      '<div class="ark-choice"><div class="ark-question"></div></div>';
     const doc = visualDocument(page, "t");
     const kit = doc.indexOf('id="arkadia-kit"');
     expect(kit).toBeGreaterThan(doc.indexOf("window.parent"));
@@ -376,6 +378,45 @@ describe("frameFocusOk and frameGestureOk", () => {
     expect(frameGestureOk({ ...ok, onFrame: false })).toBe(false);
     // The activation may be the user's typing in the Lab.
     expect(frameGestureOk({ ...ok, sinceHostInput: 1_200 })).toBe(false);
+  });
+
+  it("opens the page's mic on a key in the frame too, never on the Lab's gesture", () => {
+    const keyed = {
+      activation: true,
+      frameFocused: true,
+      sinceHostInput: 60_000,
+      lastPressHere: true,
+      pressedSinceHost: false,
+    };
+    // Space held in a remark typed into for a while: no press lately.
+    expect(frameDictationOk(keyed)).toBe(true);
+    // The user clicked another card; this page holds the focus by `focus()`.
+    expect(frameDictationOk({ ...keyed, lastPressHere: false })).toBe(false);
+    // Pressed in the field just after a key in the input: the frame's gesture.
+    expect(
+      frameDictationOk({
+        ...keyed,
+        sinceHostInput: 800,
+        pressedSinceHost: true,
+      }),
+    ).toBe(true);
+    // The activation may be the user's typing in the Lab.
+    expect(frameDictationOk({ ...keyed, sinceHostInput: 800 })).toBe(false);
+    // A page asking by itself, or a frame without the focus.
+    expect(frameDictationOk({ ...keyed, activation: false })).toBe(false);
+    expect(frameDictationOk({ ...keyed, frameFocused: false })).toBe(false);
+    expect(
+      readFrameMessage(
+        { arkadiaVisual: 1, k: "t0k", kind: "dictate", v: true },
+        "t0k",
+      ),
+    ).toEqual({ kind: "dictate", on: true });
+    expect(
+      readFrameMessage(
+        { arkadiaVisual: 1, k: "t0k", kind: "dictate", v: "yes" },
+        "t0k",
+      ),
+    ).toBeNull();
   });
 });
 

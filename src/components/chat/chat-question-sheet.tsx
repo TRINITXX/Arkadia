@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import type { ChatVoice } from "@/components/chat/chat-composer";
-import { redirectDictation } from "@/lib/chat/chatDrafts";
+import { redirectDictation, releaseDictation } from "@/lib/chat/chatDrafts";
 import {
   buttonLeadsTo,
   enterLeadsTo,
@@ -114,12 +114,16 @@ export function ChatQuestionSheet({
   // Esc folds it (its answers stay), never Claude's turn (`chatLayers`).
   useChatLayer(open && !folded, () => setFolded(true));
   const liveRef = useRef({ open, replyId });
+  /** The target this sheet set: the only one it may take back. */
+  const targetRef = useRef<((text: string) => void) | null>(null);
   useEffect(() => {
     liveRef.current = { open, replyId };
     return () => {
       // Read by a `start()` that resolves after this: nothing to take it.
       liveRef.current = { open: false, replyId };
-      redirectDictation(paneKey, null);
+      // Its own target only: a visual's remark may hold the dictation.
+      releaseDictation(paneKey, targetRef.current);
+      targetRef.current = null;
     };
   }, [open, replyId, paneKey]);
 
@@ -228,9 +232,10 @@ export function ChatQuestionSheet({
       void Promise.resolve(voice.start()).then((started) => {
         const live = liveRef.current;
         if (started === true && live.open && live.replyId === replyId) {
-          redirectDictation(paneKey, (text) =>
-            appendSheetText(paneKey, replyId, id, text),
-          );
+          const target = (text: string) =>
+            appendSheetText(paneKey, replyId, id, text);
+          targetRef.current = target;
+          redirectDictation(paneKey, target);
         } else {
           setDictating(null);
         }

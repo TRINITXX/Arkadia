@@ -1,12 +1,26 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   clampVisualHeight,
   firstFrameGrowth,
   nextFrameHeight,
   refitFrameGrowth,
 } from "@/lib/chat/chatVisual";
-import { frameGestureNow, loadVisualFrame } from "@/lib/chat/chatVisualDom";
+import {
+  frameDictationNow,
+  frameGestureNow,
+  loadVisualFrame,
+} from "@/lib/chat/chatVisualDom";
 import { glideBy, wheelPixels } from "@/lib/chat/glideScroll";
+import {
+  ChatDictationContext,
+  useFieldDictation,
+} from "@/lib/chat/useFieldDictation";
 
 interface ChatVisualFrameProps {
   /** The page, its local images in (`ChatState.visuals`). */
@@ -121,10 +135,34 @@ export function ChatVisualFrame({
     if (applySize(iframe, sizeRef.current))
       resizedAtRef.current = performance.now();
   };
-  const handlers = useRef({ onChoose, onLink });
+  // The page's mic (the choice kit's remark): the pane's dictation, its
+  // text back to this frame only (the user's ask of 14/11/2026).
+  const field = useFieldDictation(useContext(ChatDictationContext), (text) =>
+    frameRef.current?.contentWindow?.postMessage(
+      { arkadiaVisualDictated: text },
+      "*",
+    ),
+  );
+  const voiceState = {
+    can: field.can,
+    mine: field.mine,
+    status: field.status,
+    interim: field.interim,
+  };
+  const handlers = useRef({ onChoose, onLink, field, voiceState });
   useEffect(() => {
-    handlers.current = { onChoose, onLink };
+    handlers.current = { onChoose, onLink, field, voiceState };
   });
+  // Where the dictation stands, for the page's mics (said again once the
+  // page is in: `loaded`).
+  const sayVoice = () =>
+    frameRef.current?.contentWindow?.postMessage(
+      { arkadiaVisualVoice: handlers.current.voiceState },
+      "*",
+    );
+  useEffect(() => {
+    if (voiceState.can) sayVoice();
+  }, [voiceState.can, voiceState.mine, voiceState.status, voiceState.interim]);
   // The pane's height, as it changes (resize, split, the input growing).
   useLayoutEffect(() => {
     const box = boxRef.current;
@@ -165,7 +203,9 @@ export function ChatVisualFrame({
       iframe,
       html,
       (m) => {
-        if (m.kind === "size") {
+        if (m.kind === "loaded") {
+          if (handlers.current.voiceState.can) sayVoice();
+        } else if (m.kind === "size") {
           const at = resizedAtRef.current;
           const since = at === null ? null : performance.now() - at;
           setGrowth((g) =>
@@ -190,6 +230,12 @@ export function ChatVisualFrame({
           }
         } else if (m.kind === "link" && frameGestureNow(iframe))
           handlers.current.onLink?.(m.url);
+        // Listening starts only on the user's own click or key in this frame
+        // (`frameDictationOk`): a page can't open the mic by itself.
+        else if (m.kind === "dictate") {
+          if (!m.on) handlers.current.field.stop();
+          else if (frameDictationNow(iframe)) handlers.current.field.start();
+        }
       },
       fill ? undefined : (roomRef.current ?? undefined),
       !fill,
