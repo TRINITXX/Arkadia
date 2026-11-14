@@ -225,9 +225,11 @@ function AccountRow({
       title={`${accountTooltip(account)}${
         current ? "\n\nLes nouveaux onglets s'ouvrent sur ce compte" : ""
       }`}
+      // The account new tabs open on: framed in its own colour (Alexis, 14/11/2026).
+      style={current ? { borderColor: account.color } : undefined}
       className={`cursor-pointer rounded border px-2 py-1.5 text-xs ${
         current
-          ? "border-zinc-700 bg-zinc-900 text-zinc-100"
+          ? "bg-zinc-900 text-zinc-100"
           : "border-zinc-800/70 text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200"
       }`}
     >
@@ -244,11 +246,6 @@ function AccountRow({
             className={`min-w-0 flex-1 truncate ${account.loggedIn ? "" : "italic text-zinc-500"}`}
           >
             {account.label}
-          </span>
-        )}
-        {current && !renaming && (
-          <span className="shrink-0 rounded-full border border-zinc-700 px-1.5 text-[9.5px] leading-[14px] text-zinc-400">
-            nouveaux onglets
           </span>
         )}
       </div>
