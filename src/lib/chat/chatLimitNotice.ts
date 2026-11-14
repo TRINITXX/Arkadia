@@ -17,6 +17,11 @@ export interface LimitNotice {
 }
 
 const notices = new Map<string, LimitNotice>();
+/**
+ * Chats whose banner the user closed: hidden for the rest of this wait,
+ * the wait itself goes on. The wait's end (a null notice) clears it.
+ */
+const closed = new Set<string>();
 const listeners = new Set<() => void>();
 
 export function setLimitNotice(
@@ -24,7 +29,17 @@ export function setLimitNotice(
   notice: LimitNotice | null,
 ): void {
   if (notice) notices.set(chatId, notice);
-  else if (!notices.delete(chatId)) return;
+  else {
+    closed.delete(chatId);
+    if (!notices.delete(chatId)) return;
+  }
+  for (const l of listeners) l();
+}
+
+/** The banner's ×: out of sight till this wait ends. */
+export function closeLimitNotice(chatId: string): void {
+  if (!notices.has(chatId) || closed.has(chatId)) return;
+  closed.add(chatId);
   for (const l of listeners) l();
 }
 
@@ -33,7 +48,9 @@ function subscribe(cb: () => void): () => void {
   return () => listeners.delete(cb);
 }
 
+/** The notice to show: none once the user closed it. */
 export function limitNotice(chatId: string): LimitNotice | null {
+  if (closed.has(chatId)) return null;
   return notices.get(chatId) ?? null;
 }
 

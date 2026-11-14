@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { CircleDollarSign, Pause } from "lucide-react";
-import { useLimitNotice } from "@/lib/chat/chatLimitNotice";
+import { CircleDollarSign, Pause, X } from "lucide-react";
+import { closeLimitNotice, useLimitNotice } from "@/lib/chat/chatLimitNotice";
 import { useCredits } from "@/lib/credits";
 
 /**
@@ -54,6 +54,15 @@ export function ChatLimitBanner({ chatId }: { chatId: string }) {
               : "Continuer sur les crédits"}
         </button>
       )}
+      <button
+        type="button"
+        className="chat-limit-close"
+        title="Fermer (l'attente continue)"
+        aria-label="Fermer le bandeau"
+        onClick={() => closeLimitNotice(chatId)}
+      >
+        <X />
+      </button>
     </div>
   );
 }

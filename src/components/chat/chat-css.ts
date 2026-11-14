@@ -759,6 +759,10 @@ export const CHAT_CSS = `
 .chat-limit-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; padding: 8px 10px 8px 14px; border: 1px solid #5a3a2c; border-radius: 14px; background: #241f1c; font-size: 13px; color: #e4e4e7; }
 .chat-limit-banner > .lucide { width: 15px; height: 15px; color: var(--chat-accent); flex-shrink: 0; }
 .chat-limit-banner > span { flex: 1; min-width: 200px; }
+.chat-limit-close { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #a1a1aa; cursor: pointer; flex-shrink: 0; }
+.chat-limit-close:hover { background: #2f2925; color: #f4f4f5; }
+.chat-limit-close:focus-visible { outline: 2px solid var(--chat-accent); outline-offset: 2px; }
+.chat-limit-close .lucide { width: 16px; height: 16px; }
 /* A chat on the API credits: their pill where the quota rings were (the user's pick A of 13/11/2026). */
 .chat-status > .chat-credits-pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px; border: 1px solid rgba(52,211,153,.35); background: rgba(52,211,153,.08); color: #6ee7b7; }
 .chat-credits-pill b { color: #d1fae5; font-weight: 600; }
@@ -862,7 +866,10 @@ export const CHAT_CSS = `
   .chat-tools-row .chat-chip:has(> .lucide) .lbl { display: none; }
   .chat-tools-row .chat-chip:has(> .lucide) { padding: 3px 7px; }
   .chat-edit-confirm > span { min-width: 0; flex-basis: 100%; }
-  .chat-limit-banner > span { min-width: 0; flex-basis: 100%; }
+  .chat-limit-banner > span { min-width: 0; flex-basis: 100%; order: 2; }
+  /* The × stays top right, on the icon's line; the credits under the text. */
+  .chat-limit-close { order: 1; margin-left: auto; }
+  .chat-limit-banner > .chat-btn { order: 3; }
 }
 /* Attachments: cards above the input and in the user's frame (an image whole, its width following it; any other file by its icon and name), × on hover; the images Claude reads, small in their tool line. */
 .chat-files { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
