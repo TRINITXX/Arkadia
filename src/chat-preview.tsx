@@ -447,7 +447,7 @@ const SCENARIOS: Record<string, () => ChatState> = {
       ],
     };
   },
-  // Two questions: the terminal's tabs.
+  // Two questions in the sheet's look: a reco, a description, a multiple choice.
   questions: () =>
     withRequest(replay(parse(tools)), {
       requestId: "q2",
@@ -459,14 +459,46 @@ const SCENARIOS: Record<string, () => ChatState> = {
             question: "Quel format pour le résumé ?",
             header: "Format",
             options: [
-              { label: "Markdown", description: "Titres et listes" },
+              {
+                label: "Markdown (recommandé)",
+                description: "Titres et listes",
+              },
               { label: "Texte brut" },
             ],
           },
           {
             question: "Où l'enregistrer ?",
             header: "Où",
+            multiSelect: true,
             options: [{ label: "Dans le projet" }, { label: "Sur le bureau" }],
+          },
+        ],
+      },
+    }),
+  // One question, the texts of the user's screenshot (15/11/2026).
+  ask: () =>
+    withRequest(replay(parse(tools)), {
+      requestId: "q1",
+      toolName: "AskUserQuestion",
+      toolUseId: "q1",
+      input: {
+        questions: [
+          {
+            question:
+              "Quand une session te pose une question et que tu es dans Arkadia sur un autre onglet, que veux-tu ?",
+            header: "Dans Arkadia",
+            options: [
+              {
+                label: "Pop-up pour les questions (recommandé)",
+                description:
+                  "Une question bloque la session tant que tu n'as pas répondu : la pop-up apparaît, sauf si tu regardes déjà cet onglet. Les fins de session restent en son seul.",
+              },
+              {
+                label: "Garder le son seul",
+                description:
+                  "Rien ne change : dans Arkadia, une question fait juste le son et allume l'anneau de l'onglet.",
+              },
+            ],
           },
         ],
       },
@@ -895,7 +927,10 @@ function Preview() {
         onSend={() => {}}
         // Said in the console: Esc's checks read it (`chatLayers`).
         onInterrupt={() => console.info("[aperçu] interruption")}
-        onAnswer={() => {}}
+        // Said in the console: a panel's answer reads there.
+        onAnswer={(_id, result) =>
+          console.info("[aperçu] réponse", JSON.stringify(result))
+        }
         onMode={() => {}}
         onModel={() => {}}
         onOpenAgent={() => {}}

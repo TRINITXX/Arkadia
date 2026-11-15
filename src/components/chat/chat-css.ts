@@ -85,6 +85,8 @@ export const CHAT_CSS = `
 .chat-bottom.sheet-open > .chat-col { display: flex; flex-direction: column; min-height: 0; }
 .chat-bottom.sheet-open > .chat-col > * { flex-shrink: 0; }
 .chat-bottom.sheet-open > .chat-col > .chat-sheet-q { flex-shrink: 1; min-height: 120px; }
+/* Claude's question panel folded: its header alone, no room kept under it. */
+.chat-bottom.sheet-open > .chat-col > .chat-sheet-q.folded { min-height: 0; }
 .chat-tools { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 0 7px; padding-left: 14px; border-left: 1px solid var(--chat-line); }
 /* A subagent's sheet: its calls on their lines, not under a folded line; their icons under its thoughts' bulbs. */
 .chat-tools.flat { margin: 0 0 0 30px; padding-left: 0; border-left: 0; }
@@ -203,26 +205,8 @@ export const CHAT_CSS = `
 .chat-ask-head .lucide { width: 16px; height: 16px; color: var(--chat-accent); flex-shrink: 0; }
 .chat-ask-head small { margin-left: auto; color: var(--chat-mute); font-size: 12px; white-space: nowrap; }
 .chat-ask-sub { margin: -4px 4px 8px; font-size: 12px; color: var(--chat-mute); }
-.chat-opt { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 11px; color: #d4d4d8; font-size: 13.5px; cursor: pointer; border: 0; background: transparent; width: 100%; text-align: left; font: inherit; }
-.chat-opt:hover { background: #25282c; }
-.chat-opt .k { width: 24px; height: 24px; border-radius: 7px; background: #2b2e33; display: grid; place-items: center; font-size: 12px; color: var(--chat-dim); flex-shrink: 0; }
-.chat-opt .t { display: flex; flex-direction: column; min-width: 0; }
-.chat-opt .t span { color: var(--chat-mute); font-size: 12.5px; }
-.chat-opt.sel { background: #2b2623; box-shadow: inset 0 0 0 1px #5a3a2c; }
-.chat-opt.sel .k { background: var(--chat-accent); color: var(--chat-accent-ink); font-weight: 700; }
 .chat-ask-other { width: 100%; margin-top: 6px; border: 1px solid #31353b; border-radius: 10px; background: #141619; color: var(--chat-ink); font: inherit; font-size: 13.5px; padding: 7px 10px; outline: none; }
 .chat-ask-other:focus { border-color: #5a3a2c; }
-/* Its mic on the left, as the question sheet's; the words dictated show in grey in a twin over the field, the newest in view. */
-.chat-ask-free { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.chat-ask-free .chat-ask-other { margin-top: 0; }
-.chat-ask-free .mic { width: 32px; height: 32px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 9px; background: #2a2d32; color: var(--chat-ink); cursor: pointer; }
-.chat-ask-free .mic:hover:not(:disabled):not(.rec) { background: #33363c; }
-.chat-ask-free .mic:disabled { opacity: .45; cursor: default; }
-.chat-ask-free .mic.rec { background: #ef4444; color: #fff; }
-.chat-ask-free .mic .lucide { width: 15px; height: 15px; }
-.chat-ask-free .box { position: relative; flex: 1; min-width: 0; }
-.chat-ask-free .words { position: absolute; inset: 1px; box-sizing: border-box; border-radius: 9px; background: #141619; color: var(--chat-ink); font-size: 13.5px; line-height: 1.5; padding: 6px 9px; white-space: pre; overflow: hidden; pointer-events: none; }
-.chat-ask-free .words i { color: #8b8f97; }
 .chat-ask-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #2b2e33; flex-wrap: wrap; }
 .chat-btn { border: 1px solid #31353b; background: #2a2d32; color: #e4e4e7; border-radius: 10px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .chat-btn:hover { border-color: #464a51; }
@@ -395,20 +379,6 @@ export const CHAT_CSS = `
 /* The matches' tints are each pane's own (chatHighlightCss). */
 
 /* Input and requests: questions, permissions, queued messages, drop. */
-.chat-ask-tabs { display: flex; align-items: center; gap: 4px; margin: 0 2px 10px; overflow-x: auto; scrollbar-width: none; }
-.chat-ask-tabs button { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; background: transparent; color: var(--chat-mute); font: inherit; font-size: 12.5px; line-height: 1.4; padding: 3px 9px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
-.chat-ask-tabs button:not(:disabled):hover { color: var(--chat-ink); background: #25282c; }
-.chat-ask-tabs button.on { color: #f4f4f5; background: #2b2623; border-color: #5a3a2c; }
-.chat-ask-tabs button.done .lucide { color: var(--chat-accent); }
-.chat-ask-tabs button.nav { padding: 3px 4px; }
-.chat-ask-tabs button:disabled { opacity: .35; cursor: default; }
-.chat-ask-tabs .lucide { width: 14px; height: 14px; flex-shrink: 0; }
-.chat-ask-review { display: flex; flex-direction: column; gap: 2px; }
-.chat-ask-review button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; border: 0; background: transparent; font: inherit; padding: 6px 10px; border-radius: 10px; cursor: pointer; }
-.chat-ask-review button:hover { background: #25282c; }
-.chat-ask-review .q { color: var(--chat-dim); font-size: 13px; }
-.chat-ask-review .a { color: var(--chat-ink); font-size: 13.5px; }
-.chat-ask-review .missing .a { color: #fca5a5; }
 .chat-perm-always { min-width: 0; max-width: 100%; }
 .chat-perm-always span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-perm-always .lucide { flex-shrink: 0; }
@@ -804,6 +774,14 @@ export const CHAT_CSS = `
 .chat-sheet-q .opt .why { display: flex; align-items: center; gap: 8px; min-width: 0; color: #d6b9a8; font-size: 12.5px; }
 .chat-sheet-q .reco { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 11px; font-weight: 700; line-height: 1.7; color: var(--chat-accent-ink); background: var(--chat-accent); border-radius: 999px; padding: 0 7px; }
 .chat-sheet-q .reco .lucide { width: 11px; height: 11px; }
+/* Claude's AskUserQuestion in the sheet's frame (the user's pick of 15/11/2026): in place of the input, no gap under it; an option's description under its label, a multiple choice's boxes square. */
+.chat-sheet-q.ask { margin-bottom: 0; outline: none; }
+.chat-sheet-q .opt .t { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.chat-sheet-q .opt .t .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.chat-sheet-q .opt .d { color: var(--chat-dim); font-size: 12.5px; overflow-wrap: anywhere; }
+.chat-sheet-q .opt.two { align-items: flex-start; }
+.chat-sheet-q .opt.two .radio { margin-top: 3px; }
+.chat-sheet-q .opt .radio.sq { border-radius: 4px; }
 /* The field and its send stay in view at the list's bottom, however long the question. */
 .chat-sheet-q .free { display: flex; align-items: flex-end; gap: 8px; position: sticky; bottom: 0; padding: 4px 0 12px; background: #1d2024; }
 .chat-sheet-q .free .mic { width: 32px; height: 32px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 9px; background: #2a2d32; color: var(--chat-ink); cursor: pointer; }

@@ -568,16 +568,15 @@ function ChatViewBody({
       </div>
     );
   } else if (request?.toolName === "AskUserQuestion") {
+    // Its own frame, the questions sheet's (`chat-sheet-q`).
     bottom = (
-      <div className="chat-box ask">
-        <ChatQuestionPanel
-          key={request.requestId}
-          request={request}
-          isActive={isActive}
-          onAnswer={answer}
-          onOpen={open}
-        />
-      </div>
+      <ChatQuestionPanel
+        key={request.requestId}
+        request={request}
+        isActive={isActive}
+        onAnswer={answer}
+        onOpen={open}
+      />
     );
   } else if (request?.toolName === "ExitPlanMode") {
     bottom = (
@@ -784,7 +783,9 @@ function ChatViewBody({
         </div>
       </div>
       <div
-        className={`chat-bottom${sheetOpen ? " sheet-open" : ""}`}
+        // Claude's question panel, in the sheet's frame, shrinks as the sheet
+        // does when what stacks above it fills the pane.
+        className={`chat-bottom${sheetOpen || (!state.closed && request?.toolName === "AskUserQuestion") ? " sheet-open" : ""}`}
         // The scrollbar's width on the right: the same column as above.
         style={gutter > 0 ? { paddingRight: gutter } : undefined}
       >
