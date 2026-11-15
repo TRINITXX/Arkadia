@@ -10,6 +10,7 @@ mod chrome_view;
 mod claude_watcher;
 mod conversation;
 mod credits;
+mod exe_link;
 // Only consumed by the release-only single-instance block below; in debug the
 // cfg removes that call site, so silence the resulting dead-code lint there.
 #[cfg_attr(debug_assertions, allow(dead_code))]

@@ -1,6 +1,7 @@
 //! Artifacts Claude Code opens by itself land in the panel of their own tab.
 //!
-//! Every pane gets `BROWSER` = Arkadia's own exe (`browser_command`): Claude
+//! Every pane gets `BROWSER` = a link to Arkadia's exe (`browser_command`,
+//! `exe_link`): Claude
 //! Code, like git, gh or Python, runs that program with the URL to open. That
 //! second Arkadia process never starts the app (`forward_request`, checked
 //! first thing in `main`): a claude.ai artifact is dropped in the inbox
@@ -91,14 +92,15 @@ fn drop_in_inbox(dir: &Path, pane: &str, url: &str) -> std::io::Result<()> {
     std::fs::rename(&tmp, dir.join(format!("{name}.json")))
 }
 
-/// What a pane's `BROWSER` holds: this exe, by its short (8.3) path when the
-/// long one has spaces, with forward slashes. gh, Python and others split
-/// `BROWSER` like a shell command: spaces cut it, backslashes vanish.
+/// What a pane's `BROWSER` holds: this exe's link, which a rebuild never
+/// moves (`exe_link`), by its short (8.3) path when the long one has spaces,
+/// with forward slashes. gh, Python and others split `BROWSER` like a shell
+/// command: spaces cut it, backslashes vanish.
 pub fn browser_command() -> Option<&'static str> {
     static COMMAND: OnceLock<Option<String>> = OnceLock::new();
     COMMAND
         .get_or_init(|| {
-            let exe = std::env::current_exe().ok()?;
+            let exe = crate::exe_link::helper_exe()?;
             let long = exe.to_str()?.to_string();
             let path = if long.contains(' ') {
                 short_path(&exe).unwrap_or(long)

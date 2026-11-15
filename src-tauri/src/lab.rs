@@ -33,7 +33,7 @@ const fn is_lab_flag(flag: Option<&str>) -> bool {
 /// build run from anything this instance starts would make a Lab), the Lab
 /// pane marker in a daily instance started from a Lab pane (its hooks would
 /// write to the Lab's folder), in the Lab a `BROWSER` pointing at the daily
-/// exe (its artifacts would land in an inbox nobody reads), and in both the
+/// exe's link (its artifacts would land in an inbox nobody reads), and in both the
 /// chat marker of an instance started from a chat session (the hooks of all
 /// its terminals would go quiet).
 fn foreign_vars(lab: bool) -> &'static [&'static str] {
