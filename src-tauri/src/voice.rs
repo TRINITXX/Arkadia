@@ -19,6 +19,7 @@ use crate::terminal::{ScrollbackConfig, SessionMap};
 
 const CAPTURE_ARG: &str = "--voice-capture";
 const SETTINGS_FILE: &str = "settings.json";
+const CAPTURE_EXE: &str = "capture.exe";
 
 /// The hidden dictation pane, once started.
 #[derive(Default)]
@@ -90,6 +91,38 @@ fn take_capture(dir: &Path, pane: &str) -> Option<String> {
     Some(text)
 }
 
+/// The hook's own copy of this exe (a hard link, else a copy), which the
+/// rebuild script never moves: it sets the running exe aside for the whole
+/// build, and a hook naming that path fails meanwhile, blocking every
+/// dictation (15/11/2026). Refreshed when the exe changed; kept as it is
+/// while the exe is missing (mid-build). A hook under way keeps the image it
+/// started. Capture mode is the same from one build to the next. Release
+/// builds only: a `tauri dev` copy shares the `voice` folder and must not
+/// replace the daily one's hook (`voice_pane`).
+fn stable_exe(exe: &Path, link: &Path) -> PathBuf {
+    let same = |a: &std::fs::Metadata, b: &std::fs::Metadata| {
+        a.len() == b.len() && a.modified().ok() == b.modified().ok()
+    };
+    match (std::fs::metadata(exe), std::fs::metadata(link)) {
+        (Ok(src), Ok(dst)) if same(&src, &dst) => return link.to_path_buf(),
+        (Err(_), Ok(_)) => return link.to_path_buf(),
+        (Err(_), Err(_)) => return exe.to_path_buf(),
+        _ => {}
+    }
+    // Made under another name, then put in place: a reader never sees half.
+    let fresh = link.with_extension("new.exe");
+    let _ = std::fs::remove_file(&fresh);
+    let made = std::fs::hard_link(exe, &fresh).or_else(|_| std::fs::copy(exe, &fresh).map(drop));
+    if made.is_err() || std::fs::rename(&fresh, link).is_err() {
+        let _ = std::fs::remove_file(&fresh);
+    }
+    if link.exists() {
+        link.to_path_buf()
+    } else {
+        exe.to_path_buf()
+    }
+}
+
 /// Claude Code settings for the hidden `claude`, over the user's (whose
 /// dictation language it keeps). The capture hook runs in exec form, with no
 /// shell and no quoting, and a hook that fails blocks the prompt as well: a
@@ -154,6 +187,11 @@ pub fn voice_pane(
     let dir = voice_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = if cfg!(debug_assertions) {
+        exe
+    } else {
+        stable_exe(&exe, &dir.join(CAPTURE_EXE))
+    };
     let exe = exe.to_str().ok_or("chemin d'Arkadia illisible")?;
     let cwd = dir
         .to_str()
@@ -218,6 +256,32 @@ mod tests {
         assert_eq!(ps_quote(r"C:\Users\A B\s.json"), r"'C:\Users\A B\s.json'");
         assert_eq!(ps_quote("C:\\O'Neil\\$x"), "'C:\\O''Neil\\$x'");
         assert_eq!(ps_quote("C:\\O\u{2019}Neil"), "'C:\\O\u{2019}\u{2019}Neil'");
+    }
+
+    #[test]
+    fn the_hook_exe_outlives_a_rebuild() {
+        let dir = dir();
+        let exe = dir.join("arkadia.exe");
+        let link = dir.join(CAPTURE_EXE);
+        std::fs::write(&exe, "build 1").unwrap();
+        assert_eq!(stable_exe(&exe, &link), link);
+        // The rebuild script sets the exe aside: the hook's copy stays.
+        std::fs::rename(&exe, dir.join("old.exe")).unwrap();
+        assert_eq!(stable_exe(&exe, &link), link);
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "build 1");
+        // The new build lands: the copy follows it.
+        std::fs::write(&exe, "build 2, longer").unwrap();
+        assert_eq!(stable_exe(&exe, &link), link);
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "build 2, longer");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_exe_and_no_copy_names_the_exe() {
+        let dir = dir();
+        let exe = dir.join("arkadia.exe");
+        assert_eq!(stable_exe(&exe, &dir.join(CAPTURE_EXE)), exe);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
