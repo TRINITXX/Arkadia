@@ -10,6 +10,7 @@ import {
   firstFrameGrowth,
   nextFrameHeight,
   refitFrameGrowth,
+  type ChoiceImage,
 } from "@/lib/chat/chatVisual";
 import {
   frameDictationNow,
@@ -21,6 +22,11 @@ import {
   ChatDictationContext,
   useFieldDictation,
 } from "@/lib/chat/useFieldDictation";
+import {
+  keepVisualState,
+  onVisualState,
+  visualState,
+} from "@/lib/chat/visualStates";
 
 interface ChatVisualFrameProps {
   /** The page, its local images in (`ChatState.visuals`). */
@@ -31,9 +37,12 @@ interface ChatVisualFrameProps {
   /** The probe checked it clean: its growth is never stopped (`nextFrameHeight`). */
   verified?: boolean;
   /** A choice of the page (`arkadia.choose`), on the user's click in it. */
-  onChoose?: (text: string) => void;
+  onChoose?: (text: string, images?: ChoiceImage[]) => void;
   /** A link of the page, on the user's click: the browser opens it. */
   onLink?: (url: string) => void;
+  /** Its tool call: the choice kit's picks and remarks outlive the frame
+   *  (`visualStates`), its zoomed copy shares them. */
+  stateKey?: string;
 }
 
 /** Height before the page says its own (`size`). */
@@ -114,6 +123,7 @@ export function ChatVisualFrame({
   verified = false,
   onChoose,
   onLink,
+  stateKey,
 }: ChatVisualFrameProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -149,10 +159,20 @@ export function ChatVisualFrame({
     status: field.status,
     interim: field.interim,
   };
-  const handlers = useRef({ onChoose, onLink, field, voiceState });
+  const handlers = useRef({ onChoose, onLink, field, voiceState, stateKey });
   useEffect(() => {
-    handlers.current = { onChoose, onLink, field, voiceState };
+    handlers.current = { onChoose, onLink, field, voiceState, stateKey };
   });
+  // The other frame of this visual (the card's, the zoomed one) changed its
+  // picks: this one shows them too.
+  useEffect(() => {
+    if (!stateKey) return;
+    return onVisualState(stateKey, (state, from) => {
+      const iframe = frameRef.current;
+      if (iframe && from !== iframe)
+        iframe.contentWindow?.postMessage({ arkadiaVisualRestore: state }, "*");
+    });
+  }, [stateKey]);
   // Where the dictation stands, for the page's mics (said again once the
   // page is in: `loaded`).
   const sayVoice = () =>
@@ -224,7 +244,7 @@ export function ChatVisualFrame({
         else if (m.kind === "choose" && frameGestureNow(iframe)) {
           const choose = handlers.current.onChoose;
           if (choose) {
-            choose(m.text);
+            choose(m.text, m.images);
             // The page may say so (the choice kit's « Ajouté »): it went in.
             iframe.contentWindow?.postMessage({ arkadiaVisualChosen: 1 }, "*");
           }
@@ -235,6 +255,17 @@ export function ChatVisualFrame({
         else if (m.kind === "dictate") {
           if (!m.on) handlers.current.field.stop();
           else if (frameDictationNow(iframe)) handlers.current.field.start();
+        }
+        // The choice kit's state, kept for its next load, given back to it.
+        else if (m.kind === "keep") {
+          const key = handlers.current.stateKey;
+          if (key) keepVisualState(key, m.state, iframe);
+        } else if (m.kind === "restore") {
+          const key = handlers.current.stateKey;
+          iframe.contentWindow?.postMessage(
+            { arkadiaVisualRestore: key ? visualState(key) : null },
+            "*",
+          );
         }
       },
       fill ? undefined : (roomRef.current ?? undefined),

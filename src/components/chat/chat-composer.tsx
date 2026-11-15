@@ -48,8 +48,15 @@ import {
   redirectDictation,
   type ChatDraft,
   type DraftFile,
-  type DraftImage as Attachment,
 } from "@/lib/chat/chatDrafts";
+import {
+  IMAGE_TYPES,
+  lastImageNumber,
+  readImage,
+  sentImages,
+  withImageTags,
+  withoutImageTag,
+} from "@/lib/chat/pastedImages";
 import type { DictationEnd, VoiceStatus } from "@/lib/useHiddenVoice";
 import type { PermissionMode } from "@/lib/chat/chatProtocol";
 import { nextMode } from "@/lib/chat/chatLabels";
@@ -76,28 +83,10 @@ const VOICE_TITLES: Record<VoiceStatus, string> = {
   transcribing: "Transcription…",
 };
 
-const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const NO_FILES: DraftFile[] = [];
 const NO_PASTES: PastedText[] = [];
 /** The wave's bars, each its own beat. */
 const WAVE_DELAYS = [0, 180, 90, 320, 140, 260, 40, 210, 120, 300, 70, 240];
-
-function readImage(file: File): Promise<Attachment> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const url = String(reader.result);
-      resolve({
-        id: `${file.name}-${file.size}-${Math.random()}`,
-        url,
-        mediaType: file.type,
-        data: url.slice(url.indexOf(",") + 1),
-      });
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
 
 /**
  * The input card: text (Enter sends, Shift+Enter breaks the line), cards of
@@ -289,21 +278,13 @@ export function ChatComposer({
     onDraft((d) => {
       // After every number in use, the cards' and the text's: never two
       // « [Image #2] ».
-      let last = Math.max(
-        0,
-        ...d.images.map((img) => img.n ?? 0),
-        ...[...d.text.matchAll(/\[Image #(\d+)\]/g)].map((m) => Number(m[1])),
-      );
-      const added = read.map((img) => ({ ...img, n: ++last }));
-      if (!caret) return { ...d, images: [...d.images, ...added] };
-      const tags = added.map((img) => `[Image #${img.n}]`).join(" ");
-      const at = Math.min(caret.start, d.text.length);
-      const to = Math.min(Math.max(caret.end, at), d.text.length);
-      return {
-        ...d,
-        text: d.text.slice(0, at) + tags + d.text.slice(to),
-        images: [...d.images, ...added],
-      };
+      let last = lastImageNumber([d.text], d.images);
+      if (!caret) {
+        const added = read.map((img) => ({ ...img, n: ++last }));
+        return { ...d, images: [...d.images, ...added] };
+      }
+      const put = withImageTags(d.text, caret.start, caret.end, read, last);
+      return { ...d, text: put.text, images: [...d.images, ...put.images] };
     });
   };
 
@@ -327,7 +308,7 @@ export function ChatComposer({
       const n = d.images.find((x) => x.id === key)?.n;
       return {
         ...d,
-        text: n ? d.text.split(`[Image #${n}]`).join("") : d.text,
+        text: withoutImageTag(d.text, n),
         images: d.images.filter((x) => x.id !== key),
         files: d.files?.filter((x) => x.id !== key),
       };
@@ -367,11 +348,7 @@ export function ChatComposer({
         body,
         files.map((f) => f.path),
       ),
-      images.map(({ mediaType, data, n }) => ({
-        mediaType,
-        data,
-        ...(n ? { label: `Image #${n}` } : {}),
-      })),
+      sentImages(images),
       now,
     );
     onDraft(EMPTY_DRAFT);

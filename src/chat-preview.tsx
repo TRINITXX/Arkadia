@@ -799,6 +799,10 @@ function Preview() {
   useEffect(() => {
     if (name !== "visuals") return;
     let live = true;
+    // `window.__remountView()`: the view anew, as a project back on screen
+    // (a visual's picks kept, `visualStates`).
+    (window as unknown as { __remountView?: () => void }).__remountView = () =>
+      setMount((m) => m + 1);
     const onEvent = createVisualProbe((_chatId, checkId, report) => {
       if (!live) return;
       const next = visualNext(checkId, report);

@@ -1,7 +1,11 @@
 import shell from "@/lib/chat/visual-frame.html?raw";
 import { CHAT_FONTS, CHAT_TOKENS as T } from "@/lib/chat/chatTheme";
 import type { ToolItem } from "@/lib/chat/chatGroups";
+import type { ChatDraft, DraftImage } from "@/lib/chat/chatDrafts";
+import { IMAGE_TYPES, imageTags } from "@/lib/chat/pastedImages";
 import {
+  CHOICE_IMAGE_CHARS,
+  CHOICE_IMAGES_MAX,
   usesChoiceKit,
   VISUAL_KIT_CSS,
   VISUAL_KIT_JS,
@@ -143,7 +147,7 @@ export function visualBootstrap(token: string): string {
   return `(function(){
 var me=document.currentScript;if(me&&me.parentNode)me.parentNode.removeChild(me);
 var K=${JSON.stringify(token)},P=window.parent,framed=P!==window,errors=[],consoleErrors=[],blocked=[],loaded=false,last=-1;
-function post(kind,v){if(framed)P.postMessage({arkadiaVisual:1,k:K,kind:kind,v:v},"*");}
+function post(kind,v,x){if(!framed)return;var m={arkadiaVisual:1,k:K,kind:kind,v:v};if(x)m.x=x;P.postMessage(m,"*");}
 function push(l,s){s=String(s).slice(0,300);if(l.length<20&&l.indexOf(s)<0)l.push(s);}
 ${VISUAL_GUARD}
 window.addEventListener("error",function(e){var t=e.target;if(t&&t!==window&&t.tagName){push(blocked,t.tagName.toLowerCase()+" "+String(t.currentSrc||t.src||t.href||"").slice(0,160));return;}push(errors,(e.message||"Error")+(e.lineno?" (line "+e.lineno+")":""));},true);
@@ -158,11 +162,12 @@ var m=b.querySelectorAll("img,svg,canvas,video,picture,input,button,select,texta
 var all=b.querySelectorAll("*");for(var j=0;j<all.length&&j<3000;j++){var s=getComputedStyle(all[j]);if((s.backgroundColor!=="rgba(0, 0, 0, 0)"||s.backgroundImage!=="none"||parseFloat(s.borderTopWidth)>0)&&shows(all[j]))return true;}return false;}
 function report(){var r=document.documentElement,im=document.images;for(var i=0;i<im.length;i++){var src=im[i].getAttribute("src");if(src&&im[i].complete&&im[i].naturalWidth===0)push(blocked,"img "+src.slice(0,160));}
 return{errors:errors,consoleErrors:consoleErrors,blocked:blocked,height:height(),width:r.clientWidth,scrollWidth:r.scrollWidth,empty:!visible(),followsFrame:false,unfinished:!loaded};}
-try{dp(window,"arkadia",{value:Object.freeze({choose:function(t){post("choose",String(t==null?"":t).slice(0,4000));},dictate:function(on){post("dictate",!!on);}})});}catch(x){}
+try{dp(window,"arkadia",{value:Object.freeze({choose:function(t,im){post("choose",String(t==null?"":t).slice(0,4000),Array.isArray(im)&&im.length?im.slice(0,${CHOICE_IMAGES_MAX}):null);},dictate:function(on){post("dictate",!!on);},keep:function(s){post("keep",s);},restore:function(){post("restore");}})});}catch(x){}
 if(framed){
 window.addEventListener("message",function(e){var d=e.data;if(e.source!==P||!d)return;if(d.arkadiaVisualProbe===1)post("report",report());if(d.arkadiaVisualChosen===1)window.dispatchEvent(new Event("arkadia-chosen"));
 var vo=d.arkadiaVisualVoice;if(vo&&typeof vo==="object")window.dispatchEvent(new CustomEvent("arkadia-voice",{detail:{can:vo.can===true,mine:vo.mine===true,status:String(vo.status||"idle"),interim:String(vo.interim||"")}}));
 if(typeof d.arkadiaVisualDictated==="string")window.dispatchEvent(new CustomEvent("arkadia-dictated",{detail:d.arkadiaVisualDictated}));
+if("arkadiaVisualRestore" in d)window.dispatchEvent(new CustomEvent("arkadia-restore",{detail:d.arkadiaVisualRestore}));
 if(d.arkadiaVisualFit===1&&typeof d.height==="number"){if(isFinite(d.height))document.documentElement.style.setProperty("--ark-fit-h",Math.max(${VISUAL_MIN_ROOM},Math.round(d.height))+"px");}});
 document.addEventListener("click",function(e){if(!e.isTrusted||e.defaultPrevented||e.button!==0)return;var a=e.target&&e.target.closest?e.target.closest("a[href]"):null,u;if(!a)return;
 try{u=new URL(a.getAttribute("href"),document.baseURI);}catch(x){return;}if(u.href.split("#")[0]===location.href.split("#")[0])return;e.preventDefault();if(/^https?:$/.test(u.protocol))post("link",u.href);});
@@ -394,12 +399,43 @@ export type FrameMessage =
   | { kind: "down" }
   | { kind: "size"; height: number }
   | { kind: "link"; url: string }
-  | { kind: "choose"; text: string }
+  | { kind: "choose"; text: string; images?: ChoiceImage[] }
   /** The page's mic (the choice kit's remark): start on the user's click, or stop. */
   | { kind: "dictate"; on: boolean }
+  /** The choice kit's state, one per `.ark-choice`, kept for its next load (`visualStates`). */
+  | { kind: "keep"; state: unknown[] }
+  /** The page loaded asks its state kept. */
+  | { kind: "restore" }
   /** A wheel the page doesn't use: the conversation scrolls by it. */
   | { kind: "wheel"; dx: number; dy: number; mode: number }
   | { kind: "report"; report: unknown };
+
+/** An image pasted into a choice's remark, `n` as its tag « [Image #n] » says. */
+export interface ChoiceImage {
+  n: number;
+  mediaType: string;
+  data: string;
+}
+
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/** The images a frame sends with its choice, each checked; the others dropped. */
+function choiceImages(x: unknown): ChoiceImage[] {
+  if (!Array.isArray(x)) return [];
+  const seen = new Set<number>();
+  return x.slice(0, CHOICE_IMAGES_MAX).flatMap((v: unknown) => {
+    const p = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+    const { n, m, d } = p;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 999)
+      return [];
+    if (seen.has(n) || typeof m !== "string" || !IMAGE_TYPES.includes(m))
+      return [];
+    if (typeof d !== "string" || d.length > CHOICE_IMAGE_CHARS) return [];
+    if (!BASE64.test(d)) return [];
+    seen.add(n);
+    return [{ n, mediaType: m, data: d }];
+  });
+}
 
 /** A wheel delta as a frame may send it: a number, bounded. */
 const delta = (v: unknown): number | null =>
@@ -436,12 +472,34 @@ export function readFrameMessage(
       return typeof v === "string" && /^https?:\/\//i.test(v)
         ? { kind: "link", url: v.slice(0, 4000) }
         : null;
-    case "choose":
-      return typeof v === "string" && v.trim()
-        ? { kind: "choose", text: v.trim().slice(0, 4000) }
-        : null;
+    case "choose": {
+      if (typeof v !== "string" || !v.trim()) return null;
+      const images = choiceImages(d.x);
+      // A tag whose image didn't come (refused, past the cap, a bridge that
+      // carries none: the phone's) goes, on every side reading this.
+      const have = new Set(images.map((img) => img.n));
+      const text = v
+        .trim()
+        .slice(0, 4000)
+        .replace(/ ?\[Image #(\d+)\]/g, (tag, n: string) =>
+          have.has(Number(n)) ? tag : "",
+        )
+        .trim();
+      if (!text) return null;
+      return {
+        kind: "choose",
+        text,
+        ...(images.length > 0 ? { images } : {}),
+      };
+    }
     case "dictate":
       return typeof v === "boolean" ? { kind: "dictate", on: v } : null;
+    case "keep":
+      return Array.isArray(v) && v.length <= 20
+        ? { kind: "keep", state: v as unknown[] }
+        : null;
+    case "restore":
+      return { kind: "restore" };
     case "report":
       return { kind: "report", report: v };
     case "wheel": {
@@ -535,6 +593,69 @@ export function withChoice(
   if (previous && text.endsWith(`\n${previous}`))
     return `${text.slice(0, -previous.length)}${choice}`;
   return `${text}\n${choice}`;
+}
+
+/** A choice put into the input: its text there, and its images' ids. */
+export interface PutChoice {
+  text: string;
+  ids: string[];
+}
+
+/**
+ * A choice and its remarks' images into the input (`withChoice`): the images
+ * numbered after the input's, their tags in the text with them. A choice
+ * that replaces the one put before takes its images away too. `key`: this
+ * choice's own, its images' ids (the same result each time it runs).
+ */
+export function withChoiceImages(
+  draft: ChatDraft,
+  text: string,
+  images: readonly ChoiceImage[],
+  previous: PutChoice | null,
+  key: string,
+): { draft: ChatDraft; put: PutChoice } {
+  const now = draft.text.trimEnd();
+  const prev = previous?.text ?? null;
+  const replaces =
+    !now || (prev !== null && (now === prev || now.endsWith(`\n${prev}`)));
+  // What stays of the input: never its numbers taken by the choice it loses.
+  const rest =
+    !now || now === prev
+      ? ""
+      : replaces && prev
+        ? now.slice(0, -prev.length)
+        : now;
+  const gone = new Set(replaces ? (previous?.ids ?? []) : []);
+  const kept = draft.images.filter((img) => !gone.has(img.id));
+  const last = Math.max(
+    0,
+    ...kept.map((img) => img.n ?? 0),
+    ...imageTags(rest),
+  );
+  const renumber = new Map(images.map((img, i) => [img.n, last + i + 1]));
+  // A tag whose image didn't come goes (`readFrameMessage` drops them
+  // already): left, it would name the input's own image of its number.
+  const put = text.replace(/ ?\[Image #(\d+)\]/g, (tag, d: string) => {
+    const n = renumber.get(Number(d));
+    return n ? tag.replace(d, String(n)) : "";
+  });
+  const added: DraftImage[] = images.map((img, i) => {
+    return {
+      id: `${key}:${i}`,
+      url: `data:${img.mediaType};base64,${img.data}`,
+      mediaType: img.mediaType,
+      data: img.data,
+      n: renumber.get(img.n),
+    };
+  });
+  return {
+    draft: {
+      ...draft,
+      text: withChoice(draft.text, put, prev),
+      images: [...kept, ...added],
+    },
+    put: { text: put, ids: added.map((img) => img.id) },
+  };
 }
 
 /** A `show_visual` call's arguments, as far as they are there yet. */

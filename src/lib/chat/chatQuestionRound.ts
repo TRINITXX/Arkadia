@@ -1,3 +1,4 @@
+import type { DraftImage } from "@/lib/chat/chatDrafts";
 import type { ChatItem } from "@/lib/chat/chatState";
 
 /**
@@ -40,6 +41,8 @@ export interface RoundAnswer {
   reco?: boolean;
   option?: string;
   text?: string;
+  /** Pasted into its field, each tagged « [Image #n] » in `text`: sent with the reply. */
+  images?: DraftImage[];
 }
 
 const QUESTION_MARK = /^\s*❓️?\s*/;

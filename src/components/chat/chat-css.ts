@@ -902,6 +902,16 @@ export const CHAT_CSS = `
 .chat-box > .chat-files .chat-file .ph { width: 16px; height: 16px; }
 .chat-box > .chat-files .chat-file .x { top: 2px; right: 2px; width: 16px; height: 16px; }
 .chat-box > .chat-files .chat-file .x .lucide { width: 10px; height: 10px; }
+/* Pasted into a question's own words: above its field, as above the input, in line with the field (past its mic). */
+.chat-field-pics { margin-top: 8px; padding-left: 40px; }
+.chat-field-pics.flush { padding-left: 0; }
+.chat-sheet-q .chat-field-pics { margin-top: 0; }
+.chat-field-pics .chat-files { gap: 6px; }
+.chat-field-pics .chat-file { height: 48px; border-radius: 8px; }
+.chat-field-pics .chat-file.thumb { min-width: 32px; max-width: 80px; }
+.chat-field-pics .chat-file.thumb img { max-width: 78px; }
+.chat-field-pics .chat-file .x { top: 2px; right: 2px; width: 16px; height: 16px; }
+.chat-field-pics .chat-file .x .lucide { width: 10px; height: 10px; }
 .chat-read-thumbs { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .chat-read-thumb { display: inline-block; min-width: 1px; height: 22px; }
 .chat-read-thumb img { display: block; height: 22px; width: auto; max-width: 44px; object-fit: contain; background: #111215; border-radius: 4px; border: 1px solid rgba(255,255,255,.14); cursor: zoom-in; }

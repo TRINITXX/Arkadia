@@ -171,8 +171,14 @@ export function useChatSession(
     [run, chatId],
   );
   const answer = useCallback(
-    (requestId: string, result: PermissionResult) =>
-      run({ type: "answer", chatId, requestId, result }),
+    (requestId: string, result: PermissionResult, images?: ChatImage[]) =>
+      run({
+        type: "answer",
+        chatId,
+        requestId,
+        result,
+        ...(images && images.length > 0 ? { images } : {}),
+      }),
     [run, chatId],
   );
   const setMode = useCallback(

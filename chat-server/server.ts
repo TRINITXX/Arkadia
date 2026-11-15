@@ -34,6 +34,7 @@ import {
   type BangRun,
   type Kept,
 } from "./bash.ts";
+import { answerImagesRoots, withAnswerImages } from "./answerImages.ts";
 import { listensTo, replyRelayDue, replyRelayText, watchedAfter } from "./artifactWatch.ts";
 import {
   answeredTurn,
@@ -170,6 +171,8 @@ export type Command =
       chatId: string;
       requestId: string;
       result: PermissionResult;
+      /** Pasted into an AskUserQuestion's own words (`answerImages`). */
+      images?: ImageInput[];
     }
   | { type: "set_mode"; chatId: string; mode: PermissionMode }
   | { type: "set_model"; chatId: string; model: string }
@@ -1074,6 +1077,8 @@ class Chat {
       prompt: this.input,
       options: {
         cwd: start.cwd,
+        // The images pasted into an AskUserQuestion's answer (`answerImages`).
+        additionalDirectories: answerImagesRoots(),
         resume: this.sessionId,
         resumeSessionAt: this.cutBefore ? start.resumeSessionAt : undefined,
         // /rewind's « le code aussi »: the terminal keeps these backups too.
@@ -2096,12 +2101,14 @@ class Chat {
     });
   }
 
-  answer(requestId: string, result: PermissionResult): void {
+  async answer(requestId: string, result: PermissionResult, images: ImageInput[] = []): Promise<void> {
     const resolve = this.pending.get(requestId);
     if (!resolve) return;
     this.pending.delete(requestId);
+    // Images pasted into the own words: files Claude reads, named in them.
+    const final = images.length > 0 ? await withAnswerImages(result, images) : result;
     this.out({ type: "permission_resolved", chatId: this.chatId, requestId });
-    resolve(result);
+    resolve(final);
   }
 
   /**
@@ -3065,7 +3072,7 @@ async function handle(cmd: Command): Promise<void> {
       await chat.interrupt(cmd.spare);
       return;
     case "answer":
-      return chat.answer(cmd.requestId, cmd.result);
+      return chat.answer(cmd.requestId, cmd.result, cmd.images);
     case "set_mode":
       return chat.setMode(cmd.mode);
     case "set_model":

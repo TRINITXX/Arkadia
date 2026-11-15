@@ -18,6 +18,7 @@ import {
   visualPhase,
   visualProblem,
   visualVerified,
+  type ChoiceImage,
   type VisualEntry,
 } from "@/lib/chat/chatVisual";
 
@@ -27,7 +28,7 @@ interface ChatVisualCardProps {
   entry: VisualEntry | undefined;
   /** A past visual: ask its page with the images in (`visual_html`). */
   onNeedHtml?: (toolUseId: string) => void;
-  onChoose?: (text: string) => void;
+  onChoose?: (text: string, images?: ChoiceImage[]) => void;
   onOpenInBrowser?: (html: string, title: string) => void;
 }
 
@@ -171,6 +172,7 @@ export function ChatVisualCard({
           verified={visualVerified(tool)}
           onChoose={onChoose}
           onLink={link}
+          stateKey={tool.id}
         />
       ) : (
         <div className="chat-visual-wait">
@@ -190,6 +192,7 @@ export function ChatVisualCard({
           onClose={() => setZoom(null)}
           onChoose={onChoose}
           onLink={link}
+          stateKey={tool.id}
           onOpenInBrowser={onOpenInBrowser ? open : undefined}
         />
       )}

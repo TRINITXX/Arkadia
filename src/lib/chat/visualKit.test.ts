@@ -4,15 +4,26 @@ import { VISUAL_THEME_CSS } from "@/lib/chat/chatVisual";
 import { VISUAL_KIT_CSS, VISUAL_KIT_JS } from "@/lib/chat/visualKit";
 
 /** A page with the kit run over it, in a window of its own; `sent`: what it chose. */
-function page(body: string, framed = true) {
+function page(body: string, framed = true, asks = true) {
   const win = new Window({ url: "http://localhost/" });
   const doc = win.document;
   doc.body.innerHTML = body;
   const sent: string[] = [];
+  /** The images each choice carried. */
+  const shots: unknown[] = [];
   const mic: boolean[] = [];
+  /** The states the page kept, and how many times it asked its own back. */
+  const kept: unknown[] = [];
+  const asked = { n: 0 };
   Object.defineProperty(win, "arkadia", {
     value: {
-      choose: (t: string) => sent.push(t),
+      keep: (state: unknown) => kept.push(state),
+      // `asks` false: a bridge that can't ask its state back (yet).
+      ...(asks ? { restore: () => (asked.n += 1) } : {}),
+      choose: (t: string, images?: unknown) => {
+        sent.push(t);
+        shots.push(images);
+      },
       dictate: (on: boolean) => mic.push(on),
     },
   });
@@ -23,8 +34,16 @@ function page(body: string, framed = true) {
     "CustomEvent",
     "Event",
     "requestAnimationFrame",
+    "FileReader",
     VISUAL_KIT_JS,
-  )(win, doc, win.CustomEvent, win.Event, (f: () => void) => setTimeout(f, 0));
+  )(
+    win,
+    doc,
+    win.CustomEvent,
+    win.Event,
+    (f: () => void) => setTimeout(f, 0),
+    win.FileReader,
+  );
   const q = (s: string) => doc.querySelector(s) as unknown as HTMLElement;
   const all = (s: string) =>
     Array.from(doc.querySelectorAll(s)) as unknown as HTMLElement[];
@@ -56,7 +75,37 @@ function page(body: string, framed = true) {
     el.dispatchEvent(e);
     return e.defaultPrevented;
   };
-  return { doc, q, all, click, sent, ack, mic, voice, dictated, key };
+  /** Ctrl+V of a PNG in `el`; resolves once the page read it. */
+  const pasteImage = async (el: Element, bytes = "png-1") => {
+    const file = new win.File([bytes], "shot.png", { type: "image/png" });
+    const e = new win.Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(e, "clipboardData", { value: { files: [file] } });
+    el.dispatchEvent(e);
+    await new Promise((r) => setTimeout(r, 30));
+    return e.defaultPrevented;
+  };
+  /** Arkadia's answer to `restore`: the state it kept, or null. */
+  const restore = (state: unknown) =>
+    win.dispatchEvent(
+      new win.CustomEvent("arkadia-restore", { detail: state }),
+    );
+  return {
+    doc,
+    q,
+    all,
+    click,
+    sent,
+    shots,
+    ack,
+    mic,
+    voice,
+    dictated,
+    key,
+    pasteImage,
+    kept,
+    asked,
+    restore,
+  };
 }
 
 const GROUPS = `<div class="ark-choice" data-intro="Mes choix pour les mails">
@@ -177,6 +226,32 @@ describe("the choice kit", () => {
     ]);
   });
 
+  it("takes an image pasted into a remark: its tag at the caret, its thumbnail, sent with the choice", async () => {
+    const p = page(GROUPS);
+    const field = p.all(".ark-rmt")[0] as HTMLTextAreaElement;
+    field.value = "Comme ça";
+    field.focus();
+    field.setSelectionRange(5, 5);
+    expect(await p.pasteImage(field)).toBe(true);
+    expect(field.value).toBe("Comme[Image #1] ça");
+    expect(await p.pasteImage(p.all(".ark-rmt")[2], "png-2")).toBe(true);
+    expect(p.all(".ark-pic img")).toHaveLength(2);
+    // Its × takes it away with its tag; the next one keeps its number.
+    expect(await p.pasteImage(field, "png-3")).toBe(true);
+    expect(field.value).toBe("Comme[Image #1][Image #3] ça");
+    (p.all(".ark-pic button")[0] as HTMLButtonElement).click();
+    expect(field.value).toBe("Comme[Image #3] ça");
+    // A tag erased by hand: back at the remark's end.
+    (p.all(".ark-rmt")[2] as HTMLTextAreaElement).value = "voir";
+    p.click(".ark-cta");
+    expect(p.sent[0]).toContain("(remarque : Comme[Image #3] ça)");
+    expect(p.sent[0]).toContain("(remarque : voir [Image #2])");
+    expect(p.shots[0]).toEqual([
+      { n: 3, m: "image/png", d: btoa("png-3") },
+      { n: 2, m: "image/png", d: btoa("png-2") },
+    ]);
+  });
+
   it("dictates into a remark: mic, Space held or Ctrl+Space, the text at the caret", () => {
     const p =
       page(`<div class="ark-choice"><div class="ark-question" data-title="Prix">
@@ -254,5 +329,99 @@ describe("the choice kit", () => {
       "Mon choix :\nHébergement : « Le VPS 1 »\nSMS : « Rappel », « Reçu »",
     );
     expect(all("[role=checkbox]")).toHaveLength(2);
+  });
+
+  it("keeps its picks, tab, remarks and images for its next load", async () => {
+    const first = page(GROUPS);
+    expect(first.asked.n).toBe(1);
+    // Nothing sent before Arkadia gave back what it kept: never over it.
+    first.click(".ark-opt", "120");
+    expect(first.kept).toHaveLength(0);
+    first.restore(null);
+    first.click(".ark-opt", "Chiffré");
+    const field = first.all(".ark-rmt")[0] as HTMLTextAreaElement;
+    field.value = "Plus court";
+    field.dispatchEvent(
+      new (first.doc.defaultView as unknown as typeof window).Event("input"),
+    );
+    await first.pasteImage(field);
+    first.click(".ark-step", "Relance");
+    await new Promise((r) => setTimeout(r, 200));
+    const state = first.kept[first.kept.length - 1];
+
+    // The frame gone and back: a new page, the same state.
+    const again = page(GROUPS);
+    again.restore(state);
+    expect(again.all(".ark-step")[1].getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    // Applying what came back sends nothing back (the zoom's copy would echo).
+    await new Promise((r) => setTimeout(r, 30));
+    expect(again.kept).toHaveLength(0);
+    again.click(".ark-step", "Loueurs");
+    expect(
+      again
+        .all(".ark-opt[aria-checked=true] .ark-mk")
+        .map((e) => e.textContent),
+    ).toEqual(["02", "B"]);
+    expect((again.all(".ark-rmt")[0] as HTMLTextAreaElement).value).toBe(
+      "Plus court[Image #1]",
+    );
+    expect(again.all(".ark-pic img")).toHaveLength(1);
+    // The next image takes the next number; the choice sends it.
+    await again.pasteImage(again.all(".ark-rmt")[0], "png-2");
+    again.click(".ark-cta");
+    expect(again.sent[0]).toContain("[Image #1][Image #2]");
+    expect((again.shots[0] as { n: number }[]).map((x) => x.n)).toEqual([1, 2]);
+  });
+
+  it("sends a remark typed a moment ago as soon as the frame is left", () => {
+    const p = page(GROUPS);
+    p.restore(null);
+    const field = p.all(".ark-rmt")[0] as HTMLTextAreaElement;
+    field.value = "Dernier mot";
+    const win = p.doc.defaultView as unknown as typeof window;
+    field.dispatchEvent(new win.Event("input"));
+    expect(p.kept).toHaveLength(0);
+    win.dispatchEvent(new win.Event("blur"));
+    expect(p.kept).toHaveLength(1);
+    const state = p.kept[0] as { qs: { r: string }[] }[];
+    expect(state[0].qs[0].r).toBe("Dernier mot");
+  });
+
+  it("ignores a state pushed before it asked its own: its defaults never overwrite what is kept", () => {
+    const early = page(GROUPS, true, false);
+    early.restore([{ cur: 1, qs: [] }]);
+    early.click(".ark-opt", "120");
+    expect(early.all(".ark-step")[0].getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(early.kept).toHaveLength(0);
+  });
+
+  it("refuses an image past the ten a choice carries: no tag without its image", async () => {
+    const p = page(GROUPS);
+    const field = p.all(".ark-rmt")[0];
+    for (let i = 0; i < 11; i++) await p.pasteImage(field, `png-${i}`);
+    expect(p.all(".ark-pic")).toHaveLength(10);
+    expect((field as HTMLTextAreaElement).value).not.toContain("[Image #11]");
+  });
+
+  it("unpicks a single choice clicked again: none forced when none is liked", () => {
+    const { all, click, sent } =
+      page(`<div class="ark-choice" data-intro="Mon choix">
+      <div class="ark-question" data-title="Maquette"><div class="ark-option" data-reco>A</div><div class="ark-option">B</div></div>
+    </div>`);
+    const checked = () =>
+      all(".ark-opt[aria-checked=true] .ark-st").map((e) => e.textContent);
+    // The advised one, picked from the start, unpicks too.
+    click(".ark-opt", "A");
+    expect(checked()).toEqual([]);
+    click(".ark-opt", "B");
+    expect(checked()).toEqual(["B"]);
+    click(".ark-opt", "B");
+    expect(checked()).toEqual([]);
+    click(".ark-cta");
+    expect(sent[0]).toBe("Mon choix :\nMaquette : aucun choix");
   });
 });

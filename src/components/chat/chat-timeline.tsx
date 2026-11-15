@@ -47,7 +47,7 @@ import {
 import { peerLabel } from "@/lib/chat/chatPeer";
 import { latestPlan, type ChatItem, type Subagent } from "@/lib/chat/chatState";
 import { placeWork } from "@/lib/chat/chatWorkPlaces";
-import type { VisualEntry } from "@/lib/chat/chatVisual";
+import type { ChoiceImage, VisualEntry } from "@/lib/chat/chatVisual";
 import { turnDoneLine } from "@/lib/chat/chatSteps";
 import { copiedCodeMessage } from "@/lib/codeCopy";
 import type { ImageRef } from "@/lib/imageGallery";
@@ -99,7 +99,7 @@ interface ChatTimelineProps {
   /** A past visual's page with its images in, asked of the server. */
   onVisualHtml?: (toolUseId: string) => void;
   /** A visual's choice: into the input, not sent. */
-  onChoose?: (text: string) => void;
+  onChoose?: (text: string, images?: ChoiceImage[]) => void;
   onOpenVisual?: (html: string, title: string) => void;
   /** A running `!` command's stop, by its server id. */
   onStopBash?: (id: string) => void;

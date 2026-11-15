@@ -17,6 +17,9 @@ import {
   SquareCheck,
   X,
 } from "lucide-react";
+import type { LightboxContent } from "@/components/modern/ImageThumb";
+import { ChatAttachments } from "@/components/chat/chat-attachments";
+import type { DraftImage } from "@/lib/chat/chatDrafts";
 import { focusIsFree, focusOf } from "@/lib/chat/chatFocus";
 import type { PermissionResult } from "@/lib/chat/chatProtocol";
 import {
@@ -27,6 +30,16 @@ import {
   stepBy,
 } from "@/lib/chat/chatQuestions";
 import type { PendingRequest } from "@/lib/chat/chatState";
+import type { ChatImage } from "@/lib/chat/useChatSession";
+import {
+  lastImageNumber,
+  pastedImageFiles,
+  readImage,
+  sentImages,
+  withEveryTag,
+  withImageTags,
+  withoutImageTag,
+} from "@/lib/chat/pastedImages";
 import {
   ChatDictationContext,
   useFieldDictation,
@@ -44,17 +57,23 @@ const KEY_GRACE_MS = 600;
  * Claude's AskUserQuestion, inside the input card: options by click or by
  * their number, or your own words. Several questions come one at a time, as
  * in the terminal: a tab each, ticked once answered, then « Envoyer », which
- * sends them all. Answers go back as the tool expects them.
+ * sends them all. Answers go back as the tool expects them. An image pasted
+ * into your own words shows above the field, its « [Image #n] » at the
+ * caret: it goes along (the server keeps it in a file Claude reads).
  */
 export function ChatQuestionPanel({
   request,
   isActive,
   onAnswer,
+  onOpen,
 }: {
   request: PendingRequest;
   /** Only the pane the user is in takes the keyboard. */
   isActive: boolean;
-  onAnswer: (result: PermissionResult) => void;
+  /** `images`: pasted into the own words answered, their tags in them. */
+  onAnswer: (result: PermissionResult, images?: ChatImage[]) => void;
+  /** A pasted image's thumbnail clicked: the lightbox. */
+  onOpen: (content: LightboxContent) => void;
 }) {
   const questions = questionsOf(request.input);
   /** Also the « Envoyer » step's number. */
@@ -65,6 +84,15 @@ export function ChatQuestionPanel({
     questions.map(() => []),
   );
   const [other, setOther] = useState<string[]>(() => questions.map(() => ""));
+  /** Images pasted into each question's own words. */
+  const [pics, setPics] = useState<DraftImage[][]>(() =>
+    questions.map(() => []),
+  );
+  // Read when a paste's images are in: numbered after all those of the panel.
+  const ownRef = useRef({ other, pics });
+  useEffect(() => {
+    ownRef.current = { other, pics };
+  });
   const rootRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
 
@@ -97,20 +125,64 @@ export function ChatQuestionPanel({
     if (twin) twin.scrollLeft = twin.scrollWidth;
   }, [liveWords]);
 
-  const answers = questions.map((_, i) => answerOf(picked[i], other[i]));
+  // An image's tag the user erased comes back: an image alone answers too.
+  const own = other.map((t, i) => withEveryTag(t, pics[i] ?? []));
+  const answers = questions.map((_, i) => answerOf(picked[i], own[i]));
   const complete = answersOf(questions, answers);
 
   const submit = () => {
     if (!complete) return;
-    onAnswer({
-      behavior: "allow",
-      updatedInput: { ...request.input, answers: complete },
+    onAnswer(
+      {
+        behavior: "allow",
+        updatedInput: { ...request.input, answers: complete },
+      },
+      sentImages(pics.flatMap((list, i) => (own[i].trim() ? list : []))),
+    );
+  };
+
+  const pasteImages = (
+    e: React.ClipboardEvent<HTMLInputElement>,
+    qi: number,
+  ) => {
+    const files = pastedImageFiles(e.clipboardData);
+    if (files.length === 0) return;
+    e.preventDefault();
+    const input = e.currentTarget;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    void Promise.all(files.map(readImage)).then((read) => {
+      const now = ownRef.current;
+      const put = withImageTags(
+        now.other[qi] ?? "",
+        start,
+        end,
+        read,
+        lastImageNumber(now.other, now.pics.flat()),
+      );
+      setOther((o) => o.map((t, i) => (i === qi ? put.text : t)));
+      setPics((p) => p.map((l, i) => (i === qi ? [...l, ...put.images] : l)));
+      setPicked((p) => p.map((sel, i) => (i === qi ? [] : sel)));
+      requestAnimationFrame(() => {
+        if (input.isConnected && document.activeElement === input)
+          input.setSelectionRange(put.caret, put.caret);
+      });
     });
+  };
+  const dropImage = (qi: number, id: string) => {
+    const gone = pics[qi]?.find((img) => img.id === id);
+    setOther((o) =>
+      o.map((t, i) => (i === qi ? withoutImageTag(t, gone?.n) : t)),
+    );
+    setPics((p) =>
+      p.map((l, i) => (i === qi ? l.filter((img) => img.id !== id) : l)),
+    );
   };
 
   const pick = (qi: number, label: string) => {
     const { multiSelect } = questions[qi];
     setOther((o) => o.map((t, i) => (i === qi ? "" : t)));
+    setPics((p) => p.map((l, i) => (i === qi ? [] : l)));
     setPicked((p) =>
       p.map((sel, i) => {
         if (i !== qi) return sel;
@@ -293,6 +365,20 @@ export function ChatQuestionPanel({
               </span>
             </button>
           ))}
+          {pics[step].length > 0 && (
+            <div className={`chat-field-pics${field.can ? "" : " flush"}`}>
+              <ChatAttachments
+                sources={pics[step].map((img) => ({
+                  kind: "pasted" as const,
+                  key: img.id,
+                  url: img.url,
+                  name: `Image collée ${img.n ?? ""}`.trim(),
+                }))}
+                onOpen={onOpen}
+                onRemove={(id) => dropImage(step, id)}
+              />
+            </div>
+          )}
           <div className="chat-ask-free">
             {field.can && (
               <button
@@ -323,6 +409,7 @@ export function ChatQuestionPanel({
                 onKeyUp={talk.keyUp}
                 // Space released elsewhere: the dictation still stops.
                 onBlur={talk.blur}
+                onPaste={(e) => pasteImages(e, step)}
               />
               {liveWords && (
                 <div className="words" ref={wordsRef} aria-hidden="true">

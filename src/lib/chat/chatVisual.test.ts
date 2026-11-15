@@ -36,8 +36,10 @@ import {
   visualHtml,
   visualPhase,
   withChoice,
+  withChoiceImages,
   type VisualReport,
 } from "@/lib/chat/chatVisual";
+import { keepChoiceIn, lastChoiceIn } from "@/lib/chat/chatDrafts";
 import { createVisualProbe, type VisualCheck } from "@/lib/chat/chatVisualDom";
 import { usesChoiceKit, VISUAL_KIT_JS } from "@/lib/chat/visualKit";
 import { visualResult } from "@chat-server/visualHtml";
@@ -314,6 +316,51 @@ describe("readFrameMessage", () => {
     ).toBeNull();
     expect(readFrameMessage(msg("choose", "  "), "t0k")).toBeNull();
     expect(readFrameMessage({ kind: "choose", v: "B" }, "t0k")).toBeNull();
+  });
+
+  it("takes a choice's images only well formed, and the kit's state as it is", () => {
+    const shot = { n: 1, m: "image/png", d: "aGVsbG8=" };
+    const choose = (x: unknown) => ({ ...msg("choose", "B"), x });
+    expect(readFrameMessage(choose([shot]), "t0k")).toEqual({
+      kind: "choose",
+      text: "B",
+      images: [{ n: 1, mediaType: "image/png", data: "aGVsbG8=" }],
+    });
+    // A wrong type, a broken base64, a number taken twice: dropped, the choice kept.
+    expect(
+      readFrameMessage(
+        choose([
+          { ...shot, m: "text/html" },
+          { ...shot, n: 2, d: "<svg>" },
+          shot,
+          { ...shot, d: "b3RoZXI=" },
+        ]),
+        "t0k",
+      ),
+    ).toEqual({
+      kind: "choose",
+      text: "B",
+      images: [{ n: 1, mediaType: "image/png", data: "aGVsbG8=" }],
+    });
+    expect(readFrameMessage(choose("x"), "t0k")).toEqual({
+      kind: "choose",
+      text: "B",
+    });
+    // A tag whose image didn't come (the phone's bridge carries none): gone.
+    expect(
+      readFrameMessage(
+        msg("choose", "Prix (remarque : voir [Image #1])"),
+        "t0k",
+      ),
+    ).toEqual({ kind: "choose", text: "Prix (remarque : voir)" });
+    expect(readFrameMessage(msg("keep", [{ cur: 1 }]), "t0k")).toEqual({
+      kind: "keep",
+      state: [{ cur: 1 }],
+    });
+    expect(readFrameMessage(msg("keep", { cur: 1 }), "t0k")).toBeNull();
+    expect(readFrameMessage(msg("restore"), "t0k")).toEqual({
+      kind: "restore",
+    });
   });
 
   it("passes a wheel the page left unused on, its deltas bounded", () => {
@@ -605,5 +652,106 @@ describe("createVisualProbe", () => {
     expect(started).toEqual([]);
     onEvent(ev("replayed"), false);
     expect(started).toEqual(["open"]);
+  });
+});
+
+describe("withChoiceImages", () => {
+  const img = (n: number) => ({ n, mediaType: "image/png", data: `d${n}` });
+  it("numbers a remark's images after the input's, their tags with them", () => {
+    const draft = {
+      text: "Regarde [Image #1]",
+      images: [
+        { id: "a", url: "data:,", mediaType: "image/png", data: "x", n: 1 },
+      ],
+    };
+    const r = withChoiceImages(
+      draft,
+      "Mes choix :\nObjet : « A » (remarque : [Image #1] [Image #2])",
+      [img(1), img(2)],
+      null,
+      "c1",
+    );
+    expect(r.draft.text).toBe(
+      "Regarde [Image #1]\nMes choix :\nObjet : « A » (remarque : [Image #2] [Image #3])",
+    );
+    expect(r.draft.images.map((i) => [i.id, i.n])).toEqual([
+      ["a", 1],
+      ["c1:0", 2],
+      ["c1:1", 3],
+    ]);
+    expect(r.draft.images[1].url).toBe("data:image/png;base64,d1");
+    expect(r.put).toEqual({
+      text: "Mes choix :\nObjet : « A » (remarque : [Image #2] [Image #3])",
+      ids: ["c1:0", "c1:1"],
+    });
+  });
+
+  it("takes the images of the choice it replaces away, never those of one the user wrote after", () => {
+    const first = withChoiceImages(
+      { text: "", images: [] },
+      "Choix (remarque : [Image #1])",
+      [img(1)],
+      null,
+      "c1",
+    );
+    const second = withChoiceImages(
+      first.draft,
+      "Autre (remarque : [Image #1])",
+      [img(1)],
+      first.put,
+      "c2",
+    );
+    expect(second.draft.text).toBe("Autre (remarque : [Image #1])");
+    expect(second.draft.images.map((i) => i.id)).toEqual(["c2:0"]);
+    // Words added after it: the choice stays, a new one goes after them.
+    const third = withChoiceImages(
+      { ...second.draft, text: `${second.draft.text}\nEt aussi` },
+      "Encore",
+      [],
+      second.put,
+      "c3",
+    );
+    expect(third.draft.images.map((i) => i.id)).toEqual(["c2:0"]);
+    expect(third.draft.text).toBe(
+      "Autre (remarque : [Image #1])\nEt aussi\nEncore",
+    );
+  });
+
+  it("drops a tag whose image didn't come: never one naming the input's own image", () => {
+    const r = withChoiceImages(
+      {
+        text: "Vu [Image #1]",
+        images: [
+          { id: "a", url: "data:,", mediaType: "image/png", data: "x", n: 1 },
+        ],
+      },
+      "Choix (remarque : voir [Image #1] [Image #2])",
+      [img(2)],
+      null,
+      "c1",
+    );
+    expect(r.put.text).toBe("Choix (remarque : voir [Image #2])");
+    expect(r.draft.images.map((i) => i.n)).toEqual([1, 2]);
+  });
+
+  it("replaces the pane's last choice even once its view came back (kept by the pane)", () => {
+    const first = withChoiceImages(
+      { text: "", images: [] },
+      "Choix [Image #1]",
+      [img(1)],
+      lastChoiceIn("pane-r"),
+      "c1",
+    );
+    keepChoiceIn("pane-r", first.put);
+    // The view unmounted and mounted again: the pane still knows it.
+    const second = withChoiceImages(
+      first.draft,
+      "Autre [Image #1]",
+      [img(1)],
+      lastChoiceIn("pane-r"),
+      "c2",
+    );
+    expect(second.draft.text).toBe("Autre [Image #1]");
+    expect(second.draft.images.map((i) => i.id)).toEqual(["c2:0"]);
   });
 });

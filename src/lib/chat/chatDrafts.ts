@@ -6,6 +6,7 @@ import {
 } from "@/lib/chat/chatDraftStore";
 import { mergeDrafts } from "@/lib/chat/chatAttachments";
 import type { PastedText } from "@/lib/chat/chatPastes";
+import type { PutChoice } from "@/lib/chat/chatVisual";
 import type { ChatImage } from "@/lib/chat/useChatSession";
 
 /**
@@ -185,6 +186,21 @@ export function takeDictationTarget(
   return target;
 }
 
+/**
+ * The visual's choice put last into each pane's draft (`withChoiceImages`):
+ * the next one replaces it, the pane remounted or relaunched under a new id
+ * too (it moves and goes with the draft).
+ */
+const lastChoices = new Map<string, PutChoice>();
+
+export function lastChoiceIn(paneId: string): PutChoice | null {
+  return lastChoices.get(current(paneId)) ?? null;
+}
+
+export function keepChoiceIn(paneId: string, put: PutChoice): void {
+  lastChoices.set(current(paneId), put);
+}
+
 /** A dictated text, after what the input already holds. */
 export function appendDictation(paneId: string, text: string): void {
   const target = takeDictationTarget(paneId);
@@ -209,6 +225,9 @@ export function putBackInDraft(paneId: string, back: ChatDraft): void {
 /** A pane relaunched under a new id (account switch) keeps its input. */
 export function moveDraft(fromId: string, toId: string): void {
   movedTo.set(fromId, toId);
+  const choice = lastChoices.get(fromId);
+  lastChoices.delete(fromId);
+  if (choice) lastChoices.set(toId, choice);
   const draft = drafts.get(fromId);
   if (!draft) return;
   drafts.delete(fromId);
@@ -221,6 +240,7 @@ export function dropDraft(paneId: string): void {
   drafts.delete(paneId);
   savedAt.delete(paneId);
   dictationTargets.delete(paneId);
+  lastChoices.delete(paneId);
   saveSoon();
   for (const [from, to] of movedTo) {
     if (from === paneId || to === paneId) movedTo.delete(from);

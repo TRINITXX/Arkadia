@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
 import { Shapes, SquareArrowOutUpRight, X } from "lucide-react";
 import { ChatVisualFrame } from "@/components/chat/chat-visual-frame";
+import type { ChoiceImage } from "@/lib/chat/chatVisual";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 
 interface ChatVisualZoomProps {
@@ -9,9 +10,11 @@ interface ChatVisualZoomProps {
   /** The chat pane (`.chat-root`): the view covers it, not the whole app. */
   host: HTMLElement;
   onClose: () => void;
-  onChoose?: (text: string) => void;
+  onChoose?: (text: string, images?: ChoiceImage[]) => void;
   onLink?: (url: string) => void;
   onOpenInBrowser?: () => void;
+  /** Its tool call: the card's picks and remarks, shared (`visualStates`). */
+  stateKey?: string;
 }
 
 /**
@@ -26,6 +29,7 @@ export function ChatVisualZoom({
   onChoose,
   onLink,
   onOpenInBrowser,
+  stateKey,
 }: ChatVisualZoomProps) {
   useChatLayer(true, onClose);
   return createPortal(
@@ -55,11 +59,12 @@ export function ChatVisualZoom({
           html={html}
           title={title}
           fill
-          onChoose={(text) => {
-            onChoose?.(text);
+          onChoose={(text, images) => {
+            onChoose?.(text, images);
             onClose();
           }}
           onLink={onLink}
+          stateKey={stateKey}
         />
       </div>
     </div>,

@@ -362,6 +362,8 @@ export type ChatCommand =
       chatId: string;
       requestId: string;
       result: PermissionResult;
+      /** Pasted into an AskUserQuestion's own words: kept in files, their paths in the answers. */
+      images?: { mediaType: string; data: string; label?: string }[];
     }
   | { type: "set_mode"; chatId: string; mode: PermissionMode }
   | { type: "set_model"; chatId: string; model: string }

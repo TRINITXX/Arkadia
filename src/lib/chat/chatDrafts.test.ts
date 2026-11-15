@@ -4,6 +4,8 @@ import {
   dropDraft,
   EMPTY_DRAFT,
   getDraft,
+  keepChoiceIn,
+  lastChoiceIn,
   moveDraft,
   setDraft,
   insertDictation,
@@ -35,6 +37,16 @@ describe("chatDrafts", () => {
     expect(getDraft("a2")).toBe(EMPTY_DRAFT);
     appendDictation("a1", "après fermeture");
     expect(getDraft("a2")).toBe(EMPTY_DRAFT);
+  });
+
+  it("keeps a visual's last choice with the draft: moved with it, gone with it", () => {
+    const put = { text: "Mon choix", ids: ["choice:x:0"] };
+    keepChoiceIn("c1", put);
+    moveDraft("c1", "c2");
+    expect(lastChoiceIn("c1")).toEqual(put);
+    expect(lastChoiceIn("c2")).toEqual(put);
+    dropDraft("c2");
+    expect(lastChoiceIn("c2")).toBeNull();
   });
 });
 

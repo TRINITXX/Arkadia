@@ -16,6 +16,8 @@ import {
   Star,
   X,
 } from "lucide-react";
+import type { LightboxContent } from "@/components/modern/ImageThumb";
+import { ChatAttachments } from "@/components/chat/chat-attachments";
 import type { ChatVoice } from "@/components/chat/chat-composer";
 import { redirectDictation, releaseDictation } from "@/lib/chat/chatDrafts";
 import {
@@ -30,11 +32,20 @@ import {
 } from "@/lib/chat/chatQuestionRound";
 import {
   appendSheetText,
+  pasteSheetImages,
+  sheetReplyParts,
   updateSheet,
   useSheetAnswers,
 } from "@/lib/chat/chatSheetAnswers";
 import type { ChatItem } from "@/lib/chat/chatState";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
+import type { ChatImage } from "@/lib/chat/useChatSession";
+import {
+  pastedImageFiles,
+  readImage,
+  sentImages,
+  withoutImageTag,
+} from "@/lib/chat/pastedImages";
 import { useTypeToInput } from "@/lib/chat/useTypeToInput";
 
 /** A plain Space, as push-to-talk takes it (`ChatComposer`'s). */
@@ -54,8 +65,10 @@ const plainSpace = (e: React.KeyboardEvent) =>
  * While it shows, Claude's message drops its questions (`useSheetReply`).
  * Enter in the field goes on to a question left, and sends once all are
  * answered; the button at its end steps forward and sends from the last
- * question left, « Q1 : … » per line. Folds (Esc: the questions come back
- * in the message) and closes.
+ * question left, « Q1 : … » per line. An image pasted into a field shows
+ * under it, its « [Image #n] » at the caret, and goes with the reply, as
+ * from the input. Folds (Esc: the questions come back in the message) and
+ * closes.
  */
 export function ChatQuestionSheet({
   paneKey,
@@ -66,6 +79,7 @@ export function ChatQuestionSheet({
   onSend,
   onStop,
   onDictating,
+  onOpen,
 }: {
   /** The pane: answers and « closed » outlive its unmounts. */
   paneKey: string;
@@ -75,11 +89,13 @@ export function ChatQuestionSheet({
   voice: ChatVoice;
   /** Claude works again under the sheet (it stays, 02/11/2026). */
   working: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, images: ChatImage[]) => void;
   /** Unfolded, the sheet hides the input and its stop: its own one. */
   onStop: () => void;
   /** A field of the sheet takes the dictation under way (or no longer). */
   onDictating?: (on: boolean) => void;
+  /** A pasted image's thumbnail clicked: the lightbox. */
+  onOpen: (content: LightboxContent) => void;
 }) {
   const round = useMemo(() => lastReplyRound(items), [items]);
   const replyId = round?.id ?? "";
@@ -203,7 +219,8 @@ export function ChatQuestionSheet({
 
   if (!round || sheet.closed) return null;
   const { questions } = round;
-  const isAnswered = (q: RoundQuestion) => !!roundReply([q], sheet.answers);
+  const isAnswered = (q: RoundQuestion) =>
+    !!roundReply([q], sheetReplyParts(sheet.answers).answers);
   const goTo = (i: number) => setView({ replyId, step: i });
   const q = questions[step];
   const a = sheet.answers[q.key] ?? {};
@@ -219,7 +236,9 @@ export function ChatQuestionSheet({
     const next = nextQuestionLeft(answeredFlags, step);
     if (next !== null) goTo(next);
   };
-  const reply = roundReply(questions, sheet.answers);
+  // An image alone answers too: its tag stands for it.
+  const parts = sheetReplyParts(sheet.answers);
+  const reply = roundReply(questions, parts.answers);
   const answered = answeredFlags.filter(Boolean).length;
   const next = buttonLeadsTo(answeredFlags, step);
 
@@ -256,7 +275,7 @@ export function ChatQuestionSheet({
     updateSheet(paneKey, replyId, (s) => ({ ...s, closed: true }));
   const send = () => {
     if (!reply) return;
-    onSend(reply);
+    onSend(reply, sentImages(parts.images));
     close();
   };
   const recording = dictating !== null && voice.status !== "idle";
@@ -400,6 +419,27 @@ export function ChatQuestionSheet({
                 )}
               </div>
             )}
+            {/* Above the field, as above the input. */}
+            {a.images && a.images.length > 0 && (
+              <div className="chat-field-pics">
+                <ChatAttachments
+                  sources={a.images.map((img) => ({
+                    kind: "pasted" as const,
+                    key: img.id,
+                    url: img.url,
+                    name: `Image collée ${img.n ?? ""}`.trim(),
+                  }))}
+                  onOpen={onOpen}
+                  onRemove={(id) => {
+                    const gone = a.images?.find((img) => img.id === id);
+                    set(q.key, {
+                      text: withoutImageTag(a.text ?? "", gone?.n),
+                      images: a.images?.filter((img) => img.id !== id),
+                    });
+                  }}
+                />
+              </div>
+            )}
             <div className="free">
               <button
                 type="button"
@@ -427,6 +467,28 @@ export function ChatQuestionSheet({
                   }}
                   // Space released elsewhere: the dictation still stops.
                   onBlur={stopTalk}
+                  onPaste={(e) => {
+                    const files = pastedImageFiles(e.clipboardData);
+                    if (files.length === 0) return;
+                    e.preventDefault();
+                    const area = e.currentTarget;
+                    const { selectionStart, selectionEnd } = area;
+                    const key = q.key;
+                    void Promise.all(files.map(readImage)).then((read) => {
+                      const caret = pasteSheetImages(
+                        paneKey,
+                        replyId,
+                        key,
+                        read,
+                        selectionStart,
+                        selectionEnd,
+                      );
+                      requestAnimationFrame(() => {
+                        if (area.isConnected && document.activeElement === area)
+                          area.setSelectionRange(caret, caret);
+                      });
+                    });
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === " " && e.ctrlKey) {
                       e.preventDefault();

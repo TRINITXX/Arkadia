@@ -7,7 +7,9 @@
  * figures and letters, one tab card per group of questions, « Valider mes
  * choix » at the bottom right. Every session's choices look the same.
  * Under each question, a field for a remark on it, always shown, sent in
- * that question's line when filled (Alexis, 14/11/2026).
+ * that question's line when filled (Alexis, 14/11/2026). An image pasted
+ * there shows under it, tagged « [Image #n] », and goes with the choices
+ * into the input (15/11/2026).
  *
  * A picture in an option (a mockup) takes its card's width, up to its own
  * size: it drops the cap that fits media to the pane's height, and a max-width
@@ -19,6 +21,10 @@
  * the page's own nodes into its cards, never re-parses their text, and keeps
  * whatever it has no slot for where the page put it.
  */
+
+/** A choice carries at most this many images (its remarks'), each at most this much base64. */
+export const CHOICE_IMAGES_MAX = 10;
+export const CHOICE_IMAGE_CHARS = 12_000_000;
 
 /** The page uses the kit: an element of class `ark-choice`. */
 export function usesChoiceKit(html: string): boolean {
@@ -98,6 +104,14 @@ export const VISUAL_KIT_CSS = `
 .ark-rmt::placeholder{color:var(--faint);opacity:1}
 @media (pointer:coarse){.ark-rmt,.ark-rmw{font-size:16px}}
 .ark-rmt:focus{background:var(--card);box-shadow:inset 0 0 0 1px var(--border-strong)}
+.ark-pics{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.ark-pics:empty{display:none}
+.ark-pic{position:relative;height:64px;min-width:48px;border-radius:10px;overflow:hidden;background:var(--card);box-shadow:var(--ark-ring)}
+.ark-pic img{display:block;height:100%;width:auto;max-width:180px;max-height:none;object-fit:contain}
+.ark-pic button{all:unset;box-sizing:border-box;position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:rgba(0,0,0,.72);color:#fff;cursor:pointer;opacity:0;transition:opacity .12s var(--ark-ease)}
+.ark-pic button svg{width:12px;height:12px}
+.ark-pic:hover button,.ark-pic button:focus-visible{opacity:1}
+@media (hover:none){.ark-pic button{opacity:1}}
 .ark-note{font-size:15px;line-height:1.55;color:var(--muted);text-wrap:pretty;background:var(--card);border-radius:14px;padding:14px 18px;box-shadow:var(--ark-ring)}
 .ark-note>:first-child{margin-top:0}.ark-note>:last-child{margin-bottom:0}
 .ark-prev{background:var(--card);border-radius:12px;padding:12px 16px;box-shadow:var(--ark-ring);min-width:0;font-size:14.5px}
@@ -149,6 +163,17 @@ function grow(t){if(!t.offsetParent)return;t.style.height="auto";t.style.height=
 // says where it stands (\`arkadia-voice\`, no word of it: no mic), and the
 // text of the one this page started lands where its caret was.
 var voice={can:false,mine:false,status:"idle",interim:""},dict=null,remarks=[];
+// What the page holds before « Valider » outlives its frame, gone with its
+// project or scrolled far (the user's report of 15/11/2026): sent to Arkadia
+// as it changes, once Arkadia gave back what it kept (\`arkadia-restore\`).
+var mounts=[],asked=false,restored=false,applying=false,keepTimer=null;
+function sendKeep(){keepTimer=null;window.arkadia.keep(mounts.map(function(m){return m.snap();}));}
+function keepSoon(ms){if(!restored||applying||!(window.arkadia&&window.arkadia.keep))return;clearTimeout(keepTimer);keepTimer=setTimeout(sendKeep,ms||0);}
+// The frame left (a click in Arkadia, another project next): what waits goes now, before the frame may.
+window.addEventListener("blur",function(){if(keepTimer===null)return;clearTimeout(keepTimer);sendKeep();});
+// Heard only once asked: a state the other frame pushed before this page was
+// built applied nowhere, and its defaults would then overwrite what is kept.
+window.addEventListener("arkadia-restore",function(e){if(!asked)return;var st=e.detail;applying=true;try{if(Array.isArray(st))mounts.forEach(function(m,i){m.apply(st[i]);});}finally{applying=false;}restored=true;});
 function canTalk(){return voice.can&&!!(window.arkadia&&window.arkadia.dictate);}
 function talkAt(B,pos){dict={B:B,at:pos};window.arkadia.dictate(true);}
 function stopTalk(){if(window.arkadia&&window.arkadia.dictate)window.arkadia.dictate(false);}
@@ -170,8 +195,19 @@ function put(text){
  if(!dict)return;var ta=dict.B.remark,v=ta.value,pos=Math.max(0,Math.min(v.length,dict.at)),t=String(text||"").trim();dict=null;if(!t)return;
  var before=v.slice(0,pos),after=v.slice(pos),lead=before&&!/\\s$/.test(before)?" ":"",trail=after&&!/^\\s/.test(after)?" ":"";
  var upTo=before+lead+t,nv=(upTo+trail+after).slice(0,ta.maxLength>0?ta.maxLength:500),c=Math.min(upTo.length,nv.length);ta.value=nv;
- try{ta.setSelectionRange(c,c);}catch(x){}grow(ta);mics();
+ try{ta.setSelectionRange(c,c);}catch(x){}grow(ta);mics();keepSoon(0);
 }
+// An image pasted into a remark (the user's ask of 15/11/2026), as in the
+// input: its « [Image #n] » at the caret, its thumbnail under the field, and
+// it goes along with the choices.
+var IMG=["image/png","image/jpeg","image/gif","image/webp"];
+function readPic(f){return new Promise(function(ok,no){var r=new FileReader();r.onload=function(){var u=String(r.result);ok({url:u,m:f.type,d:u.slice(u.indexOf(",")+1)});};r.onerror=function(){no(r.error);};r.readAsDataURL(f);});}
+function tag(n){return "[Image #"+n+"]";}
+function xIcon(){return icon(["M18 6 6 18","M6 6l12 12"]);}
+function drawPics(B){B.strip.textContent="";B.pics.forEach(function(p){
+ var w=el("div","ark-pic"),im=el("img"),x=el("button");im.src=p.url;im.alt="Image "+p.n;x.type="button";x.title="Retirer";x.setAttribute("aria-label","Retirer l'image "+p.n);x.appendChild(xIcon());
+ x.addEventListener("click",function(){B.pics=B.pics.filter(function(q){return q!==p;});B.remark.value=B.remark.value.split(tag(p.n)).join("");grow(B.remark);drawPics(B);});
+ w.appendChild(im);w.appendChild(x);B.strip.appendChild(w);});keepSoon(0);}
 window.addEventListener("arkadia-voice",function(e){var d=e.detail||{};voice={can:d.can===true,mine:d.mine===true,status:String(d.status||"idle"),interim:String(d.interim||"")};mics();});
 window.addEventListener("arkadia-dictated",function(e){put(e.detail);});
 // Space held talks, as in the input: the tap's space goes, the release (or
@@ -213,7 +249,7 @@ function block(n,G,questions){
 function mount(root){
  if(root.getAttribute("data-ark-ready"))return;root.setAttribute("data-ark-ready","1");
  var all=nodes(root).filter(function(n){return !blank(n);}),flat=!all.some(function(n){return has(n,"ark-group");});
- var groups=[],shared=group(null),top=[],bottom=[],cur=0,waitTimer=null,idleTimer=null,waiting=false;
+ var groups=[],shared=group(null),top=[],bottom=[],cur=0,waitTimer=null,idleTimer=null,waiting=false,picN=0;
  if(flat){var F=group(null);F.forLine=at(root,"data-for");all.forEach(function(n){F.blocks.push(block(n,F,true));});groups.push(F);}
  else all.forEach(function(n){
   if(has(n,"ark-group")){var G=group(n);nodes(n).forEach(function(c){if(!blank(c))G.blocks.push(block(c,G,true));});groups.push(G);}
@@ -254,14 +290,25 @@ function mount(root){
    });
    sec.appendChild(grid);
    var rm=el("div","ark-rm"),ta=el("textarea","ark-rmt");ta.rows=1;ta.maxLength=500;ta.placeholder="Une remarque sur ce choix ?";ta.setAttribute("aria-label",B.title?"Remarque sur "+low(B.title):"Remarque");
-   ta.addEventListener("input",function(){grow(ta);});
+   ta.addEventListener("input",function(){grow(ta);keepSoon(400);});
    var mic=el("button","ark-mic"),tw=el("div","ark-rmw");mic.type="button";mic.hidden=true;tw.hidden=true;tw.setAttribute("aria-hidden","true");
    B.remark=ta;B.mic=mic;B.bub=bubble();B.twin=tw;B.rec=null;
    // The caret before the click took the focus: the text lands there.
    mic.addEventListener("pointerdown",function(){B.caret=document.activeElement===ta?ta.selectionStart:ta.value.length;});
    mic.addEventListener("click",function(){var c=B.caret==null?ta.value.length:B.caret;B.caret=null;toggleTalk(B,c);ta.focus();try{ta.setSelectionRange(c,c);}catch(x){}});
    talkKeys(B);remarks.push(B);
-   rm.appendChild(B.bub);rm.appendChild(mic);rm.appendChild(ta);rm.appendChild(tw);sec.appendChild(rm);
+   B.pics=[];B.strip=el("div","ark-pics");
+   ta.addEventListener("paste",function(e){
+    var fs=e.clipboardData?Array.prototype.filter.call(e.clipboardData.files||[],function(f){return IMG.indexOf(f.type)>=0;}):[];
+    if(!fs.length)return;e.preventDefault();var s=ta.selectionStart,en=ta.selectionEnd;
+    Promise.all(fs.map(readPic)).then(function(list){
+     // What Arkadia takes (\`readFrameMessage\`): never a tag whose image stays here.
+     var room=${CHOICE_IMAGES_MAX}-shots().length;list=list.filter(function(p){return p.d.length<=${CHOICE_IMAGE_CHARS};}).slice(0,Math.max(0,room));if(!list.length)return;
+     var v=ta.value,a=Math.min(s,v.length),b=Math.min(Math.max(en,a),v.length),t=list.map(function(p){p.n=++picN;B.pics.push(p);return tag(p.n);}).join(" ");
+     ta.value=v.slice(0,a)+t+v.slice(b);var c=a+t.length;if(document.activeElement===ta){try{ta.setSelectionRange(c,c);}catch(x){}}grow(ta);drawPics(B);
+    }).catch(function(){});
+   });
+   rm.appendChild(B.bub);rm.appendChild(mic);rm.appendChild(ta);rm.appendChild(tw);sec.appendChild(rm);sec.appendChild(B.strip);
   }
   return sec;
  }
@@ -278,7 +325,8 @@ function mount(root){
  next.type="button";cta.type="button";
  if(!flat)foot.appendChild(next);foot.appendChild(left);foot.appendChild(cta);out.appendChild(foot);
  root.textContent="";root.appendChild(out);
- function pick(Q,o){if(Q.multi)o.on=!o.on;else Q.opts.forEach(function(x){x.on=x===o;});draw();}
+ // The card picked, clicked again, unpicks: no choice forced when none is liked (the user's ask of 15/11/2026).
+ function pick(Q,o){if(Q.multi)o.on=!o.on;else{var was=o.on;Q.opts.forEach(function(x){x.on=false;});o.on=!was;}draw();}
  function go(i){cur=i;groups[i].seen=true;draw();}
  function chosen(Q){return Q.opts.filter(function(o){return o.on;});}
  function code(G){return G.qs.map(function(Q){var c=chosen(Q);return c.length?c.map(function(o){return o.mk;}).join("+"):"\\u2013";}).join(" ");}
@@ -300,20 +348,26 @@ function mount(root){
   if(!flat){var last=cur>=groups.length-1;next.hidden=last;if(!last)next.textContent="Liste suivante : "+groups[cur+1].title+"  \\u2192";
    var un=groups.filter(function(G){return !G.seen;}).map(function(G){return G.title;});
    left.textContent=un.length?(un.length===1?un[0]+" pas encore vue":un.slice(0,-1).join(", ")+" et "+un[un.length-1]+" pas encore vues"):"";}
+  keepSoon(0);
  }
  function summary(){
   var lines=[intro+" :"];
   groups.forEach(function(G){
-   var parts=G.qs.map(function(Q){var c=chosen(Q).map(function(o){return "\\u00ab "+cap(o.label,160)+" \\u00bb";});var a=c.length?c.join(", "):"aucun choix",r=Q.remark?Q.remark.value.replace(/\\s+/g," ").trim():"";if(r)a+=" (remarque : "+r+")";return flat?(Q.title?Q.title+" : "+a:a):(Q.title?low(Q.title)+" "+a:a);});
+   var parts=G.qs.map(function(Q){var c=chosen(Q).map(function(o){return "\\u00ab "+cap(o.label,160)+" \\u00bb";});var a=c.length?c.join(", "):"aucun choix",r=Q.remark?Q.remark.value.replace(/\\s+/g," ").trim():"";
+    // An image whose tag the user erased: its tag back at the remark's end.
+    (Q.pics||[]).forEach(function(p){if(r.indexOf(tag(p.n))<0)r=(r?r+" ":"")+tag(p.n);});
+    if(r)a+=" (remarque : "+r+")";return flat?(Q.title?Q.title+" : "+a:a):(Q.title?low(Q.title)+" "+a:a);});
    if(!parts.length)return;
    if(flat)lines.push.apply(lines,parts);else lines.push(G.title+" : "+parts.join(", "));
   });
   return lines.join("\\n");
  }
+ // The remarks' images, as numbered in their tags.
+ function shots(){var l=[];groups.forEach(function(G){G.qs.forEach(function(Q){(Q.pics||[]).forEach(function(p){l.push({n:p.n,m:p.m,d:p.d});});});});return l;}
  next.addEventListener("click",function(){if(cur<groups.length-1)go(cur+1);});
  cta.addEventListener("click",function(){
   if(!window.arkadia||!window.arkadia.choose)return;
-  window.arkadia.choose(summary());
+  window.arkadia.choose(summary(),shots());
   clearTimeout(idleTimer);idle();
   waiting=true;clearTimeout(waitTimer);waitTimer=setTimeout(function(){waiting=false;},2000);
  });
@@ -331,9 +385,28 @@ function mount(root){
   if(hit){root.classList.add("ark-nomo");requestAnimationFrame(function(){requestAnimationFrame(function(){root.classList.remove("ark-nomo");});});}
  });
  window.addEventListener("resize",regrow);
+ // Its state for its next load (keepSoon), and back from Arkadia.
+ mounts.push({
+  snap:function(){var qs=[];groups.forEach(function(G){G.qs.forEach(function(Q){qs.push({on:Q.opts.map(function(o){return o.on?1:0;}),r:Q.remark?Q.remark.value:"",p:(Q.pics||[]).map(function(p){return {n:p.n,url:p.url,m:p.m};})});});});
+   return {cur:cur,seen:groups.map(function(G){return G.seen?1:0;}),qs:qs,n:picN};},
+  apply:function(s){
+   if(!s||typeof s!=="object"||!Array.isArray(s.qs))return;var i=0;
+   groups.forEach(function(G,gi){if(Array.isArray(s.seen)&&s.seen[gi])G.seen=true;G.qs.forEach(function(Q){var q=s.qs[i++];if(!q||typeof q!=="object")return;
+    if(Array.isArray(q.on)&&q.on.length===Q.opts.length)Q.opts.forEach(function(o,k){o.on=!!q.on[k];});
+    if(Q.remark&&typeof q.r==="string")Q.remark.value=q.r.slice(0,4000);
+    if(Q.strip&&Array.isArray(q.p)){var next=q.p.filter(function(p){return !!p&&typeof p.n==="number"&&IMG.indexOf(p.m)>=0&&typeof p.url==="string"&&p.url.indexOf("data:"+p.m+";base64,")===0;}).map(function(p){return {n:p.n,url:p.url,m:p.m,d:p.url.slice(p.url.indexOf(",")+1)};}),had=Q.pics||[];
+     // The same images: their thumbnails stay as they are.
+     if(next.length!==had.length||next.some(function(p,k){return p.n!==had[k].n||p.url!==had[k].url;})){Q.pics=next;drawPics(Q);}}
+   });});
+   if(typeof s.n==="number"&&s.n>picN)picN=s.n;
+   if(typeof s.cur==="number"&&s.cur>=0&&s.cur<groups.length){cur=s.cur;groups[cur].seen=true;}
+   draw();mics();
+  }
+ });
  idle();draw();mics();
 }
-function start(){var all=document.querySelectorAll(".ark-choice");for(var i=0;i<all.length;i++)mount(all[i]);}
+function start(){var all=document.querySelectorAll(".ark-choice");for(var i=0;i<all.length;i++)mount(all[i]);
+ if(mounts.length&&window.arkadia&&window.arkadia.restore){asked=true;window.arkadia.restore();}}
 document.addEventListener("keydown",function(e){
  if(e.ctrlKey||e.metaKey||e.altKey||e.defaultPrevented)return;
  var t=e.target;if(t&&(t.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))return;

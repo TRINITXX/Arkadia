@@ -1,6 +1,12 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import type { DraftImage } from "@/lib/chat/chatDrafts";
 import { lastReplyRound, type RoundAnswer } from "@/lib/chat/chatQuestionRound";
 import type { ChatItem } from "@/lib/chat/chatState";
+import {
+  lastImageNumber,
+  withEveryTag,
+  withImageTags,
+} from "@/lib/chat/pastedImages";
 
 /**
  * The question sheet's answers per pane, outside React like the drafts: a
@@ -86,6 +92,61 @@ export function appendSheetText(
       },
     };
   });
+}
+
+/**
+ * Images pasted into a question's field: numbered after every image of the
+ * round, their tags in place of the selection. Gives the caret after them.
+ */
+export function pasteSheetImages(
+  paneId: string,
+  replyId: string,
+  questionKey: string,
+  images: readonly DraftImage[],
+  start: number,
+  end: number,
+): number {
+  let caret = 0;
+  updateSheet(paneId, replyId, (s) => {
+    const all = Object.values(s.answers);
+    const last = lastImageNumber(
+      all.map((a) => a.text ?? ""),
+      all.flatMap((a) => a.images ?? []),
+    );
+    const a = s.answers[questionKey] ?? {};
+    const put = withImageTags(a.text ?? "", start, end, images, last);
+    caret = put.caret;
+    return {
+      ...s,
+      answers: {
+        ...s.answers,
+        [questionKey]: {
+          ...a,
+          text: put.text,
+          images: [...(a.images ?? []), ...put.images],
+        },
+      },
+    };
+  });
+  return caret;
+}
+
+/**
+ * The answers as sent: an image's tag the user erased comes back at its
+ * answer's end (an image alone answers too). Their images, in number order.
+ */
+export function sheetReplyParts(
+  answers: Readonly<Record<string, RoundAnswer>>,
+): { answers: Record<string, RoundAnswer>; images: DraftImage[] } {
+  const out: Record<string, RoundAnswer> = {};
+  const images: DraftImage[] = [];
+  for (const [key, a] of Object.entries(answers)) {
+    const own = a.images ?? [];
+    out[key] = own.length ? { ...a, text: withEveryTag(a.text ?? "", own) } : a;
+    images.push(...own);
+  }
+  images.sort((x, y) => (x.n ?? 0) - (y.n ?? 0));
+  return { answers: out, images };
 }
 
 /**

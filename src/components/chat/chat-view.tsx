@@ -31,7 +31,11 @@ import { useDoneAgentsLink } from "@/lib/chat/useDoneAgentsLink";
 import { useLiveActivity } from "@/lib/chat/useLiveActivity";
 import type { ShellOutput } from "@/lib/chat/useShellOutputs";
 import { ChatComposer, type ChatVoice } from "@/components/chat/chat-composer";
-import type { ChatDraft } from "@/lib/chat/chatDrafts";
+import {
+  keepChoiceIn,
+  lastChoiceIn,
+  type ChatDraft,
+} from "@/lib/chat/chatDrafts";
 import { followsAfterScroll } from "@/lib/followBottom";
 import { useAnyOverlayOpen } from "@/lib/overlays";
 import { CHAT_CSS } from "@/components/chat/chat-css";
@@ -81,7 +85,7 @@ import {
 } from "@/lib/chat/chatState";
 import type { ChatImage } from "@/lib/chat/useChatSession";
 import type { SlashActions } from "@/lib/chat/useSlashActions";
-import { withChoice } from "@/lib/chat/chatVisual";
+import { withChoiceImages, type ChoiceImage } from "@/lib/chat/chatVisual";
 
 /** After a chat shows, the dictation's Claude Code starts (`warmHiddenVoice`). */
 const VOICE_WARM_MS = 5_000;
@@ -100,7 +104,12 @@ export interface ChatViewProps {
   /** `now`: Claude Code ends the turn under way for it. */
   onSend: (text: string, images: ChatImage[], now?: boolean) => void;
   onInterrupt: () => void;
-  onAnswer: (requestId: string, result: PermissionResult) => void;
+  /** `images`: pasted into an AskUserQuestion's own words. */
+  onAnswer: (
+    requestId: string,
+    result: PermissionResult,
+    images?: ChatImage[],
+  ) => void;
   onMode: (mode: PermissionMode) => void;
   onModel: (model: string) => void;
   onOpenAgent: (agentId: string) => void;
@@ -478,12 +487,13 @@ function ChatViewBody({
     stuckRef.current = follows;
   };
 
-  const answer = (result: PermissionResult) => {
-    if (request) onAnswer(request.requestId, result);
+  const answer = (result: PermissionResult, images?: ChatImage[]) => {
+    if (request) onAnswer(request.requestId, result, images);
   };
   // A visual's choice goes into the input, never sent: the user can add a
-  // comment. A second click changes the pick (`withChoice`).
-  const lastChoice = useRef<string | null>(null);
+  // comment. A second click changes the pick (`withChoice`), its remarks'
+  // images with it (`withChoiceImages`). Kept with the pane's draft, not by
+  // this view: the draft outlives it and moves with it (`lastChoiceIn`).
   // Read when a choice comes: the pane's `onActivate` is a new arrow each
   // render, and a `choose` that changed with it would draw the whole column
   // again on every render (`ChatTimeline` is memoised).
@@ -492,11 +502,16 @@ function ChatViewBody({
     activateRef.current = onActivate;
   });
   const choose = useCallback(
-    (text: string) => {
-      // Read now: the updater runs later, after the ref holds this choice.
-      const previous = lastChoice.current;
-      lastChoice.current = text;
-      onDraft((d) => ({ ...d, text: withChoice(d.text, text, previous) }));
+    (text: string, images: ChoiceImage[] = []) => {
+      // Read now, the key made now (unique, its images' ids): the updater
+      // gives the same draft each time it runs (React may run it twice).
+      const previous = lastChoiceIn(paneId);
+      const key = `choice:${crypto.randomUUID()}`;
+      onDraft((d) => {
+        const r = withChoiceImages(d, text, images, previous, key);
+        keepChoiceIn(paneId, r.put);
+        return r.draft;
+      });
       // The input hidden under the sheet: shown with the choice in it.
       foldSheet();
       // A click in a frame doesn't reach the pane: it becomes the active one here.
@@ -507,7 +522,7 @@ function ChatViewBody({
           ?.focus(),
       );
     },
-    [onDraft, foldSheet],
+    [onDraft, foldSheet, paneId],
   );
 
   // The session's button, its rings and its shells: in the input's bottom
@@ -560,6 +575,7 @@ function ChatViewBody({
           request={request}
           isActive={isActive}
           onAnswer={answer}
+          onOpen={open}
         />
       </div>
     );
@@ -816,9 +832,10 @@ function ChatViewBody({
               active={isActive && shown}
               working={state.working}
               onDictating={setSheetDictates}
-              onSend={(text) => {
+              onOpen={open}
+              onSend={(text, images) => {
                 stuckRef.current = true;
-                onSend(text, []);
+                onSend(text, images);
               }}
               onStop={onInterrupt}
             />
