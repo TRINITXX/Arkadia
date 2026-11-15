@@ -1,13 +1,10 @@
 import type { JsonObject } from "@/lib/chat/chatProtocol";
 
 /**
- * Claude's AskUserQuestion, one question at a time. On the PC, in the look of
- * the questions sheet (the user's pick of 15/11/2026): a segment per
- * question, the answers sent from the field's button once all have one. On
- * the iPhone, as the terminal asks them (`← ☐ Format ☐ Où ✔ Submit →`): a
- * step per question, then a last one, « Envoyer », that sends them all,
- * steps numbered 0 to `questions.length`. A single question has no tabs and
- * no such step.
+ * Claude's AskUserQuestion, one question at a time in the look of the
+ * questions sheet, on the PC and the iPhone (the user's pick of 15/11/2026):
+ * a segment per question, steps numbered 0 to `questions.length - 1`, the
+ * answers sent from the field's button once every question has one.
  */
 
 export interface Question {
@@ -31,24 +28,9 @@ export function answerOf(picked: string[], other: string): string {
   return other.trim() || picked.join(", ");
 }
 
-/**
- * Arrows and tab clicks: never before the first step nor past `last` (the
- * iPhone's « Envoyer » step, `questions.length`; the PC's last question).
- */
-export function stepBy(step: number, delta: number, last: number): number {
-  return Math.max(0, Math.min(last, step + delta));
-}
-
-/**
- * Where a pick leads on the iPhone: a single choice goes on to the next
- * question (the last one to « Envoyer »), a multiple choice stays for more.
- */
-export function stepAfterPick(
-  step: number,
-  count: number,
-  multiSelect: boolean | undefined,
-): number {
-  return multiSelect ? step : stepBy(step, 1, count);
+/** The PC's arrows: never before the first question nor past the last one. */
+export function stepBy(step: number, delta: number, count: number): number {
+  return Math.max(0, Math.min(count - 1, step + delta));
 }
 
 const RECO_TAG = /\s*\((?:recommandée?|conseillée?|recommended)\)\s*$/i;

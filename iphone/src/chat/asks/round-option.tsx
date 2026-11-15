@@ -7,12 +7,16 @@ import { C, T } from "~/chat/chat-theme";
  * An option of Claude's ❓ question (`.chat-sheet-q .opt`): a radio, its
  * letter and words; the one Claude recommends carries « Reco » and his
  * reason. Without a letter, the recommendation is a choice of its own.
+ * Claude's AskUserQuestion uses it too: a `description` under the words,
+ * and a square box where several can be picked (`multi`).
  */
 export function RoundOption({
   letter,
   label,
   reco,
   reason,
+  description,
+  multi,
   on,
   onPress,
 }: {
@@ -20,6 +24,8 @@ export function RoundOption({
   label: string;
   reco: boolean;
   reason?: string;
+  description?: string;
+  multi?: boolean;
   on: boolean;
   onPress: () => void;
 }) {
@@ -31,16 +37,25 @@ export function RoundOption({
   );
   return (
     <Pressable
-      accessibilityRole="radio"
+      accessibilityRole={multi ? "checkbox" : "radio"}
       accessibilityState={{ checked: on }}
       onPress={onPress}
       style={({ pressed }) => [
         styles.option,
+        // A description under it: the radio by the label's line.
+        description ? styles.top : null,
         on && styles.on,
         pressed && !on && styles.pressed,
       ]}
     >
-      <View style={[styles.radio, on && styles.radioOn]} />
+      <View
+        style={[
+          styles.radio,
+          multi && styles.box,
+          description ? styles.radioTop : null,
+          on && styles.radioOn,
+        ]}
+      />
       <View style={styles.text}>
         {letter ? (
           <Text style={styles.label}>
@@ -59,6 +74,9 @@ export function RoundOption({
             {reason ? <Text style={styles.reason}>{reason}</Text> : null}
           </View>
         ) : null}
+        {description ? (
+          <Text style={styles.description}>{description}</Text>
+        ) : null}
       </View>
     </Pressable>
   );
@@ -76,6 +94,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: C.lineStrong,
   },
+  top: { alignItems: "flex-start" },
   pressed: { backgroundColor: "#222529" },
   on: { borderColor: C.accent, backgroundColor: A.optOn },
   radio: {
@@ -86,6 +105,8 @@ const styles = StyleSheet.create({
     borderColor: A.radio,
   },
   radioOn: { borderWidth: 5, borderColor: C.accent },
+  box: { borderRadius: 4 },
+  radioTop: { marginTop: 1 },
   text: { flex: 1, gap: 4 },
   line: { flexDirection: "row", alignItems: "center", gap: 8 },
   grow: { flex: 1 },
@@ -97,6 +118,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   reason: { flex: 1, color: A.reason, fontSize: T.small, lineHeight: 18 },
+  description: { color: C.dim, fontSize: T.small, lineHeight: 18 },
   reco: {
     flexDirection: "row",
     alignItems: "center",

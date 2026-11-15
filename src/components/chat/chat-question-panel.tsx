@@ -265,7 +265,7 @@ export function ChatQuestionPanel({
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     if (count > 1 && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
       e.preventDefault();
-      setStep(stepBy(step, e.key === "ArrowRight" ? 1 : -1, count - 1));
+      setStep(stepBy(step, e.key === "ArrowRight" ? 1 : -1, count));
       return;
     }
     const n = Number(e.key);

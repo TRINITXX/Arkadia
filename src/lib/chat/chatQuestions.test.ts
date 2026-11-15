@@ -3,7 +3,6 @@ import {
   answerOf,
   answersOf,
   recoOf,
-  stepAfterPick,
   stepBy,
   type Question,
 } from "@/lib/chat/chatQuestions";
@@ -14,20 +13,12 @@ const q = (question: string): Question => ({
 });
 
 describe("Claude's questions", () => {
-  // The iPhone's tabs, two questions: steps 0 and 1, then « Envoyer » at 2.
-  it("goes on after a single pick, the last one to « Envoyer », and stays on a multiple choice", () => {
-    expect(stepAfterPick(0, 2, false)).toBe(1);
-    expect(stepAfterPick(1, 2, undefined)).toBe(2);
-    expect(stepAfterPick(0, 2, true)).toBe(0);
-  });
-
-  it("moves with the arrows without leaving the steps", () => {
+  // Two questions: steps 0 and 1, no « Envoyer » step after them.
+  it("moves with the arrows without leaving the questions", () => {
     expect(stepBy(0, -1, 2)).toBe(0);
-    expect(stepBy(1, 1, 2)).toBe(2);
-    expect(stepBy(2, 1, 2)).toBe(2);
-    expect(stepBy(2, -1, 2)).toBe(1);
-    // The PC's two questions, no « Envoyer » step: the last one is 1.
-    expect(stepBy(1, 1, 1)).toBe(1);
+    expect(stepBy(0, 1, 2)).toBe(1);
+    expect(stepBy(1, 1, 2)).toBe(1);
+    expect(stepBy(1, -1, 2)).toBe(0);
   });
 
   it("sends every answer, own words first, only once all are given", () => {

@@ -118,7 +118,14 @@ export function ChatAsks({ chatId, state, actions, part }: ChatAsksProps) {
       <ElicitationAsk key={id} request={ask.request} onAnswer={elicitAnswer} />
     );
   return (
-    <View style={[styles.card, { maxHeight }, sent === id && styles.sent]}>
+    <View
+      style={[
+        // A question in the ❓ sheet's frame, as on the desktop (15/11/2026).
+        ask.kind === "question" ? styles.sheet : styles.card,
+        { maxHeight },
+        sent === id && styles.sent,
+      ]}
+    >
       {panel}
     </View>
   );

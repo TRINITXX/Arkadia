@@ -299,7 +299,8 @@ export function RoundSheet({
   );
 }
 
-const styles = StyleSheet.create({
+/** Also Claude's AskUserQuestion's (`question-ask.tsx`): the same look. */
+export const sheetStyles = StyleSheet.create({
   sheet: { flexShrink: 1 },
   head: {
     flexDirection: "row",
@@ -374,3 +375,4 @@ const styles = StyleSheet.create({
   sendDim: { opacity: 0.4 },
   dictation: { flexShrink: 0, paddingHorizontal: 4, paddingBottom: 10 },
 });
+const styles = sheetStyles;

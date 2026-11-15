@@ -12,9 +12,8 @@ export const A = {
   optOn: "#3a2519",
   /** The question sheet's card. */
   sheet: "#1d2024",
-  /** A plain button, the mic, an option's number. */
+  /** A plain button, the mic. */
   button: "#2a2d32",
-  optionKey: "#2b2e33",
   /** Bright text: titles, picked labels. */
   strong: "#f4f4f5",
   /** An option's label at rest. */
