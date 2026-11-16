@@ -5,6 +5,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
 import {
   launchReminder,
+  launchReminders,
   postponeReminder,
   publishReminders,
   refreshReminders,
@@ -57,6 +58,51 @@ describe("reminderStore", () => {
     await launch;
     expect(open).not.toHaveBeenCalled();
     expect(ids()).toEqual([]);
+  });
+
+  it("« Tout lancer » opens one chat after the other, skipping a reminder without project", async () => {
+    const other: Reminder = { ...due, id: "r2" };
+    const lost: Reminder = { ...due, id: "r3" };
+    publishReminders([due, lost, other]);
+    const opened: string[] = [];
+    let finishFirst = () => {};
+    const run = launchReminders([due, lost, other], (reminder) =>
+      reminder.id === "r3"
+        ? null
+        : () => {
+            opened.push(reminder.id);
+            if (reminder.id !== "r1") return Promise.resolve(true);
+            return new Promise<boolean>((resolve) => {
+              finishFirst = () => resolve(true);
+            });
+          },
+    );
+    await vi.waitFor(() => expect(opened).toEqual(["r1"]));
+    // r2 waits for r1's chat to be open.
+    expect(calls.filter((c) => c === "reminder_claim")).toHaveLength(1);
+    finishFirst();
+    await run;
+    expect(opened).toEqual(["r1", "r2"]);
+    expect(ids()).toEqual(["r3"]);
+  });
+
+  it("« Tout lancer » leaves alone a reminder put off while the others open", async () => {
+    const later: Reminder = { ...due, id: "r2" };
+    publishReminders([due, later]);
+    let finishFirst = () => {};
+    const opened: string[] = [];
+    const run = launchReminders([due, later], (reminder) => () => {
+      opened.push(reminder.id);
+      return new Promise<boolean>((resolve) => {
+        finishFirst = () => resolve(true);
+      });
+    });
+    await vi.waitFor(() => expect(opened).toEqual(["r1"]));
+    await postponeReminder(later);
+    finishFirst();
+    await run;
+    expect(opened).toEqual(["r1"]);
+    expect(calls.filter((c) => c === "reminder_claim")).toHaveLength(1);
   });
 
   it("claims before opening, and gives back a chat that could not open", async () => {

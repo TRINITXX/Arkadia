@@ -10,6 +10,7 @@ import {
 } from "@/lib/reminders";
 import {
   launchReminder,
+  launchReminders,
   postponeReminder,
   useReminders,
 } from "@/lib/reminderStore";
@@ -40,6 +41,15 @@ export function RemindersButton({ projects, onLaunch }: RemindersButtonProps) {
   const [place, setPlace] = useState<Place | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const [launchingAll, setLaunchingAll] = useState(false);
+  // « Tout lancer » runs past the last chat it opens: no state after unmount.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const open = place !== null && due.length > 0;
 
   // The last one launched or put off: the list closes with the button.
@@ -71,6 +81,25 @@ export function RemindersButton({ projects, onLaunch }: RemindersButtonProps) {
   }, [open]);
 
   if (due.length === 0) return null;
+
+  const opener = (reminder: Reminder) => {
+    const target = reminderProject(projects, reminder.conversation);
+    return target ? () => onLaunch(target.project, reminder.prompt) : null;
+  };
+  const launchable = due.filter(
+    (r) => !launching.has(r.id) && reminderProject(projects, r.conversation),
+  ).length;
+  const launchAll = async () => {
+    setLaunchingAll(true);
+    try {
+      await launchReminders(
+        due.filter((r) => !launching.has(r.id)),
+        opener,
+      );
+    } finally {
+      if (mounted.current) setLaunchingAll(false);
+    }
+  };
 
   const toggle = () => {
     const button = buttonRef.current;
@@ -115,8 +144,21 @@ export function RemindersButton({ projects, onLaunch }: RemindersButtonProps) {
               maxHeight: place.maxHeight,
             }}
           >
-            <div className="px-1.5 pb-1.5 pt-0.5 text-[11px] text-zinc-500">
-              {remindersHeader(due.length)}
+            <div className="flex items-center gap-2 px-1.5 pb-1.5 pt-0.5">
+              <span className="min-w-0 flex-1 text-[11px] text-zinc-500">
+                {remindersHeader(due.length)}
+              </span>
+              {launchable >= 2 && (
+                <button
+                  type="button"
+                  disabled={launchingAll}
+                  onClick={() => void launchAll()}
+                  title="Une nouvelle conversation par rappel, chacun dans son projet"
+                  className="rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-400/20 disabled:opacity-40"
+                >
+                  Tout lancer
+                </button>
+              )}
             </div>
             {due.map((reminder) => (
               <ReminderRow

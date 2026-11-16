@@ -129,6 +129,32 @@ export async function launchReminder(
   }
 }
 
+/**
+ * « Tout lancer »: each reminder in turn, one chat each, in the list's order.
+ * `open` gives null for a reminder no project fits: it stays in the list.
+ * One run at a time, the sidebar folded and unfolded meanwhile included.
+ * Each reminder is checked against the list as it is now: one put off or
+ * launched by its own row while the others open is left alone.
+ */
+let launchingAll = false;
+export async function launchReminders(
+  reminders: readonly Reminder[],
+  open: (reminder: Reminder) => (() => Promise<boolean>) | null,
+): Promise<void> {
+  if (launchingAll) return;
+  launchingAll = true;
+  try {
+    for (const reminder of reminders) {
+      if (!view.due.some((r) => r.id === reminder.id)) continue;
+      if (launching.has(reminder.id)) continue;
+      const opener = open(reminder);
+      if (opener) await launchReminder(reminder, opener);
+    }
+  } finally {
+    launchingAll = false;
+  }
+}
+
 /** « Demain »: due again tomorrow at 9:00, out of the list till then. */
 export async function postponeReminder(reminder: Reminder): Promise<void> {
   const at = tomorrowAtNine(new Date());
