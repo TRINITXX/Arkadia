@@ -230,9 +230,13 @@ export function ChatQuestionSheet({
   const reply = round ? roundReply(round.questions, parts.answers) : null;
   const close = () =>
     updateSheet(paneKey, replyId, (s) => ({ ...s, closed: true }));
-  const send = () => {
+  /** `whole`: Enter's send, only once every question has its answer, read
+   *  again after a dictation it waited for (none said: the sheet stays). */
+  const send = (whole: boolean) => {
     // Closed while the reply waited for a dictation: the user took it back.
     if (!reply || sheet.closed) return;
+    if (whole && round?.questions.some((x) => !roundReply([x], parts.answers)))
+      return;
     onSend(reply, sentImages(parts.images));
     close();
   };
@@ -240,7 +244,7 @@ export function ChatQuestionSheet({
   // dictation stops and the reply goes once its words are in it, never the
   // reply first and the words in a message of their own (the user's report
   // of 16/11/2026). Another field's dictation (a visual's remark) is not
-  // waited for.
+  // waited for. The hook's flag carries `whole` here.
   const sending = useSendAfterDictation(
     { status: dictating !== null ? voice.status : "idle", stop: voice.stop },
     send,
@@ -267,7 +271,18 @@ export function ChatQuestionSheet({
     if (next !== null) goTo(next);
   };
   const answered = answeredFlags.filter(Boolean).length;
-  const next = buttonLeadsTo(answeredFlags, step);
+  // Where Enter and the button lead: the question dictated into counts as
+  // answered once listening began, its words on their way. Sent meanwhile,
+  // the reply waits for them (`sending`).
+  const dictatedKey =
+    dictating !== null &&
+    (voice.status === "listening" || voice.status === "transcribing")
+      ? dictating
+      : null;
+  const routedFlags = questions.map(
+    (x, i) => answeredFlags[i] || x.key === dictatedKey,
+  );
+  const next = buttonLeadsTo(routedFlags, step);
 
   const dictate = (id: string) => {
     if (voice.status === "idle") {
@@ -547,8 +562,8 @@ export function ChatQuestionSheet({
                       if (e.repeat) return;
                       // On to the next question left; sent only once all
                       // are answered (the button sends a part).
-                      const to = enterLeadsTo(answeredFlags, step);
-                      if (to === "send") sending.submit(false);
+                      const to = enterLeadsTo(routedFlags, step);
+                      if (to === "send") sending.submit(true);
                       else if (to !== null) goTo(to);
                     }
                   }}
@@ -574,9 +589,9 @@ export function ChatQuestionSheet({
                 <button
                   type="button"
                   className={`send${sending.waiting ? " waiting" : ""}`}
-                  disabled={!reply}
+                  disabled={!reply && dictatedKey === null}
                   title={
-                    sending.waiting
+                    sending.waiting || (!reply && dictatedKey !== null)
                       ? "Envoi dès la fin de la dictée…"
                       : reply
                         ? `Envoyer ${answered} réponse${answered > 1 ? "s" : ""} sur ${questions.length}`

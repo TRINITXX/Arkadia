@@ -48,6 +48,9 @@ interface ChatVisualFrameProps {
 /** Height before the page says its own (`size`). */
 const FIRST_HEIGHT = 160;
 
+/** A choice held for a dictation, asked again: the page's answer waited this long. */
+const CHOOSE_AGAIN_MS = 1_000;
+
 const px = (value: string) => parseFloat(value) || 0;
 
 /**
@@ -163,6 +166,26 @@ export function ChatVisualFrame({
   useEffect(() => {
     handlers.current = { onChoose, onLink, field, voiceState, stateKey };
   });
+  // « Valider » clicked while a remark of this page is dictated: the choice
+  // waits for its words (the user's report of 16/11/2026), then the page is
+  // asked it again, taken once without a new click. A page that doesn't
+  // answer (its own button, not the kit's) gets the choice held, as it was.
+  const againRef = useRef<{
+    phase: "waiting" | "asked";
+    text: string;
+    images?: ChoiceImage[];
+  } | null>(null);
+  /** The choice of this frame goes in (the user's click, or held for a dictation). */
+  const chosen = (text: string, images?: ChoiceImage[]) => {
+    const choose = handlers.current.onChoose;
+    if (!choose) return;
+    choose(text, images);
+    // The page may say so (the choice kit's « Ajouté »): it went in.
+    frameRef.current?.contentWindow?.postMessage(
+      { arkadiaVisualChosen: 1 },
+      "*",
+    );
+  };
   // The other frame of this visual (the card's, the zoomed one) changed its
   // picks: this one shows them too.
   useEffect(() => {
@@ -182,6 +205,22 @@ export function ChatVisualFrame({
     );
   useEffect(() => {
     if (voiceState.can) sayVoice();
+    // The dictation over, its words already sent to the page: the choice
+    // held is asked again, the remark now whole. No answer soon: the one held.
+    const held = againRef.current;
+    if (held?.phase === "waiting" && !voiceState.mine) {
+      const asked = { ...held, phase: "asked" as const };
+      againRef.current = asked;
+      frameRef.current?.contentWindow?.postMessage(
+        { arkadiaVisualChooseAgain: 1 },
+        "*",
+      );
+      window.setTimeout(() => {
+        if (againRef.current !== asked) return;
+        againRef.current = null;
+        chosen(asked.text, asked.images);
+      }, CHOOSE_AGAIN_MS);
+    }
   }, [voiceState.can, voiceState.mine, voiceState.status, voiceState.interim]);
   // The pane's height, as it changes (resize, split, the input growing).
   useLayoutEffect(() => {
@@ -240,13 +279,23 @@ export function ChatVisualFrame({
         // A wheel the page doesn't use scrolls the conversation, wherever
         // the pointer is over the visual (the user's report of 01/11/2026).
         else if (m.kind === "wheel") scrollAround(iframe, m);
-        // Only the user's click in this frame acts (`frameGestureOk`).
-        else if (m.kind === "choose" && frameGestureNow(iframe)) {
-          const choose = handlers.current.onChoose;
-          if (choose) {
-            choose(m.text, m.images);
-            // The page may say so (the choice kit's « Ajouté »): it went in.
-            iframe.contentWindow?.postMessage({ arkadiaVisualChosen: 1 }, "*");
+        // Only the user's click in this frame acts (`frameGestureOk`), or the
+        // choice it held for a dictation, asked again a moment ago.
+        else if (m.kind === "choose") {
+          const asked = againRef.current?.phase === "asked";
+          const h = handlers.current;
+          if (!asked && !frameGestureNow(iframe)) {
+            // Not the user's: nothing goes.
+          } else if (!asked && h.field.mine) {
+            againRef.current = {
+              phase: "waiting",
+              text: m.text,
+              images: m.images,
+            };
+            h.field.stop();
+          } else {
+            againRef.current = null;
+            chosen(m.text, m.images);
           }
         } else if (m.kind === "link" && frameGestureNow(iframe))
           handlers.current.onLink?.(m.url);

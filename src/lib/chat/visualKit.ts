@@ -25,6 +25,12 @@
 /** A choice carries at most this many images (its remarks'), each at most this much base64. */
 export const CHOICE_IMAGES_MAX = 10;
 export const CHOICE_IMAGE_CHARS = 12_000_000;
+/**
+ * A choice's text: no remark is ever cut, typed or dictated at length (the
+ * user's ask of 16/11/2026: a dictated remark lost its end past 500). Only a
+ * page that would flood the input is.
+ */
+export const CHOICE_TEXT_MAX = 200_000;
 
 /** The page uses the kit: an element of class `ark-choice`. */
 export function usesChoiceKit(html: string): boolean {
@@ -194,7 +200,7 @@ function mics(){remarks.forEach(function(B){
 function put(text){
  if(!dict)return;var ta=dict.B.remark,v=ta.value,pos=Math.max(0,Math.min(v.length,dict.at)),t=String(text||"").trim();dict=null;if(!t)return;
  var before=v.slice(0,pos),after=v.slice(pos),lead=before&&!/\\s$/.test(before)?" ":"",trail=after&&!/^\\s/.test(after)?" ":"";
- var upTo=before+lead+t,nv=(upTo+trail+after).slice(0,ta.maxLength>0?ta.maxLength:500),c=Math.min(upTo.length,nv.length);ta.value=nv;
+ var upTo=before+lead+t,nv=upTo+trail+after,c=Math.min(upTo.length,nv.length);ta.value=nv;
  try{ta.setSelectionRange(c,c);}catch(x){}grow(ta);mics();keepSoon(0);
 }
 // An image pasted into a remark (the user's ask of 15/11/2026), as in the
@@ -210,6 +216,13 @@ function drawPics(B){B.strip.textContent="";B.pics.forEach(function(p){
  w.appendChild(im);w.appendChild(x);B.strip.appendChild(w);});keepSoon(0);}
 window.addEventListener("arkadia-voice",function(e){var d=e.detail||{};voice={can:d.can===true,mine:d.mine===true,status:String(d.status||"idle"),interim:String(d.interim||"")};mics();});
 window.addEventListener("arkadia-dictated",function(e){put(e.detail);});
+// « Valider » while a remark of this page was dictated: Arkadia held the
+// choice, then asks it again once the words landed (the user's report of
+// 16/11/2026: the remark dictated was missing from the choice).
+var chooseAgain=null;
+window.addEventListener("arkadia-choose-again",function(){var f=chooseAgain;chooseAgain=null;if(f)f();});
+// The choice went in as it was: nothing to ask again.
+window.addEventListener("arkadia-chosen",function(){chooseAgain=null;});
 // Space held talks, as in the input: the tap's space goes, the release (or
 // the field left) stops it; Ctrl+Space toggles.
 function talkKeys(B){var ta=B.remark,talk=null;
@@ -289,7 +302,7 @@ function mount(root){
     b.addEventListener("click",function(){pick(B,o);});o.btn=b;grid.appendChild(b);
    });
    sec.appendChild(grid);
-   var rm=el("div","ark-rm"),ta=el("textarea","ark-rmt");ta.rows=1;ta.maxLength=500;ta.placeholder="Une remarque sur ce choix ?";ta.setAttribute("aria-label",B.title?"Remarque sur "+low(B.title):"Remarque");
+   var rm=el("div","ark-rm"),ta=el("textarea","ark-rmt");ta.rows=1;ta.placeholder="Une remarque sur ce choix ?";ta.setAttribute("aria-label",B.title?"Remarque sur "+low(B.title):"Remarque");
    ta.addEventListener("input",function(){grow(ta);keepSoon(400);});
    var mic=el("button","ark-mic"),tw=el("div","ark-rmw");mic.type="button";mic.hidden=true;tw.hidden=true;tw.setAttribute("aria-hidden","true");
    B.remark=ta;B.mic=mic;B.bub=bubble();B.twin=tw;B.rec=null;
@@ -365,12 +378,15 @@ function mount(root){
  // The remarks' images, as numbered in their tags.
  function shots(){var l=[];groups.forEach(function(G){G.qs.forEach(function(Q){(Q.pics||[]).forEach(function(p){l.push({n:p.n,m:p.m,d:p.d});});});});return l;}
  next.addEventListener("click",function(){if(cur<groups.length-1)go(cur+1);});
- cta.addEventListener("click",function(){
+ function send(){
   if(!window.arkadia||!window.arkadia.choose)return;
   window.arkadia.choose(summary(),shots());
   clearTimeout(idleTimer);idle();
   waiting=true;clearTimeout(waitTimer);waitTimer=setTimeout(function(){waiting=false;},2000);
- });
+ }
+ // Arkadia may ask this choice again (\`arkadia-choose-again\`): a remark was
+ // still being dictated, its words now in it.
+ cta.addEventListener("click",function(){chooseAgain=send;send();});
  window.addEventListener("arkadia-chosen",function(){
   if(!waiting)return;waiting=false;clearTimeout(waitTimer);
   cta.textContent="";cta.appendChild(check());cta.appendChild(el("span",null,"Ajout\\u00e9 \\u00e0 ton message"));
@@ -393,7 +409,7 @@ function mount(root){
    if(!s||typeof s!=="object"||!Array.isArray(s.qs))return;var i=0;
    groups.forEach(function(G,gi){if(Array.isArray(s.seen)&&s.seen[gi])G.seen=true;G.qs.forEach(function(Q){var q=s.qs[i++];if(!q||typeof q!=="object")return;
     if(Array.isArray(q.on)&&q.on.length===Q.opts.length)Q.opts.forEach(function(o,k){o.on=!!q.on[k];});
-    if(Q.remark&&typeof q.r==="string")Q.remark.value=q.r.slice(0,4000);
+    if(Q.remark&&typeof q.r==="string")Q.remark.value=q.r.slice(0,${CHOICE_TEXT_MAX});
     if(Q.strip&&Array.isArray(q.p)){var next=q.p.filter(function(p){return !!p&&typeof p.n==="number"&&IMG.indexOf(p.m)>=0&&typeof p.url==="string"&&p.url.indexOf("data:"+p.m+";base64,")===0;}).map(function(p){return {n:p.n,url:p.url,m:p.m,d:p.url.slice(p.url.indexOf(",")+1)};}),had=Q.pics||[];
      // The same images: their thumbnails stay as they are.
      if(next.length!==had.length||next.some(function(p,k){return p.n!==had[k].n||p.url!==had[k].url;})){Q.pics=next;drawPics(Q);}}

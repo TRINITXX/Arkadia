@@ -28,6 +28,7 @@ import {
   questionsOf,
   recoOf,
   stepBy,
+  withWords,
   type Question,
 } from "@/lib/chat/chatQuestions";
 import type { PendingRequest } from "@/lib/chat/chatState";
@@ -108,25 +109,21 @@ export function ChatQuestionPanel({
 
   // Your own words dictated too (the mic, Space held, Ctrl+Space), as in
   // the input it replaced (the user's ask of 14/11/2026). Its text goes to
-  // the question it was started from, after what that field holds.
+  // the question it was started from, after what that field holds. Your own
+  // words never drop a pick: they go with it as a remark (`answerOf`).
   const [dictatedFor, setDictatedFor] = useState(0);
   const dictation = useContext(ChatDictationContext);
-  const field = useFieldDictation(dictation, (text) => {
+  const field = useFieldDictation(dictation, (text) =>
     setOther((o) =>
-      o.map((t, i) =>
-        i !== dictatedFor ? t : t.trim() ? `${t.trimEnd()} ${text}` : text,
-      ),
-    );
-    setPicked((p) => p.map((sel, i) => (i === dictatedFor ? [] : sel)));
-  });
+      o.map((t, i) => (i === dictatedFor ? withWords(t, text) : t)),
+    ),
+  );
   // A dictation starts from the field shown: its question takes the text.
   const aimHere = () => {
     if (!field.mine) setDictatedFor(step);
   };
-  const setOwn = (text: string) => {
+  const setOwn = (text: string) =>
     setOther((o) => o.map((t, i) => (i === step ? text : t)));
-    if (text) setPicked((p) => p.map((sel, i) => (i === step ? [] : sel)));
-  };
   const talk = usePushToTalk(field, other[step] ?? "", setOwn);
   // The words so far, in grey after the field's text, the newest in view;
   // the field grows with them (its own sizing reads its text only).
@@ -150,6 +147,14 @@ export function ChatQuestionPanel({
   const answers = questions.map((_, i) => answerOf(picked[i], own[i]));
   const answered = answers.map(Boolean);
   const complete = answersOf(questions, answers);
+  // Where Enter and the button lead: the question your own words are being
+  // dictated into counts as answered, its words on their way. Enter during
+  // the dictation sends once they land, as in the input (`useSendAfterDictation`).
+  const listening =
+    field.mine &&
+    (field.status === "listening" || field.status === "transcribing");
+  const routed = answered.map((a, i) => a || (listening && i === dictatedFor));
+  const routedAll = routed.every(Boolean);
 
   const answerNow = () => {
     if (!complete) return;
@@ -196,7 +201,6 @@ export function ChatQuestionPanel({
       );
       setOther((o) => o.map((t, i) => (i === qi ? put.text : t)));
       setPics((p) => p.map((l, i) => (i === qi ? [...l, ...put.images] : l)));
-      setPicked((p) => p.map((sel, i) => (i === qi ? [] : sel)));
       requestAnimationFrame(() => {
         if (area.isConnected && document.activeElement === area)
           area.setSelectionRange(put.caret, put.caret);
@@ -218,8 +222,6 @@ export function ChatQuestionPanel({
   const pick = (qi: number, label: string) => {
     const { multiSelect } = questions[qi];
     const was = picked[qi].includes(label);
-    setOther((o) => o.map((t, i) => (i === qi ? "" : t)));
-    setPics((p) => p.map((l, i) => (i === qi ? [] : l)));
     setPicked((p) =>
       p.map((sel, i) => {
         if (i !== qi) return sel;
@@ -235,7 +237,7 @@ export function ChatQuestionPanel({
   // Enter goes on to the next question left, and sends once all are
   // answered (`enterLeadsTo`, as in the sheet).
   const enter = () => {
-    const to = enterLeadsTo(answered, step);
+    const to = enterLeadsTo(routed, step);
     if (to === "send") submit();
     else if (to !== null) setStep(to);
   };
@@ -318,7 +320,7 @@ export function ChatQuestionPanel({
   // No question to read (an input the tool should never send): the header
   // alone, its × still dismisses it, else Claude would wait for good.
   const q: Question | undefined = questions[step];
-  const left = nextQuestionLeft(answered, step);
+  const left = nextQuestionLeft(routed, step);
   const done = answered.filter(Boolean).length;
   return (
     <div
@@ -493,7 +495,7 @@ export function ChatQuestionPanel({
               </div>
               {/* On to a question left; once all are answered, the answers
                   go (the tool needs one per question). */}
-              {!complete && left !== null ? (
+              {!routedAll && left !== null ? (
                 <button
                   type="button"
                   className="send"
@@ -510,9 +512,9 @@ export function ChatQuestionPanel({
                 <button
                   type="button"
                   className={`send${sending.waiting ? " waiting" : ""}`}
-                  disabled={!complete}
+                  disabled={!routedAll}
                   title={
-                    sending.waiting
+                    sending.waiting || (routedAll && !complete)
                       ? "Envoi dès la fin de la dictée…"
                       : complete
                         ? "Envoyer (Entrée)"

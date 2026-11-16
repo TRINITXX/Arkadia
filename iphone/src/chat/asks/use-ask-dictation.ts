@@ -23,16 +23,33 @@ export function useAskDictation() {
     [start],
   );
 
-  /** « Écrire »: the words so far go to their field. */
-  const writeOut = useCallback(async () => {
-    const text = (await finish()).trim();
+  /** Waits on `writeOut` that a cancel ends: they get null. */
+  const waiting = useRef(new Set<() => void>());
+
+  /** « Écrire »: the words so far go to their field, and come back (a send
+   *  that waited for them reads them before its field's state shows them).
+   *  Null when « Annuler » cut the dictation meanwhile: nothing is written,
+   *  and a send that waited lets go (it never hangs). */
+  const writeOut = useCallback(async (): Promise<string | null> => {
+    let end = () => {};
+    const dropped = new Promise<null>((resolve) => {
+      end = () => resolve(null);
+      waiting.current.add(end);
+    });
+    const said = await Promise.race([finish(), dropped]);
+    waiting.current.delete(end);
+    if (said === null) return null;
+    const text = said.trim();
     const onText = write.current;
     write.current = null;
     if (text && onText) onText(text);
+    return text;
   }, [finish]);
 
   const drop = useCallback(() => {
     write.current = null;
+    for (const end of waiting.current) end();
+    waiting.current.clear();
     cancel();
   }, [cancel]);
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Keyboard, Pressable, ScrollView, Text, View } from "react-native";
 import { SymbolView } from "expo-symbols";
 import type { SFSymbol } from "sf-symbols-typescript";
@@ -9,6 +9,7 @@ import {
   answersOf,
   questionsOf,
   recoOf,
+  withWords,
 } from "@/lib/chat/chatQuestions";
 import type { PendingRequest } from "@/lib/chat/chatState";
 import { AskDictationLine } from "~/chat/asks/ask-dictation-line";
@@ -53,16 +54,55 @@ export function QuestionAsk({
   const answered = answers.map(Boolean);
   const done = answered.filter(Boolean).length;
   const complete = answersOf(questions, answers);
+  const listened = dictation.field !== null ? Number(dictation.field) : null;
+  // Where Return and the button lead: the question dictated into counts as
+  // answered, its words on their way (sent meanwhile, they go with it).
+  const routed = answered.map((a, i) => a || listened === i);
+  const routedAll = routed.every(Boolean);
 
-  const submit = () => {
-    if (!complete) return;
+  /** The answers of `d`, sent; nothing while one is missing. */
+  const answerWith = (d: typeof draft) => {
+    const all = answersOf(
+      questions,
+      questions.map((_, i) => answerOf(d.picked[i], d.other[i])),
+    );
+    if (!all) return;
     // Sent, the panel dims and takes no touch while the PC answers: its
-    // keyboard and its mic go too, else Return or the mic would still act.
+    // keyboard goes too, else Return would still act.
     Keyboard.dismiss();
-    if (dictation.phase !== "idle") dictation.drop();
     onAnswer({
       behavior: "allow",
-      updatedInput: { ...request.input, answers: complete },
+      updatedInput: { ...request.input, answers: all },
+    });
+  };
+  // Sent mid-dictation: its words first, then the answers with them, never
+  // dropped (the user's report of 16/11/2026). Read from the draft as it is
+  // when they land: a pick or a word changed meanwhile goes too.
+  const draftRef = useRef(draft);
+  useEffect(() => {
+    draftRef.current = draft;
+  });
+  const sendingRef = useRef(false);
+  const submit = () => {
+    if (sendingRef.current) return;
+    if (listened === null || dictation.phase === "idle") {
+      answerWith(draft);
+      return;
+    }
+    sendingRef.current = true;
+    const at = listened;
+    void dictation.writeOut().then((words) => {
+      sendingRef.current = false;
+      // « Annuler » meanwhile: nothing goes.
+      if (words === null) return;
+      const d = draftRef.current;
+      const was = d.other[at] ?? "";
+      // Their field may show them already (a render came between).
+      const other =
+        words && !was.trimEnd().endsWith(words)
+          ? d.other.map((t, i) => (i === at ? withWords(t, words) : t))
+          : d.other;
+      answerWith({ ...d, other });
     });
   };
   const dismiss = () => {
@@ -86,7 +126,7 @@ export function QuestionAsk({
     const was = picked[qi].includes(label);
     tick();
     setDraft((d) => ({
-      other: d.other.map((t, i) => (i === qi ? "" : t)),
+      ...d,
       picked: d.picked.map((sel, i) => {
         if (i !== qi) return sel;
         if (!multiSelect) return was ? [] : [label];
@@ -98,22 +138,18 @@ export function QuestionAsk({
     if (next !== null) goTo(next);
   };
 
-  /** Own words for question `qi` drop its picks: they win anyway (`answerOf`). */
+  /** Own words for question `qi`: they go with its picks, as a remark (`answerOf`). */
   const write = (qi: number, text: (prev: string) => string) =>
-    setDraft((d) => {
-      const typed = text(d.other[qi]);
-      return {
-        other: d.other.map((t, i) => (i === qi ? typed : t)),
-        picked: d.picked.map((sel, i) => (i === qi && typed ? [] : sel)),
-      };
-    });
+    setDraft((d) => ({
+      ...d,
+      other: d.other.map((t, i) => (i === qi ? text(t) : t)),
+    }));
 
   // Return: on to the next question left, sent once all are answered.
-  const leadsTo = enterLeadsTo(answered, step);
+  const leadsTo = enterLeadsTo(routed, step);
   // The button at the field's end: on to a question left; with every one
   // answered, it sends (the tool needs one answer per question).
-  const left = nextQuestionLeft(answered, step);
-  const listened = dictation.field !== null ? Number(dictation.field) : null;
+  const left = nextQuestionLeft(routed, step);
 
   const iconButton = (icon: SFSymbol, label: string, onPress: () => void) => (
     <Pressable
@@ -234,13 +270,10 @@ export function QuestionAsk({
               mic={{
                 dictation,
                 id: String(step),
-                onText: (text) =>
-                  write(step, (prev) =>
-                    prev.trim() ? `${prev.trimEnd()} ${text}` : text,
-                  ),
+                onText: (text) => write(step, (prev) => withWords(prev, text)),
               }}
               trailing={
-                !complete && left !== null ? (
+                !routedAll && left !== null ? (
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel="Question suivante"
@@ -265,14 +298,18 @@ export function QuestionAsk({
                     accessibilityRole="button"
                     accessibilityLabel="Envoyer les réponses"
                     accessibilityHint={
-                      complete ? undefined : "Choisis ou écris une réponse"
+                      complete
+                        ? undefined
+                        : routedAll
+                          ? "Envoi dès la fin de la dictée"
+                          : "Choisis ou écris une réponse"
                     }
-                    disabled={!complete}
+                    disabled={!routedAll}
                     hitSlop={4}
                     onPress={grace(submit)}
                     style={({ pressed }) => [
                       styles.send,
-                      (!complete || pressed) && styles.sendDim,
+                      (!routedAll || pressed) && styles.sendDim,
                     ]}
                   >
                     <SymbolView

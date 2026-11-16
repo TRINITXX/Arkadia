@@ -6,6 +6,7 @@ import { IMAGE_TYPES, imageTags } from "@/lib/chat/pastedImages";
 import {
   CHOICE_IMAGE_CHARS,
   CHOICE_IMAGES_MAX,
+  CHOICE_TEXT_MAX,
   usesChoiceKit,
   VISUAL_KIT_CSS,
   VISUAL_KIT_JS,
@@ -162,9 +163,9 @@ var m=b.querySelectorAll("img,svg,canvas,video,picture,input,button,select,texta
 var all=b.querySelectorAll("*");for(var j=0;j<all.length&&j<3000;j++){var s=getComputedStyle(all[j]);if((s.backgroundColor!=="rgba(0, 0, 0, 0)"||s.backgroundImage!=="none"||parseFloat(s.borderTopWidth)>0)&&shows(all[j]))return true;}return false;}
 function report(){var r=document.documentElement,im=document.images;for(var i=0;i<im.length;i++){var src=im[i].getAttribute("src");if(src&&im[i].complete&&im[i].naturalWidth===0)push(blocked,"img "+src.slice(0,160));}
 return{errors:errors,consoleErrors:consoleErrors,blocked:blocked,height:height(),width:r.clientWidth,scrollWidth:r.scrollWidth,empty:!visible(),followsFrame:false,unfinished:!loaded};}
-try{dp(window,"arkadia",{value:Object.freeze({choose:function(t,im){post("choose",String(t==null?"":t).slice(0,4000),Array.isArray(im)&&im.length?im.slice(0,${CHOICE_IMAGES_MAX}):null);},dictate:function(on){post("dictate",!!on);},keep:function(s){post("keep",s);},restore:function(){post("restore");}})});}catch(x){}
+try{dp(window,"arkadia",{value:Object.freeze({choose:function(t,im){post("choose",String(t==null?"":t).slice(0,${CHOICE_TEXT_MAX}),Array.isArray(im)&&im.length?im.slice(0,${CHOICE_IMAGES_MAX}):null);},dictate:function(on){post("dictate",!!on);},keep:function(s){post("keep",s);},restore:function(){post("restore");}})});}catch(x){}
 if(framed){
-window.addEventListener("message",function(e){var d=e.data;if(e.source!==P||!d)return;if(d.arkadiaVisualProbe===1)post("report",report());if(d.arkadiaVisualChosen===1)window.dispatchEvent(new Event("arkadia-chosen"));
+window.addEventListener("message",function(e){var d=e.data;if(e.source!==P||!d)return;if(d.arkadiaVisualProbe===1)post("report",report());if(d.arkadiaVisualChosen===1)window.dispatchEvent(new Event("arkadia-chosen"));if(d.arkadiaVisualChooseAgain===1)window.dispatchEvent(new Event("arkadia-choose-again"));
 var vo=d.arkadiaVisualVoice;if(vo&&typeof vo==="object")window.dispatchEvent(new CustomEvent("arkadia-voice",{detail:{can:vo.can===true,mine:vo.mine===true,status:String(vo.status||"idle"),interim:String(vo.interim||"")}}));
 if(typeof d.arkadiaVisualDictated==="string")window.dispatchEvent(new CustomEvent("arkadia-dictated",{detail:d.arkadiaVisualDictated}));
 if("arkadiaVisualRestore" in d)window.dispatchEvent(new CustomEvent("arkadia-restore",{detail:d.arkadiaVisualRestore}));
@@ -480,7 +481,7 @@ export function readFrameMessage(
       const have = new Set(images.map((img) => img.n));
       const text = v
         .trim()
-        .slice(0, 4000)
+        .slice(0, CHOICE_TEXT_MAX)
         .replace(/ ?\[Image #(\d+)\]/g, (tag, n: string) =>
           have.has(Number(n)) ? tag : "",
         )

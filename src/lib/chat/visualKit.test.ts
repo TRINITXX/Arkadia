@@ -55,6 +55,9 @@ function page(body: string, framed = true, asks = true) {
   const ack = () => {
     if (framed) win.dispatchEvent(new win.Event("arkadia-chosen"));
   };
+  /** Arkadia asks the choice it held for a dictation again. */
+  const chooseAgain = () =>
+    win.dispatchEvent(new win.Event("arkadia-choose-again"));
   /** What Arkadia says of the pane's dictation (`arkadia-voice`), or its text. */
   const voice = (detail: Record<string, unknown>) =>
     win.dispatchEvent(new win.CustomEvent("arkadia-voice", { detail }));
@@ -97,6 +100,7 @@ function page(body: string, framed = true, asks = true) {
     sent,
     shots,
     ack,
+    chooseAgain,
     mic,
     voice,
     dictated,
@@ -208,8 +212,6 @@ describe("the choice kit", () => {
     const { doc, all, click, sent } = page(GROUPS);
     const fields = all(".ark-rmt") as HTMLTextAreaElement[];
     expect(fields).toHaveLength(3);
-    // Capped: the bridge cuts the whole summary at 4000 characters.
-    expect(fields[0].maxLength).toBe(500);
     fields[0].value = "  Trop long,\n à revoir ";
     // A key typed in a remark is text, never a pick.
     const key = new (doc.defaultView as unknown as typeof window).KeyboardEvent(
@@ -287,6 +289,42 @@ describe("the choice kit", () => {
     expect(p.mic).toEqual([true, false, true]);
     p.voice({ can: true, mine: false, status: "listening" });
     expect(mic.disabled).toBe(true);
+  });
+
+  it("sends the choice again when Arkadia asks, the remark dictated meanwhile in it", () => {
+    const p =
+      page(`<div class="ark-choice"><div class="ark-question" data-title="Prix">
+      <div class="ark-option" data-reco>6,99 €</div><div class="ark-option">9,99 €</div>
+    </div></div>`);
+    p.voice({ can: true, status: "idle" });
+    p.click(".ark-mic");
+    p.voice({ can: true, mine: true, status: "listening", interim: "trop" });
+    // « Valider » mid-dictation: Arkadia holds it, the words land, then it asks again.
+    p.click(".ark-cta");
+    p.dictated("trop cher pour un mois");
+    p.voice({ can: true, status: "idle" });
+    p.chooseAgain();
+    expect(p.sent).toHaveLength(2);
+    expect(p.sent[1]).toContain("(remarque : trop cher pour un mois)");
+    // Asked once: a later ask sends nothing more.
+    p.chooseAgain();
+    expect(p.sent).toHaveLength(2);
+  });
+
+  it("never cuts a remark, dictated at length", () => {
+    const p =
+      page(`<div class="ark-choice"><div class="ark-question" data-title="Prix">
+      <div class="ark-option" data-reco>6,99 €</div>
+    </div></div>`);
+    const long = "mot ".repeat(750).trim();
+    p.voice({ can: true, status: "idle" });
+    p.click(".ark-mic");
+    p.voice({ can: true, mine: true, status: "listening" });
+    p.dictated(long);
+    p.voice({ can: true, status: "idle" });
+    expect((p.q(".ark-rmt") as HTMLTextAreaElement).value).toBe(long);
+    p.click(".ark-cta");
+    expect(p.sent[0]).toContain(`(remarque : ${long})`);
   });
 
   it("fills a preview from its question, whatever the case, and leaves an unknown one alone", () => {

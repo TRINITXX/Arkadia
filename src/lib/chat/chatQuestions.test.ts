@@ -21,12 +21,18 @@ describe("Claude's questions", () => {
     expect(stepBy(1, -1, 2)).toBe(0);
   });
 
-  it("sends every answer, own words first, only once all are given", () => {
+  it("sends every answer, only once all are given", () => {
     const questions = [q("Format ?"), q("Où ?")];
     expect(answersOf(questions, [answerOf(["A"], ""), ""])).toBeNull();
     expect(
-      answersOf(questions, [answerOf(["A"], ""), answerOf(["B"], " Ici ")]),
+      answersOf(questions, [answerOf(["A"], ""), answerOf([], " Ici ")]),
     ).toEqual({ "Format ?": "A", "Où ?": "Ici" });
+  });
+
+  it("keeps the picks when your own words come too, as a remark", () => {
+    expect(answerOf(["A", "B"], " surtout A ")).toBe(
+      "A, B (remarque : surtout A)",
+    );
   });
 
   it("reads Claude's « (recommandé) » as the Reco badge, the label alone shown", () => {

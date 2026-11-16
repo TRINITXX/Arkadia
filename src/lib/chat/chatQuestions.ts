@@ -23,9 +23,20 @@ export function questionsOf(input: JsonObject): Question[] {
   );
 }
 
-/** Its own words win over the options picked. */
+/**
+ * The options picked, your own words after them as a remark (the visuals'
+ * way): a comment never drops a pick (the user's ask of 16/11/2026).
+ */
 export function answerOf(picked: string[], other: string): string {
-  return other.trim() || picked.join(", ");
+  const own = other.trim();
+  const picks = picked.join(", ");
+  if (!picks) return own;
+  return own ? `${picks} (remarque : ${own})` : picks;
+}
+
+/** Dictated words after what a field holds, a space between. */
+export function withWords(text: string, words: string): string {
+  return text.trim() ? `${text.trimEnd()} ${words}` : words;
 }
 
 /** The PC's arrows: never before the first question nor past the last one. */

@@ -85,6 +85,11 @@ export function dictateInto(
   updateRound(chatId, replyId, (s) => withDictatedText(s, key, text));
 }
 
+/** The round's sheet as kept now, outside a render: a send that waited for its words. */
+export function roundNow(chatId: string, replyId: string): RoundSheet {
+  return roundSheetFor(sheets.get(chatId), replyId);
+}
+
 export function useRoundSheet(chatId: string, replyId: string): RoundSheet {
   const subscribe = useCallback(
     (cb: () => void) => {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SymbolView } from "expo-symbols";
 import type { SFSymbol } from "sf-symbols-typescript";
@@ -17,6 +17,7 @@ import { AskField } from "~/chat/asks/ask-field";
 import { RoundOption } from "~/chat/asks/round-option";
 import {
   dictateInto,
+  roundNow,
   updateRound,
   useRoundSheet,
 } from "~/chat/asks/round-store";
@@ -53,6 +54,8 @@ export function RoundSheet({
   const sheet = useRoundSheet(chatId, replyId);
   const [view, setView] = useState({ step: 0 });
   const dictation = useAskDictation();
+  /** A send waits for the words dictated: one at a time. */
+  const sendingRef = useRef(false);
   if (sheet.closed) return null;
 
   const { questions } = round;
@@ -65,6 +68,12 @@ export function RoundSheet({
   const answeredFlags = questions.map(isAnswered);
   const answered = answeredFlags.filter(Boolean).length;
   const reply = roundReply(questions, sheet.answers);
+  const listened = questions.find((x) => x.key === dictation.field);
+  // Where Return leads: the question dictated into counts as answered, its
+  // words on their way (sent meanwhile, they go with it).
+  const routedFlags = questions.map(
+    (x, i) => answeredFlags[i] || x.key === listened?.key,
+  );
 
   const goTo = (i: number) => setView({ step: i });
   const set = (key: string, patch: RoundAnswer) =>
@@ -90,14 +99,37 @@ export function RoundSheet({
     if (dictation.phase !== "idle") dictation.drop();
     updateRound(chatId, replyId, (s) => ({ ...s, closed: true }));
   };
-  const send = () => {
-    if (!reply) return;
+  const sendFrom = (answers: typeof sheet.answers) => {
+    const text = roundReply(questions, answers);
+    if (!text) return;
     success();
-    onSend(reply);
+    onSend(text);
     close();
   };
+  // Sent mid-dictation: its words first, into their question, then the
+  // reply with them, never dropped (the user's report of 16/11/2026).
+  // `whole`: Return's send, only once every question has its answer, read
+  // again once the words are in (none said: it stays).
+  const send = (whole = false) => {
+    if (sendingRef.current) return;
+    if (!listened || dictation.phase === "idle") {
+      sendFrom(sheet.answers);
+      return;
+    }
+    sendingRef.current = true;
+    void dictation.writeOut().then((words) => {
+      sendingRef.current = false;
+      // « Annuler » meanwhile: nothing goes.
+      if (words === null) return;
+      // Its words are in the kept sheet now (`dictateInto`): read there.
+      const now = roundNow(chatId, replyId);
+      if (now.closed) return;
+      if (whole && questions.some((x) => !roundReply([x], now.answers))) return;
+      sendFrom(now.answers);
+    });
+  };
   // Return: on to the next question left, sent once all are answered.
-  const leadsTo = enterLeadsTo(answeredFlags, step);
+  const leadsTo = enterLeadsTo(routedFlags, step);
 
   // An option it names carries its reason; else the recommendation is a
   // choice of its own.
@@ -105,7 +137,6 @@ export function RoundSheet({
   const why =
     named && q.recommendation ? recoReason(q.recommendation, named) : "";
   const ownReco = !named && q.recommendation ? q.recommendation : null;
-  const listened = questions.find((x) => x.key === dictation.field);
 
   const iconButton = (icon: SFSymbol, label: string, onPress: () => void) => (
     <Pressable
@@ -246,7 +277,7 @@ export function RoundSheet({
               }
               submitBehavior={leadsTo === null ? "blurAndSubmit" : "submit"}
               onSubmitEditing={() => {
-                if (leadsTo === "send") send();
+                if (leadsTo === "send") send(true);
                 else if (leadsTo !== null) goTo(leadsTo);
               }}
               mic={{
@@ -261,14 +292,16 @@ export function RoundSheet({
                   accessibilityHint={
                     reply
                       ? `Envoyer ${answered} réponse${answered > 1 ? "s" : ""} sur ${questions.length}`
-                      : "Choisis ou écris au moins une réponse"
+                      : listened
+                        ? "Envoi dès la fin de la dictée"
+                        : "Choisis ou écris au moins une réponse"
                   }
-                  disabled={!reply}
+                  disabled={!reply && !listened}
                   hitSlop={4}
-                  onPress={send}
+                  onPress={() => send()}
                   style={({ pressed }) => [
                     styles.send,
-                    (!reply || pressed) && styles.sendDim,
+                    ((!reply && !listened) || pressed) && styles.sendDim,
                   ]}
                 >
                   <SymbolView
