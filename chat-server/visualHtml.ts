@@ -387,7 +387,7 @@ export function visualResult(
   if (problems.length === 0) {
     return {
       text: [
-        `${VISUAL_CHECKED_CLEAN}, ${report.height}px tall${report.unfinished ? ", still loading at the end of the check" : ""}). Do not describe it again in your reply.`,
+        `${VISUAL_CHECKED_CLEAN}, ${report.height}px tall${report.unfinished ? ", still loading at the end of the check" : ""}). Do not describe it again in your reply, but write the answer to every question of the user's that it does not cover.`,
         ...notes,
       ].join("\n"),
       isError: false,

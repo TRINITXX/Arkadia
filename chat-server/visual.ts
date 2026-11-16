@@ -44,9 +44,17 @@ export interface PreparedVisual {
 const VISUAL_WHEN =
   "Use it for what helps now, in this conversation: explaining a mechanism, a plan or a diagnosis; comparing figures or 2 to 4 options; a quick choice (mockups or options the user picks, with a comment). Publish a claude.ai artifact instead only for a big page (a report, an audit, many mockup screens), something to share or reopen later (a link), something to fill over several days (a test checklist), or anything meant for outside Arkadia (the phone, someone else). Mermaid code fences keep rendering in the chat as before.";
 
+/**
+ * What a visual leaves to the reply (the user's ask of 16/11/2026): turns
+ * ending on a choice visual left the message's other questions answered in
+ * Claude's thinking only, out of sight behind the bulb.
+ */
+const VISUAL_REPLY =
+  "A visual answers only what it shows: every other question in the user's message still gets its answer written in your reply, never left in your thinking.";
+
 /** What the tool's description tells Claude: when, how, and the theme. */
 export const VISUAL_TOOL_DESCRIPTION = [
-  "Show a finished, self-contained HTML page inline in this chat, above your final reply, where this call sits: a chart, a diagram or schema, a table, a comparison, steps, mockups, an image collage, or a choice with buttons. The user sees it in Arkadia's chat column; do not describe or restate it in your reply.",
+  `Show a finished, self-contained HTML page inline in this chat, above your final reply, where this call sits: a chart, a diagram or schema, a table, a comparison, steps, mockups, an image collage, or a choice with buttons. The user sees it in Arkadia's chat column; do not describe or restate it in your reply. ${VISUAL_REPLY}`,
   `When: ${VISUAL_WHEN}`,
   "html: a complete document (<!doctype html>…), inline <style> and <script>. Scripts may load only from https://cdn.jsdelivr.net, https://cdnjs.cloudflare.com or https://unpkg.com (Chart.js, d3, mermaid…). No fetch, XHR, WebSocket, iframe, worker or Trusted Types policy of its own (a library that makes one, like lit, fails): everything the page shows is in it. Remote images other than those CDNs are blocked; local images by absolute path (C:\\…\\shot.png in src, srcset or CSS url()) are inlined for you: name each once.",
   "Theme: use these CSS variables, never fixed colours: --bg (page background), --text, --muted, --faint, --card and --card-2 (a box), --border, --border-strong, --accent (#e2865f, the one accent) with --accent-text (text on it) and --accent-soft, --ok, --warn, --bad, --info, --chart-1 … --chart-6 (series, in order), --radius and --radius-sm, --font-sans, --font-serif, --font-mono. They are set on :root before your styles, with a base sheet (background, text colour, font, 16px gutter).",
@@ -62,6 +70,7 @@ export const VISUAL_TOOL_DESCRIPTION = [
 export const VISUAL_RULE = [
   "# Visuals in the chat",
   `This chat runs in Arkadia, which can show an HTML page right in the conversation: the show_visual tool. ${VISUAL_WHEN}`,
+  VISUAL_REPLY,
 ].join("\n");
 
 /** Where a page's inlined copy is kept: a resumed chat shows it again. */
