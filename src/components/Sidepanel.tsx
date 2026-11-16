@@ -29,6 +29,7 @@ import { paneTabTitle } from "@/lib/paneTitle";
 import type { Project, Tab, Workspace } from "@/types";
 import { AgentBadge } from "./AgentBadge";
 import { AccountDot } from "./AccountDot";
+import { TabProgressLine } from "./TabProgressLine";
 import type { AccountMark } from "@/lib/accounts";
 
 interface SidepanelProps {
@@ -84,6 +85,9 @@ interface SidepanelProps {
   accountMarks: Record<string, AccountMark>;
   /** The "Comptes" button, under "Sessions récentes". */
   accountsPanel: React.ReactNode;
+  /** The « Rappels » button, above « Sessions récentes » (nothing while
+   *  no reminder is due). */
+  remindersPanel: React.ReactNode;
 }
 
 const UNGROUPED_ID = "__ungrouped__";
@@ -176,6 +180,9 @@ interface TabAgentState {
    *  in — the badge next to it already says waiting vs. busy. */
   title: string;
   state: AgentStateValue;
+  /** The tab's chat pane, its progress line under the row (`TabProgressLine`):
+   *  the active pane, else the first chat of its splits; null for none. */
+  chatPaneId: string | null;
 }
 
 function projectAgentStates(
@@ -192,11 +199,15 @@ function projectAgentStates(
       ),
     );
     if (!isActive(tabState)) continue;
+    const shown = tab.panes[tab.activePaneId];
+    const chatPane = shown?.chat
+      ? shown
+      : Object.values(tab.panes).find((p) => p.chat);
     states.push({
       tabId: tab.id,
-      title:
-        stripStatusGlyph(paneTabTitle(tab.panes[tab.activePaneId])) || "pwsh",
+      title: stripStatusGlyph(paneTabTitle(shown)) || "pwsh",
       state: tabState,
+      chatPaneId: chatPane?.id ?? null,
     });
   }
   return states;
@@ -254,6 +265,7 @@ export function Sidepanel({
   hiddenTabIds,
   accountMarks,
   accountsPanel,
+  remindersPanel,
 }: SidepanelProps) {
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null);
   const [view, setView] = useState<"active" | "inactive">("inactive");
@@ -603,6 +615,7 @@ export function Sidepanel({
         </div>
       )}
       <div className="flex flex-col gap-1 p-2">
+        {remindersPanel}
         {onRestoreSession && (
           <button
             onClick={onRestoreSession}
@@ -1042,6 +1055,7 @@ function ActiveProjectGroup({
             <span className="min-w-0 flex-1 truncate">{solo.title}</span>
             <TabAccountDot mark={accountMarks[solo.tabId]} />
           </div>
+          <TabProgressLine paneId={solo.chatPaneId} solo />
         </div>
       </div>
     );
@@ -1077,42 +1091,53 @@ function ActiveProjectGroup({
       </div>
       {agentStates.length > 0 && (
         <div className="flex flex-col pb-0.5">
-          {agentStates.map(({ tabId, title, state }) => (
-            <button
-              key={tabId}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onActivateTab(project.id, tabId);
-              }}
-              onMouseDown={(e) => {
-                // Middle-click closes just this tab (same gesture as the tab
-                // bar). Stopped here so it never reaches the group header,
-                // which would close the whole project.
-                if (e.button === 1) {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onCloseTab(tabId);
-                }
-              }}
-              onContextMenu={(e) => {
+          {agentStates.map(({ tabId, title, state, chatPaneId }) => {
+            const activate = (e: React.MouseEvent) => {
+              e.stopPropagation();
+              onActivateTab(project.id, tabId);
+            };
+            const closeOnMiddleClick = (e: React.MouseEvent) => {
+              // Middle-click closes just this tab (same gesture as the tab
+              // bar). Stopped here so it never reaches the group header,
+              // which would close the whole project.
+              if (e.button === 1) {
                 e.preventDefault();
-                onTabContextMenu(tabId, e.clientX, e.clientY);
-              }}
-              className={`flex items-center gap-2 rounded px-1.5 py-[3px] text-left text-xs ${
-                // Only the visible project highlights its current tab — doing it
-                // in every group would light up half the panel.
-                active && tabId === currentTabId
-                  ? "bg-zinc-800 text-zinc-100"
-                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-              }`}
-              title={title}
-            >
-              <AgentBadge state={state} size={8} inline />
-              <span className="min-w-0 flex-1 truncate">{title}</span>
-              <TabAccountDot mark={accountMarks[tabId]} />
-            </button>
-          ))}
+                e.stopPropagation();
+                onCloseTab(tabId);
+              }
+            };
+            return (
+              <Fragment key={tabId}>
+                <button
+                  type="button"
+                  onClick={activate}
+                  onMouseDown={closeOnMiddleClick}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    onTabContextMenu(tabId, e.clientX, e.clientY);
+                  }}
+                  className={`flex items-center gap-2 rounded px-1.5 py-[3px] text-left text-xs ${
+                    // Only the visible project highlights its current tab — doing it
+                    // in every group would light up half the panel.
+                    active && tabId === currentTabId
+                      ? "bg-zinc-800 text-zinc-100"
+                      : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+                  }`}
+                  title={title}
+                >
+                  <AgentBadge state={state} size={8} inline />
+                  <span className="min-w-0 flex-1 truncate">{title}</span>
+                  <TabAccountDot mark={accountMarks[tabId]} />
+                </button>
+                {/* Its line acts as its row. */}
+                <TabProgressLine
+                  paneId={chatPaneId}
+                  onClick={activate}
+                  onMouseDown={closeOnMiddleClick}
+                />
+              </Fragment>
+            );
+          })}
         </div>
       )}
     </div>

@@ -18,6 +18,9 @@ interface ToolbarProps {
   disabled?: boolean;
   sidepanelOpen: boolean;
   onToggleSidepanel: () => void;
+  /** On the sidepanel's button while the sidepanel is hidden: what waits
+   *  in it (the due reminders' dot). */
+  sidepanelBadge?: React.ReactNode;
   /** Shown only while the sidepanel (and its accounts block) is hidden. */
   accountChip: React.ReactNode;
   /** Chat / Terminal for the active pane, before the settings. */
@@ -37,6 +40,7 @@ export function Toolbar({
   disabled = false,
   sidepanelOpen,
   onToggleSidepanel,
+  sidepanelBadge,
   accountChip,
   paneMode,
 }: ToolbarProps) {
@@ -44,7 +48,7 @@ export function Toolbar({
     <div className="chrome-surface flex h-9 items-center gap-1 border-b border-zinc-800 bg-zinc-950 px-2">
       <button
         onClick={onToggleSidepanel}
-        className="mr-1 flex size-7 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+        className="relative mr-1 flex size-7 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
         title={sidepanelOpen ? "Fermer le sidepanel" : "Ouvrir le sidepanel"}
         aria-label={
           sidepanelOpen ? "Fermer le sidepanel" : "Ouvrir le sidepanel"
@@ -57,6 +61,7 @@ export function Toolbar({
         ) : (
           <PanelLeftOpen size={14} />
         )}
+        {!sidepanelOpen && sidepanelBadge}
       </button>
       {!sidepanelOpen && accountChip}
       {/* One row of whole buttons: those that do not fit wrap to a second

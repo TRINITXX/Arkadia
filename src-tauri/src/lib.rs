@@ -25,6 +25,7 @@ mod pane_viewers;
 mod photos;
 mod pip_follow;
 mod popup;
+mod reminders;
 mod remote;
 mod screenshots;
 mod sessions;
@@ -324,6 +325,10 @@ pub fn run() {
             chrome_profile::chrome_profiles_list,
             chrome_profile::chrome_pairing_get,
             chrome_profile::chrome_pairing_set,
+            reminders::reminders_list,
+            reminders::reminder_claim,
+            reminders::reminder_unclaim,
+            reminders::reminder_postpone,
             chrome_view::chrome_view_show,
             chrome_view::chrome_view_prepare,
             chrome_view::chrome_view_place,

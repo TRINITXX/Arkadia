@@ -5,11 +5,15 @@ import type { ChatEvent } from "@/lib/chat/chatProtocol";
 const listeners = new Map<string, (event: ChatEvent) => void>();
 const exits = new Set<(account: string) => void>();
 const commands: unknown[] = [];
+/** Command types the server refuses. */
+const refused = new Set<string>();
 vi.mock("@/lib/chat/chatEvents", () => ({
   SERVER_GONE: "Le serveur du chat s'est arrêté",
   chatCommand: (_account: unknown, command: unknown) => {
     commands.push(command);
-    return Promise.resolve();
+    return refused.has((command as { type: string }).type)
+      ? Promise.reject(new Error("refusé"))
+      : Promise.resolve();
   },
   liveServerAccounts: () => [],
   chatEventsReady: () => Promise.resolve(),
@@ -93,6 +97,20 @@ describe("a queued message withdrawn by its ×", () => {
     ]);
     expect(ids(chatId)).toEqual(["sent:u0"]);
     expect(getDraft(chatId).text).toBe("");
+    dropLiveChat(chatId);
+  });
+});
+
+describe("a start the server refuses", () => {
+  it("says it failed, the column closed on its error", async () => {
+    vi.useFakeTimers();
+    const chatId = "live-refused";
+    refused.add("start");
+    attachLiveChat(chatId, undefined);
+    expect(await startLiveChat(chatId, undefined, { cwd: "C:/p" })).toBe(false);
+    vi.runOnlyPendingTimers();
+    expect(liveChatState(chatId).closed).toEqual({ error: "Error: refusé" });
+    refused.clear();
     dropLiveChat(chatId);
   });
 });

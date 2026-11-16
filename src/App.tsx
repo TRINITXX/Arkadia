@@ -10,6 +10,9 @@ import { Sidepanel } from "@/components/Sidepanel";
 import { Toolbar } from "@/components/Toolbar";
 import { ChatModeToggle } from "@/components/chat/chat-mode-toggle";
 import { AccountsPanel } from "@/components/AccountsPanel";
+import { RemindersButton } from "@/components/RemindersButton";
+import { RemindersDot } from "@/components/RemindersDot";
+import { startReminderPolling } from "@/lib/reminderStore";
 import { AccountChip } from "@/components/AccountChip";
 import { useAccounts } from "@/lib/useAccounts";
 import { useCreditsPoll } from "@/lib/credits";
@@ -2764,6 +2767,55 @@ export function App() {
     };
   }, [paneHolding, revealPane, startChat]);
 
+  // A due reminder's « Lancer » (sidebar « Rappels »): a new chat tab in its
+  // project, shown, its prompt sent as the first message. As the phone opens
+  // a chat (`chatOpen`): started from here, before its pane mounts, so the
+  // pane finds it running (`attachLiveChat`) and starts nothing.
+  const openReminderChat = useCallback(
+    async (project: Project, prompt: string): Promise<boolean> => {
+      const accountId = currentAccountRef.current;
+      const paneAccount = accountId === MAIN_ACCOUNT_ID ? undefined : accountId;
+      const spawned = await spawnTabFor(
+        project,
+        undefined,
+        undefined,
+        accountId,
+      );
+      if (!spawned) {
+        pushToast("error", `Onglet non créé dans ${project.name}`);
+        return false;
+      }
+      const chat: PaneChat = { cwd: project.path };
+      startChat(spawned.paneId, chat);
+      setSessionPreview(null);
+      setActiveProjectId(project.id);
+      markProjectInput(project.id);
+      try {
+        // A start that failed closes the column on its error: the reminder
+        // goes back to the list.
+        if (
+          attachLiveChat(spawned.paneId, paneAccount) &&
+          !(await startLiveChat(spawned.paneId, paneAccount, chat))
+        )
+          return false;
+        await chatCommand(paneAccount, {
+          type: "send",
+          chatId: spawned.paneId,
+          text: prompt,
+          images: [],
+        });
+      } catch (e) {
+        pushToast("error", `Rappel non envoyé : ${String(e)}`);
+        return false;
+      }
+      return true;
+    },
+    [spawnTabFor, startChat, markProjectInput, pushToast],
+  );
+  // The reminders folder: read now, then every minute, the sidebar folded
+  // or not (the folded sidebar's button shows the due ones).
+  useEffect(() => startReminderPolling(), []);
+
   // ─── Focus a pane on request from the notification popup ────────
   // The "open in Arkadia" button emits `focus-pane` with the pane id; bring its
   // project + tab forward and focus the pane so the user lands on the
@@ -3684,6 +3736,9 @@ export function App() {
           activeProjectIds={sidebarActiveProjectIds}
           hiddenTabIds={hiddenSidebarTabIds}
           accountMarks={accountMarks}
+          remindersPanel={
+            <RemindersButton projects={projects} onLaunch={openReminderChat} />
+          }
           accountsPanel={
             accounts.state && (
               <AccountsPanel
@@ -3740,6 +3795,7 @@ export function App() {
               disabled={!activeProject}
               sidepanelOpen={sidepanelOpen}
               onToggleSidepanel={() => setSidepanelOpen((v) => !v)}
+              sidepanelBadge={<RemindersDot />}
               accountChip={
                 accounts.state && accounts.state.accounts.length > 1 ? (
                   <AccountChip
