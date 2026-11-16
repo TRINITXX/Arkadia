@@ -924,7 +924,8 @@ function Preview() {
         cwd={"C:\\Users\\TRINITX\\Desktop\\Claude Desktop\\Arkadia-lab"}
         isActive
         onActivate={() => {}}
-        onSend={() => {}}
+        // Said in the console: a message sent (the input's, the sheet's) reads there.
+        onSend={(text) => console.info("[aperçu] envoi", JSON.stringify(text))}
         // Said in the console: Esc's checks read it (`chatLayers`).
         onInterrupt={() => console.info("[aperçu] interruption")}
         // Said in the console: a panel's answer reads there.

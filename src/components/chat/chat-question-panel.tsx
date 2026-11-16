@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
+import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatAttachments } from "@/components/chat/chat-attachments";
 import type { DraftImage } from "@/lib/chat/chatDrafts";
 import { focusIsFree, focusOf } from "@/lib/chat/chatFocus";
@@ -45,6 +46,11 @@ import {
   useFieldDictation,
   usePushToTalk,
 } from "@/lib/chat/useFieldDictation";
+import { useSendAfterDictation } from "@/lib/chat/useSendAfterDictation";
+import type { DictationEnd } from "@/lib/useHiddenVoice";
+
+/** No pane, no dictation: never waited for (`status` reads idle). */
+const noStop = (): Promise<DictationEnd> => Promise.resolve({ ok: true });
 
 /**
  * Keys this soon after the question shows, or after a key it ignored, were
@@ -68,6 +74,7 @@ export function ChatQuestionPanel({
   isActive,
   onAnswer,
   onOpen,
+  onToast,
 }: {
   request: PendingRequest;
   /** Only the pane the user is in takes the keyboard. */
@@ -76,6 +83,8 @@ export function ChatQuestionPanel({
   onAnswer: (result: PermissionResult, images?: ChatImage[]) => void;
   /** A pasted image's thumbnail clicked: the lightbox. */
   onOpen: (content: LightboxContent) => void;
+  /** A dictation that fails as the answers wait for it: why nothing went. */
+  onToast?: ToastFn;
 }) {
   const questions = questionsOf(request.input);
   const count = questions.length;
@@ -101,7 +110,8 @@ export function ChatQuestionPanel({
   // the input it replaced (the user's ask of 14/11/2026). Its text goes to
   // the question it was started from, after what that field holds.
   const [dictatedFor, setDictatedFor] = useState(0);
-  const field = useFieldDictation(useContext(ChatDictationContext), (text) => {
+  const dictation = useContext(ChatDictationContext);
+  const field = useFieldDictation(dictation, (text) => {
     setOther((o) =>
       o.map((t, i) =>
         i !== dictatedFor ? t : t.trim() ? `${t.trimEnd()} ${text}` : text,
@@ -141,7 +151,7 @@ export function ChatQuestionPanel({
   const answered = answers.map(Boolean);
   const complete = answersOf(questions, answers);
 
-  const submit = () => {
+  const answerNow = () => {
     if (!complete) return;
     onAnswer(
       {
@@ -151,6 +161,19 @@ export function ChatQuestionPanel({
       sentImages(pics.flatMap((list, i) => (own[i].trim() ? list : []))),
     );
   };
+  // Sent while your own words are dictated (Enter, the button): the
+  // dictation stops and the answers go once its words are in them, never
+  // the answers first and the words left for a message of their own (the
+  // user's report of 16/11/2026). Another field's dictation is not waited for.
+  const sending = useSendAfterDictation(
+    {
+      status: field.mine ? field.status : "idle",
+      stop: dictation?.voice.stop ?? noStop,
+    },
+    answerNow,
+    onToast,
+  );
+  const submit = () => sending.submit(false);
 
   const pasteImages = (
     e: React.ClipboardEvent<HTMLTextAreaElement>,
@@ -486,12 +509,14 @@ export function ChatQuestionPanel({
               ) : (
                 <button
                   type="button"
-                  className="send"
+                  className={`send${sending.waiting ? " waiting" : ""}`}
                   disabled={!complete}
                   title={
-                    complete
-                      ? "Envoyer (Entrée)"
-                      : "Choisis ou écris une réponse"
+                    sending.waiting
+                      ? "Envoi dès la fin de la dictée…"
+                      : complete
+                        ? "Envoyer (Entrée)"
+                        : "Choisis ou écris une réponse"
                   }
                   aria-label="Envoyer les réponses"
                   onClick={submit}

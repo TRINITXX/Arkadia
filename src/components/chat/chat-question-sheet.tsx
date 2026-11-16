@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
+import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatAttachments } from "@/components/chat/chat-attachments";
 import type { ChatVoice } from "@/components/chat/chat-composer";
 import { redirectDictation, releaseDictation } from "@/lib/chat/chatDrafts";
@@ -40,6 +41,7 @@ import {
 import type { ChatItem } from "@/lib/chat/chatState";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 import type { ChatImage } from "@/lib/chat/useChatSession";
+import { useSendAfterDictation } from "@/lib/chat/useSendAfterDictation";
 import {
   pastedImageFiles,
   readImage,
@@ -80,6 +82,7 @@ export function ChatQuestionSheet({
   onStop,
   onDictating,
   onOpen,
+  onToast,
 }: {
   /** The pane: answers and « closed » outlive its unmounts. */
   paneKey: string;
@@ -96,6 +99,8 @@ export function ChatQuestionSheet({
   onDictating?: (on: boolean) => void;
   /** A pasted image's thumbnail clicked: the lightbox. */
   onOpen: (content: LightboxContent) => void;
+  /** A dictation that fails as the reply waits for it: why nothing went. */
+  onToast?: ToastFn;
 }) {
   const round = useMemo(() => lastReplyRound(items), [items]);
   const replyId = round?.id ?? "";
@@ -140,6 +145,9 @@ export function ChatQuestionSheet({
       // Its own target only: a visual's remark may hold the dictation.
       releaseDictation(paneKey, targetRef.current);
       targetRef.current = null;
+      // Its words now go to the draft: no field of it holds the dictation,
+      // a send never waits for it (another round in its place included).
+      setDictating(null);
     };
   }, [open, replyId, paneKey]);
 
@@ -217,6 +225,28 @@ export function ChatQuestionSheet({
     twin.scrollTop = twin.scrollHeight;
   }, [liveWords, shownText]);
 
+  // An image alone answers too: its tag stands for it.
+  const parts = sheetReplyParts(sheet.answers);
+  const reply = round ? roundReply(round.questions, parts.answers) : null;
+  const close = () =>
+    updateSheet(paneKey, replyId, (s) => ({ ...s, closed: true }));
+  const send = () => {
+    // Closed while the reply waited for a dictation: the user took it back.
+    if (!reply || sheet.closed) return;
+    onSend(reply, sentImages(parts.images));
+    close();
+  };
+  // Sent while a field of it takes a dictation (Enter, the button): the
+  // dictation stops and the reply goes once its words are in it, never the
+  // reply first and the words in a message of their own (the user's report
+  // of 16/11/2026). Another field's dictation (a visual's remark) is not
+  // waited for.
+  const sending = useSendAfterDictation(
+    { status: dictating !== null ? voice.status : "idle", stop: voice.stop },
+    send,
+    onToast,
+  );
+
   if (!round || sheet.closed) return null;
   const { questions } = round;
   const isAnswered = (q: RoundQuestion) =>
@@ -236,9 +266,6 @@ export function ChatQuestionSheet({
     const next = nextQuestionLeft(answeredFlags, step);
     if (next !== null) goTo(next);
   };
-  // An image alone answers too: its tag stands for it.
-  const parts = sheetReplyParts(sheet.answers);
-  const reply = roundReply(questions, parts.answers);
   const answered = answeredFlags.filter(Boolean).length;
   const next = buttonLeadsTo(answeredFlags, step);
 
@@ -270,13 +297,6 @@ export function ChatQuestionSheet({
     talkRef.current = null;
     if (talking && voice.status !== "idle" && voice.status !== "transcribing")
       void voice.stop();
-  };
-  const close = () =>
-    updateSheet(paneKey, replyId, (s) => ({ ...s, closed: true }));
-  const send = () => {
-    if (!reply) return;
-    onSend(reply, sentImages(parts.images));
-    close();
   };
   const recording = dictating !== null && voice.status !== "idle";
   const listening = recording && dictating === q.key;
@@ -528,7 +548,7 @@ export function ChatQuestionSheet({
                       // On to the next question left; sent only once all
                       // are answered (the button sends a part).
                       const to = enterLeadsTo(answeredFlags, step);
-                      if (to === "send") send();
+                      if (to === "send") sending.submit(false);
                       else if (to !== null) goTo(to);
                     }
                   }}
@@ -553,15 +573,17 @@ export function ChatQuestionSheet({
               {next === "send" ? (
                 <button
                   type="button"
-                  className="send"
+                  className={`send${sending.waiting ? " waiting" : ""}`}
                   disabled={!reply}
                   title={
-                    reply
-                      ? `Envoyer ${answered} réponse${answered > 1 ? "s" : ""} sur ${questions.length}`
-                      : "Choisis ou écris au moins une réponse"
+                    sending.waiting
+                      ? "Envoi dès la fin de la dictée…"
+                      : reply
+                        ? `Envoyer ${answered} réponse${answered > 1 ? "s" : ""} sur ${questions.length}`
+                        : "Choisis ou écris au moins une réponse"
                   }
                   aria-label="Envoyer les réponses"
-                  onClick={send}
+                  onClick={() => sending.submit(false)}
                 >
                   <Send />
                 </button>

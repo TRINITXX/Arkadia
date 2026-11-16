@@ -576,6 +576,7 @@ function ChatViewBody({
         isActive={isActive}
         onAnswer={answer}
         onOpen={open}
+        onToast={onToast}
       />
     );
   } else if (request?.toolName === "ExitPlanMode") {
@@ -834,6 +835,7 @@ function ChatViewBody({
               working={state.working}
               onDictating={setSheetDictates}
               onOpen={open}
+              onToast={onToast}
               onSend={(text, images) => {
                 stuckRef.current = true;
                 onSend(text, images);

@@ -388,9 +388,9 @@ export const CHAT_CSS = `
 .chat-queued-mark.dropped { color: #fca5a5; }
 .chat-queued-mark button { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; border: 1px solid #3a3e45; background: transparent; color: #c4c4cc; font: inherit; font-size: 11.5px; padding: 1px 8px; border-radius: 999px; cursor: pointer; }
 .chat-queued-mark button:hover { color: var(--chat-ink); border-color: #5a3a2c; background: #2b2623; }
-.chat-round.send.waiting { animation: chat-send-wait 1.1s ease-in-out infinite; }
+.chat-round.send.waiting, .chat-sheet-q .free .send.waiting { animation: chat-send-wait 1.1s ease-in-out infinite; }
 @keyframes chat-send-wait { 0%, 100% { box-shadow: 0 0 0 0 rgba(226,134,95,.5); } 50% { box-shadow: 0 0 0 7px rgba(226,134,95,0); opacity: .75; } }
-@media (prefers-reduced-motion: reduce) { .chat-round.send.waiting { animation: none; box-shadow: 0 0 0 3px rgba(226,134,95,.35); } }
+@media (prefers-reduced-motion: reduce) { .chat-round.send.waiting, .chat-sheet-q .free .send.waiting { animation: none; box-shadow: 0 0 0 3px rgba(226,134,95,.35); } }
 
 /* Slash commands: menu and the panels they open. */
 .chat-slash { position: absolute; left: 10px; right: 10px; bottom: calc(100% + 6px); z-index: 5; max-height: min(380px, 52vh); overflow: auto; border-radius: 14px; background: #202327; border: 1px solid #31353b; box-shadow: 0 2px 6px rgba(0,0,0,.3); padding: 4px; scroll-padding: 26px 0 4px; scrollbar-width: thin; scrollbar-color: #31353b transparent; }
