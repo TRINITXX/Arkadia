@@ -8,10 +8,6 @@ import {
 import { messageDraft } from "@/lib/chat/chatAttachments";
 import { putBackInDraft } from "@/lib/chat/chatDrafts";
 import type { ChatEvent } from "@/lib/chat/chatProtocol";
-import {
-  dropChatProgress,
-  publishChatProgress,
-} from "@/lib/chat/chatProgressStore";
 import { mayAutoResume, restartStart } from "@/lib/chat/chatRestart";
 import { withdrawnItem } from "@/lib/chat/chatSdkSettings";
 import { sleepAfter } from "@/lib/chat/chatSleep";
@@ -93,8 +89,6 @@ export function subscribeLiveSessions(
 }
 
 function notify(chat: LiveChat, before?: ChatState, reset = false): void {
-  // The sidebar's line under its tab, its pane shown or not.
-  publishChatProgress(chat.chatId, chat.state);
   for (const cb of chat.listeners) cb();
   const sessionId = chat.state.sessionId;
   const changed = before && sessionId && sessionId !== before.sessionId;
@@ -350,7 +344,6 @@ export function dropLiveChat(chatId: string): void {
   if (!chat) return;
   chat.off();
   chats.delete(chatId);
-  dropChatProgress(chatId);
 }
 
 export function rememberColumn(chatId: string, place: ColumnPlace): void {

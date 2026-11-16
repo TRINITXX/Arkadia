@@ -7,17 +7,14 @@ import { RemindersDot } from "@/components/RemindersDot";
 import { Sidepanel } from "@/components/Sidepanel";
 import { Toolbar } from "@/components/Toolbar";
 import type { AgentStateValue } from "@/lib/agentState";
-import { publishChatProgress } from "@/lib/chat/chatProgressStore";
-import { EMPTY_CHAT, type ChatItem } from "@/lib/chat/chatState";
 import { publishReminders } from "@/lib/reminderStore";
 import type { Reminder } from "@/lib/reminders";
 import type { Project, Tab, ToolbarButton } from "@/types";
 
 /**
- * Dev-only page (not in the build): the real sidebar fed with made-up chats
- * and reminders through its real stores (`chatProgressStore`,
- * `reminderStore`), for screenshots without the app.
- * `?v=progress`: each tab's progress line. `?v=reminders`: the « Rappels »
+ * Dev-only page (not in the build): the real sidebar fed with made-up
+ * reminders through its real store (`reminderStore`), for screenshots
+ * without the app. `?v=reminders`: the « Rappels »
  * button, its list open. `?v=folded`: the sidebar folded, the due
  * reminders' dot on the toolbar's button that unfolds it.
  */
@@ -82,7 +79,6 @@ const tabs: Tab[] = [
   tab("t1", "ark", "Crash de Chrome au lancement"),
   tab("t2", "ark", "Note vocale envoyée en double"),
   tab("t3", "ark", "Habitudes d'utilisation d'Arkadia"),
-  // A terminal pane: no line under it.
   tab("t6", "ark", "pwsh", false),
   tab("t4", "vtc", "Paywall et code promo"),
   tab("t5", "assets", "Catalogue de packs Superhéros"),
@@ -99,89 +95,6 @@ const states: Record<string, AgentStateValue> = {
 };
 
 const now = Date.now();
-const ago = (min: number) => now - min * 60_000;
-let seq = 0;
-const user = (text: string, at: number): ChatItem => ({
-  kind: "user",
-  id: `u${seq++}`,
-  text,
-  images: 0,
-  at,
-});
-const said = (text: string, at: number): ChatItem => ({
-  kind: "text",
-  id: `x${seq++}`,
-  text,
-  streaming: false,
-  at,
-});
-const ended = (at: number): ChatItem => ({
-  kind: "turn",
-  id: `turn${seq++}`,
-  durationMs: 60_000,
-  tools: 3,
-  files: 1,
-  at,
-});
-
-/** In a turn since `min` minutes, Claude's words so far. */
-function working(paneId: string, min: number, items: ChatItem[]): void {
-  publishChatProgress(paneId, {
-    ...EMPTY_CHAT,
-    working: true,
-    turnStartedAt: ago(min),
-    items: [user("Vas-y", ago(min)), ...items],
-  });
-}
-
-/** At rest since `min` minutes, after this reply. */
-function resting(paneId: string, min: number, reply: string): void {
-  publishChatProgress(paneId, {
-    ...EMPTY_CHAT,
-    items: [
-      user("Vas-y", ago(min + 4)),
-      said(reply, ago(min)),
-      ended(ago(min)),
-    ],
-  });
-}
-
-working("t1-p", 6, [
-  said(
-    "Je relance Chrome pour reproduire le crash. Ensuite je lis son journal.",
-    ago(2),
-  ),
-]);
-resting(
-  "t2-p",
-  12,
-  [
-    "Deux causes possibles pour le doublon.",
-    "",
-    "❓ Question 1 sur 1.",
-    "",
-    "La note part deux fois quand la dictée finit pendant l'envoi.",
-    "",
-    "On corrige d'abord la dictée ou l'envoi ?",
-    "",
-    "  a) La dictée",
-    "  b) L'envoi",
-    "",
-    "Je pencherais pour (a) : c'est le cas le plus fréquent.",
-  ].join("\n"),
-);
-working("t3-p", 18, [
-  said(
-    "**Je vérifie** 6 points avant de proposer :\n\n1. Les lectures",
-    ago(1),
-  ),
-]);
-resting(
-  "t4-p",
-  80,
-  "✅ **Fini** : commit fait, rien poussé.\n\n| Quoi | État |\n|---|---|",
-);
-working("t5-p", 2, []);
 
 /** `h` hours before now, on the hour (`days` days back first). */
 function hoursAgo(h: number, days = 0): string {
