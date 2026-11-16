@@ -47,6 +47,7 @@ import {
   type CompactFacts,
 } from "./autoCompact.ts";
 import { pipeGone, strayVerdict } from "./guard.ts";
+import { forgetChat, reapChat, stderrTail, trackedSpawn } from "./reap.ts";
 import {
   coldFacts,
   conversationDigest,
@@ -263,7 +264,12 @@ export type Command =
   | { type: "visual_open"; chatId: string; html: string; title: string }
   /** An artifact opened from this chat sent its reply to Claude (`artifactWatch.ts`). */
   | { type: "artifact_reply"; chatId: string; url: string }
-  | { type: "close"; chatId: string };
+  /**
+   * `ended`: Arkadia closed the pane for good (`close_chat`), what its Claude
+   * Code left running goes too. Without it, the page closes the chat for a
+   * switch (account, chat → terminal): the session goes on elsewhere.
+   */
+  | { type: "close"; chatId: string; ended?: boolean };
 
 type StartCommand = Extract<Command, { type: "start" }>;
 
@@ -672,6 +678,17 @@ function emit(event: ServerEvent, to?: string): void {
 /** The phone a command came from (`to` of its reads), for its error too. */
 function replyTo(cmd: Command): string | undefined {
   return "to" in cmd && typeof cmd.to === "string" ? cmd.to : undefined;
+}
+
+/**
+ * A Claude Code that exited on an error, with the end of its stderr (why: a
+ * refused `--resume`, a crash at boot), as the SDK's own spawn gave it.
+ */
+async function withStderr(error: string, chatId: string): Promise<string> {
+  const exited = /Claude Code process (exited with code|terminated by signal)/.test(error);
+  if (!exited || error.includes("stderr:")) return error;
+  const tail = await stderrTail(chatId);
+  return tail ? `${error}. stderr: ${tail}` : error;
 }
 
 /** The user's Claude Code, so the chat runs the same version as the terminal. */
@@ -1173,7 +1190,12 @@ class Chat {
         // 31/10/2026): left out, the SDK runs a near-empty one. Plus the rule
         // of a visual against an artifact.
         systemPrompt: { type: "preset", preset: "claude_code", append: VISUAL_RULE },
-        stderr: (data) => process.stderr.write(`[${this.chatId}] ${data}`),
+        // Started here, its pid kept: what it leaves running dies with its
+        // pane (`reapChat`). Its stderr comes through it (the SDK's `stderr`
+        // option is unused with a custom spawn).
+        spawnClaudeCodeProcess: trackedSpawn(this.chatId, (data) =>
+          process.stderr.write(`[${this.chatId}] ${data}`),
+        ),
       },
     });
     this.query = q;
@@ -1662,7 +1684,8 @@ class Chat {
       if (this.query === q) this.out({ type: "closed", chatId: this.chatId });
     } catch (e) {
       await this.killed;
-      if (this.query === q) this.out({ type: "closed", chatId: this.chatId, error: String(e) });
+      const error = await withStderr(String(e), this.chatId);
+      if (this.query === q) this.out({ type: "closed", chatId: this.chatId, error });
     } finally {
       // Stopped for a relaunch: its successor takes the place. Asleep: it stays.
       const asleep = this.query !== q;
@@ -3056,6 +3079,12 @@ async function handle(cmd: Command): Promise<void> {
     return history({ ...cmd, type: "history" });
   }
   const chat = chats.get(cmd.chatId);
+  if (cmd.type === "close") {
+    // A pane closed for good: what its Claude Code left running dies once
+    // it is gone (asleep long ago included). A switch keeps it all.
+    if (cmd.ended === true) void reapChat(cmd.chatId);
+    else forgetChat(cmd.chatId);
+  }
   // Arkadia closes the chat of every pane it closes, chat or not.
   if (!chat && cmd.type === "close") return;
   // A reply for a chat gone meanwhile: no one to tell, and no error in a column.

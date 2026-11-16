@@ -2039,6 +2039,9 @@ export function App() {
       paneToTab.current.delete(old.id);
       dropFrame(old.id);
       dropHeldConv(old.id);
+      // After the page's close above, never before: it tells the server the
+      // session goes on, so this pane's end kills none of the programs its
+      // Claude Code started (`chat-server/reap.ts`, `forgetChat`).
       void invoke("close_terminal", { sessionId: old.id }).catch(() => {});
       paneToTab.current.set(newId, tabId);
       void invoke("remote_pane_replaced", { oldId: old.id, newId }).catch(

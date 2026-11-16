@@ -263,10 +263,15 @@ fn spawn_server(app: &AppHandle, account_id: Option<&str>) -> Result<Server, Str
 impl ChatServers {
     /// Ends the chat of a pane that closes, whatever its account: every
     /// server running gets the close (one with no such chat ignores it).
+    /// `ended`: the pane is gone, what its Claude Code left running goes too
+    /// (`chat-server/reap.ts`); a switch closes the chat from the page.
     /// On its own thread: `close_terminal` runs on the main thread, and the
     /// lock may be held a while (a server starting, a large message sent).
     pub fn close_chat(&self, chat_id: &str) {
-        let line = format!("{}\n", json!({ "type": "close", "chatId": chat_id }));
+        let line = format!(
+            "{}\n",
+            json!({ "type": "close", "chatId": chat_id, "ended": true })
+        );
         let servers = self.clone();
         std::thread::spawn(move || {
             for server in servers.0.lock().values_mut() {
