@@ -19,7 +19,7 @@ use serde_json::Value;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Reminder {
-    /// Its file's name: the Resend id the script named it by.
+    /// Its file's name, given by `rappel.mjs` (`r-<day>-<hex>`; older ones: their Resend id).
     id: String,
     /// The conversation (project) the prompt is for.
     conversation: String,
@@ -38,7 +38,7 @@ fn reminders_dir() -> PathBuf {
         .join("reminders")
 }
 
-/// A reminder's id names a file of the folder: a Resend id, nothing that
+/// A reminder's id names a file of the folder: letters, digits, dashes, nothing that
 /// could reach another folder.
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
