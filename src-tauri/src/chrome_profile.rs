@@ -179,6 +179,28 @@ pub(crate) fn profile_dir_for_email(email: &str) -> Option<String> {
     profile_dir(&read_json(local_state_file()?)?, &name)
 }
 
+/// The profile folders paired with a Claude account in the table, each once.
+/// None when the table or Chrome's `Local State` cannot be read.
+pub(crate) fn paired_profile_dirs() -> Option<Vec<String>> {
+    let pairing = pairing_file().and_then(read_json)?;
+    let state = local_state_file().and_then(read_json)?;
+    let mut dirs: Vec<String> = Vec::new();
+    for name in pairing
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| !key.starts_with('_'))
+        .filter_map(|(_, name)| name.as_str())
+    {
+        if let Some(dir) = profile_dir(&state, name) {
+            if !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+    }
+    Some(dirs)
+}
+
 /// Opens a new window in profile folder `dir` (the Chrome panel), on a blank
 /// page titled `title`: the window is found by it.
 pub(crate) fn launch_window(dir: &str, title: &str) -> bool {

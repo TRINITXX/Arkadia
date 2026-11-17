@@ -549,6 +549,154 @@ fn anchor_of(state: &ChromeView, dir: &str) -> Result<(Win, bool, bool), String>
     Ok((anchor, true, started))
 }
 
+/// The profile folder of a Chrome AppUserModelID (`app_id_of` reversed):
+/// "Chrome" is "Default", "Chrome.UserData.Profile3" is "Profile 3".
+fn profile_dir_of_app_id(app_id: &str) -> Option<String> {
+    if app_id == "Chrome" {
+        return Some("Default".into());
+    }
+    let digits = app_id.strip_prefix("Chrome.UserData.Profile")?;
+    (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+        .then(|| format!("Profile {digits}"))
+}
+
+/// Whether a window title is still a launch page's (`launch_title`), of
+/// any run: an anchor's, never a session's once Claude used it.
+fn on_launch_page(window_title: &str) -> bool {
+    let Some(rest) = window_title.strip_prefix("Arkadia-") else {
+        return false;
+    };
+    let mut parts = rest.splitn(3, |c: char| !c.is_ascii_digit());
+    let pid = parts.next().unwrap_or("");
+    let n = parts.next().unwrap_or("");
+    !pid.is_empty() && !n.is_empty() && rest[pid.len()..].starts_with('-')
+}
+
+/// A Chrome window an ended run of this Arkadia left.
+#[derive(Clone, Debug)]
+struct LeftWindow {
+    hwnd: isize,
+    app_id: Option<String>,
+    parked: bool,
+    /// Still on its launch page: an anchor, not a session's window.
+    launch_page: bool,
+}
+
+/// The windows an ended run left: per profile paired in `paired` (its
+/// folders), the one kept as its anchor, and the others, to close. A parked
+/// window on its launch page wins: a crashed run also left its sessions'
+/// windows, with a dead session's tabs. A window of a profile no account
+/// uses any more closes, so it does not keep that profile loaded for good.
+fn sort_left_behind(left: &[LeftWindow], paired: &[String]) -> (Vec<(String, isize)>, Vec<isize>) {
+    let rank = |w: &LeftWindow| (w.parked, w.launch_page);
+    let mut anchors: Vec<(String, &LeftWindow)> = Vec::new();
+    let mut extra = Vec::new();
+    for w in left {
+        let Some(dir) = w
+            .app_id
+            .as_deref()
+            .and_then(profile_dir_of_app_id)
+            .filter(|d| paired.contains(d))
+        else {
+            extra.push(w.hwnd);
+            continue;
+        };
+        match anchors.iter_mut().find(|(d, _)| *d == dir) {
+            Some(kept) if rank(w) > rank(kept.1) => {
+                extra.push(kept.1.hwnd);
+                kept.1 = w;
+            }
+            Some(_) => extra.push(w.hwnd),
+            None => anchors.push((dir, w)),
+        }
+    }
+    let anchors = anchors.into_iter().map(|(dir, w)| (dir, w.hwnd)).collect();
+    (anchors, extra)
+}
+
+/// At startup: the anchors the last run left stay their profile's anchor.
+/// Closing them unloaded the profile, and the next session that needed it
+/// started it cold: Chrome then froze Alexis's own window 10 to 20 s (every
+/// freeze he dated, 16 and 17/11/2026, fell on such a start). The rest of
+/// what it left (a crashed run's session windows) closes. Under the launch
+/// lock: a request of a session Arkadia does not run may come meanwhile
+/// (`prepare_outside`), and its anchor, if it launched one first, stays.
+fn keep_left_behind(app: &AppHandle) {
+    let state = app.state::<ChromeView>();
+    let Ok(_launch) = state.launching.lock() else {
+        return;
+    };
+    // Watching a kept window needs the hook thread; the lock is held from
+    // the start, so no request launches an anchor meanwhile.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !win::hooks_ready() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let left = win::left_behind();
+    // The table unreadable: every profile a window was left for counts.
+    let paired = crate::chrome_profile::paired_profile_dirs().unwrap_or_else(|| {
+        left.iter()
+            .filter_map(|w| w.app_id.as_deref().and_then(profile_dir_of_app_id))
+            .collect()
+    });
+    let (anchors, mut extra) = sort_left_behind(&left, &paired);
+    let anchors: Vec<(String, isize)> = anchors
+        .into_iter()
+        .filter(|(dir, raw)| {
+            let taken = state
+                .inner
+                .lock()
+                .is_ok_and(|inner| inner.spares.get(dir).is_some_and(|a| win::alive(a.hwnd)));
+            if taken {
+                extra.push(*raw);
+            }
+            !taken
+        })
+        .collect();
+    for raw in extra {
+        win::close(raw);
+    }
+    for (dir, raw) in anchors {
+        win::adopt(raw);
+        win::park(raw);
+        win::watch_process(raw);
+        if let Ok(mut inner) = state.inner.lock() {
+            inner.spares.insert(
+                dir.clone(),
+                Win {
+                    hwnd: raw,
+                    profile_dir: dir.clone(),
+                    at: None,
+                    launch: None,
+                    launch_busy: false,
+                    proven: false,
+                    steered: false,
+                    elsewhere: false,
+                },
+            );
+        }
+        log(&format!("anchor of {dir} kept from the last run"));
+    }
+}
+
+/// At startup: the profiles paired with a Claude account that have no
+/// anchor start now, parked, rather than cold when a session first needs
+/// one, maybe while Alexis browses (see `keep_left_behind`). After a reboot
+/// Arkadia starts before he opens his Chrome.
+fn prestart(app: &AppHandle) {
+    let state = app.state::<ChromeView>();
+    for dir in crate::chrome_profile::paired_profile_dirs().unwrap_or_default() {
+        let Ok(_launch) = state.launching.lock() else {
+            return;
+        };
+        match anchor_of(&state, &dir) {
+            Ok((_, true, _)) => log(&format!("anchor of {dir} started ahead")),
+            Ok(_) => {}
+            Err(e) => log(&format!("anchor of {dir} not started ahead: {e}")),
+        }
+    }
+}
+
 /// A Claude session Arkadia does not run (a scheduled task, another
 /// terminal) is about to use Claude in Chrome: its profile's anchor, parked
 /// off-screen, becomes the profile's last-focused window, where the
@@ -557,8 +705,8 @@ fn anchor_of(state: &ChromeView, dir: &str) -> Result<(Win, bool, bool), String>
 /// another app, the anchor steered by nobody): the tabs go to the profile's
 /// last-focused window, as before; the hook does not look. Known limits: a
 /// launch here borrows the foreground as every launch does
-/// (`make_most_recent`), and the anchor, its tabs with it, closes with
-/// Arkadia (exit, rebuild).
+/// (`make_most_recent`). The anchor, its tabs with it, outlives Arkadia
+/// (exit, rebuild): the next run takes it back (`keep_left_behind`).
 fn prepare_outside(state: &ChromeView, email: &str, id: &str) -> Result<Prepared, String> {
     let dir = crate::chrome_profile::profile_dir_for_email(email)
         .ok_or_else(|| "no Chrome profile paired with this account".to_string())?;
@@ -660,7 +808,7 @@ fn launch(state: &ChromeView, dir: &str, pane: Option<&str>) -> Result<(Win, boo
     let hwnd = loop {
         let found = win::browser_windows()
             .into_iter()
-            .find(|(_, _, text)| is_launched_window(text, &title));
+            .find(|(h, _, text)| is_launched_window(text, &title) && !win::marked(*h));
         if let Some((h, _, _)) = found {
             break h;
         }
@@ -745,7 +893,7 @@ fn catch_late(dir: String, title: String, pane: Option<String>, before: Option<i
         let hwnd = loop {
             let found = win::browser_windows()
                 .into_iter()
-                .find(|(_, _, text)| is_launched_window(text, &title));
+                .find(|(h, _, text)| is_launched_window(text, &title) && !win::marked(*h));
             if let Some((h, _, _)) = found {
                 break h;
             }
@@ -1230,29 +1378,39 @@ pub async fn chrome_view_keys(app: AppHandle) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Every window closes (page reload, Arkadia exit).
+/// Every session's window closes (Arkadia exit, `on_exit`; the page no
+/// longer calls it). The daily's anchors stay, parked: its next run takes
+/// them back (`keep_left_behind`). The Lab's close: started for tests only,
+/// left behind they would hold Claude's tabs nobody steers for days.
 #[tauri::command]
 pub async fn chrome_view_close_all(app: AppHandle) {
     close_all(&app.state::<ChromeView>());
 }
 
 fn close_all(state: &ChromeView) {
-    let wins: Vec<Win> = state
+    let keep_anchors = !crate::lab::LAB;
+    let (wins, anchors): (Vec<Win>, Vec<isize>) = state
         .inner
         .lock()
         .map(|mut inner| {
             inner.active = None;
-            let spares: Vec<Win> = inner.spares.drain().map(|(_, w)| w).collect();
-            inner
-                .windows
-                .drain()
-                .map(|(_, w)| w)
-                .chain(spares)
-                .collect()
+            let anchors = if keep_anchors {
+                inner.spares.values().map(|w| w.hwnd).collect()
+            } else {
+                inner.spares.drain().map(|(_, w)| w.hwnd).collect()
+            };
+            (inner.windows.drain().map(|(_, w)| w).collect(), anchors)
         })
         .unwrap_or_default();
     for win in wins {
         win::close(win.hwnd);
+    }
+    for raw in anchors {
+        if keep_anchors {
+            win::park(raw);
+        } else {
+            win::close(raw);
+        }
     }
 }
 
@@ -1442,14 +1600,21 @@ fn forget_asked(pane_id: &str) {
     let _ = std::fs::remove_file(asked_marker(&temp, pane_id));
 }
 
-/// Starts the inbox watcher and the window hooks. Windows a crashed
-/// Arkadia left behind (they carry its mark) close first.
+/// Starts the inbox watcher and the window hooks, then takes back the
+/// anchors the last run left and starts the paired profiles that have none
+/// (`keep_left_behind`, `prestart`).
 pub fn spawn(app: AppHandle) {
     let _ = APP.set(app.clone());
-    win::close_orphans();
     let hooks_app = app.clone();
     std::thread::spawn(move || win::run_hooks(hooks_app));
     std::thread::spawn(win::run_covers);
+    let start_app = app.clone();
+    std::thread::spawn(move || {
+        keep_left_behind(&start_app);
+        if !crate::lab::LAB {
+            prestart(&start_app);
+        }
+    });
     std::thread::spawn(move || {
         if let Err(e) = run_inbox(app) {
             eprintln!("[arkadia chrome] inbox watcher stopped: {e}");
@@ -2527,18 +2692,44 @@ mod win {
         }
     }
 
-    /// Windows a crashed run of this Arkadia left: closed. Those of an
-    /// instance still running (`tauri dev` beside the daily) are left alone.
-    pub(super) fn close_orphans() {
+    /// Windows an ended run of this Arkadia left (its anchors, kept on
+    /// purpose, or all of a crashed run's), with their profile's
+    /// AppUserModelID and whether they are parked. Those of an instance
+    /// still running (`tauri dev` beside the daily) are left alone.
+    pub(super) fn left_behind() -> Vec<super::LeftWindow> {
         unveil_leftovers();
-        for (raw, _, _) in browser_windows() {
-            // SAFETY: plain read of a window property.
-            let mark = unsafe { GetPropW(hwnd(raw), mark_name()) };
-            let pid = mark.0 as usize as u32;
-            if pid != 0 && pid != std::process::id() && !running(pid) {
-                close(raw);
-            }
-        }
+        browser_windows()
+            .into_iter()
+            .filter(|(raw, _, _)| {
+                // SAFETY: plain read of a window property.
+                let mark = unsafe { GetPropW(hwnd(*raw), mark_name()) };
+                let pid = mark.0 as usize as u32;
+                pid != 0 && pid != std::process::id() && !running(pid)
+            })
+            .map(|(raw, app_id, title)| {
+                let mut r = RECT::default();
+                // SAFETY: plain read.
+                let read = unsafe { GetWindowRect(hwnd(raw), &mut r) }.is_ok();
+                super::LeftWindow {
+                    hwnd: raw,
+                    app_id,
+                    parked: read
+                        && is_parked((r.left, r.top, r.right - r.left, r.bottom - r.top)),
+                    launch_page: super::on_launch_page(&title),
+                }
+            })
+            .collect()
+    }
+
+    /// Whether a window carries a panel's mark (this Arkadia's or the
+    /// other's, of any run): a launch's new window never does yet.
+    pub(super) fn marked(raw: isize) -> bool {
+        is_panel_window(hwnd(raw))
+    }
+
+    /// The hook thread runs: a window can be watched.
+    pub(super) fn hooks_ready() -> bool {
+        HOOK_THREAD.load(Ordering::SeqCst) != 0
     }
 
     pub(super) fn window_title(raw: isize) -> String {
@@ -3161,7 +3352,15 @@ mod win {
     pub(super) fn activate_briefly(_: isize) -> bool {
         false
     }
-    pub(super) fn close_orphans() {}
+    pub(super) fn left_behind() -> Vec<super::LeftWindow> {
+        Vec::new()
+    }
+    pub(super) fn marked(_: isize) -> bool {
+        false
+    }
+    pub(super) fn hooks_ready() -> bool {
+        true
+    }
     pub(super) fn watch_process(_: isize) {}
     pub(super) fn expect_late(_: &str) {}
     pub(super) fn late_done(_: &str) {}
@@ -3171,6 +3370,56 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_dir_of_app_id_reverses_app_id_of() {
+        for dir in ["Default", "Profile 3", "Profile 12"] {
+            assert_eq!(profile_dir_of_app_id(&app_id_of(dir)).as_deref(), Some(dir));
+        }
+        assert_eq!(profile_dir_of_app_id("Chrome.UserData.GuestProfile"), None);
+        assert_eq!(profile_dir_of_app_id("Chrome.UserData.Profile"), None);
+        assert_eq!(profile_dir_of_app_id("Msedge"), None);
+    }
+
+    #[test]
+    fn sort_left_behind_keeps_one_anchor_per_paired_profile() {
+        let w = |hwnd, profile: &str, parked, launch_page| LeftWindow {
+            hwnd,
+            app_id: Some(format!("Chrome.UserData.{profile}")),
+            parked,
+            launch_page,
+        };
+        let left = vec![
+            w(1, "Profile3", false, true),
+            w(2, "Profile3", true, false),
+            w(3, "Profile3", true, true),
+            w(4, "Profile7", false, false),
+            w(5, "Profile9", true, true),
+            LeftWindow {
+                hwnd: 6,
+                app_id: None,
+                parked: true,
+                launch_page: true,
+            },
+        ];
+        let paired = vec!["Profile 3".to_string(), "Profile 7".to_string()];
+        let (anchors, extra) = sort_left_behind(&left, &paired);
+        // Parked on its launch page wins; an unpaired or unknown profile closes.
+        assert_eq!(
+            anchors,
+            vec![("Profile 3".to_string(), 3), ("Profile 7".to_string(), 4)]
+        );
+        assert_eq!(extra, vec![1, 2, 5, 6]);
+    }
+
+    #[test]
+    fn knows_a_launch_page_of_any_run() {
+        assert!(on_launch_page("Arkadia-15492-3"));
+        assert!(on_launch_page("Arkadia-15492-3 - Google Chrome - Minifashion"));
+        assert!(!on_launch_page("Arkadia - adsense.google.com"));
+        assert!(!on_launch_page("Arkadia-15492 - Google Chrome"));
+        assert!(!on_launch_page("Nouvel onglet - Google Chrome"));
+    }
 
     fn b(x: f64, y: f64, width: f64, height: f64) -> Bounds {
         Bounds {
