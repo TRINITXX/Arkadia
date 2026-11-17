@@ -1294,6 +1294,12 @@ pub fn shown_has_foreground(app: &AppHandle) -> bool {
     win::foreground().is_some_and(|fg| shown.contains(&fg))
 }
 
+/// Arkadia's side: one of its windows, a panel's Chrome, or a popup of it.
+#[cfg(windows)]
+pub fn is_front_side(raw: isize) -> bool {
+    win::is_front_side(win::hwnd(raw))
+}
+
 pub fn on_exit(app: &AppHandle) {
     if let Some(state) = app.try_state::<ChromeView>() {
         close_all(&state);
@@ -1645,7 +1651,7 @@ mod win {
     use windows::Win32::UI::WindowsAndMessaging::{SC_MAXIMIZE, SC_RESTORE, WM_SYSCOMMAND};
     use windows::Win32::UI::WindowsAndMessaging::{SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN};
 
-    fn hwnd(raw: isize) -> HWND {
+    pub(super) fn hwnd(raw: isize) -> HWND {
         HWND(raw as *mut core::ffi::c_void)
     }
 
@@ -2317,7 +2323,7 @@ mod win {
     }
 
     /// Arkadia's side: one of its windows, a panel's Chrome, or a popup of it.
-    fn is_front_side(h: HWND) -> bool {
+    pub(super) fn is_front_side(h: HWND) -> bool {
         !h.0.is_null() && (own_process(h) || is_panel_window(h) || owned_by_panel(h))
     }
 

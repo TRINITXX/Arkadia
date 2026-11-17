@@ -458,19 +458,125 @@ fn handle_signal(
     });
 }
 
-/// True when Arkadia's main window is focused, or is the front-most real window
-/// with only an always-on-top overlay (PiP) above it.
+/// True when Alexis is in Arkadia (see `Presence`).
 fn main_is_foreground(app: &AppHandle) -> bool {
+    presence(app).in_arkadia()
+}
+
+/// Whether Alexis is in Arkadia, and which test says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Presence {
+    /// The first test that puts him in Arkadia: main focused, an artifact
+    /// focused, the panel's Chrome in front, or main front-most with only an
+    /// always-on-top overlay (PiP) above it.
+    said_by: Option<&'static str>,
+    /// Another app's real window holds the foreground: he is in that app,
+    /// whatever the tests say. One of them said "in Arkadia" while he read
+    /// his own Chrome (15/11 and 17/11/2026).
+    vetoed: bool,
+}
+
+impl Presence {
+    fn in_arkadia(self) -> bool {
+        self.said_by.is_some() && !self.vetoed
+    }
+}
+
+fn presence(app: &AppHandle) -> Presence {
+    Presence {
+        said_by: first_test_in_arkadia(app),
+        vetoed: other_app_in_front(),
+    }
+}
+
+fn first_test_in_arkadia(app: &AppHandle) -> Option<&'static str> {
     let focused = app
         .get_webview_window("main")
         .and_then(|w| w.is_focused().ok())
         .unwrap_or(false);
+    if focused {
+        return Some("main focused");
+    }
     // Reading an artifact beside the terminals is being in Arkadia too, and
     // so is typing in the panel's Chrome.
-    focused
-        || crate::artifact_view::has_focus(app)
-        || crate::chrome_view::shown_has_foreground(app)
-        || main_is_effective_foreground(app)
+    if crate::artifact_view::has_focus(app) {
+        return Some("artifact focused");
+    }
+    if crate::chrome_view::shown_has_foreground(app) {
+        return Some("panel Chrome in front");
+    }
+    if main_is_effective_foreground(app) {
+        return Some("front-most window");
+    }
+    None
+}
+
+/// The foreground window belongs to another app and Alexis can see and use
+/// it: not Arkadia's side (its windows, a panel's Chrome or its dialogs),
+/// shown, not a tool window nor an always-on-top overlay (PiP, taskbar).
+#[cfg(windows)]
+fn other_app_in_front() -> bool {
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowLongW, IsIconic, IsWindowVisible, GWL_EXSTYLE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    };
+
+    // SAFETY: plain reads of the foreground window's properties.
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() || crate::chrome_view::is_front_side(hwnd.0 as isize) {
+            return false;
+        }
+        let mut cloaked: u32 = 0;
+        let _ = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            &mut cloaked as *mut u32 as *mut core::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+        let exstyle = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        IsWindowVisible(hwnd).as_bool()
+            && !IsIconic(hwnd).as_bool()
+            && cloaked == 0
+            && exstyle & (WS_EX_TOOLWINDOW.0 | WS_EX_TOPMOST.0) == 0
+    }
+}
+
+#[cfg(not(windows))]
+fn other_app_in_front() -> bool {
+    false
+}
+
+/// The foreground window's class and title start, for the log. Never sends
+/// a message (`InternalGetWindowText`): Arkadia's main thread may be busy.
+#[cfg(windows)]
+fn foreground_label() -> String {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetForegroundWindow, InternalGetWindowText,
+    };
+
+    // SAFETY: plain reads of the foreground window's properties.
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return "none".into();
+        }
+        let mut class = [0u16; 64];
+        let class_len = GetClassNameW(hwnd, &mut class).max(0) as usize;
+        let mut title = [0u16; 48];
+        let title_len = InternalGetWindowText(hwnd, &mut title).max(0) as usize;
+        format!(
+            "{} '{}'",
+            String::from_utf16_lossy(&class[..class_len]),
+            String::from_utf16_lossy(&title[..title_len])
+        )
+    }
+}
+
+#[cfg(not(windows))]
+fn foreground_label() -> String {
+    String::new()
 }
 
 /// Runs as soon as a signal lands (no grace since 31/10/2026), on a throwaway
@@ -529,18 +635,26 @@ fn show_signal(
 
     // The popup, however, only while the user is away from Arkadia. Read after
     // the chime, which blocks ~0.7 s: the user may come back while it plays.
-    let away = !main_is_foreground(app);
+    let presence = presence(app);
+    let away = !presence.in_arkadia();
     note_told(
         &mut queue.told_while_away.lock(),
         &pane_id,
         told_kind(&kind, round),
         away,
     );
-    if !away {
+    // Which test and which window: a wrong verdict names its culprit.
+    if let Some(test) = presence.said_by {
+        let label = foreground_label();
+        if !away {
+            log_line(&format!(
+                "Arkadia has focus ({test}; foreground {label}) — chimed, no popup for pane {pane_id}"
+            ));
+            return;
+        }
         log_line(&format!(
-            "Arkadia has focus — chimed, no popup for pane {pane_id}"
+            "{test} said Arkadia has focus, but {label} holds the foreground — popup for pane {pane_id}"
         ));
-        return;
     }
 
     let style = queue.style.load(Ordering::Acquire);
@@ -1381,7 +1495,7 @@ mod tests {
     use super::{cascade_xy, chat_self_woken, mirror_lift, told_kind, NOTIF_W, POPUP_H, POPUP_W};
     use super::{
         chime_allowed, compact_for, mute_self_woken, note_told, signal_folder,
-        suppress_for_fullscreen, toast_wanted, window_label, FullscreenKind, NOTIF_LABEL,
+        suppress_for_fullscreen, toast_wanted, window_label, FullscreenKind, Presence, NOTIF_LABEL,
         STYLE_COMPACT, STYLE_MIRROR, STYLE_OFF,
     };
     use std::collections::HashSet;
@@ -1520,5 +1634,35 @@ mod tests {
         assert_eq!(window_label("b", true), NOTIF_LABEL);
         assert_ne!(window_label("a", false), window_label("b", false));
         assert!(NOTIF_LABEL.starts_with("popup-"), "the sweeps match on it");
+    }
+
+    /// Another app's real window in front is away, whatever Arkadia's tests
+    /// say: one said "in Arkadia" while Alexis read his own Chrome (15/11 and
+    /// 17/11/2026).
+    #[test]
+    fn another_apps_window_in_front_overrides_every_test() {
+        for test in [
+            "main focused",
+            "artifact focused",
+            "panel Chrome in front",
+            "front-most window",
+        ] {
+            let said = Some(test);
+            assert!(Presence {
+                said_by: said,
+                vetoed: false
+            }
+            .in_arkadia());
+            assert!(!Presence {
+                said_by: said,
+                vetoed: true
+            }
+            .in_arkadia());
+        }
+        assert!(!Presence {
+            said_by: None,
+            vetoed: false
+        }
+        .in_arkadia());
     }
 }
