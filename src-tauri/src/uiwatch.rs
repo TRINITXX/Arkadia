@@ -34,10 +34,19 @@ const REPAIR_GRACE: Duration = Duration::from_secs(6);
 /// Repairs attempted per wedge before giving up and leaving the window alone.
 const MAX_ATTEMPTS: u32 = 2;
 
+/// Repairs (reloads and rebuilds) allowed within `REPAIR_WINDOW`, wedge after
+/// wedge. A page that wedges again right after each repair is not being
+/// repaired: on 18/11/2026 the window was torn down five times in a minute,
+/// until Alexis closed the app.
+const REPAIR_BUDGET: usize = 4;
+const REPAIR_WINDOW: Duration = Duration::from_secs(600);
+
 const POLL: Duration = Duration::from_millis(500);
 
-/// Grace given to a fresh page (app start, rebuilt window) before its silence
-/// counts against it.
+/// Grace given to a fresh page (app start, reloaded page, rebuilt window)
+/// before its silence counts against it. It runs to its end: a booting page
+/// beat once, 4.6 s after its reload, then stayed silent 5.4 s more
+/// (18/11/2026).
 const BOOT_GRACE: Duration = Duration::from_secs(15);
 
 /// Main-thread lag past which the page's silence says nothing about the page.
@@ -75,23 +84,29 @@ pub enum Action {
 /// `attempts` counts repairs already made for the CURRENT wedge, and
 /// `since_attempt` is the time since the last one (meaningless when
 /// `attempts` is 0). `host_stalled` says the main thread itself lags, which
-/// alone explains a silent page.
+/// alone explains a silent page. `budget_left` says a repair is still allowed
+/// (`REPAIR_BUDGET`).
 pub fn decide(
     silence: Duration,
     attempts: u32,
     since_attempt: Duration,
     host_stalled: bool,
+    budget_left: bool,
 ) -> Action {
     if silence < WEDGE_AFTER || host_stalled {
         return Action::Wait;
     }
     if attempts == 0 {
-        return Action::Reload;
+        return if budget_left {
+            Action::Reload
+        } else {
+            Action::GiveUp
+        };
     }
     if since_attempt < REPAIR_GRACE {
         return Action::Wait;
     }
-    if attempts >= MAX_ATTEMPTS {
+    if attempts >= MAX_ATTEMPTS || !budget_left {
         return Action::GiveUp;
     }
     Action::Rebuild
@@ -115,8 +130,15 @@ pub enum Calm {
 /// stall-adjusted silence, which drops to zero when the main thread comes back
 /// whether or not the page is alive (that mix-up reset the repair count on a
 /// dead page, review of 24/10/2026).
-pub fn calm(beat_silence: Duration, in_grace: bool) -> Calm {
-    if beat_silence < WEDGE_AFTER {
+///
+/// `own_beat` says the last beat came from the page now loaded. A beat of the
+/// page a repair replaced, answered late, is not the new page's: taken for
+/// one, it ended the new page's grace, and the page was reloaded 5 s into a
+/// boot that takes 6 (18/11/2026).
+pub fn calm(beat_silence: Duration, in_grace: bool, own_beat: bool) -> Calm {
+    if in_grace && !own_beat {
+        Calm::Booting
+    } else if beat_silence < WEDGE_AFTER {
         Calm::Back
     } else if in_grace {
         Calm::Booting
@@ -130,6 +152,9 @@ pub fn calm(beat_silence: Duration, in_grace: bool) -> Calm {
 pub struct UiHealth {
     /// Milliseconds since `started` at the last heartbeat.
     last_beat_ms: AtomicU64,
+    /// Milliseconds since `started` when the last repair was asked for: the
+    /// page it brings can only beat after it.
+    born_ms: AtomicU64,
     started: Instant,
     /// True while frames must not be sent: the page is deaf, or the main thread
     /// that relays them lags. Read by every flush thread, hence an `Arc` handed
@@ -147,6 +172,7 @@ impl Default for UiHealth {
     fn default() -> Self {
         Self {
             last_beat_ms: AtomicU64::new(0),
+            born_ms: AtomicU64::new(0),
             started: Instant::now(),
             frames_held: Arc::new(AtomicBool::new(false)),
             attempts: AtomicU32::new(0),
@@ -164,6 +190,17 @@ impl UiHealth {
     pub fn silence(&self) -> Duration {
         let now = self.started.elapsed().as_millis() as u64;
         Duration::from_millis(now.saturating_sub(self.last_beat_ms.load(Ordering::Acquire)))
+    }
+
+    /// A repair just replaced the page: beats up to now were the old one's.
+    fn mark_born(&self) {
+        let ms = self.started.elapsed().as_millis() as u64;
+        self.born_ms.store(ms, Ordering::Release);
+    }
+
+    /// Whether the page now loaded has beaten.
+    fn beat_since_born(&self) -> bool {
+        self.last_beat_ms.load(Ordering::Acquire) > self.born_ms.load(Ordering::Acquire)
     }
 
     /// Handed to the per-pane flush threads so they can skip emitting while
@@ -296,11 +333,18 @@ pub fn spawn_watchdog(app: AppHandle) {
         // Set while a rebuild waits for the old window to go: (destroy posted
         // at, last "still waiting" line).
         let mut rebuild: Option<(Instant, Instant)> = None;
-        // A rebuilt window's page gets the same grace as at app start.
+        // A reloaded or rebuilt page gets the same grace as at app start.
         let mut grace_until: Option<Instant> = None;
+        // The grace follows a reload: the renderer is the old one, maybe
+        // still deaf, so frames stay held until the page beats.
+        let mut grace_holds = false;
+        // The spent budget already has its line in the log.
+        let mut budget_logged = false;
         // The current silence already has its "no heartbeat" line.
         let mut wedge_logged = false;
         let mut last_attempt = Instant::now();
+        // When the repairs of the last `REPAIR_WINDOW` were made.
+        let mut repairs: VecDeque<Instant> = VecDeque::new();
         loop {
             std::thread::sleep(POLL);
             meter.sample(crate::terminal::frames_emitted());
@@ -317,7 +361,9 @@ pub fn spawn_watchdog(app: AppHandle) {
                         since.elapsed().as_millis()
                     ));
                     rebuild = None;
+                    health.mark_born();
                     grace_until = Some(Instant::now() + BOOT_GRACE);
+                    grace_holds = false;
                     wedge_logged = false;
                     last_attempt = Instant::now();
                     // The new page asks for whatever it missed on mount.
@@ -340,9 +386,8 @@ pub fn spawn_watchdog(app: AppHandle) {
             let in_grace = grace_until.is_some_and(|t| Instant::now() < t);
 
             if !host_stalled && (silence < WEDGE_AFTER || in_grace) {
-                match calm(beat_silence, in_grace) {
+                match calm(beat_silence, in_grace, health.beat_since_born()) {
                     Calm::Back => {
-                        grace_until = None;
                         wedge_logged = false;
                         let was_held = held.swap(false, Ordering::AcqRel);
                         if was_held || attempts != 0 {
@@ -350,6 +395,7 @@ pub fn spawn_watchdog(app: AppHandle) {
                             crate::popup::log_line("[uiwatch] webview back, frames resumed");
                         }
                     }
+                    Calm::Booting if grace_holds => {}
                     Calm::Booting => held.store(false, Ordering::Release),
                     Calm::Waiting => {}
                 }
@@ -366,16 +412,43 @@ pub fn spawn_watchdog(app: AppHandle) {
                 ));
             }
 
-            match decide(silence, attempts, last_attempt.elapsed(), host_stalled) {
+            while repairs
+                .front()
+                .is_some_and(|t| t.elapsed() > REPAIR_WINDOW)
+            {
+                repairs.pop_front();
+            }
+            let budget_left = repairs.len() < REPAIR_BUDGET;
+            if budget_left {
+                budget_logged = false;
+            }
+            match decide(
+                silence,
+                attempts,
+                last_attempt.elapsed(),
+                host_stalled,
+                budget_left,
+            ) {
                 Action::Wait => {}
                 Action::Reload => {
                     health.attempts.store(1, Ordering::Release);
                     last_attempt = Instant::now();
+                    repairs.push_back(last_attempt);
                     crate::popup::log_line("[uiwatch] repair 1/2: reloading the webview");
-                    if let Some(win) = app.get_webview_window("main") {
-                        if let Err(e) = win.reload() {
+                    let posted = match app.get_webview_window("main").map(|win| win.reload()) {
+                        Some(Ok(())) => true,
+                        Some(Err(e)) => {
                             crate::popup::log_line(&format!("[uiwatch] reload failed: {e}"));
+                            false
                         }
+                        None => false,
+                    };
+                    if posted {
+                        // A reloaded page boots like a new one: its first
+                        // beat came 4.6 to 6.2 s after the reload (18/11/2026).
+                        health.mark_born();
+                        grace_until = Some(last_attempt + BOOT_GRACE);
+                        grace_holds = true;
                     }
                 }
                 Action::Rebuild => {
@@ -385,7 +458,19 @@ pub fn spawn_watchdog(app: AppHandle) {
                         "[uiwatch] repair 2/2: rebuilding the window on a fresh renderer",
                     );
                     if start_rebuild(&app) {
+                        repairs.push_back(last_attempt);
                         rebuild = Some((Instant::now(), Instant::now()));
+                    }
+                }
+                // The budget is spent, this wedge's repairs are not: nothing
+                // latched, they resume when the budget frees up.
+                Action::GiveUp if attempts < MAX_ATTEMPTS => {
+                    if !budget_logged {
+                        budget_logged = true;
+                        crate::popup::log_line(&format!(
+                            "[uiwatch] {REPAIR_BUDGET} repairs in {} min - waiting before another",
+                            REPAIR_WINDOW.as_secs() / 60
+                        ));
                     }
                 }
                 Action::GiveUp => {
@@ -500,7 +585,7 @@ mod tests {
     #[test]
     fn a_beating_page_is_left_alone() {
         assert_eq!(
-            decide(Duration::from_secs(1), 0, Duration::ZERO, false),
+            decide(Duration::from_secs(1), 0, Duration::ZERO, false, true),
             Action::Wait
         );
     }
@@ -508,7 +593,7 @@ mod tests {
     #[test]
     fn silence_past_the_threshold_reloads_first() {
         assert_eq!(
-            decide(Duration::from_secs(6), 0, Duration::ZERO, false),
+            decide(Duration::from_secs(6), 0, Duration::ZERO, false, true),
             Action::Reload
         );
     }
@@ -516,11 +601,11 @@ mod tests {
     #[test]
     fn a_silent_page_is_not_judged_while_the_main_thread_lags() {
         assert_eq!(
-            decide(Duration::from_secs(20), 0, Duration::ZERO, true),
+            decide(Duration::from_secs(20), 0, Duration::ZERO, true, true),
             Action::Wait
         );
         assert_eq!(
-            decide(Duration::from_secs(20), 1, Duration::from_secs(7), true),
+            decide(Duration::from_secs(20), 1, Duration::from_secs(7), true, true),
             Action::Wait
         );
     }
@@ -528,7 +613,7 @@ mod tests {
     #[test]
     fn a_repair_is_given_time_to_land_before_escalating() {
         assert_eq!(
-            decide(Duration::from_secs(9), 1, Duration::from_secs(2), false),
+            decide(Duration::from_secs(9), 1, Duration::from_secs(2), false, true),
             Action::Wait
         );
     }
@@ -536,7 +621,7 @@ mod tests {
     #[test]
     fn a_reload_that_did_not_help_escalates_to_a_rebuild() {
         assert_eq!(
-            decide(Duration::from_secs(20), 1, Duration::from_secs(7), false),
+            decide(Duration::from_secs(20), 1, Duration::from_secs(7), false, true),
             Action::Rebuild
         );
     }
@@ -548,7 +633,8 @@ mod tests {
                 Duration::from_secs(60),
                 MAX_ATTEMPTS,
                 Duration::from_secs(7),
-                false
+                false,
+                true
             ),
             Action::GiveUp
         );
@@ -590,18 +676,44 @@ mod tests {
         // The stall-adjusted silence looks fine...
         assert!(probe.page_silence(beat_silence) < WEDGE_AFTER);
         // ...but without a real beat the episode stays open.
-        assert_eq!(calm(beat_silence, false), Calm::Waiting);
+        assert_eq!(calm(beat_silence, false, true), Calm::Waiting);
     }
 
     #[test]
     fn a_real_beat_closes_the_episode() {
-        assert_eq!(calm(Duration::from_secs(1), false), Calm::Back);
-        assert_eq!(calm(Duration::from_secs(1), true), Calm::Back);
+        assert_eq!(calm(Duration::from_secs(1), false, true), Calm::Back);
+        assert_eq!(calm(Duration::from_secs(1), true, true), Calm::Back);
     }
 
     #[test]
     fn a_rebuilt_page_gets_frames_while_it_boots() {
-        assert_eq!(calm(Duration::from_secs(9), true), Calm::Booting);
+        assert_eq!(calm(Duration::from_secs(9), true, false), Calm::Booting);
+    }
+
+    #[test]
+    fn a_late_beat_of_the_replaced_page_does_not_end_the_new_page_s_grace() {
+        assert_eq!(calm(Duration::from_millis(400), true, false), Calm::Booting);
+        let health = UiHealth::default();
+        std::thread::sleep(Duration::from_millis(5));
+        health.beat();
+        std::thread::sleep(Duration::from_millis(5));
+        health.mark_born();
+        assert!(!health.beat_since_born());
+        std::thread::sleep(Duration::from_millis(5));
+        health.beat();
+        assert!(health.beat_since_born());
+    }
+
+    #[test]
+    fn repairs_stop_once_the_budget_is_spent() {
+        assert_eq!(
+            decide(Duration::from_secs(6), 0, Duration::ZERO, false, false),
+            Action::GiveUp
+        );
+        assert_eq!(
+            decide(Duration::from_secs(20), 1, Duration::from_secs(7), false, false),
+            Action::GiveUp
+        );
     }
 
     #[test]
