@@ -76,7 +76,28 @@ describe("model menu", () => {
       "Haiku 5.5",
       "Haiku 4.5",
       "Opus 4.6",
+      "Mythos 5.2",
     ]);
+  });
+
+  it("offers Mythos 5.2 till Claude Code lists a Mythos, never alone", () => {
+    const mythos = (raw: JsonObject[]) =>
+      modelChoices(raw)
+        .filter((m) => m.model.includes("mythos"))
+        .map((m) => m.value);
+    expect(mythos(MODELS)).toEqual(["claude-mythos-5-2"]);
+    expect(
+      mythos([
+        ...MODELS,
+        {
+          value: "mythos",
+          resolvedModel: "claude-mythos-5-3",
+          displayName: "Mythos 5.3",
+        },
+      ]),
+    ).toEqual(["mythos"]);
+    // No list from Claude Code: the menu's fallback, not Mythos alone.
+    expect(modelChoices([])).toEqual([]);
   });
 
   it("shows only the latest version of each family", () => {
@@ -106,9 +127,10 @@ describe("model menu", () => {
         { value: "custom", resolvedModel: "custom", displayName: "Custom" },
       ]),
     );
-    // Fable first, then Opus, Sonnet, Haiku: not Claude Code's order.
+    // Fable first, Mythos, then Opus, Sonnet, Haiku: not Claude Code's order.
     expect(rows.map((m) => m.value)).toEqual([
       "fable",
+      "claude-mythos-5-2",
       "opus",
       "opus[1m]",
       "sonnet",

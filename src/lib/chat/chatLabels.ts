@@ -33,15 +33,16 @@ export function nextMode(mode: string | null): PermissionMode {
 }
 
 /**
- * The usual four, before Claude Code ever listed its own. `alias` is what
+ * The usual ones, before Claude Code ever listed its own. `alias` is what
  * the menu sends: Claude Code runs the family's latest under it, whatever
- * the label says.
+ * the label says. Mythos goes by its id (`UNLISTED_MODELS`).
  */
 export const MODELS: { id: string; alias: string; label: string }[] = [
   { id: "claude-opus-5-5", alias: "opus", label: "Opus 5.5" },
   { id: "claude-sonnet-5-5", alias: "sonnet", label: "Sonnet 5.5" },
   { id: "claude-haiku-5-5", alias: "haiku", label: "Haiku 5.5" },
   { id: "claude-fable-5-2", alias: "fable", label: "Fable 5.2" },
+  { id: "claude-mythos-5-2", alias: "claude-mythos-5-2", label: "Mythos 5.2" },
 ];
 
 /** "Opus 5.5" for `claude-opus-5-5`, `claude-opus-5-5[1m]` or `opus`. */
@@ -50,7 +51,7 @@ export function modelLabel(model: string | null): string {
   const base = model.replace(/\[.*\]$/, "");
   const known = MODELS.find((m) => m.id === base || m.alias === base);
   if (known) return known.label;
-  const family = /(opus|sonnet|haiku|fable)/i.exec(base)?.[1];
+  const family = /(opus|sonnet|haiku|fable|mythos)/i.exec(base)?.[1];
   return family
     ? family[0].toUpperCase() + family.slice(1).toLowerCase()
     : base;

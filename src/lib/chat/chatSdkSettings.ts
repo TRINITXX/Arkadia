@@ -101,8 +101,26 @@ function shortLabel(name: string, value: string): string {
 }
 
 /**
+ * Models Claude Code runs but leaves out of `supportedModels`: Mythos 5.2,
+ * open to every account, `setModel` taking its id (checked 18/11/2026,
+ * Claude Code 2.1.327). Each stays in the menu until Claude Code lists a
+ * model of its family.
+ */
+export const UNLISTED_MODELS: ModelChoice[] = [
+  {
+    value: "claude-mythos-5-2",
+    model: "claude-mythos-5-2",
+    label: "Mythos 5.2",
+    efforts: EFFORT_LEVELS,
+    // Claude Code's own table gives it fast mode, as Fable 5.2.
+    fast: true,
+  },
+];
+
+/**
  * The menu from `supportedModels`, in its order, labels short and in French:
- * the « Default (recommended) » row names the model it runs.
+ * the « Default (recommended) » row names the model it runs. The models it
+ * leaves out come last (`UNLISTED_MODELS`).
  */
 export function modelChoices(raw: unknown[]): ModelChoice[] {
   const rows = raw.map(obj).filter((r) => str(r.value));
@@ -116,13 +134,22 @@ export function modelChoices(raw: unknown[]): ModelChoice[] {
       fast: r.supportsFastMode === true,
     };
   });
-  return choices.map((c) => {
+  const named = choices.map((c) => {
     if (c.value !== "default") return c;
     const same = choices.find(
       (o) => o.value !== "default" && o.model === c.model,
     );
     return { ...c, label: same ? `Par défaut · ${same.label}` : "Par défaut" };
   });
+  // No list, no addition: the menu keeps its fallback.
+  if (named.length === 0) return named;
+  const families = new Set(named.map((c) => familyVersion(c.model)?.family));
+  return [
+    ...named,
+    ...UNLISTED_MODELS.filter(
+      (u) => !families.has(familyVersion(u.model)?.family),
+    ),
+  ];
 }
 
 const baseModel = (id: string) => id.replace(/\[.*\]$/, "");
@@ -131,7 +158,7 @@ const baseModel = (id: string) => id.replace(/\[.*\]$/, "");
 function familyVersion(
   id: string,
 ): { family: string; version: number[] } | null {
-  const m = /(opus|sonnet|haiku|fable)-([\d-]+)/i.exec(baseModel(id));
+  const m = /(opus|sonnet|haiku|fable|mythos)-([\d-]+)/i.exec(baseModel(id));
   if (!m) return null;
   const version = m[2]
     .split("-")
@@ -148,8 +175,11 @@ function compareVersions(a: number[], b: number[]): number {
   return 0;
 }
 
-/** The menu's order of the families (the user's pick of 12/11/2026). */
-const FAMILY_ORDER = ["fable", "opus", "sonnet", "haiku"];
+/**
+ * The menu's order of the families (the user's pick of 12/11/2026), Mythos
+ * next to Fable, its twin.
+ */
+const FAMILY_ORDER = ["fable", "mythos", "opus", "sonnet", "haiku"];
 
 const familyRank = (id: string) => {
   const family = familyVersion(id)?.family;
@@ -158,8 +188,8 @@ const familyRank = (id: string) => {
 };
 
 /**
- * The menu's rows: the latest version of each family, Fable, Opus, Sonnet
- * then Haiku, each with its wide-window row; no « Par défaut », no older
+ * The menu's rows: the latest version of each family, Fable, Mythos, Opus,
+ * Sonnet then Haiku, each with its wide-window row; no « Par défaut », no older
  * version (the user's pick of 31/10/2026). A row naming no family stays,
  * last.
  */

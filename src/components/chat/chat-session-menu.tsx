@@ -30,7 +30,7 @@ import { fitAbove } from "@/lib/chat/fitAbove";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 import { ChatEffortSlider } from "@/components/chat/chat-effort-slider";
 
-/** Until Claude Code ever listed its models: the usual four, by alias. */
+/** Until Claude Code ever listed its models: the usual ones (`MODELS`). */
 const FALLBACK: ModelChoice[] = MODELS.map((m) => ({
   value: m.alias,
   model: m.id,

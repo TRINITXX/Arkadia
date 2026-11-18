@@ -51,5 +51,6 @@ describe("modelLabel", () => {
     expect(modelLabel("fable")).toBe("Fable 5.2");
     expect(modelLabel("claude-fable-5-2")).toBe("Fable 5.2");
     expect(modelLabel("claude-opus-5-5[1m]")).toBe("Opus 5.5");
+    expect(modelLabel("claude-mythos-5-2")).toBe("Mythos 5.2");
   });
 });
