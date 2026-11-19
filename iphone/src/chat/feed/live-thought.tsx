@@ -9,10 +9,11 @@ import { F } from "~/chat/feed/feed-style";
 const LINES = 6;
 
 /**
- * Claude's latest thinking while it works and no reply follows it yet
- * (`chat-live-thought.tsx`): plain, after a bulb. Once a reply comes, it
- * goes behind that reply's bulb. Past six lines a tap opens it whole.
- * In a subagent's sheet, each of its thoughts where it came.
+ * A thought in full, plain, after a bulb (`chat-live-thought.tsx`): Claude's
+ * latest while it works and no reply follows it yet, which goes behind the
+ * next reply's bulb once it comes; and for good, one in Claude's own French
+ * words (`fullThoughts`). Past six lines a tap opens it whole. In a
+ * subagent's sheet, each of its thoughts where it came.
  */
 export function LiveThought({
   items,

@@ -12,7 +12,7 @@ import {
 import { withDayBreaks, type DayRow } from "@/lib/chat/chatDays";
 import { latestPlan, type ChatItem } from "@/lib/chat/chatState";
 import { turnDoneLine } from "@/lib/chat/chatSteps";
-import { thoughtBody } from "@/lib/chat/chatThoughts";
+import { fullThoughts, thoughtBody } from "@/lib/chat/chatThoughts";
 import { placeWork, type WorkPlaces } from "@/lib/chat/chatWorkPlaces";
 
 /**
@@ -34,13 +34,18 @@ export interface FeedRow {
   plan: string | null;
   /** « ✻ Terminé en … » of a turn row (`turnDoneLine`). */
   turn: string | null;
-  /** « Récit » (`placeWork`): the thoughts behind a reply's bulb. */
+  /** « Récit » (`placeWork`): the thoughts behind a reply's bulb, but
+   *  those drawn in full where they came. */
   thoughts: ThinkingItem[] | null;
+  /** A thinking row's thoughts in full (`fullThoughts`): its latest while
+   *  Claude works, and Claude's French words for good. */
+  full: ThinkingItem[] | null;
   /** The tools behind a reply's wrench: all but the line under way. */
   tools: FoldedUnit[] | null;
   /** A reply said before the exchange under way: a step reply dims. */
   past: boolean;
-  /** A thinking or tools row behind an icon of its own, not in full. */
+  /** A thinking or tools row with an icon of its own: a thinking row's
+   *  is for the thoughts it doesn't draw in full. */
   alone: boolean;
 }
 
@@ -92,12 +97,19 @@ export function lastThought(items: readonly ThinkingItem[]): string {
 
 /**
  * Whether the column draws a unit (`chat-timeline.tsx`): a long turn's
- * « Terminé en » only, a thinking with words in full while live or behind
- * its own bulb, the tool line under way or tools behind their own wrench.
- * The others are behind a reply's icon, or nothing. `unfolded` (a subagent's
- * sheet), each thought and each run of tools is a unit of its own, drawn.
+ * « Terminé en » only, a thinking with thoughts in full (`full`) or behind
+ * its own bulb (`ownBulb`), the tool line under way or tools behind their
+ * own wrench. The others are behind a reply's icon, or nothing.
+ * `unfolded` (a subagent's sheet), each thought and each run of tools is a
+ * unit of its own, drawn.
  */
-function drawn(u: ChatUnit, places: WorkPlaces, turn: string | null): boolean {
+function drawn(
+  u: ChatUnit,
+  places: WorkPlaces,
+  turn: string | null,
+  full: Map<string, ThinkingItem[]>,
+  ownBulb: (u: ChatUnit) => boolean,
+): boolean {
   switch (u.kind) {
     case "turn":
       return turn !== null;
@@ -106,10 +118,7 @@ function drawn(u: ChatUnit, places: WorkPlaces, turn: string | null): boolean {
     case "thinking":
       return true;
     case "thoughts":
-      return (
-        (places.live === u.id || places.alone.has(u.id)) &&
-        lastThought(u.items) !== ""
-      );
+      return full.has(u.id) || ownBulb(u);
     case "activity":
       return places.current.has(u.id) || places.alone.has(u.id);
     default:
@@ -140,6 +149,19 @@ export function feedRows(
       ? drawnUnits(messagesOnly ? onlyMessages(all, pending) : all, unfolded)
       : folded;
   const places = placeWork(shown, working);
+  // Drawn in full where they came, so out of every bulb (`fullThoughts`).
+  const full = fullThoughts(
+    shown.flatMap((u) => (u.kind === "thoughts" ? [u] : [])),
+    places.live,
+  );
+  const behindBulb = (items?: readonly ThinkingItem[]) => {
+    const left = items?.filter((t) => !full.ids.has(t.id));
+    return left && lastThought(left) ? left : null;
+  };
+  const ownBulb = (u: ChatUnit) =>
+    u.kind === "thoughts" &&
+    places.alone.has(u.id) &&
+    behindBulb(u.items) !== null;
   const turnOf = (u: ChatUnit) =>
     u.kind === "turn"
       ? turnDoneLine(
@@ -155,21 +177,22 @@ export function feedRows(
   const rows: FeedRow[] = [];
   for (const unit of withDayBreaks(shown, unitAt, now)) {
     const turn = unit.kind === "day" ? null : turnOf(unit);
-    if (unit.kind !== "day" && !drawn(unit, places, turn)) continue;
+    if (unit.kind !== "day" && !drawn(unit, places, turn, full.byRun, ownBulb))
+      continue;
     const reply = unit.kind === "text" ? unit.item.id : null;
     const current = reply !== null && places.current.has(reply);
-    const thoughts = reply ? places.thoughts.get(reply) : undefined;
     rows.push({
       key: unitKey(unit),
       unit,
       step: reply !== null && steps.has(reply),
       plan: unit.kind === "plan" ? planUpTo(items, unit.item.id) : null,
       turn,
-      thoughts: thoughts && lastThought(thoughts) ? thoughts : null,
+      thoughts: reply ? behindBulb(places.thoughts.get(reply)) : null,
+      full: unit.kind === "thoughts" ? (full.byRun.get(unit.id) ?? null) : null,
       tools: (reply && places.tools.get(reply)) || null,
       past: reply !== null && !current,
       alone:
-        (unit.kind === "thoughts" && unit.id !== places.live) ||
+        (unit.kind !== "day" && ownBulb(unit)) ||
         (unit.kind === "activity" && !places.current.has(unit.id)),
     });
   }
@@ -225,6 +248,7 @@ export function sameRow(a: FeedRow, b: FeedRow): boolean {
     a.alone === b.alone &&
     sameList(unitParts(a.unit), unitParts(b.unit)) &&
     sameList(a.thoughts, b.thoughts) &&
+    sameList(a.full, b.full) &&
     sameList(
       a.tools && activityTools(a.tools),
       b.tools && activityTools(b.tools),

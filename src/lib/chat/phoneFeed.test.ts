@@ -120,6 +120,38 @@ describe("feedRows « Récit »", () => {
     expect(live.find((r) => r.key === "now")?.tools).toBeNull();
   });
 
+  it("keeps Claude's French words in full where they came, out of the bulb", () => {
+    const said: ChatItem = {
+      kind: "thinking",
+      id: "fr",
+      text: "Pour YouTube, il faut faire la validation vidéo sur les deux chaînes, sinon la ferme réessaiera chaque heure.",
+      streaming: false,
+    };
+    const summary: ChatItem = {
+      kind: "thinking",
+      id: "en",
+      text: "I'm checking the regex for sentence boundaries, and it looks fine so far.",
+      streaming: false,
+    };
+    const rows = feedRows(
+      [user("u"), said, summary, tool("Bash", "b1"), text("a")],
+      false,
+    );
+    const thought = rows.find((r) => r.unit.kind === "thoughts");
+    expect(thought?.full?.map((t) => t.id)).toEqual(["fr"]);
+    expect(thought?.alone).toBe(false);
+    // The reply's bulb keeps the summary only: never a thought twice.
+    expect(rows.find((r) => r.key === "a")?.thoughts?.map((t) => t.id)).toEqual(
+      ["en"],
+    );
+    // A summary alone stays behind the bulb: no row for it.
+    const quiet = feedRows(
+      [user("u"), summary, tool("Bash", "b1"), text("a")],
+      false,
+    );
+    expect(quiet.some((r) => r.unit.kind === "thoughts")).toBe(false);
+  });
+
   it("shows the latest thought in full while Claude works, else its own bulb", () => {
     const items = [user("u"), think("t1")];
     const live = feedRows(items, true);

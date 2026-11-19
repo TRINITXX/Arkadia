@@ -181,13 +181,23 @@ export const FeedRowView = memo(function FeedRowView({
     // came, a tap reading it whole. `foldActivity` gathers it otherwise.
     case "thinking":
       return <LiveThought items={[unit.item]} onOpen={open("thoughts")} />;
-    // The latest thought in full while Claude works; one with no reply in
-    // its exchange behind a bulb of its own (the others are a reply's).
+    // In full: the latest thought while Claude works, and Claude's French
+    // words for good (`full`); one with no reply in its exchange behind a
+    // bulb of its own (the others are a reply's).
     case "thoughts":
-      return row.alone ? (
-        <PeekAlone kind="thoughts" onPress={open("thoughts")} />
-      ) : (
-        <LiveThought items={unit.items} onOpen={open("thoughts")} />
+      return (
+        <>
+          {row.full?.map((item) => (
+            <LiveThought
+              key={item.id}
+              items={[item]}
+              onOpen={open("thoughts")}
+            />
+          ))}
+          {row.alone && (
+            <PeekAlone kind="thoughts" onPress={open("thoughts")} />
+          )}
+        </>
       );
     case "notice":
       return <NoticeRow item={unit.item} />;
