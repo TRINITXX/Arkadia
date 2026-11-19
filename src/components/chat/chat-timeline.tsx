@@ -1,4 +1,11 @@
-import { memo, startTransition, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  memo,
+  startTransition,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { CircleHelp } from "lucide-react";
 import {
   MarkdownContent,
@@ -46,6 +53,7 @@ import {
 } from "@/lib/chat/chatImages";
 import { peerLabel } from "@/lib/chat/chatPeer";
 import { latestPlan, type ChatItem, type Subagent } from "@/lib/chat/chatState";
+import { fullThoughts } from "@/lib/chat/chatThoughts";
 import { placeWork } from "@/lib/chat/chatWorkPlaces";
 import type { ChoiceImage, VisualEntry } from "@/lib/chat/chatVisual";
 import { turnDoneLine } from "@/lib/chat/chatSteps";
@@ -153,21 +161,32 @@ export const ChatTimeline = memo(function ChatTimeline({
     const uuid = item.queued ? sentUuid(item.id) : null;
     return uuid && onRemoveQueued ? () => onRemoveQueued(uuid) : undefined;
   };
-  const { units, steps, places } = useMemo(() => {
+  const { units, steps, places, full } = useMemo(() => {
     const all = groupChatItems(items);
     const shown = drawnUnits(
       messagesOnly ? onlyMessages(all, pendingToolIds) : all,
       unfolded,
     );
+    // Thinking and tools behind Claude's replies (« Récit »).
+    const places = placeWork(shown, working);
     return {
       // « Aujourd'hui », « Hier », « lun. 27 oct. » where the day changes.
       units: withDayBreaks(shown, unitAt),
       // Read on the whole column: « Messages seuls » hides the work.
       steps: stepReplyIds(foldActivity(all), working),
-      // Thinking and tools behind Claude's replies (« Récit »).
-      places: placeWork(shown, working),
+      places,
+      // The thoughts drawn in full where they came, out of every bulb.
+      full: fullThoughts(
+        shown.flatMap((u) => (u.kind === "thoughts" ? [u] : [])),
+        places.live,
+      ),
     };
   }, [items, messagesOnly, unfolded, pendingToolIds, working]);
+  // A bulb's thoughts: those not already drawn in full.
+  const behindBulb = <T extends { id: string }>(thoughts?: T[]) => {
+    const left = thoughts?.filter((t) => !full.ids.has(t.id));
+    return left && left.length > 0 ? left : undefined;
+  };
   const [whole, setWhole] = useState(!tailFirst);
   useEffect(() => {
     if (!whole) startTransition(() => setWhole(true));
@@ -203,7 +222,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   // way); on a step's line (`stepText`), its tools' images after them, but
   // those its sentence already shows as minis.
   const peeks = (id: string, stepText?: string): React.ReactNode => {
-    const thoughts = places.thoughts.get(id);
+    const thoughts = behindBulb(places.thoughts.get(id));
     const tools = places.tools.get(id);
     if (!thoughts && !tools) return null;
     let shots = stepText === undefined ? undefined : lineImages.get(id);
@@ -341,15 +360,28 @@ export const ChatTimeline = memo(function ChatTimeline({
         return <ChatLiveThought key={unit.item.id} items={[unit.item]} />;
       // « Récit » (the user's picks of 02/11/2026): the latest thought in
       // full while Claude works, the others behind the bulb of the reply
-      // they led to (`placeWork`), or a bulb of their own.
-      case "thoughts":
-        if (unit.id === places.live)
-          return <ChatLiveThought key={unit.id} items={unit.items} />;
-        return places.alone.has(unit.id) ? (
-          <div key={unit.id} className="chat-unit chat-peek-alone">
-            <ChatThoughtBulb items={unit.items} />
-          </div>
-        ) : null;
+      // they led to (`placeWork`), or a bulb of their own. Claude's French
+      // words stay in full where they came: an answer he left there would
+      // be lost behind the bulb (`thoughtsInFull`, 19/11/2026).
+      case "thoughts": {
+        const inFull = full.byRun.get(unit.id) ?? [];
+        const bulb = places.alone.has(unit.id)
+          ? behindBulb(unit.items)
+          : undefined;
+        if (inFull.length === 0 && !bulb) return null;
+        return (
+          <Fragment key={unit.id}>
+            {inFull.map((item) => (
+              <ChatLiveThought key={item.id} items={[item]} />
+            ))}
+            {bulb && (
+              <div className="chat-unit chat-peek-alone">
+                <ChatThoughtBulb items={bulb} />
+              </div>
+            )}
+          </Fragment>
+        );
+      }
       case "notice":
         return unit.item.action === "reload_plugins" ? (
           <ChatPluginErrors

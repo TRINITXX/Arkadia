@@ -299,6 +299,10 @@ function recitState(): ChatState {
     run("Read", { file_path: "src/components/modern/MarkdownContent.tsx" }),
     say("Je cherche où le chat dessine les chemins de fichiers."),
     run("Read", { file_path: "src/lib/filePaths.ts" }),
+    // Claude's French words: in full where they came (19/11/2026).
+    think(
+      "Les chemins viennent tous de MarkdownContent : un seul endroit à changer, et la copie d'une phrase gardera le chemin complet.",
+    ),
     think(
       "I'll wrap each one found on disk in a tag and keep the folder hidden, so copying the sentence still gives the full path.",
     ),
