@@ -15,6 +15,11 @@ fn main() {
     if let Some((target, pane)) = arkadia_lib::artifact_inbox::forward_request() {
         return arkadia_lib::artifact_inbox::forward(&target, pane.as_deref());
     }
+    // A paired Chrome profile's saved tab groups, emptied out of Arkadia's
+    // process (see `chrome_tab_groups`).
+    if let Some(profile) = arkadia_lib::chrome_tab_groups::tidy_arg() {
+        return arkadia_lib::chrome_tab_groups::run_child(&profile);
+    }
     // The phone companion's always-on gate: same exe, no window (see `gate`).
     if arkadia_lib::gate::is_gate_mode() {
         return arkadia_lib::gate::run();

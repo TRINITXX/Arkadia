@@ -179,6 +179,11 @@ pub(crate) fn profile_dir_for_email(email: &str) -> Option<String> {
     profile_dir(&read_json(local_state_file()?)?, &name)
 }
 
+/// The full path of profile folder `dir` ("Profile 3").
+pub(crate) fn profile_path(dir: &str) -> Option<PathBuf> {
+    Some(local_state_file()?.parent()?.join(dir))
+}
+
 /// The profile folders paired with a Claude account in the table, each once.
 /// None when the table or Chrome's `Local State` cannot be read.
 pub(crate) fn paired_profile_dirs() -> Option<Vec<String>> {

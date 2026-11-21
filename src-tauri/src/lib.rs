@@ -6,6 +6,7 @@ mod artifact_snip;
 mod artifact_view;
 mod chat;
 mod chrome_profile;
+pub mod chrome_tab_groups;
 mod chrome_view;
 mod claude_watcher;
 mod conversation;
