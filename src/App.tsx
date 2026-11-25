@@ -126,7 +126,11 @@ import {
   type AgentStateValue,
   type PaneBackground,
 } from "@/lib/agentState";
-import { findProjectsByPath, parentOf } from "@/lib/externalAction";
+import {
+  bringMainForward,
+  findProjectsByPath,
+  parentOf,
+} from "@/lib/externalAction";
 import { resolveProjectTarget, type ClaudeSession } from "@/lib/sessionsIndex";
 import { subscribeStable } from "@/lib/tauriEvents";
 import { setChromePane, setChromeToggler } from "@/lib/chromePanes";
@@ -2771,33 +2775,51 @@ export function App() {
   // project, shown, its prompt sent as the first message. As the phone opens
   // a chat (`chatOpen`): started from here, before its pane mounts, so the
   // pane finds it running (`attachLiveChat`) and starts nothing.
+  // `shown` false (`--chat-add`, a button clicked in Chrome): the tab opens
+  // behind, the desktop stays on the project and tab Alexis is in. The
+  // project is not marked as typed in either: the sidebar would flip to it.
+  // A failure there would only toast in a window left behind, gone unseen
+  // after 8 s: `surface` brings the window forward, on the tab if it exists.
   const openReminderChat = useCallback(
-    async (project: Project, prompt: string): Promise<boolean> => {
+    async (
+      project: Project,
+      prompt: string,
+      shown = true,
+    ): Promise<boolean> => {
       const accountId = currentAccountRef.current;
       const paneAccount = accountId === MAIN_ACCOUNT_ID ? undefined : accountId;
+      const surface = (paneId = "") => {
+        if (!shown) bringMainForward(paneId);
+      };
       const spawned = await spawnTabFor(
         project,
         undefined,
         undefined,
         accountId,
+        shown,
       );
       if (!spawned) {
         pushToast("error", `Onglet non créé dans ${project.name}`);
+        surface();
         return false;
       }
       const chat: PaneChat = { cwd: project.path };
       startChat(spawned.paneId, chat);
-      setSessionPreview(null);
-      setActiveProjectId(project.id);
-      markProjectInput(project.id);
+      if (shown) {
+        setSessionPreview(null);
+        setActiveProjectId(project.id);
+        markProjectInput(project.id);
+      }
       try {
         // A start that failed closes the column on its error: the reminder
         // goes back to the list.
         if (
           attachLiveChat(spawned.paneId, paneAccount) &&
           !(await startLiveChat(spawned.paneId, paneAccount, chat))
-        )
+        ) {
+          surface(spawned.paneId);
           return false;
+        }
         await chatCommand(paneAccount, {
           type: "send",
           chatId: spawned.paneId,
@@ -2805,7 +2827,8 @@ export function App() {
           images: [],
         });
       } catch (e) {
-        pushToast("error", `Rappel non envoyé : ${String(e)}`);
+        pushToast("error", `Prompt non envoyé : ${String(e)}`);
+        surface(spawned.paneId);
         return false;
       }
       return true;
@@ -3039,7 +3062,7 @@ export function App() {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, color } : p)));
   };
 
-  // ─── External-action listener (/w and /m skills, --tab-add) ───
+  // ─── External-action listener (/w and /m skills, --tab-add, --chat-add) ───
   //
   // The listener must always act on the freshest projects/handlers, but keying
   // an effect on them would re-subscribe every render: `projects` changes often
@@ -3051,6 +3074,7 @@ export function App() {
   const externalActionRef = useRef({
     projects,
     spawnTabFor,
+    openReminderChat,
     onDeleteProject,
     pushToast,
     markProjectInput,
@@ -3062,6 +3086,7 @@ export function App() {
     externalActionRef.current = {
       projects,
       spawnTabFor,
+      openReminderChat,
       onDeleteProject,
       pushToast,
       markProjectInput,
@@ -3076,6 +3101,7 @@ export function App() {
       const {
         projects,
         spawnTabFor,
+        openReminderChat,
         onDeleteProject,
         pushToast,
         markProjectInput,
@@ -3116,6 +3142,34 @@ export function App() {
             ? `➕ ${a.name ?? a.run} lancé dans ${project.name}`
             : `Onglet non créé dans ${project.name}`,
         );
+        return;
+      }
+
+      if (a.kind === "chat") {
+        // A chat opened behind with its prompt (the TRINITX extension's
+        // « Claude » button on a tweet): Alexis stays in Chrome, the chat's
+        // end-of-turn notification brings him here.
+        // Its errors bring the window forward: Alexis is waiting in Chrome.
+        if (!a.path || !a.message) {
+          pushToast(
+            "error",
+            "--chat-add : --path et un --prompt-file lisible sont requis",
+          );
+          bringMainForward();
+          return;
+        }
+        const project = findProjectsByPath(projects, a.path)[0];
+        if (!project) {
+          pushToast("error", `Projet introuvable pour ${a.path}`);
+          bringMainForward();
+          return;
+        }
+        if (await openReminderChat(project, a.message, false)) {
+          pushToast(
+            "info",
+            `💬 ${a.name ?? "Chat"} ouvert dans ${project.name}`,
+          );
+        }
         return;
       }
 

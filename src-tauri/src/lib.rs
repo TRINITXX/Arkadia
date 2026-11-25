@@ -146,11 +146,20 @@ pub fn run() {
                     let _ = w.set_focus();
                 }
             }
-            // If this second launch carried an action (--wt-*, --tab-add),
-            // forward it to the frontend, which reuses the live project and
-            // tab paths.
+            // If this second launch carried an action (--wt-*, --tab-add,
+            // --chat-add), forward it to the frontend, which reuses the live
+            // project and tab paths. --chat-add reads its prompt file on a
+            // thread of its own: this callback runs on the main thread.
             if let Some(action) = action {
-                let _ = app.emit("external-action", action);
+                if action.kind == "chat" {
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        let action = crate::external_action::load_prompt(action);
+                        let _ = app.emit("external-action", action);
+                    });
+                } else {
+                    let _ = app.emit("external-action", action);
+                }
             }
         }));
     }

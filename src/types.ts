@@ -332,12 +332,14 @@ export const SCROLLBACK_LINES_DEFAULT = 20_000;
 
 /**
  * Payload forwarded from the Rust single-instance callback when Arkadia is
- * relaunched with an action argv: `--wt-*` (from the `/w` and `/m` skills) or
- * `--tab-add` (kind "tab": one more tab in an open project, running `run`).
+ * relaunched with an action argv: `--wt-*` (from the `/w` and `/m` skills),
+ * `--tab-add` (kind "tab": one more tab in an open project, running `run`) or
+ * `--chat-add` (kind "chat": a chat opened behind, its prompt in `message`).
  * Mirrors the Rust `ExternalAction` struct field-for-field.
  */
 export interface ExternalAction {
-  kind: "add" | "remove" | "notify" | "tab";
+  /** `chat`: `message` holds the prompt read from `--prompt-file`. */
+  kind: "add" | "remove" | "notify" | "tab" | "chat";
   path?: string;
   name?: string;
   color?: string;
@@ -345,6 +347,7 @@ export interface ExternalAction {
   after?: string;
   level?: "info" | "error";
   message?: string;
+  prompt_file?: string;
 }
 
 /** A transient on-screen toast (external-action feedback). */

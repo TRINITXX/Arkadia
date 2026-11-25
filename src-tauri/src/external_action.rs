@@ -10,14 +10,41 @@ pub struct ExternalAction {
     pub after: Option<String>,
     pub level: Option<String>,
     pub message: Option<String>,
+    pub prompt_file: Option<String>,
 }
 
 impl ExternalAction {
     /// True for an action that must not bring Arkadia's window to the front:
-    /// `--tab-add` comes from a script while Alexis may be typing elsewhere.
+    /// `--tab-add` comes from a script while Alexis may be typing elsewhere,
+    /// `--chat-add` from a button he clicked in Chrome, where he stays.
     pub fn stays_in_background(&self) -> bool {
-        self.kind == "tab"
+        self.kind == "tab" || self.kind == "chat"
     }
+}
+
+/// Largest prompt file `--chat-add` reads: a prompt, not a document.
+const MAX_PROMPT_BYTES: u64 = 256 * 1024;
+
+/// `--chat-add`: the prompt read from `--prompt-file` into `message`. The
+/// prompt travels in a file because the single-instance plugin joins the argv
+/// with `|` and splits it back: a prompt written in the argv would be cut at
+/// its first `|`. Left without a message when the file is missing or too big.
+/// Read after the caller's process has exited: the file must outlive it. A
+/// relative path resolves against Arkadia's own folder, not the caller's.
+pub fn load_prompt(mut action: ExternalAction) -> ExternalAction {
+    if action.kind != "chat" {
+        return action;
+    }
+    action.message = action.prompt_file.as_deref().and_then(|path| {
+        let size = std::fs::metadata(path).ok()?.len();
+        if size > MAX_PROMPT_BYTES {
+            return None;
+        }
+        std::fs::read_to_string(path)
+            .ok()
+            .filter(|text| !text.trim().is_empty())
+    });
+    action
 }
 
 /// Reads the value following `flag` in `argv` (e.g. `--path C:\x` → `Some("C:\\x")`).
@@ -33,7 +60,9 @@ fn value_after(argv: &[String], flag: &str) -> Option<String> {
 ///
 /// `--wt-add` adds a project (a worktree); `--tab-add` opens one more tab in
 /// the project already open on `--path` and runs `--run` in it. There `--name`
-/// is the tab's fixed title, shown instead of its terminal's.
+/// is the tab's fixed title, shown instead of its terminal's. `--chat-add`
+/// opens a chat tab in the project on `--path`, in the background, and sends
+/// it the prompt of `--prompt-file` (`load_prompt`).
 pub fn parse_external_action(argv: &[String]) -> Option<ExternalAction> {
     let kind = if argv.iter().any(|a| a == "--wt-add") {
         "add"
@@ -43,6 +72,8 @@ pub fn parse_external_action(argv: &[String]) -> Option<ExternalAction> {
         "notify"
     } else if argv.iter().any(|a| a == "--tab-add") {
         "tab"
+    } else if argv.iter().any(|a| a == "--chat-add") {
+        "chat"
     } else {
         return None;
     };
@@ -55,6 +86,7 @@ pub fn parse_external_action(argv: &[String]) -> Option<ExternalAction> {
         after: value_after(argv, "--after"),
         level: value_after(argv, "--level"),
         message: value_after(argv, "--message"),
+        prompt_file: value_after(argv, "--prompt-file"),
     })
 }
 
@@ -142,9 +174,79 @@ mod tests {
     }
 
     #[test]
-    fn only_tab_add_stays_in_background() {
+    fn parses_chat_add() {
+        let a = parse_external_action(&argv(&[
+            "arkadia.exe",
+            "--chat-add",
+            "--path",
+            "C:\\Users\\x\\Claude Desktop",
+            "--prompt-file",
+            "C:\\tmp\\prompt.txt",
+        ]))
+        .expect("should parse");
+        assert_eq!(a.kind, "chat");
+        assert_eq!(a.path.as_deref(), Some("C:\\Users\\x\\Claude Desktop"));
+        assert_eq!(a.prompt_file.as_deref(), Some("C:\\tmp\\prompt.txt"));
+    }
+
+    #[test]
+    fn load_prompt_reads_the_file_into_message() {
+        let dir = std::env::temp_dir().join(format!("arkadia-chat-add-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("prompt.txt");
+        std::fs::write(&file, "Juge ce tweet | et ses réponses").unwrap();
+        let path = file.to_string_lossy().to_string();
+        let a = load_prompt(
+            parse_external_action(&argv(&[
+                "arkadia.exe",
+                "--chat-add",
+                "--prompt-file",
+                &path,
+            ]))
+            .unwrap(),
+        );
+        assert_eq!(
+            a.message.as_deref(),
+            Some("Juge ce tweet | et ses réponses")
+        );
+        std::fs::write(&file, "   ").unwrap();
+        let blank = load_prompt(
+            parse_external_action(&argv(&[
+                "arkadia.exe",
+                "--chat-add",
+                "--prompt-file",
+                &path,
+            ]))
+            .unwrap(),
+        );
+        assert_eq!(blank.message, None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let missing = load_prompt(
+            parse_external_action(&argv(&[
+                "arkadia.exe",
+                "--chat-add",
+                "--prompt-file",
+                &path,
+            ]))
+            .unwrap(),
+        );
+        assert_eq!(missing.message, None);
+    }
+
+    #[test]
+    fn load_prompt_leaves_other_actions_alone() {
+        let a = load_prompt(
+            parse_external_action(&argv(&["arkadia.exe", "--wt-notify", "--message", "done"]))
+                .unwrap(),
+        );
+        assert_eq!(a.message.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn only_tab_add_and_chat_add_stay_in_background() {
         let action = |flag: &str| parse_external_action(&argv(&["arkadia.exe", flag])).unwrap();
         assert!(action("--tab-add").stays_in_background());
+        assert!(action("--chat-add").stays_in_background());
         assert!(!action("--wt-add").stays_in_background());
         assert!(!action("--wt-remove").stays_in_background());
         assert!(!action("--wt-notify").stays_in_background());

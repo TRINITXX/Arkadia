@@ -1,4 +1,15 @@
+import { invoke } from "@tauri-apps/api/core";
 import type { Project } from "../types";
+
+/**
+ * Brings the main window forward (restored, shown, focused), on `paneId`'s tab
+ * when given: the popups' « open in Arkadia » command. For an external action
+ * left behind on purpose (`--chat-add`) whose failure would otherwise only
+ * toast in a window nobody looks at.
+ */
+export function bringMainForward(paneId = ""): void {
+  void invoke("popup_open_in_main", { paneId }).catch(() => {});
+}
 
 /** Normalise a Windows path for comparison: lowercase, forward slashes, no trailing sep. */
 function norm(pathStr: string): string {
