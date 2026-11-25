@@ -2776,10 +2776,12 @@ export function App() {
   // a chat (`chatOpen`): started from here, before its pane mounts, so the
   // pane finds it running (`attachLiveChat`) and starts nothing.
   // `shown` false (`--chat-add`, a button clicked in Chrome): the tab opens
-  // behind, the desktop stays on the project and tab Alexis is in. The
-  // project is not marked as typed in either: the sidebar would flip to it.
-  // A failure there would only toast in a window left behind, gone unseen
-  // after 8 s: `surface` brings the window forward, on the tab if it exists.
+  // behind, the desktop stays on the project and tab Alexis is in. Its
+  // project still joins the sidebar's « Actifs » list, with the new tab: the
+  // sign, seen from Arkadia, that the click worked (without it, the chat out
+  // of sight looked like a failed click). A failure there would only toast in
+  // a window left behind, gone unseen after 8 s: `surface` brings the window
+  // forward, on the tab if it exists.
   const openReminderChat = useCallback(
     async (
       project: Project,
@@ -2805,10 +2807,10 @@ export function App() {
       }
       const chat: PaneChat = { cwd: project.path };
       startChat(spawned.paneId, chat);
+      markProjectInput(project.id);
       if (shown) {
         setSessionPreview(null);
         setActiveProjectId(project.id);
-        markProjectInput(project.id);
       }
       try {
         // A start that failed closes the column on its error: the reminder
