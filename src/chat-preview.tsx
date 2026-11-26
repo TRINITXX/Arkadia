@@ -829,7 +829,7 @@ function Preview() {
       ? attachDraft(pastedPng)
       : { ...EMPTY_DRAFT, text: params.get("draft") ?? "" },
   );
-  const [messagesOnly, setMessagesOnly] = useState(false);
+  const [keepAccount, setKeepAccount] = useState<string | undefined>();
   // `?s=visuals`: each page goes through the probe; its report answers the
   // call as the chat server would, and the next call follows.
   useEffect(() => {
@@ -943,8 +943,8 @@ function Preview() {
         draft={draft}
         onDraft={setDraft}
         voice={voice}
-        messagesOnly={messagesOnly}
-        onMessagesOnly={setMessagesOnly}
+        keepAccount={keepAccount}
+        onKeepAccount={(on) => setKeepAccount(on ? "main" : undefined)}
         slashActions={PREVIEW_SLASH}
         sdkActions={{
           ...PREVIEW_SDK,

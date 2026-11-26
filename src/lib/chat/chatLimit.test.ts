@@ -267,6 +267,64 @@ describe("a chat at its usage limit", () => {
   });
 });
 
+describe("a chat kept on its account (its input's lock)", () => {
+  const accounts = [account("main", 100, 90), account("b", 10, 200)];
+  const blocked = { main: NOW + 90 * 60_000 };
+
+  it("waits for its own reset though another account is free", () => {
+    expect(
+      planChatLimitSwitch(accounts, blocked, "main", NOW, null, "main"),
+    ).toEqual({ kind: "none" });
+    expect(
+      chatLimitStep(
+        accounts,
+        blocked,
+        "main",
+        NOW + 90 * 60_000,
+        NOW,
+        null,
+        "main",
+      ),
+    ).toEqual({
+      kind: "wait",
+      at: NOW + 90 * 60_000,
+      here: true,
+      credits: true,
+    });
+  });
+
+  it("goes on in Opus on its own account when Fable alone is out", () => {
+    const fableOut = { "main:fable": NOW + 60 * 60_000 };
+    const fresh = [account("main", 40, 90), account("b", 10, 200)];
+    expect(
+      chatLimitStep(fresh, fableOut, "main", NOW, NOW, "fable", "main"),
+    ).toEqual({ kind: "switch", accountId: "main", model: "opus" });
+  });
+
+  it("goes back from the credits to its account only", () => {
+    expect(
+      chatLimitStep(accounts, blocked, "api", Infinity, NOW, null, "main"),
+    ).toEqual({
+      kind: "wait",
+      at: NOW + 90 * 60_000,
+      here: false,
+      credits: false,
+    });
+    const back = [account("main", 5, 290), account("b", 10, 200)];
+    expect(planChatLimitSwitch(back, {}, "api", NOW, null, "main")).toEqual({
+      kind: "switch",
+      accountId: "main",
+    });
+  });
+
+  it("follows the usual rule when its account is signed out", () => {
+    const out = [account("main", 100, 90, false), account("b", 10, 200)];
+    expect(
+      planChatLimitSwitch(out, blocked, "main", NOW, null, "main"),
+    ).toEqual({ kind: "switch", accountId: "b" });
+  });
+});
+
 describe("the API credits when no account is free", () => {
   // Every account at its limit: the chat's own back in 2 h, another in 30 min.
   const accounts = [

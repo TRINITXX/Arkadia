@@ -184,6 +184,7 @@ export const CHAT_CSS = `
 .chat-ib.sky { background: rgba(56,189,248,.10); } .chat-ib.sky:hover { background: rgba(56,189,248,.20); } .chat-ib.sky.on { background: rgba(56,189,248,.28); color: #bae6fd; }
 .chat-ib.rose { background: rgba(244,63,94,.10); } .chat-ib.rose:hover { background: rgba(244,63,94,.20); } .chat-ib.rose.on { background: rgba(244,63,94,.28); color: #fecdd3; }
 .chat-ib.amber { background: rgba(245,158,11,.10); } .chat-ib.amber:hover { background: rgba(245,158,11,.20); } .chat-ib.amber.on { background: rgba(245,158,11,.28); color: #fde68a; }
+.chat-ib.violet { background: rgba(167,139,250,.10); } .chat-ib.violet:hover { background: rgba(167,139,250,.20); } .chat-ib.violet.on { background: rgba(167,139,250,.28); color: #ddd6fe; }
 .chat-ib:disabled { opacity: .45; cursor: default; }
 /* « Commandes »: the prompt bar's buttons of the settings (the user's ask of 01/11/2026). */
 .chat-commands-menu { min-width: 220px; max-height: min(420px, 60vh, var(--room, 100vh)); overflow: auto; scrollbar-width: thin; scrollbar-color: #31353b transparent; }

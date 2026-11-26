@@ -305,6 +305,7 @@ export function ChatScreen({ snapshot, project, tab, pane }: ChatScreenProps) {
             promptButtons={snapshot.promptButtons}
             bottomInset={insets.bottom}
             cover={cover}
+            keep={pane.keep}
           />
         </View>
         {cover === "round" && <View style={{ height: insets.bottom }} />}

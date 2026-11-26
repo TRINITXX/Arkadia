@@ -289,6 +289,19 @@ describe("restoredChat", () => {
       resume,
     });
   });
+
+  it("keeps its input's lock, on its session or asleep", () => {
+    const resume = "0f3a2b1c-1111-2222-3333-444455556666";
+    expect(restoredChat({ cwd: "C:/p", resume, keepAccount: "b" })).toEqual({
+      cwd: "C:/p",
+      resume,
+      keepAccount: "b",
+    });
+    const taken = new Set([resume]);
+    expect(
+      restoredLaunch({ cwd: "C:/p", resume, keepAccount: "b" }, null, taken),
+    ).toEqual({ chat: { cwd: "C:/p", asleep: true, keepAccount: "b" } });
+  });
 });
 
 describe("restoredLaunch", () => {

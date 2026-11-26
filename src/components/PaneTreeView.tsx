@@ -42,6 +42,7 @@ export interface PaneChatHandlers {
   switching: ReadonlySet<string>;
   onToggle: (paneId: string) => void;
   onSession: (paneId: string, sessionId: string) => void;
+  onKeepAccount: (paneId: string, on: boolean) => void;
   onLabel: (paneId: string, label: string) => void;
   /** Sessions running in the other panes (`usePaneChats`), for /resume. */
   liveSessions: (exceptPaneId: string) => Promise<Set<string>>;
@@ -82,6 +83,7 @@ export function PaneTreeView({
             onActivate={() => onActivate(pane.id)}
             onSession={chat.onSession}
             onLabel={chat.onLabel}
+            onKeepAccount={chat.onKeepAccount}
             liveSessions={chat.liveSessions}
             onToast={onToast}
             shown={shown}

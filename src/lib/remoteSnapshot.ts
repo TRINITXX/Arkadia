@@ -12,10 +12,16 @@ import {
   stateFromTitle,
   type AgentStateValue,
 } from "@/lib/agentState";
-import type { AccountMark, AccountsState } from "@/lib/accounts";
+import {
+  paneAccountId,
+  type AccountMark,
+  type AccountsState,
+} from "@/lib/accounts";
+import { CREDITS_ACCOUNT_ID } from "@/lib/creditsAccount";
 import { collectPaneIds } from "@/lib/paneTree";
 import { paneTabTitle } from "@/lib/paneTitle";
 import type {
+  PaneState,
   Project,
   Tab,
   TerminalPalette,
@@ -52,6 +58,10 @@ export interface RemotePane {
    *  before 02/11/2026 (paths then read from the home folder). Not the SDK
    *  init's `cwd`: that one follows Claude's `cd`. */
   cwd?: string;
+  /** A chat's input lock: on, it keeps its account at the usage limit.
+   *  Absent: no lock (a terminal, a chat on the API credits not kept, a
+   *  desktop built before 26/11/2026). */
+  keep?: boolean;
 }
 
 export interface RemoteTab {
@@ -167,6 +177,15 @@ function remoteButtons(buttons: ToolbarButton[]): RemoteButton[] {
     }));
 }
 
+/** A pane's lock for the phone, as the desktop input shows it (`ChatView`). */
+function keepLock(pane: PaneState): boolean | undefined {
+  if (!pane.chat) return undefined;
+  if (pane.chat.keepAccount) return true;
+  return paneAccountId(pane.accountId) === CREDITS_ACCOUNT_ID
+    ? undefined
+    : false;
+}
+
 function remoteTab(
   tab: Tab,
   { paneStates, claudePaneIds, accountMarks }: RemoteSnapshotInput,
@@ -189,6 +208,7 @@ function remoteTab(
       claude: claudePaneIds.has(id),
       chat: !!tab.panes[id].chat,
       cwd: tab.panes[id].chat?.cwd,
+      keep: keepLock(tab.panes[id]),
     })),
     account: accountMarks[tab.id] ?? null,
   };

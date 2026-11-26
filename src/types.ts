@@ -168,6 +168,10 @@ export interface PaneChat {
    *  resume shown, no Claude Code until a letter is typed in its input or
    *  a session picked. Gone once it has a session. */
   asleep?: boolean;
+  /** Its input's lock (the user's pick of 26/11/2026): the account it keeps
+   *  at the usage limit, waited for till its reset, then « continue ». Kept
+   *  across a relaunch; on the API credits, the account to go back to. */
+  keepAccount?: string;
 }
 
 export type SplitDirection = "horizontal" | "vertical";

@@ -70,6 +70,7 @@ export function ChatComposer({
   promptButtons,
   bottomInset,
   cover,
+  keep,
 }: {
   chatId: string;
   state: ChatState;
@@ -82,6 +83,11 @@ export function ChatComposer({
    * sheet hides it all (the screen does).
    */
   cover: ComposerCover;
+  /**
+   * The desktop input's lock (`RemotePane.keep`): on, the chat keeps its
+   * account at the usage limit. Undefined: no lock shown.
+   */
+  keep?: boolean;
 }) {
   const covered = cover !== null;
   // Under a request: the chips' row alone, as the desktop's status row.
@@ -280,6 +286,25 @@ export function ChatComposer({
       showFailure(e instanceof Error ? e.message : String(e));
     }
   };
+  // The lock, at once on the button; the desktop's next picture settles it.
+  const [keepNow, setKeepNow] = useState(keep);
+  useEffect(() => setKeepNow(keep), [keep]);
+  const toggleKeep = () => {
+    if (keepNow === undefined) return;
+    tick();
+    const on = !keepNow;
+    setKeepNow(on);
+    showNotice(
+      on
+        ? "Compte gardé : à la limite, le chat attend son quota puis continue"
+        : "Compte libéré",
+    );
+    act({ kind: "chatKeepAccount", paneId: chatId, on }).catch((e: unknown) => {
+      setKeepNow(keep);
+      failure();
+      showFailure(e instanceof Error ? e.message : String(e));
+    });
+  };
   // The + menu's entries feel as what they do: a sheet or an action taps,
   // a list ticks, a copy says how it went.
   const tapThen = (run: () => void) => () => {
@@ -460,6 +485,13 @@ export function ChatComposer({
             <>
               <View style={styles.spacer} />
               <IconButton name="plus" onPress={openPlus} />
+              {keepNow !== undefined && (
+                <IconButton
+                  name={keepNow ? "lock.fill" : "lock.open"}
+                  onPress={toggleKeep}
+                  on={keepNow}
+                />
+              )}
               <IconButton
                 name={phase === "listening" ? "waveform" : "mic"}
                 onPress={onMic}

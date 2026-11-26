@@ -7,7 +7,6 @@ import {
   usePaneDraft,
 } from "@/lib/chat/chatDrafts";
 import { folderOf } from "@/lib/chat/chatLabels";
-import { usePaneMessagesOnly } from "@/lib/chat/chatMessagesOnly";
 import { startupPhase } from "@/lib/chat/chatStartup";
 import { useBranchRefresh } from "@/lib/chat/useBranchRefresh";
 import { useChatSdkActions } from "@/lib/chat/useChatSdkActions";
@@ -30,6 +29,7 @@ export function ChatPane({
   onActivate,
   onSession,
   onLabel,
+  onKeepAccount,
   liveSessions,
   onToast,
   shown = true,
@@ -45,6 +45,8 @@ export function ChatPane({
   onSession: (paneId: string, sessionId: string) => void;
   /** The tab title's text (its status glyph follows the chat: `usePaneChats`). */
   onLabel: (paneId: string, label: string) => void;
+  /** Its input's lock turned on or off (`PaneChat.keepAccount`). */
+  onKeepAccount: (paneId: string, on: boolean) => void;
   /** Sessions running in the other panes: /resume can't take them. */
   liveSessions: (exceptPaneId: string) => Promise<Set<string>>;
   onToast?: ToastFn;
@@ -79,7 +81,6 @@ export function ChatPane({
     if (engaged && !engagedRef.current) onUserInputRef.current?.();
     engagedRef.current = engaged;
   }, [engaged]);
-  const [messagesOnly, setMessagesOnly] = usePaneMessagesOnly(pane.id);
   // A dictation still lands in this pane's draft if the pane unmounted
   // meanwhile (another project on screen).
   const paneId = pane.id;
@@ -155,8 +156,8 @@ export function ChatPane({
       draft={draft}
       onDraft={setDraft}
       voice={voice}
-      messagesOnly={messagesOnly}
-      onMessagesOnly={setMessagesOnly}
+      keepAccount={chat.keepAccount}
+      onKeepAccount={(on) => onKeepAccount(pane.id, on)}
       onHidden={onHidden}
       onToast={onToast}
       slashActions={slashActions}

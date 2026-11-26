@@ -138,6 +138,10 @@ function normalizeChat(raw: unknown): { chat: PaneChat } | null {
       ...(c.continue === true ? { continue: true } : {}),
       // Never typed in: asleep again after a restart (`PaneChat.asleep`).
       ...(c.asleep === true ? { asleep: true } : {}),
+      // Its input's lock: the account it keeps at the limit.
+      ...(typeof c.keepAccount === "string" && c.keepAccount
+        ? { keepAccount: c.keepAccount }
+        : {}),
     },
   };
 }

@@ -195,12 +195,45 @@ export function nextFreeAccountAt(
 }
 
 /**
+ * A chat's kept account (its input's lock, `PaneChat.keepAccount`): the
+ * signed-in account it never leaves at the limit, or none (not kept, or
+ * that account gone or signed out: the usual rule then).
+ */
+function keptAccount(
+  accounts: readonly Account[],
+  keep: string | null,
+): Account | undefined {
+  return keep ? accounts.find((a) => a.id === keep && a.loggedIn) : undefined;
+}
+
+/**
+ * A kept chat's move (the user's picks of 26/11/2026): from the credits,
+ * back to its account once free; its model out there alone (Fable's
+ * limit), the next model there at once. Never another account.
+ */
+function planKept(
+  kept: Account,
+  blocked: BlockedUntil,
+  from: string,
+  now: number,
+  family: string | null,
+): ChatLimitPlan {
+  if (kept.id !== from && freeAt(kept, blocked, family) <= now)
+    return { kind: "switch", accountId: kept.id };
+  const fallback = fallbackModel(family);
+  if (fallback && freeAt(kept, blocked, fallback) <= now)
+    return { kind: "switch", accountId: kept.id, model: fallback };
+  return { kind: "none" };
+}
+
+/**
  * The user's rule for a chat: another signed-in account free right now for
  * its model, the one whose 5-hour window resets soonest (its quota comes
  * back anyway); an account with no reset known (window not started) comes
  * last, then the least used. Its model out everywhere (Fable's limit), an
  * account free for the next model (`fallbackModel`), its own first: Opus
- * there rather than a wait (the user's pick of 12/11/2026).
+ * there rather than a wait (the user's pick of 12/11/2026). `keep`: the
+ * chat's kept account, the only one it may go to (`planKept`).
  */
 export function planChatLimitSwitch(
   accounts: readonly Account[],
@@ -208,7 +241,10 @@ export function planChatLimitSwitch(
   from: string,
   now: number,
   family: string | null = null,
+  keep: string | null = null,
 ): ChatLimitPlan {
+  const kept = keptAccount(accounts, keep);
+  if (kept) return planKept(kept, blocked, from, now, family);
   const signedIn = accounts.filter((a) => a.loggedIn);
   const reset = (a: Account) => {
     const at = a.usage?.fiveHour?.resetsAt;
@@ -252,7 +288,8 @@ export type ChatLimitStep =
  * else it waits for the first account back, or for its own reset (`until`)
  * when that comes first. A chat on the API credits (`from` = `api`) never
  * waits for « its own » reset: the credits have none, it goes back to a
- * subscription account, and the credits are not offered again.
+ * subscription account, and the credits are not offered again. `keep`: the
+ * chat's kept account, waited for whatever the others' quotas.
  */
 export function chatLimitStep(
   accounts: readonly Account[],
@@ -261,9 +298,25 @@ export function chatLimitStep(
   until: number,
   now: number,
   family: string | null = null,
+  keep: string | null = null,
 ): ChatLimitStep {
-  const plan = planChatLimitSwitch(accounts, blocked, from, now, family);
+  const plan = planChatLimitSwitch(accounts, blocked, from, now, family, keep);
   if (plan.kind === "switch") return plan;
+  const kept = keptAccount(accounts, keep);
+  if (kept) {
+    const fallback = fallbackModel(family);
+    const free = (f: string | null) => freeAt(kept, blocked, f);
+    const back = Math.min(free(family), fallback ? free(fallback) : Infinity);
+    // On the credits: back to its account, the credits not offered again.
+    if (kept.id !== from)
+      return { kind: "wait", at: back, here: false, credits: false };
+    return {
+      kind: "wait",
+      at: Math.max(until, free(family)),
+      here: true,
+      credits: true,
+    };
+  }
   const next = nextFreeAccountAt(accounts, blocked, from, now, family);
   if (from === CREDITS_ACCOUNT_ID)
     return next === null

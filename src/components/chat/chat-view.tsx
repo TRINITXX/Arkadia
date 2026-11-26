@@ -30,7 +30,14 @@ import { useWakeOnInput } from "@/lib/chat/useWakeOnInput";
 import { useDoneAgentsLink } from "@/lib/chat/useDoneAgentsLink";
 import { useLiveActivity } from "@/lib/chat/useLiveActivity";
 import type { ShellOutput } from "@/lib/chat/useShellOutputs";
-import { ChatComposer, type ChatVoice } from "@/components/chat/chat-composer";
+import {
+  ChatComposer,
+  type ChatVoice,
+  type KeepLock,
+} from "@/components/chat/chat-composer";
+import { useAccountLabel } from "@/lib/accountQuota";
+import { paneAccountId } from "@/lib/accounts";
+import { CREDITS_ACCOUNT_ID } from "@/lib/creditsAccount";
 import {
   keepChoiceIn,
   lastChoiceIn,
@@ -119,9 +126,10 @@ export interface ChatViewProps {
   draft: ChatDraft;
   onDraft: React.Dispatch<React.SetStateAction<ChatDraft>>;
   voice: ChatVoice;
-  /** « Messages seuls »: the column shows the user's and Claude's words alone. */
-  messagesOnly: boolean;
-  onMessagesOnly: (on: boolean) => void;
+  /** Its lock (`PaneChat.keepAccount`): the account it keeps at the limit. */
+  keepAccount?: string;
+  /** The lock clicked; absent, no lock. */
+  onKeepAccount?: (on: boolean) => void;
   /** The pane stopped showing (its tab hidden): nothing on screen any more. */
   onHidden?: () => void;
   onToast?: ToastFn;
@@ -188,8 +196,8 @@ function ChatViewBody({
   draft,
   onDraft,
   voice,
-  messagesOnly,
-  onMessagesOnly,
+  keepAccount,
+  onKeepAccount,
   onHidden,
   onToast,
   slashActions,
@@ -525,6 +533,19 @@ function ChatViewBody({
     [onDraft, foldSheet, paneId],
   );
 
+  // The lock beside the microphone: on the credits, only to free the
+  // account it goes back to (none to keep there otherwise).
+  const onCreditsNow = paneAccountId(accountId) === CREDITS_ACCOUNT_ID;
+  const keptLabel = useAccountLabel(onCreditsNow ? keepAccount : accountId);
+  const keepLock: KeepLock | null =
+    onKeepAccount && (!onCreditsNow || keepAccount)
+      ? {
+          on: !!keepAccount,
+          account: keptLabel ?? "ce compte",
+          onToggle: () => onKeepAccount(!keepAccount),
+        }
+      : null;
+
   // The session's button, its rings and its shells: in the input's bottom
   // row (the user's pick of 31/10/2026), else on a row of their own.
   const sessionItems = (
@@ -664,8 +685,7 @@ function ChatViewBody({
         onInterrupt={onInterrupt}
         onBackground={onBackground}
         onMode={onMode}
-        messagesOnly={messagesOnly}
-        onMessagesOnly={onMessagesOnly}
+        keepLock={keepLock}
         onToast={onToast}
         suggestion={state.suggestion}
         onOpen={open}
@@ -750,7 +770,6 @@ function ChatViewBody({
             cwd={cwd}
             subagents={state.subagents}
             pendingToolIds={pendingToolIds}
-            messagesOnly={messagesOnly}
             // A subagent's row opens its conversation; a row whose agent
             // isn't known takes no click (`ChatAgentRow`).
             onOpenAgents={openSheet}

@@ -211,6 +211,26 @@ describe("buildRemoteSnapshot", () => {
     ]);
   });
 
+  it("sends a chat's lock as the desktop input shows it", () => {
+    const t = tab("t1", "arkadia", ["Gardé", "Libre"]);
+    t.panes["t1-p0"].chat = { cwd: "C:/a", keepAccount: "main" };
+    t.panes["t1-p1"].chat = { cwd: "C:/a" };
+    const credits = tab("t2", "arkadia", ["Crédits", "pwsh"]);
+    credits.panes["t2-p0"].chat = { cwd: "C:/a" };
+    credits.panes["t2-p0"].accountId = "api";
+    const snap = buildRemoteSnapshot(
+      input({
+        projects: [project("arkadia")],
+        tabs: [t, credits],
+        activeProjectIds: new Set(["arkadia"]),
+      }),
+    );
+    // No lock on the credits unless kept, none on a terminal.
+    expect(
+      snap.active[0].tabs.flatMap((x) => x.panes.map((p) => p.keep)),
+    ).toEqual([true, false, undefined, undefined]);
+  });
+
   it("names a tab by its fixed name, not by its terminal's title", () => {
     const t = tab("t1", "arkadia", ["C:\\WINDOWS\\system32\\cmd.exe"]);
     t.panes["t1-p0"].label = "Serveur dev";

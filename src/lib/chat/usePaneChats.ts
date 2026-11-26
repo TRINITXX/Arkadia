@@ -13,7 +13,8 @@ import {
   subscribeChatActivity,
   type ChatActivity,
 } from "@/lib/chat/chatEvents";
-import { subscriptionAccount } from "@/lib/accounts";
+import { paneAccountId, subscriptionAccount } from "@/lib/accounts";
+import { CREDITS_ACCOUNT_ID } from "@/lib/creditsAccount";
 import { folderOf } from "@/lib/chat/chatLabels";
 import {
   dropLiveChat,
@@ -65,13 +66,16 @@ export function chatForCommand(command: string, cwd: string): PaneChat | null {
  * switch holds another conversation (or one /clear emptied).
  */
 export function restoredChat(saved: PaneChat): PaneChat {
+  // Its input's lock, whatever it reopens on.
+  const keep = saved.keepAccount ? { keepAccount: saved.keepAccount } : {};
   return saved.resume
-    ? { cwd: saved.cwd, resume: saved.resume }
+    ? { cwd: saved.cwd, resume: saved.resume, ...keep }
     : {
         cwd: saved.cwd,
         ...(saved.continue ? { continue: true } : {}),
         // Never typed in: it opens asleep again, no Claude Code started.
         ...(saved.asleep ? { asleep: true } : {}),
+        ...keep,
       };
 }
 
@@ -93,7 +97,15 @@ export function restoredLaunch(
   const session = chat ? chat.resume : mapSession;
   if (session) {
     if (taken.has(session))
-      return chat ? { chat: { cwd: chat.cwd, asleep: true } } : {};
+      return chat
+        ? {
+            chat: {
+              cwd: chat.cwd,
+              asleep: true,
+              ...(chat.keepAccount ? { keepAccount: chat.keepAccount } : {}),
+            },
+          }
+        : {};
     taken.add(session);
   }
   if (chat) return { chat };
@@ -303,11 +315,39 @@ export function usePaneChats({
         else
           patchPane(paneId, (pane) =>
             pane.chat && (pane.chat.resume || pane.chat.continue)
-              ? { ...pane, chat: { cwd: pane.chat.cwd } }
+              ? {
+                  ...pane,
+                  // A new conversation keeps the pane's lock.
+                  chat: {
+                    cwd: pane.chat.cwd,
+                    ...(pane.chat.keepAccount
+                      ? { keepAccount: pane.chat.keepAccount }
+                      : {}),
+                  },
+                }
               : pane,
           );
       }),
     [onSession, patchPane],
+  );
+
+  /**
+   * The input's lock (the user's pick of 26/11/2026): on, the chat keeps the
+   * account it runs on at the usage limit (`useChatLimitSwitch`). On the
+   * API credits it only turns off: none to keep there.
+   */
+  const onKeepAccount = useCallback(
+    (paneId: string, on: boolean) =>
+      patchPane(paneId, (pane) => {
+        if (!pane.chat || !!pane.chat.keepAccount === on) return pane;
+        const account = paneAccountId(pane.accountId);
+        if (on && account === CREDITS_ACCOUNT_ID) return pane;
+        const chat = { ...pane.chat };
+        if (on) chat.keepAccount = account;
+        else delete chat.keepAccount;
+        return { ...pane, chat };
+      }),
+    [patchPane],
   );
 
   const onLabel = useCallback(
@@ -480,8 +520,15 @@ export function usePaneChats({
   );
 
   const handlers = useMemo(
-    () => ({ switching, onToggle, onSession, onLabel, liveSessions }),
-    [switching, onToggle, onSession, onLabel, liveSessions],
+    () => ({
+      switching,
+      onToggle,
+      onSession,
+      onLabel,
+      onKeepAccount,
+      liveSessions,
+    }),
+    [switching, onToggle, onSession, onLabel, onKeepAccount, liveSessions],
   );
   return { handlers, startChat, paneHolding };
 }

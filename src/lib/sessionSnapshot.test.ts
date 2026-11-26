@@ -91,6 +91,18 @@ describe("sessionSnapshot", () => {
     });
   });
 
+  it("keeps a chat's lock through save and reload", () => {
+    const t = tab({ kind: "leaf", paneId: "a" }, ["a"]);
+    t.panes.a.chat = { cwd: "C:/w", resume: "s1", keepAccount: "b" };
+    const snap = buildSessionSnapshot([t], new Set(), 1);
+    const reloaded = normalizeSessionSnapshot(JSON.parse(JSON.stringify(snap)));
+    expect(reloaded?.tabs[0].panes[0].chat).toEqual({
+      cwd: "C:/w",
+      resume: "s1",
+      keepAccount: "b",
+    });
+  });
+
   it("keeps a chat asleep through save and reload, never typed in", () => {
     const t = tab({ kind: "leaf", paneId: "a" }, ["a"]);
     t.panes.a.chat = { cwd: "C:/w", asleep: true };

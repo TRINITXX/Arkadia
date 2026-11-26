@@ -66,6 +66,8 @@ export type RemoteAction =
     }
   /** Chat ⇄ terminal, as the desktop toolbar's switch. */
   | { kind: "chatToggle"; paneId: string }
+  /** A chat's input lock (`PaneChat.keepAccount`), as the desktop's. */
+  | { kind: "chatKeepAccount"; paneId: string; on: boolean }
   /**
    * The desktop's /resume, /rewind and /mcp for a chat the phone shows, with
    * the desktop's rules (`slashActions`, `mcpAction`): the lists to pick

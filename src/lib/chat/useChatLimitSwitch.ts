@@ -47,8 +47,10 @@ import type { PaneChat, PaneState, Tab } from "@/types";
 const TURN_WAIT_MS = 60_000;
 /** The hit comes mid-turn: a wait is said only when it lasts past this. */
 const SLOW_REST_MS = 5_000;
-/** A long wait looks this often whether its pane still holds the chat. */
+/** A turn under way after a wait: looked at again this often at most. */
 const PANE_CHECK_MS = 60_000;
+/** A wait looks this often whether its chat's lock was turned on or off. */
+const KEEP_CHECK_MS = 5_000;
 /** After an account's reset, a margin before it takes a turn. */
 const RESET_MARGIN_MS = 5_000;
 /** After a restart, saved waits look for their chat's pane at these times. */
@@ -145,7 +147,10 @@ function waitForTurnEnd(chatId: string, timeoutMs: number): Promise<boolean> {
  * resumable, Claude takes them up again there (`stopAndCloseChat`). The
  * account is marked blocked until its reset either way; with the setting
  * off, nothing moves. Bounded: blocked accounts are never chosen, and one
- * conversation moves at most 3 times in 30 min.
+ * conversation moves at most 3 times in 30 min. A chat whose input's lock
+ * is on (`PaneChat.keepAccount`) never leaves its account: it waits for its
+ * reset, then « continue » there, the setting on or off; Opus at once there
+ * when Fable alone is out.
  *
  * No account free: a banner above its input says the wait, and offers the
  * API credits (`toCredits`, pseudo-account `api`, Opus 5.5). A chat on the
@@ -203,6 +208,19 @@ export function useChatLimitSwitch({
       const pane = tab?.panes[chatId];
       return tab && pane?.chat ? { tab, pane, chat: pane.chat } : null;
     };
+    /**
+     * The account a chat keeps at the limit (its input's lock), or null: on
+     * a subscription, the one it runs on; on the credits, the one it left.
+     */
+    const keepOf = (chatId: string): string | null => {
+      const found = find(chatId);
+      if (!found?.chat.keepAccount) return null;
+      const on = paneAccountId(found.pane.accountId);
+      return on === CREDITS_ACCOUNT_ID ? found.chat.keepAccount : on;
+    };
+    /** The setting on, or the chat's lock: alone, it says to go on too. */
+    const enabledFor = (chatId: string) =>
+      enabledRef.current || keepOf(chatId) !== null;
 
     /** A chat's wait, cut short when it moves to the credits (`wake`). */
     const wakers = new Map<string, () => void>();
@@ -236,24 +254,28 @@ export function useChatLimitSwitch({
     const modelBefore = new Map<string, string | null>();
 
     /**
-     * Waits until `at`; false as soon as its pane no longer holds the chat,
-     * or its wait is cut short (`wake`).
+     * Waits until `at` (« time »); « gone » as soon as its pane no longer
+     * holds the chat, or its wait is cut short (`wake`); « lock » when its
+     * lock was turned on or off meanwhile, for the next step to be worked
+     * out again.
      */
     const sleepUntil = (chatId: string, at: number) =>
-      new Promise<boolean>((resolve) => {
+      new Promise<"time" | "gone" | "lock">((resolve) => {
+        const keep = keepOf(chatId);
         let timer: number | undefined;
-        const finish = (ok: boolean) => {
+        const finish = (how: "time" | "gone" | "lock") => {
           window.clearTimeout(timer);
           if (wakers.get(chatId) === stop) wakers.delete(chatId);
-          resolve(ok);
+          resolve(how);
         };
-        const stop = () => finish(false);
+        const stop = () => finish("gone");
         wakers.set(chatId, stop);
         const tick = () => {
-          if (!find(chatId)) return finish(false);
+          if (!find(chatId)) return finish("gone");
+          if (keepOf(chatId) !== keep) return finish("lock");
           const left = at - Date.now();
-          if (left <= 0) return finish(true);
-          timer = window.setTimeout(tick, Math.min(left, PANE_CHECK_MS));
+          if (left <= 0) return finish("time");
+          timer = window.setTimeout(tick, Math.min(left, KEEP_CHECK_MS));
         };
         tick();
       });
@@ -280,7 +302,7 @@ export function useChatLimitSwitch({
       if (hit.scope === "model")
         block(family ? modelBlockKey(from, family) : from, until);
       else block(from, until);
-      if (!enabledRef.current) {
+      if (!enabledFor(chatId)) {
         logSwitch(`${chatId} on ${from}: setting off`);
         return;
       }
@@ -288,7 +310,9 @@ export function useChatLimitSwitch({
       const recent = (moves.current.get(key) ?? []).filter(
         (t) => now - t < SWITCH_WINDOW_MS,
       );
-      if (recent.length >= MAX_SWITCHES) {
+      // A kept chat moves at most once, to the next model on its own
+      // account: no cap to hold it, it waits there for its reset.
+      if (recent.length >= MAX_SWITCHES && keepOf(chatId) === null) {
         logSwitch(`${chatId} on ${from}: ${recent.length} moves in 30 min`);
         const plan = planChatLimitSwitch(
           accountsRef.current?.accounts ?? [],
@@ -310,12 +334,13 @@ export function useChatLimitSwitch({
           text: `Limite atteinte sur ${label(from)} · ${recent.length} bascules en 30 min, chat laissé là`,
           onCredits: () => toCredits(chatId),
         });
-        await sleepUntil(
+        const woke = await sleepUntil(
           chatId,
           Math.min(until, Math.min(...recent) + SWITCH_WINDOW_MS),
         );
         setLimitNotice(chatId, null);
-        return;
+        // Its lock turned on meanwhile: it waits for its reset, below.
+        if (woke !== "lock" || keepOf(chatId) === null) return;
       }
       // Its turn (or a question) first, a minute at most; never what runs
       // behind: a dev server would hold it until the reset (02/11/2026).
@@ -327,7 +352,9 @@ export function useChatLimitSwitch({
         );
         deps.current.onToast(
           "info",
-          `limite atteinte sur ${label(from)} · bascule à la fin de son tour`,
+          keepOf(chatId)
+            ? `limite atteinte sur ${label(from)} · compte gardé, reprise après son reset`
+            : `limite atteinte sur ${label(from)} · bascule à la fin de son tour`,
         );
       }, SLOW_REST_MS);
       const ended = await waitForTurnEnd(chatId, TURN_WAIT_MS);
@@ -336,7 +363,7 @@ export function useChatLimitSwitch({
         logSwitch(
           `${chatId} on ${from}: turn still on, moves anyway (${activityLine(chatId)})`,
         );
-      if (!enabledRef.current) {
+      if (!enabledFor(chatId)) {
         logSwitch(`${chatId} on ${from}: setting turned off while it waited`);
         return;
       }
@@ -389,6 +416,11 @@ export function useChatLimitSwitch({
       // the wait ends; failed, it goes on (`toCredits`).
       const movedToCredits = async () =>
         (await leaving.get(chatId)?.catch(() => false)) === true;
+      // Where a chat on the credits goes back: its kept account, else any.
+      const backTo = () => {
+        const keep = keepOf(chatId);
+        return keep ? label(keep) : "un abonnement";
+      };
       if (firstLook !== undefined && firstLook > Date.now()) {
         save(firstLook);
         // Picked up after a restart: the banner says the wait again.
@@ -396,19 +428,19 @@ export function useChatLimitSwitch({
           chatId,
           onCredits
             ? {
-                text: `${CREDITS_LABEL} refusés · retour sur un abonnement ${clock(firstLook)}`,
+                text: `${CREDITS_LABEL} refusés · retour sur ${backTo()} ${clock(firstLook)}`,
               }
             : {
-                text: `Limite atteinte sur ${label(from)} · aucun autre compte libre, reprise ${clock(firstLook)}`,
+                text: `Limite atteinte sur ${label(from)} · ${keepOf(chatId) ? "compte gardé" : "aucun autre compte libre"}, reprise ${clock(firstLook)}`,
                 onCredits: () => toCredits(chatId),
               },
         );
-        if (!(await sleepUntil(chatId, firstLook))) return save(null);
+        if ((await sleepUntil(chatId, firstLook)) === "gone") return save(null);
       }
       for (;;) {
         if (await movedToCredits()) return save(null);
         // The setting may have been turned off during a wait.
-        if (!onCredits && !enabledRef.current) {
+        if (!onCredits && !enabledFor(chatId)) {
           logSwitch(`${chatId} on ${from}: setting turned off, no move`);
           return save(null);
         }
@@ -435,6 +467,7 @@ export function useChatLimitSwitch({
           until,
           Date.now(),
           family,
+          keepOf(chatId),
         );
         if (step.kind === "switch") {
           if (
@@ -496,24 +529,30 @@ export function useChatLimitSwitch({
               `${chatId} on ${from}: refused, back to a subscription at ${new Date(step.at).toISOString()} (${state})`,
             );
           setLimitNotice(chatId, {
-            text: `${CREDITS_LABEL} refusés${why ? ` : ${why}` : ""} · retour sur un abonnement ${clock(step.at)}`,
+            text: `${CREDITS_LABEL} refusés${why ? ` : ${why}` : ""} · retour sur ${backTo()} ${clock(step.at)}`,
           });
         } else if (step.here) {
           // `step.at`, not `until`: its own account's figure (the week used
           // up) may hold it past its block, which lasts 5 hours at most.
+          const kept = keepOf(chatId) !== null;
           logSwitch(
-            `${chatId} on ${from}: no free account, continues here at ${new Date(step.at).toISOString()} (${state})`,
+            `${chatId} on ${from}: ${kept ? "kept" : "no free account"}, continues here at ${new Date(step.at).toISOString()} (${state})`,
           );
           setLimitNotice(chatId, {
-            text: `Limite atteinte sur ${label(from)} · aucun autre compte libre, reprise ici ${clock(step.at)}`,
+            text: `Limite atteinte sur ${label(from)} · ${kept ? "compte gardé" : "aucun autre compte libre"}, reprise ici ${clock(step.at)}`,
             onCredits: offer,
           });
           save(step.at + RESET_MARGIN_MS);
-          if (!(await sleepUntil(chatId, step.at + RESET_MARGIN_MS)))
-            return save(null);
+          const woke = await sleepUntil(chatId, step.at + RESET_MARGIN_MS);
+          if (woke === "gone") return save(null);
           // Its reset came during a move to the credits: never « continue »
           // to the chat it closes.
           if (await movedToCredits()) return save(null);
+          // Its lock turned on or off: the next step worked out again.
+          if (woke === "lock") {
+            waited = true;
+            continue;
+          }
           save(null);
           await owned(chatId, () => continueHere(chatId, from));
           return;
@@ -529,7 +568,7 @@ export function useChatLimitSwitch({
         }
         told = true;
         save(step.at + RESET_MARGIN_MS);
-        if (!(await sleepUntil(chatId, step.at + RESET_MARGIN_MS)))
+        if ((await sleepUntil(chatId, step.at + RESET_MARGIN_MS)) === "gone")
           return save(null);
         waited = true;
       }
@@ -537,7 +576,7 @@ export function useChatLimitSwitch({
 
     /** Its own account back: « continue » there, unless it works again. */
     const continueHere = async (chatId: string, from: string) => {
-      if (!enabledRef.current) {
+      if (!enabledFor(chatId)) {
         logSwitch(`${chatId} on ${from}: setting turned off, no continue`);
         return;
       }
@@ -739,6 +778,7 @@ export function useChatLimitSwitch({
         CREDITS_ACCOUNT_ID,
         Date.now(),
         modelFamily(before),
+        keepOf(chatId),
       );
       if (plan.kind !== "switch") return;
       returning.add(chatId);

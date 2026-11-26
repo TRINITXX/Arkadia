@@ -39,7 +39,6 @@ import {
   drawnUnits,
   foldActivity,
   groupChatItems,
-  messagesOnly as onlyMessages,
   questionAnswers,
   stepReplyIds,
   type ChatUnit,
@@ -77,8 +76,6 @@ interface ChatTimelineProps {
   subagents: Subagent[];
   /** Tool calls a pending request is about (its question or plan). */
   pendingToolIds: Set<string>;
-  /** « Messages seuls » (`messagesOnly` in `chatGroups`). */
-  messagesOnly?: boolean;
   /** A subagent's sheet: each thought in full and each tool call on its
    *  line, in order, nothing folded (`drawnUnits`). */
   unfolded?: boolean;
@@ -137,7 +134,6 @@ export const ChatTimeline = memo(function ChatTimeline({
   cwd,
   subagents,
   pendingToolIds,
-  messagesOnly = false,
   unfolded = false,
   onOpenAgents,
   onOpen,
@@ -163,16 +159,12 @@ export const ChatTimeline = memo(function ChatTimeline({
   };
   const { units, steps, places, full } = useMemo(() => {
     const all = groupChatItems(items);
-    const shown = drawnUnits(
-      messagesOnly ? onlyMessages(all, pendingToolIds) : all,
-      unfolded,
-    );
+    const shown = drawnUnits(all, unfolded);
     // Thinking and tools behind Claude's replies (« Récit »).
     const places = placeWork(shown, working);
     return {
       // « Aujourd'hui », « Hier », « lun. 27 oct. » where the day changes.
       units: withDayBreaks(shown, unitAt),
-      // Read on the whole column: « Messages seuls » hides the work.
       steps: stepReplyIds(foldActivity(all), working),
       places,
       // The thoughts drawn in full where they came, out of every bulb.
@@ -181,7 +173,7 @@ export const ChatTimeline = memo(function ChatTimeline({
         places.live,
       ),
     };
-  }, [items, messagesOnly, unfolded, pendingToolIds, working]);
+  }, [items, unfolded, working]);
   // A bulb's thoughts: those not already drawn in full.
   const behindBulb = <T extends { id: string }>(thoughts?: T[]) => {
     const left = thoughts?.filter((t) => !full.ids.has(t.id));
@@ -346,7 +338,7 @@ export const ChatTimeline = memo(function ChatTimeline({
             tools: unit.item.tools,
             files: unit.item.files,
           },
-          messagesOnly,
+          false,
         );
         return line ? (
           <div key={unit.item.id} className="chat-unit chat-done">

@@ -16,6 +16,7 @@ import { startReminderPolling } from "@/lib/reminderStore";
 import { AccountChip } from "@/components/AccountChip";
 import { useAccounts } from "@/lib/useAccounts";
 import { useCreditsPoll } from "@/lib/credits";
+import { CREDITS_ACCOUNT_ID } from "@/lib/creditsAccount";
 import { publishAccountQuota } from "@/lib/accountQuota";
 import {
   isModelLimit,
@@ -191,10 +192,6 @@ import { PromptButtonsContext } from "@/lib/chat/promptButtonsContext";
 import { useChatNotify } from "@/lib/chat/useChatNotify";
 import { useVisualProbe } from "@/lib/chat/useVisualProbe";
 import { dropPathsInChat } from "@/lib/chat/chatDrop";
-import {
-  dropMessagesOnly,
-  moveMessagesOnly,
-} from "@/lib/chat/chatMessagesOnly";
 import {
   chatBusyReason,
   chatForCommand,
@@ -1786,7 +1783,6 @@ export function App() {
         dropFrame(pid);
         dropHeldConv(pid);
         dropDraft(pid);
-        dropMessagesOnly(pid);
         dropLiveChat(pid);
         dropSheet(pid);
         try {
@@ -1834,7 +1830,6 @@ export function App() {
           dropFrame(pid);
           dropHeldConv(pid);
           dropDraft(pid);
-          dropMessagesOnly(pid);
           dropLiveChat(pid);
           dropSheet(pid);
           try {
@@ -1879,7 +1874,6 @@ export function App() {
       dropFrame(paneId);
       dropHeldConv(paneId);
       dropDraft(paneId);
-      dropMessagesOnly(paneId);
       dropLiveChat(paneId);
       dropSheet(paneId);
       try {
@@ -2055,20 +2049,31 @@ export function App() {
         () => {},
       );
       moveDraft(old.id, newId);
-      moveMessagesOnly(old.id, newId);
       // Its own session or the folder's latest: never the pane map's, which
       // may hold a terminal session that ran in this pane before the chat.
       // The chat's own word first: the pane may not have heard it yet.
       const resume = liveSessionId(old.id) ?? chat.resume;
       dropLiveChat(old.id);
       dropSheet(old.id);
+      // Its lock goes with it, as it is now (clicked during the move): the
+      // account it runs on now, or on the API credits the one it left
+      // (`useChatLimitSwitch` takes it back there).
+      const oldNow = tabsRef.current.find((t) => t.id === tabId)?.panes[old.id]
+        ?.chat;
+      const keptNow = oldNow ? oldNow.keepAccount : chat.keepAccount;
+      const keep = keptNow
+        ? {
+            keepAccount: accountId === CREDITS_ACCOUNT_ID ? keptNow : accountId,
+          }
+        : {};
       const next: PaneChat = resume
-        ? { cwd: chat.cwd, resume }
+        ? { cwd: chat.cwd, resume, ...keep }
         : {
             cwd: chat.cwd,
             ...(chat.continue ? { continue: true } : {}),
             // Never typed in: no Claude Code on the new account either.
             ...(chat.asleep ? { asleep: true } : {}),
+            ...keep,
           };
       setTabs((prev) =>
         prev.map((t) => {
@@ -3034,7 +3039,6 @@ export function App() {
         paneToTab.current.delete(pid);
         dropHeldConv(pid);
         dropDraft(pid);
-        dropMessagesOnly(pid);
         dropLiveChat(pid);
         dropSheet(pid);
         void invoke("close_terminal", { sessionId: pid });
@@ -3656,6 +3660,9 @@ export function App() {
           const refused = await chatHandlers.onToggle(action.paneId);
           return refused ? { error: refused } : {};
         }
+        case "chatKeepAccount":
+          chatHandlers.onKeepAccount(action.paneId, action.on);
+          return {};
         case "chatSessions":
         case "chatResume":
         case "chatRewindPoints":

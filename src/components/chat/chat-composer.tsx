@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowUp, Mic, Square } from "lucide-react";
+import { ArrowUp, Lock, LockOpen, Mic, Square } from "lucide-react";
 import type { LightboxContent } from "@/components/modern/ImageThumb";
 import type { ToastFn } from "@/components/modern/MarkdownContent";
 import { ChatAttachments } from "@/components/chat/chat-attachments";
@@ -85,6 +85,14 @@ const VOICE_TITLES: Record<VoiceStatus, string> = {
 
 const NO_FILES: DraftFile[] = [];
 const NO_PASTES: PastedText[] = [];
+/** The input's lock (`PaneChat.keepAccount`), beside the microphone. */
+export interface KeepLock {
+  on: boolean;
+  /** The account's name, for its title. */
+  account: string;
+  onToggle: () => void;
+}
+
 /** The wave's bars, each its own beat. */
 const WAVE_DELAYS = [0, 180, 90, 320, 140, 260, 40, 210, 120, 300, 70, 240];
 
@@ -115,8 +123,7 @@ export function ChatComposer({
   onInterrupt,
   onBackground,
   onMode,
-  messagesOnly,
-  onMessagesOnly,
+  keepLock = null,
   active,
   onToast,
   suggestion = null,
@@ -144,8 +151,11 @@ export function ChatComposer({
   /** Ctrl+B while Claude works: its running Bash and agents to the background. */
   onBackground?: () => void;
   onMode: (mode: PermissionMode) => void;
-  messagesOnly: boolean;
-  onMessagesOnly: (on: boolean) => void;
+  /**
+   * Keep its account at the usage limit (the user's pick of 26/11/2026):
+   * its quota waited for, then « continue ». Null: no lock (on the credits).
+   */
+  keepLock?: KeepLock | null;
   /** The pane is the active one and on screen (`ChatRailActions`). */
   active: boolean;
   onToast?: ToastFn;
@@ -676,16 +686,36 @@ export function ChatComposer({
       )}
       <div className="chat-tools-row">
         {leading}
-        {/* Insert, hide, mic, send: one group on the right, never split. */}
+        {/* Insert, lock, mic, send: one group on the right, never split. */}
         <div className="chat-tools-end">
           <ChatCommandsMenu onRun={runCommand} />
           <ChatRailActions
             onDraft={onDraft}
             areaRef={areaRef}
-            messagesOnly={messagesOnly}
-            onMessagesOnly={onMessagesOnly}
             active={active}
           />
+          {keepLock && (
+            <button
+              type="button"
+              className={`chat-ib violet${keepLock.on ? " on" : ""}`}
+              title={
+                keepLock.on
+                  ? `Compte gardé : à la limite, ce chat attend le quota de ${keepLock.account} puis continue (clic pour libérer)`
+                  : `Garder ${keepLock.account} à la limite : attendre son quota au lieu de changer de compte`
+              }
+              aria-label={
+                keepLock.on
+                  ? "Libérer le compte"
+                  : "Garder ce compte à la limite"
+              }
+              aria-pressed={keepLock.on}
+              // The input keeps the focus: Space and Enter stay its own.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={keepLock.onToggle}
+            >
+              {keepLock.on ? <Lock /> : <LockOpen />}
+            </button>
+          )}
           <button
             type="button"
             className={`chat-round mic${voice.status === "listening" ? " rec" : ""}`}
