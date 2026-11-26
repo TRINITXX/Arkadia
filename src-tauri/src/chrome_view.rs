@@ -778,24 +778,35 @@ fn launch(state: &ChromeView, dir: &str, pane: Option<&str>) -> Result<(Win, boo
         }
     ));
     // Chrome cannot have the profile's sync store open: the only moment its
-    // saved Claude groups can go (`chrome_tab_groups`).
+    // saved Claude groups can go and its default zoom be set
+    // (`chrome_tab_groups`).
     if profile_started {
         match crate::chrome_profile::profile_path(&dir)
             .ok_or_else(|| "no Chrome folder".to_string())
             .and_then(|path| crate::chrome_tab_groups::tidy_isolated(&path))
         {
-            Ok(t) if t.groups + t.tabs > 0 || t.sync_turned_off => log(&format!(
-                "saved tab groups of {dir}: {} Claude groups and {} tabs deleted{}",
-                t.groups,
-                t.tabs,
-                if t.sync_turned_off {
-                    ", tab sync turned off"
-                } else {
-                    ""
+            Ok(t) => {
+                let mut done = Vec::new();
+                if t.groups + t.tabs > 0 {
+                    done.push(format!(
+                        "{} Claude groups and {} tabs deleted",
+                        t.groups, t.tabs
+                    ));
                 }
-            )),
-            Ok(_) => {}
-            Err(e) => log(&format!("saved tab groups of {dir} left: {e}")),
+                if t.sync_turned_off {
+                    done.push("tab sync turned off".to_string());
+                }
+                if t.zoom_set {
+                    done.push(format!(
+                        "default zoom set to {} %",
+                        crate::chrome_tab_groups::PANEL_ZOOM_PERCENT
+                    ));
+                }
+                if !done.is_empty() {
+                    log(&format!("profile {dir} before launch: {}", done.join(", ")));
+                }
+            }
+            Err(e) => log(&format!("profile {dir} left as is before launch: {e}")),
         }
     }
     // Chrome puts a window launched from the command line in front, over

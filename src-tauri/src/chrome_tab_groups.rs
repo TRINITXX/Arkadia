@@ -14,7 +14,9 @@
 //! holds it. It also turns off the profile's syncing of tabs and tab groups
 //! in `Preferences`, so the account's groups never come back. A profile
 //! with full Chrome sync (`has_setup_completed`) is a person's own and is
-//! left alone. It runs in a child process of the same exe (`TIDY_ARG`):
+//! left alone. The same write gives the profile the panel's default page
+//! zoom (`set_panel_zoom`): Chrome reads it only when a profile starts.
+//! It runs in a child process of the same exe (`TIDY_ARG`):
 //! the store is data Arkadia does not control, and a panic in the LevelDB
 //! reader must not take Arkadia down (`panic = "abort"`).
 
@@ -32,6 +34,9 @@ const DATA: &[u8] = b"saved_tab_group-dt-";
 const META: &[u8] = b"saved_tab_group-md-";
 const TIDY_ARG: &str = "--tidy-tab-groups";
 const CHILD_TIMEOUT: Duration = Duration::from_secs(20);
+/// The panel's window is narrow: Alexis asked for its pages at 50 %
+/// (26/11/2026). Claude in Chrome's clicks land right at that zoom.
+pub(crate) const PANEL_ZOOM_PERCENT: u32 = 50;
 
 /// What `tidy` did to one profile.
 #[derive(Debug, Default, PartialEq)]
@@ -39,6 +44,7 @@ pub(crate) struct Tidied {
     pub groups: usize,
     pub tabs: usize,
     pub sync_turned_off: bool,
+    pub zoom_set: bool,
 }
 
 /// The profile folder when Arkadia was started as `tidy`'s child.
@@ -58,7 +64,13 @@ pub fn run_child(profile: &Path) {
     println!(
         "{}",
         match tidy(profile) {
-            Ok(t) => format!("ok {} {} {}", t.groups, t.tabs, u8::from(t.sync_turned_off)),
+            Ok(t) => format!(
+                "ok {} {} {} {}",
+                t.groups,
+                t.tabs,
+                u8::from(t.sync_turned_off),
+                u8::from(t.zoom_set)
+            ),
             Err(e) => format!("err {e}"),
         }
     );
@@ -109,15 +121,20 @@ fn parse_outcome(line: &str) -> Option<Result<Tidied, String>> {
     let groups = parts.next()?.parse().ok()?;
     let tabs = parts.next()?.parse().ok()?;
     let sync_turned_off = parts.next()? == "1";
+    // Absent from the line of a helper exe built before the zoom.
+    let zoom_set = parts.next() == Some("1");
     Some(Ok(Tidied {
         groups,
         tabs,
         sync_turned_off,
+        zoom_set,
     }))
 }
 
-/// Empties the Claude groups of the profile in folder `profile`. Err while
-/// Chrome has its sync store open, or for a profile with full sync.
+/// Empties the Claude groups of the profile in folder `profile` and gives it
+/// the panel's zoom. Err while Chrome has its sync store open, or for a
+/// profile with full sync. A profile with no sync store yet is left as is:
+/// without its LOCK nothing proves Chrome has closed it.
 pub(crate) fn tidy(profile: &Path) -> Result<Tidied, String> {
     let prefs_file = profile.join("Preferences");
     if read_prefs(&prefs_file)?
@@ -143,6 +160,7 @@ pub(crate) fn tidy(profile: &Path) -> Result<Tidied, String> {
     // meanwhile (a profile closing writes it last).
     let (mut prefs, stamp) = read_prefs(&prefs_file)?;
     let sync_turned_off = turn_off_tab_sync(&mut prefs);
+    let zoom_set = set_panel_zoom(&mut prefs);
     let mut ids = HashSet::new();
     let mut entities = Vec::new();
     let mut iter = db.new_iter().map_err(|e| format!("sync store: {e}"))?;
@@ -173,7 +191,7 @@ pub(crate) fn tidy(profile: &Path) -> Result<Tidied, String> {
     }
     // After the store, so a refused rename does not keep the groups; still
     // under the LOCK.
-    let written = if sync_turned_off {
+    let written = if sync_turned_off || zoom_set {
         write_prefs(&prefs_file, &prefs, &stamp)
     } else {
         Ok(())
@@ -188,7 +206,36 @@ pub(crate) fn tidy(profile: &Path) -> Result<Tidied, String> {
         groups,
         tabs: doomed.len() - groups,
         sync_turned_off,
+        zoom_set,
     })
+}
+
+/// Gives the profile the panel's default page zoom, unless it has one: a
+/// zoom Alexis picks in the profile's settings stays. Key "x" is the
+/// default storage partition (`ChromeZoomLevelPrefs::GetPartitionKey` of an
+/// empty path); a level is log base 1.2 of the factor. True when it changed.
+fn set_panel_zoom(prefs: &mut Value) -> bool {
+    let Some(levels) = prefs
+        .as_object_mut()
+        .and_then(|p| {
+            p.entry("partition")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+        })
+        .and_then(|p| {
+            p.entry("default_zoom_level")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+        })
+    else {
+        return false;
+    };
+    if levels.contains_key("x") {
+        return false;
+    }
+    let level = (f64::from(PANEL_ZOOM_PERCENT) / 100.0).ln() / 1.2_f64.ln();
+    levels.insert("x".to_owned(), json!(level));
+    true
 }
 
 type Stamp = (u64, Option<std::time::SystemTime>);
@@ -455,13 +502,38 @@ mod tests {
     }
 
     #[test]
+    fn sets_the_panel_zoom_once_and_keeps_a_chosen_one() {
+        let mut prefs = json!({"partition": {"per_host_zoom_levels": {}}});
+        assert!(set_panel_zoom(&mut prefs));
+        let level = prefs["partition"]["default_zoom_level"]["x"]
+            .as_f64()
+            .unwrap();
+        // Chrome's own value for 50 % in its settings.
+        assert!((level - -3.801_784_016_923_930_8).abs() < 1e-9);
+        assert!(prefs["partition"]["per_host_zoom_levels"].is_object());
+        assert!(!set_panel_zoom(&mut prefs));
+
+        let mut chosen = json!({"partition": {"default_zoom_level": {"x": 0.0}}});
+        assert!(!set_panel_zoom(&mut chosen));
+        assert_eq!(chosen["partition"]["default_zoom_level"]["x"], 0.0);
+    }
+
+    #[test]
     fn reads_the_childs_outcome() {
         assert_eq!(
-            parse_outcome("ok 3 5 1"),
+            parse_outcome("ok 3 5 1 0"),
             Some(Ok(Tidied {
                 groups: 3,
                 tabs: 5,
-                sync_turned_off: true
+                sync_turned_off: true,
+                zoom_set: false,
+            }))
+        );
+        assert_eq!(
+            parse_outcome("ok 0 0 1"),
+            Some(Ok(Tidied {
+                sync_turned_off: true,
+                ..Tidied::default()
             }))
         );
         assert_eq!(parse_outcome("err locked"), Some(Err("locked".into())));
@@ -500,7 +572,8 @@ mod tests {
             Tidied {
                 groups: 1,
                 tabs: 1,
-                sync_turned_off: true
+                sync_turned_off: true,
+                zoom_set: true,
             }
         );
         let mut db = DB::open(
@@ -517,6 +590,7 @@ mod tests {
             written["sync"]["selected_types_per_account"]["a"]["sync.tabs"],
             false
         );
+        assert!(written["partition"]["default_zoom_level"]["x"].is_f64());
         assert!(!dir.path().join("Preferences.arkadia-tmp").exists());
     }
 
