@@ -12,6 +12,13 @@
 //! - An Arkadia notification (toast, mirror popup, daily or Lab) in front
 //!   moves nothing either: after 200 s without input, Windows lets the toast
 //!   take the foreground while Alexis watches a stream elsewhere (05/11/2026).
+//! - A window owned by Arkadia (`OWNER_DEPTH` owners up) counts as
+//!   Arkadia: the Chrome panel laid in it (`chrome_view`, a chrome.exe
+//!   window owned by main) and its popups. As another app, each click
+//!   between the panel and the rest of Arkadia sent the PiP back and forth
+//!   (26/11/2026). A panel window that is not laid (parked, anchor:
+//!   unowned, off-screen) moves nothing: a launch activates one for an
+//!   instant, whatever app is in front.
 //! - The place to go back to (`origin`) belongs to no window handle: Chrome
 //!   reopens a closed PiP at its last place (the target), and the new window
 //!   must still go back. It is never the target itself, and it survives a
@@ -77,20 +84,29 @@ enum Foreground {
     Pip,
     /// One of Arkadia's notification windows (toast, mirror popup).
     Notification,
+    /// A Chrome panel window not laid in Arkadia (parked, anchor).
+    ParkedPanel,
     Other,
 }
 
 impl Foreground {
-    /// Neither Arkadia nor another app: a click in the PiP, or a notification
-    /// that took the foreground. The last side stays what it was.
+    /// Neither Arkadia nor another app: a click in the PiP, a notification
+    /// or a parked panel window that took the foreground. The last side
+    /// stays what it was.
     fn is_neutral(self) -> bool {
-        matches!(self, Foreground::Pip | Foreground::Notification)
+        matches!(
+            self,
+            Foreground::Pip | Foreground::Notification | Foreground::ParkedPanel
+        )
     }
 
     /// A pending return to the origin still happens: Alexis is not back on
     /// Arkadia (a click in the PiP or Arkadia itself cancels it).
     fn keeps_restore(self) -> bool {
-        matches!(self, Foreground::Other | Foreground::Notification)
+        matches!(
+            self,
+            Foreground::Other | Foreground::Notification | Foreground::ParkedPanel
+        )
     }
 }
 
@@ -121,6 +137,24 @@ fn came_back(last_side: Option<Foreground>, fg: Foreground) -> bool {
 fn is_arkadia_exe(exe: &str) -> bool {
     let exe = exe.to_ascii_lowercase();
     exe == "arkadia.exe" || exe == "arkadia-lab.exe"
+}
+
+/// Owners followed up from the foreground window: a popup of a popup of the
+/// laid panel is three steps from main.
+const OWNER_DEPTH: usize = 8;
+
+/// The side of a foreground window that is neither the PiP nor a
+/// notification. `owners`: for the window, then its owner, its owner's
+/// owner…, whether it belongs to Arkadia (daily or Lab); read lazily, up to
+/// the first yes. `panel`: a Chrome panel window or a popup of one.
+fn side_of(mut owners: impl Iterator<Item = bool>, panel: bool) -> Foreground {
+    if owners.any(|arkadia| arkadia) {
+        Foreground::Arkadia
+    } else if panel {
+        Foreground::ParkedPanel
+    } else {
+        Foreground::Other
+    }
 }
 
 /// The extension's PiP window is a topmost Chrome window titled after the
@@ -189,8 +223,8 @@ mod imp {
 #[cfg(windows)]
 mod imp {
     use super::{
-        came_back, is_arkadia_exe, is_twitch_pip, next_action, Action, Foreground, Rect,
-        RESTORE_DELAY_MS,
+        came_back, is_arkadia_exe, is_twitch_pip, next_action, side_of, Action, Foreground, Rect,
+        OWNER_DEPTH, RESTORE_DELAY_MS,
     };
     use crate::popup::log_line;
     use std::path::PathBuf;
@@ -203,10 +237,11 @@ mod imp {
     };
     use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
     use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, EnumWindows, GetForegroundWindow, GetMessageW, GetPropW, GetWindowLongW,
-        GetWindowRect, GetWindowThreadProcessId, InternalGetWindowText, IsWindowVisible, KillTimer,
-        SetTimer, SetWindowPos, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, MSG, SWP_ASYNCWINDOWPOS,
-        SWP_NOACTIVATE, SWP_NOZORDER, WINEVENT_OUTOFCONTEXT, WS_EX_TOPMOST,
+        DispatchMessageW, EnumWindows, GetForegroundWindow, GetMessageW, GetPropW, GetWindow,
+        GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, InternalGetWindowText,
+        IsWindowVisible, KillTimer, SetTimer, SetWindowPos, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE,
+        GW_OWNER, MSG, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER, WINEVENT_OUTOFCONTEXT,
+        WS_EX_TOPMOST,
     };
 
     struct State {
@@ -478,15 +513,28 @@ mod imp {
         if !tag.0.is_null() {
             return Foreground::Notification;
         }
+        // Owners, processes and window properties only: no message sent (see
+        // the module doc on pumping).
+        let panel = crate::chrome_view::is_front_side(hwnd.0 as isize);
+        side_of(owners(hwnd).map(is_arkadia_window), panel)
+    }
+
+    /// The window, then its owner, its owner's owner… (`OWNER_DEPTH` at most).
+    fn owners(hwnd: HWND) -> impl Iterator<Item = HWND> {
+        std::iter::successors((!hwnd.0.is_null()).then_some(hwnd), |h| {
+            // SAFETY: plain read of a window's owner.
+            unsafe { GetWindow(*h, GW_OWNER) }
+                .ok()
+                .filter(|o| !o.0.is_null())
+        })
+        .take(OWNER_DEPTH)
+    }
+
+    fn is_arkadia_window(hwnd: HWND) -> bool {
         let mut pid = 0u32;
-        // SAFETY: reads the owner of a window handle.
+        // SAFETY: reads the owner process of a window handle.
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-        let ours = pid == std::process::id();
-        if ours || exe_name(pid).is_some_and(|exe| is_arkadia_exe(&exe)) {
-            Foreground::Arkadia
-        } else {
-            Foreground::Other
-        }
+        pid == std::process::id() || exe_name(pid).is_some_and(|exe| is_arkadia_exe(&exe))
     }
 
     fn is_pip(hwnd: HWND) -> bool {
@@ -618,6 +666,44 @@ mod tests {
         // Back from a click in the PiP: last_side stayed Arkadia.
         assert!(!came_back(Some(Foreground::Arkadia), Foreground::Arkadia));
         assert!(!came_back(Some(Foreground::Arkadia), Foreground::Other));
+    }
+
+    #[test]
+    fn a_click_in_the_laid_chrome_panel_is_still_arkadia() {
+        // The panel's window, owned by main.
+        assert_eq!(
+            side_of([false, true].into_iter(), true),
+            Foreground::Arkadia
+        );
+        // A dialog of a dialog of the panel.
+        assert_eq!(
+            side_of([false, false, false, true].into_iter(), true),
+            Foreground::Arkadia
+        );
+        // Arkadia's own window: no process lookup for its owners.
+        assert_eq!(
+            side_of(
+                [true]
+                    .into_iter()
+                    .chain(std::iter::from_fn(|| unreachable!())),
+                false
+            ),
+            Foreground::Arkadia
+        );
+    }
+
+    #[test]
+    fn a_parked_panel_window_in_front_moves_nothing() {
+        // Unowned and off-screen: a launch activates it, whatever app is in
+        // front.
+        let parked = side_of([false].into_iter(), true);
+        assert_eq!(parked, Foreground::ParkedPanel);
+        assert_eq!(next_action(false, parked), Action::Nothing);
+        assert_eq!(next_action(true, parked), Action::Nothing);
+        assert!(parked.is_neutral());
+        assert!(parked.keeps_restore());
+        // Alexis's own Chrome is another app.
+        assert_eq!(side_of([false].into_iter(), false), Foreground::Other);
     }
 
     #[test]
