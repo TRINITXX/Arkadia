@@ -11,11 +11,14 @@ import {
   nextFrameHeight,
   refitFrameGrowth,
   type ChoiceImage,
+  type VisualImage,
 } from "@/lib/chat/chatVisual";
 import {
+  frameClickedNow,
   frameDictationNow,
   frameGestureNow,
   loadVisualFrame,
+  takeFocusFrom,
 } from "@/lib/chat/chatVisualDom";
 import { glideBy, wheelPixels } from "@/lib/chat/glideScroll";
 import {
@@ -40,6 +43,8 @@ interface ChatVisualFrameProps {
   onChoose?: (text: string, images?: ChoiceImage[]) => void;
   /** A link of the page, on the user's click: the browser opens it. */
   onLink?: (url: string) => void;
+  /** An image of the page, on the user's click: the lightbox shows it, ←/→ walk the others. */
+  onZoom?: (images: VisualImage[], index: number) => void;
   /** Its tool call: the choice kit's picks and remarks outlive the frame
    *  (`visualStates`), its zoomed copy shares them. */
   stateKey?: string;
@@ -126,6 +131,7 @@ export function ChatVisualFrame({
   verified = false,
   onChoose,
   onLink,
+  onZoom,
   stateKey,
 }: ChatVisualFrameProps) {
   const boxRef = useRef<HTMLDivElement>(null);
@@ -162,9 +168,23 @@ export function ChatVisualFrame({
     status: field.status,
     interim: field.interim,
   };
-  const handlers = useRef({ onChoose, onLink, field, voiceState, stateKey });
+  const handlers = useRef({
+    onChoose,
+    onLink,
+    onZoom,
+    field,
+    voiceState,
+    stateKey,
+  });
   useEffect(() => {
-    handlers.current = { onChoose, onLink, field, voiceState, stateKey };
+    handlers.current = {
+      onChoose,
+      onLink,
+      onZoom,
+      field,
+      voiceState,
+      stateKey,
+    };
   });
   // « Valider » clicked while a remark of this page is dictated: the choice
   // waits for its words (the user's report of 16/11/2026), then the page is
@@ -299,6 +319,12 @@ export function ChatVisualFrame({
           }
         } else if (m.kind === "link" && frameGestureNow(iframe))
           handlers.current.onLink?.(m.url);
+        // An image clicked: shown big over the Lab, on the user's own click
+        // in this frame; the keys go to the lightbox, not the page.
+        else if (m.kind === "zoom" && frameClickedNow(iframe)) {
+          takeFocusFrom(iframe);
+          handlers.current.onZoom?.(m.images, m.index);
+        }
         // Listening starts only on the user's own click or key in this frame
         // (`frameDictationOk`): a page can't open the mic by itself.
         else if (m.kind === "dictate") {
@@ -319,6 +345,7 @@ export function ChatVisualFrame({
       },
       fill ? undefined : (roomRef.current ?? undefined),
       !fill,
+      !!handlers.current.onZoom,
     );
     setFitRef.current = setFit;
     return () => {

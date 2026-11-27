@@ -1,7 +1,7 @@
 import { createPortal } from "react-dom";
 import { Shapes, SquareArrowOutUpRight, X } from "lucide-react";
 import { ChatVisualFrame } from "@/components/chat/chat-visual-frame";
-import type { ChoiceImage } from "@/lib/chat/chatVisual";
+import type { ChoiceImage, VisualImage } from "@/lib/chat/chatVisual";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 
 interface ChatVisualZoomProps {
@@ -12,6 +12,8 @@ interface ChatVisualZoomProps {
   onClose: () => void;
   onChoose?: (text: string, images?: ChoiceImage[]) => void;
   onLink?: (url: string) => void;
+  /** An image of the page clicked: the lightbox, over this view. */
+  onZoom?: (images: VisualImage[], index: number) => void;
   onOpenInBrowser?: () => void;
   /** Its tool call: the card's picks and remarks, shared (`visualStates`). */
   stateKey?: string;
@@ -28,6 +30,7 @@ export function ChatVisualZoom({
   onClose,
   onChoose,
   onLink,
+  onZoom,
   onOpenInBrowser,
   stateKey,
 }: ChatVisualZoomProps) {
@@ -64,6 +67,7 @@ export function ChatVisualZoom({
             onClose();
           }}
           onLink={onLink}
+          onZoom={onZoom}
           stateKey={stateKey}
         />
       </div>

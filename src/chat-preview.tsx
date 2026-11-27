@@ -52,7 +52,12 @@ import tools from "../chat-server/fixtures/tools.jsonl?raw";
 import usageText from "../chat-server/fixtures/usage.txt?raw";
 import pastedPng from "../src-tauri/icons/128x128@2x.png?inline";
 import { attachDraft, attachEvents } from "@/chat-preview-attach";
-import { tallEvents, visualNext, visualStart } from "@/chat-preview-visuals";
+import {
+  shotsEvents,
+  tallEvents,
+  visualNext,
+  visualStart,
+} from "@/chat-preview-visuals";
 import { sleepScenarios } from "@/chat-preview-sleep";
 import { rememberPastes } from "@/lib/chat/chatPastes";
 import { createVisualProbe } from "@/lib/chat/chatVisualDom";
@@ -655,6 +660,8 @@ const SCENARIOS: Record<string, () => ChatState> = {
   visuals: () => replay(visualStart()),
   // One tall screenshot and its caption: the card fits the pane's height.
   tall: () => replay(tallEvents()),
+  // Mockup screenshots, then a choice holding them: a click on one opens it big.
+  shots: () => replay(shotsEvents()),
 };
 // SDK settings: model, effort and fast mode chips, MCP chip and requests,
 // a running hook, plugin errors, a cautious permission, a message withdrawn.

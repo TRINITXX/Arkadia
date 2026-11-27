@@ -10,4 +10,9 @@ export interface ImageRef {
   caption?: string;
   /** Already in memory (an image pasted in the chat): shown, never fetched. */
   url?: string;
+  /**
+   * Said under the caption in place of the file name: an image with no file
+   * (a chat visual's) gives its place in its walk, « 2 / 3 ». Empty: nothing.
+   */
+  label?: string;
 }

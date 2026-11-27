@@ -412,3 +412,103 @@ span{color:var(--text)}
     }),
   ];
 }
+
+/** A wide dashboard screenshot drawn here (1600×900): one mockup of three. */
+function mockupShot(variant: number): string {
+  const c = document.createElement("canvas");
+  c.width = 1600;
+  c.height = 900;
+  const g = c.getContext("2d");
+  if (!g) return "";
+  const tint = ["#e2865f", "#60a5fa", "#c084fc"][variant % 3];
+  g.fillStyle = "#0f1012";
+  g.fillRect(0, 0, 1600, 900);
+  g.fillStyle = "#1c1e22";
+  g.fillRect(0, 0, 1600, 110);
+  g.fillStyle = "#e4e4e7";
+  g.font = "600 44px Segoe UI, sans-serif";
+  g.fillText(`Vidéos par compte · maquette ${"ABC"[variant % 3]}`, 48, 72);
+  const cols = [8, 4, 1][variant % 3];
+  for (let r = 0; r < 9; r++) {
+    const y = 150 + r * 80;
+    g.fillStyle = "#26282d";
+    g.fillRect(48, y, 420, 52);
+    for (let k = 0; k < cols; k++) {
+      const w = (1050 - (cols - 1) * 12) / cols;
+      g.globalAlpha = 0.25 + ((r * 7 + k * 3) % 10) / 13;
+      g.fillStyle = tint;
+      g.fillRect(500 + k * (w + 12), y, w, 52);
+      g.globalAlpha = 1;
+    }
+  }
+  return c.toDataURL("image/png");
+}
+
+/**
+ * `?s=shots`: three mockup screenshots side by side, then a choice whose
+ * cards hold them. A click on one opens it full size, ←/→ to the others.
+ */
+export function shotsEvents(): ChatEvent[] {
+  const shots = [0, 1, 2].map(mockupShot);
+  const names = [
+    "Une colonne par compte, couleur selon les vues",
+    "Une colonne par réseau, FR et EN empilés",
+    "Une seule colonne, le total par vidéo",
+  ];
+  const plain = `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><style>
+.m{margin-bottom:18px}.m h3{margin:0 0 4px;font-size:15px}.m p{margin:0 0 8px;color:var(--muted);font-size:13px}
+.m img{display:block;width:100%;border-radius:var(--radius-sm)}
+</style></head><body>
+${shots.map((s, i) => `<div class="m"><h3>${"ABC"[i]} · ${names[i]}</h3><p>Une ligne d'explication.</p><img src="${s}"></div>`).join("\n")}
+</body></html>`;
+  const choice = `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"></head><body>
+<div class="ark-choice" data-intro="Mon choix de tableau">
+  <div class="ark-question" data-title="Tableau" data-sub="Vidéos par compte">
+${shots.map((s, i) => `    <div class="ark-option"${i === 0 ? " data-reco" : ""} data-title="${names[i]}"><img src="${s}"></div>`).join("\n")}
+  </div>
+</div>
+</body></html>`;
+  const call = (id: string, html: string, title: string, wide: boolean) => [
+    sdk({
+      type: "assistant",
+      uuid: `${id}-a`,
+      message: {
+        id: `${id}-m`,
+        content: [
+          {
+            type: "tool_use",
+            id,
+            name: VISUAL_TOOL_NAME,
+            input: { html, title, ...(wide ? { wide: true } : {}) },
+          },
+        ],
+      },
+    }),
+    ev("visual_check", { checkId: id, toolUseId: id, html, title, wide }),
+    ev("visual_checked", { checkId: id }),
+    sdk({
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: id,
+            content: "Shown in the chat (checked: no error).",
+            is_error: false,
+          },
+        ],
+      },
+    }),
+  ];
+  return [
+    ev("user_sent", {
+      text: "Montre-moi les maquettes du tableau des vidéos.",
+      images: 0,
+    }),
+    ...call("vis-shots", plain, "Vidéos par compte : 3 maquettes", false),
+    ...call("vis-shots-choice", choice, "Choix du tableau", true),
+    sdk({ type: "result", subtype: "success", duration_ms: 9_000 }),
+  ];
+}

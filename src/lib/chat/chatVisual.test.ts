@@ -33,6 +33,7 @@ import {
   VISUAL_THEME_CSS,
   VISUAL_TOOL_NAME,
   visualDocument,
+  visualGallery,
   visualHtml,
   visualPhase,
   withChoice,
@@ -64,6 +65,35 @@ describe("visualDocument", () => {
     expect(csp).toBeGreaterThan(0);
     expect(theme).toBeGreaterThan(csp);
     expect(page).toBeGreaterThan(doc.indexOf("window.parent"));
+  });
+
+  it("opens images on click only for a host that has a lightbox", () => {
+    const page = '<img src="data:image/png;base64,aGVsbG8=">';
+    const zoom = visualDocument(page, "t", undefined, true, true);
+    expect(zoom).toContain('id="arkadia-zoom"');
+    expect(zoom).toContain('post("zoom"');
+    // The phone and the browser copy: a tap on a card's image still picks it.
+    for (const doc of [visualDocument(page, "t"), VISUAL_BOOTSTRAP]) {
+      expect(doc).not.toContain('post("zoom"');
+      expect(doc).not.toContain("arkadia-zoom");
+    }
+  });
+
+  it("walks a visual's images by their place, said only when there are several", () => {
+    const shots = [
+      { url: "data:image/png;base64,QQ==", caption: "A" },
+      { url: "data:image/png;base64,Qg==" },
+    ];
+    expect(visualGallery("toolu_1", shots)).toEqual([
+      {
+        path: "visual:toolu_1:1",
+        url: shots[0].url,
+        label: "1 / 2",
+        caption: "A",
+      },
+      { path: "visual:toolu_1:2", url: shots[1].url, label: "2 / 2" },
+    ]);
+    expect(visualGallery("toolu_1", [shots[1]])[0].label).toBe("");
   });
 
   it("adds the choice kit after the bootstrap, only to a page that uses it", () => {
@@ -383,6 +413,45 @@ describe("readFrameMessage", () => {
     expect(readFrameMessage(msg("wheel", { dy: "x" }), "t0k")).toBeNull();
   });
 
+  it("takes a clicked image's walk with inlined images only, the click following its image", () => {
+    const png = "data:image/png;base64,aGVsbG8=";
+    const svg = "data:image/svg+xml,%3Csvg%3E%3C/svg%3E";
+    expect(
+      readFrameMessage(
+        msg("zoom", {
+          i: 2,
+          l: [
+            { s: png, c: " A · Colonnes " },
+            { s: "https://evil.example/x.png", c: "out" },
+            { s: svg },
+            { s: "data:text/html,<script>", c: "page" },
+          ],
+        }),
+        "t0k",
+      ),
+    ).toEqual({
+      kind: "zoom",
+      images: [{ url: png, caption: "A · Colonnes" }, { url: svg }],
+      index: 1,
+    });
+    // Every type the server inlines opens (an .ico among them).
+    const ico = "data:image/x-icon;base64,AAABAA==";
+    expect(
+      readFrameMessage(msg("zoom", { i: 0, l: [{ s: ico }] }), "t0k"),
+    ).toEqual({ kind: "zoom", images: [{ url: ico }], index: 0 });
+    // The clicked one refused, or no list: nothing opens.
+    expect(
+      readFrameMessage(
+        msg("zoom", { i: 1, l: [{ s: png }, { s: "blob:x" }] }),
+        "t0k",
+      ),
+    ).toBeNull();
+    expect(readFrameMessage(msg("zoom", { i: 0 }), "t0k")).toBeNull();
+    expect(
+      readFrameMessage(msg("zoom", { i: 0, l: [{ s: png }] }, "guess"), "t0k"),
+    ).toBeNull();
+  });
+
   it("believes a press or a choice only with the frame's token, which its page never sees", () => {
     expect(readFrameMessage(msg("down"), "t0k")).toEqual({ kind: "down" });
     expect(readFrameMessage(msg("down", undefined, "guess"), "t0k")).toBeNull();
@@ -392,8 +461,11 @@ describe("readFrameMessage", () => {
       readFrameMessage({ arkadiaVisual: 1, kind: "shell" }, "t0k"),
     ).toEqual({ kind: "shell" });
     // The bootstrap removes its own script, token and all, before the page runs.
-    const boot = visualBootstrap("t0k");
+    const boot = visualBootstrap("t0k", true);
     expect(boot).toContain('var K="t0k"');
+    // The message carrying it is built whole: an assignment onto it would run
+    // a setter the page put on Object.prototype, the token in its hands.
+    expect(boot).not.toMatch(/\bm\.\w+\s*=/);
     expect(boot.indexOf("removeChild(me)")).toBeLessThan(
       boot.indexOf('var K="t0k"'),
     );

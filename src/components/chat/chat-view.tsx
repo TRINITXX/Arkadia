@@ -268,9 +268,15 @@ function ChatViewBody({
   );
   // A known subagent's conversation: from its row or the live line's menu.
   const { openSheet } = agentSheet;
-  // Every image of the conversation, for the lightbox's ←/→.
+  // Every image of the conversation, for the lightbox's ←/→; a visual's
+  // image walks its own page's.
   const gallery = useMemo(
-    () => (lightbox ? chatGallery(state.items, cwd).all : []),
+    () =>
+      !lightbox
+        ? []
+        : lightbox.kind === "image" && lightbox.gallery
+          ? lightbox.gallery
+          : chatGallery(state.items, cwd).all,
     [lightbox, state.items, cwd],
   );
   // A match brought into view leaves the end, as the reader's scroll would.

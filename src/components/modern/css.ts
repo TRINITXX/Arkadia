@@ -186,6 +186,7 @@ export const LIGHTBOX_CSS = `
 .modern-lightbox .lb-cap .path { margin-top: 3px; font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 11.5px; color: #a1a1aa; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .modern-lightbox .lb-cap .path.open { white-space: normal; overflow-wrap: anywhere; }
 .modern-lightbox .lb-cap .path:hover { color: #e4e4ea; text-decoration: underline; text-underline-offset: 2px; }
+.modern-lightbox .lb-cap .count { margin-top: 3px; font-size: 12px; color: #a1a1aa; font-variant-numeric: tabular-nums; }
 .modern-lightbox .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 50%; color: #e8e8ee; background: rgba(20,20,24,0.72); border: 1px solid rgba(255,255,255,0.14); cursor: pointer; transition: background .12s; }
 .modern-lightbox .lb-nav:hover { background: rgba(40,40,48,0.9); }
 .modern-lightbox .lb-nav.prev { left: 18px; }

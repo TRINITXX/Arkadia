@@ -148,9 +148,12 @@ export function Lightbox({ content, gallery, onClose }: LightboxProps) {
     : -1;
   const hasPrev = index > 0;
   const hasNext = index >= 0 && index < gallery.length - 1;
-  const caption =
-    image?.caption ?? (index >= 0 ? gallery[index].caption : undefined);
-  const captionShown = Boolean(image?.path);
+  const entry = index >= 0 ? gallery[index] : undefined;
+  const caption = image?.caption ?? entry?.caption;
+  /** In place of the file name: an image without a file says its place (`ImageRef.label`). */
+  const label = entry?.label;
+  const captionShown =
+    Boolean(image?.path) && (label === undefined || Boolean(label || caption));
 
   const step = useCallback(
     (dir: 1 | -1) => {
@@ -177,6 +180,11 @@ export function Lightbox({ content, gallery, onClose }: LightboxProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       e.stopPropagation();
+      // Nor does its action reach what holds the focus under the layer (the
+      // input a click in a visual gives back the keyboard to): a key typed
+      // would write in the draft, Enter or Space click a button. Shortcuts
+      // (copying the caption) keep theirs.
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) e.preventDefault();
       if (e.key === "Escape") {
         e.preventDefault();
         onClose();
@@ -298,7 +306,7 @@ export function Lightbox({ content, gallery, onClose }: LightboxProps) {
       onPointerCancel={onPointerUp}
     >
       <style>{LIGHTBOX_CSS}</style>
-      {image?.path && (
+      {image?.path && captionShown && (
         <div
           ref={captionRef}
           className="lb-cap"
@@ -310,18 +318,24 @@ export function Lightbox({ content, gallery, onClose }: LightboxProps) {
               {caption}
             </div>
           )}
-          <div
-            className={`path${pathExpanded ? " open" : ""}`}
-            title={pathExpanded ? "Réduire le chemin" : image.path}
-            onClick={() => {
-              // Selecting the path to copy it must not fold it back.
-              if (!hasSelection()) setPathExpanded((v) => !v);
-            }}
-          >
-            {pathExpanded
-              ? image.path
-              : (image.path.split(/[\\/]/).pop() ?? image.path)}
-          </div>
+          {label !== undefined ? (
+            label ? (
+              <div className="count">{label}</div>
+            ) : null
+          ) : (
+            <div
+              className={`path${pathExpanded ? " open" : ""}`}
+              title={pathExpanded ? "Réduire le chemin" : image.path}
+              onClick={() => {
+                // Selecting the path to copy it must not fold it back.
+                if (!hasSelection()) setPathExpanded((v) => !v);
+              }}
+            >
+              {pathExpanded
+                ? image.path
+                : (image.path.split(/[\\/]/).pop() ?? image.path)}
+            </div>
+          )}
         </div>
       )}
       {/* The transform lives on a wrapper: the pop animation on the content

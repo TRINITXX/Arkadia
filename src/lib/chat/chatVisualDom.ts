@@ -39,13 +39,15 @@ export function loadVisualFrame(
   fit?: number,
   /** In the column's card (not « Agrandir »): no sideways scroll. */
   card = false,
+  /** Its images open on click (`zoom` messages): a lightbox is there. */
+  zoom = false,
 ): { stop: () => void; setFit: (height: number) => void } {
   iframe.setAttribute("sandbox", "allow-scripts");
   iframe.setAttribute("referrerpolicy", "no-referrer");
   visualFrames.add(iframe);
   // Only this frame's bootstrap knows it: its messages are its own.
   const token = crypto.randomUUID();
-  const doc = visualDocument(html, token, fit, card);
+  const doc = visualDocument(html, token, fit, card, zoom);
   let posted = false;
   /** A room given before the page is in: sent once it is (the shell drops it). */
   let pendingFit: number | null = null;
@@ -145,11 +147,21 @@ const pressedIn = (iframe: HTMLIFrameElement) =>
   pressed?.frame === iframe && Date.now() - pressed.at < ACTIVATION_MS;
 
 /** The user's click in `iframe`, now: pressed in it, a fresh gesture (`frameFocusOk`). */
-function frameClickedNow(iframe: HTMLIFrameElement): boolean {
+export function frameClickedNow(iframe: HTMLIFrameElement): boolean {
   return frameFocusOk({
     activation: navigator.userActivation?.isActive ?? false,
     onFrame: pressedIn(iframe),
   });
+}
+
+/**
+ * The keyboard back from `iframe` to the Lab, where it was before the click
+ * (the input): a layer over it (the lightbox) hears ←/→ and Esc.
+ */
+export function takeFocusFrom(iframe: HTMLIFrameElement): void {
+  if (document.activeElement !== iframe) return;
+  iframe.blur();
+  if (lastHostFocus?.isConnected) lastHostFocus.focus({ preventScroll: true });
 }
 
 /**

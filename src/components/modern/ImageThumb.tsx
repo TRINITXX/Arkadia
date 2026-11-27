@@ -2,15 +2,23 @@ import { memo, useEffect, useRef, useState } from "react";
 import { Image as ImageIcon } from "lucide-react";
 import { fetchImageUrl } from "@/lib/imageUrlCache";
 import { isVideoPath } from "@/lib/imagePaths";
+import type { ImageRef } from "@/lib/imageRef";
 import { VideoThumb } from "@/components/modern/VideoThumb";
 
 /** What the lightbox displays. */
 export type LightboxContent =
   /**
    * `path` places the image in the conversation gallery (arrow navigation);
-   * `caption` is the prose around the mention that was clicked.
+   * `caption` is the prose around the mention that was clicked. `gallery`:
+   * a walk of its own (a chat visual's images) in place of the conversation's.
    */
-  | { kind: "image"; url: string; path?: string; caption?: string }
+  | {
+      kind: "image";
+      url: string;
+      path?: string;
+      caption?: string;
+      gallery?: ImageRef[];
+    }
   /** `poster` is the still the thumbnail showed, held up while it loads. */
   | { kind: "video"; path: string; poster?: string; caption?: string }
   | { kind: "svg"; html: string };

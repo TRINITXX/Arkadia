@@ -2,6 +2,7 @@ import shell from "@/lib/chat/visual-frame.html?raw";
 import { CHAT_FONTS, CHAT_TOKENS as T } from "@/lib/chat/chatTheme";
 import type { ToolItem } from "@/lib/chat/chatGroups";
 import type { ChatDraft, DraftImage } from "@/lib/chat/chatDrafts";
+import type { ImageRef } from "@/lib/imageRef";
 import { IMAGE_TYPES, imageTags } from "@/lib/chat/pastedImages";
 import {
   CHOICE_IMAGE_CHARS,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/chat/visualKit";
 import {
   VISUAL_CHECKED_CLEAN,
+  VISUAL_PAGE_MAX,
   VISUAL_TOOL_NAME,
   type VisualReport,
 } from "@chat-server/visualHtml";
@@ -137,18 +139,73 @@ function cut(n){if(n.parentNode){rmc.call(n.parentNode,n);push(blocked,"<"+n.tag
 function sweep(n){if(!n||n.nodeType!==1)return;if(mt.call(n,NEST)){cut(n);return;}var l=qsa.call(n,NEST);for(var i=0;i<l.length;i++)cut(l[i]);}
 new MutationObserver(function(ms){for(var i=0;i<ms.length;i++){var a=ms[i].addedNodes;for(var j=0;j<a.length;j++)sweep(a[j]);}}).observe(document,{childList:true,subtree:true});`;
 
+/** The most images a click on one sends up for the lightbox's ←/→. */
+export const VISUAL_ZOOM_MAX = 60;
+
+/**
+ * The inlined images a click opens (`imageMime`'s types, and jpg written by
+ * hand): one list for the page's click, its cursor and the Lab's check, so
+ * the cursor never promises what the Lab refuses. An svg in an `<img>` runs
+ * nothing.
+ */
+const ZOOM_TYPES = [
+  "png",
+  "jpeg",
+  "jpg",
+  "gif",
+  "webp",
+  "avif",
+  "bmp",
+  "x-icon",
+  "svg+xml",
+];
+const ZOOM_SRC = new RegExp(
+  `^data:image/(?:${ZOOM_TYPES.map((t) => t.replace("+", "\\+")).join("|")})[;,]`,
+  "i",
+);
+
+/**
+ * A click on one of the page's images opens it full size in the Lab's
+ * lightbox, ←/→ walking the page's images (the user's ask of 27/11/2026).
+ * Only an inlined image (`data:image`, the one kind the Lab's CSP shows),
+ * never one in a link, in a button of the page or among a remark's pasted
+ * images. In a choice's card the image opens instead of picking the card:
+ * its title picks. The walk skips images drawn under 48 px (icons). The
+ * caption: the image's alt, its figure's caption, its card's title, else
+ * the last heading before it. The Lab still checks the click was the
+ * user's (`frameClickedNow`).
+ */
+const VISUAL_ZOOM = `var ZS=new RegExp(${JSON.stringify(ZOOM_SRC.source)},"i");
+function zsrc(m){var s=m.currentSrc||m.src||"";return ZS.test(s)?s:"";}
+function zok(m){if(!zsrc(m)||m.closest("a[href],.ark-pic"))return false;var c=m.closest("button,[role=button],label,summary");return !c||c.classList.contains("ark-opt");}
+function ztext(n){return n?String(n.innerText||n.textContent||"").replace(/\\s+/g," ").trim():"";}
+function zcap(m){var t=(m.getAttribute("alt")||m.getAttribute("title")||"").trim();if(t)return t;
+var f=m.closest("figure");if(f&&(t=ztext(f.querySelector("figcaption"))))return t;
+var o=m.closest(".ark-opt");if(o){var mk=ztext(o.querySelector(".ark-mk")),lb=ztext(o.querySelector(".ark-th b"))||ztext(o.querySelector(".ark-st"));return lb&&mk?mk+" \\u00b7 "+lb:lb;}
+var h=document.querySelectorAll("h1,h2,h3,h4,h5,h6"),best="";for(var i=0;i<h.length;i++){if(h[i].compareDocumentPosition(m)&4)best=ztext(h[i]);else break;}return best;}
+function zlist(hit){var out=[],seen=new Map(),at=-1,im=document.images;for(var i=0;i<im.length;i++){var m=im[i],s=zsrc(m);if(!s||!zok(m))continue;
+if(m!==hit){var r=m.getBoundingClientRect();if(r.width<48||r.height<48||out.length>=${VISUAL_ZOOM_MAX - 1})continue;}
+if(seen.has(s)){if(m===hit)at=seen.get(s);continue;}seen.set(s,out.length);if(m===hit)at=out.length;out.push({s:s,c:zcap(m).slice(0,300)});}return at<0?null:{i:at,l:out};}
+window.addEventListener("click",function(e){if(!e.isTrusted||e.button!==0)return;var t=e.target;if(!t||t.tagName!=="IMG"||!zok(t))return;var z=zlist(t);if(!z)return;
+if(t.closest(".ark-opt")){e.preventDefault();e.stopPropagation();}post("zoom",z);},true);`;
+
+/** What shows an image opens on click (`VISUAL_ZOOM`), at no specificity: the page's own cursor wins. */
+const VISUAL_ZOOM_CSS = `:where(img:is(${ZOOM_TYPES.map((t) => `[src^="data:image/${t}" i]`).join(",")}):not(a[href] img,.ark-pic img,:is(button:not(.ark-opt),[role=button],label,summary) img)){cursor:zoom-in}`;
+
 /**
  * The page's side of the frame, its first script: the guard above, then
  * catches errors, failed loads and `console.error`, says its height, sends
  * links and choices up (the Lab decides: a click only, `frameGestureOk`),
  * and answers the probe. Top-level (the copy opened in the browser) its
- * links stay plain links and `arkadia.choose` does nothing.
+ * links stay plain links and `arkadia.choose` does nothing. `zoom`: its
+ * images open on click (`VISUAL_ZOOM`), for a host with a lightbox (the
+ * phone has none: there a tap on a card's image still picks the card).
  */
-export function visualBootstrap(token: string): string {
+export function visualBootstrap(token: string, zoom = false): string {
   return `(function(){
 var me=document.currentScript;if(me&&me.parentNode)me.parentNode.removeChild(me);
 var K=${JSON.stringify(token)},P=window.parent,framed=P!==window,errors=[],consoleErrors=[],blocked=[],loaded=false,last=-1;
-function post(kind,v,x){if(!framed)return;var m={arkadiaVisual:1,k:K,kind:kind,v:v};if(x)m.x=x;P.postMessage(m,"*");}
+function post(kind,v,x){if(!framed)return;P.postMessage({arkadiaVisual:1,k:K,kind:kind,v:v,x:x||null},"*");}
 function push(l,s){s=String(s).slice(0,300);if(l.length<20&&l.indexOf(s)<0)l.push(s);}
 ${VISUAL_GUARD}
 window.addEventListener("error",function(e){var t=e.target;if(t&&t!==window&&t.tagName){push(blocked,t.tagName.toLowerCase()+" "+String(t.currentSrc||t.src||t.href||"").slice(0,160));return;}push(errors,(e.message||"Error")+(e.lineno?" (line "+e.lineno+")":""));},true);
@@ -172,6 +229,7 @@ if("arkadiaVisualRestore" in d)window.dispatchEvent(new CustomEvent("arkadia-res
 if(d.arkadiaVisualFit===1&&typeof d.height==="number"){if(isFinite(d.height))document.documentElement.style.setProperty("--ark-fit-h",Math.max(${VISUAL_MIN_ROOM},Math.round(d.height))+"px");}});
 document.addEventListener("click",function(e){if(!e.isTrusted||e.defaultPrevented||e.button!==0)return;var a=e.target&&e.target.closest?e.target.closest("a[href]"):null,u;if(!a)return;
 try{u=new URL(a.getAttribute("href"),document.baseURI);}catch(x){return;}if(u.href.split("#")[0]===location.href.split("#")[0])return;e.preventDefault();if(/^https?:$/.test(u.protocol))post("link",u.href);});
+${zoom ? VISUAL_ZOOM : ""}
 window.addEventListener("focus",function(){post("focus");});
 function ov(n,y){var s=getComputedStyle(n);return y?s.overflowY:s.overflowX;}
 function room(n,d,y){var r=document.documentElement,b=document.body;
@@ -193,15 +251,21 @@ window.addEventListener("load",function(){loaded=true;size();setTimeout(function
 export const VISUAL_BOOTSTRAP = visualBootstrap("");
 
 /** `<\/script>` inside the bootstrap would end its tag early. */
-const bootstrapTag = (token: string) =>
-  `<script>${visualBootstrap(token).replace(/<\/script/gi, "<\\/script")}</script>`;
+const bootstrapTag = (token: string, zoom: boolean) =>
+  `<script>${visualBootstrap(token, zoom).replace(/<\/script/gi, "<\\/script")}</script>`;
 
 /** The choice kit (`visualKit.ts`), after the bootstrap whose `arkadia.choose` it uses. */
 const kitTags = () =>
   `<style id="arkadia-kit">${VISUAL_KIT_CSS}</style>` +
   `<script>${VISUAL_KIT_JS.replace(/<\/script/gi, "<\\/script")}</script>`;
 
-const head = (token: string, fit?: number, card = false, kit = false) =>
+const head = (
+  token: string,
+  fit?: number,
+  card = false,
+  kit = false,
+  zoom = false,
+) =>
   '<meta charset="utf-8">' +
   `<meta http-equiv="Content-Security-Policy" content="${VISUAL_PAGE_CSP}">` +
   // No DNS lookups ahead of links: a name looked up can carry data out.
@@ -217,7 +281,8 @@ const head = (token: string, fit?: number, card = false, kit = false) =>
   // scrollbar) is cut at its margin. The probe still measures the real
   // width and tells Claude; « Agrandir » shows the page as written.
   (card ? '<style id="arkadia-card">html{overflow-x:hidden}</style>' : "") +
-  bootstrapTag(token) +
+  (zoom ? `<style id="arkadia-zoom">${VISUAL_ZOOM_CSS}</style>` : "") +
+  bootstrapTag(token, zoom) +
   // Only a page that offers options the house way gets the kit.
   (kit ? kitTags() : "");
 
@@ -249,9 +314,11 @@ export function visualDocument(
   token = "",
   fit?: number,
   card = false,
+  /** Its images open on click (`VISUAL_ZOOM`): the host has a lightbox. */
+  zoom = false,
 ): string {
   const page = inertFrames(html);
-  const top = head(token, fit, card, usesChoiceKit(page));
+  const top = head(token, fit, card, usesChoiceKit(page), zoom);
   const doctype = /^\uFEFF?\s*<!doctype[^>]*>/i.exec(page);
   if (doctype) {
     const at = doctype[0].length;
@@ -409,7 +476,53 @@ export type FrameMessage =
   | { kind: "restore" }
   /** A wheel the page doesn't use: the conversation scrolls by it. */
   | { kind: "wheel"; dx: number; dy: number; mode: number }
+  /** An image clicked (`VISUAL_ZOOM`): the page's images, `index` the one to show. */
+  | { kind: "zoom"; images: VisualImage[]; index: number }
   | { kind: "report"; report: unknown };
+
+/** One of a page's images, as the lightbox walks them. */
+export interface VisualImage {
+  /** Always a `data:image` URL: the Lab's CSP shows nothing else. */
+  url: string;
+  caption?: string;
+}
+
+/** The images a frame sends with a click on one, each checked; null when the clicked one isn't fine. */
+function zoomImages(
+  v: unknown,
+): { images: VisualImage[]; index: number } | null {
+  const w = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+  if (!Array.isArray(w.l) || typeof w.i !== "number") return null;
+  const images: VisualImage[] = [];
+  let index = -1;
+  w.l.slice(0, VISUAL_ZOOM_MAX).forEach((x: unknown, i) => {
+    const p = x && typeof x === "object" ? (x as Record<string, unknown>) : {};
+    const { s, c } = p;
+    if (typeof s !== "string" || s.length > VISUAL_PAGE_MAX) return;
+    if (!ZOOM_SRC.test(s)) return;
+    if (i === w.i) index = images.length;
+    const caption = typeof c === "string" ? c.trim().slice(0, 300) : "";
+    images.push(caption ? { url: s, caption } : { url: s });
+  });
+  return index < 0 ? null : { images, index };
+}
+
+/**
+ * The lightbox's walk through a visual's images: each one's place in it said
+ * in place of a file name (« 2 / 3 », none when alone), its caption above.
+ * `key` (its tool call) keeps the walk to this visual.
+ */
+export function visualGallery(
+  key: string,
+  images: readonly VisualImage[],
+): ImageRef[] {
+  return images.map((img, i) => ({
+    path: `visual:${key}:${i + 1}`,
+    url: img.url,
+    label: images.length > 1 ? `${i + 1} / ${images.length}` : "",
+    ...(img.caption ? { caption: img.caption } : {}),
+  }));
+}
 
 /** An image pasted into a choice's remark, `n` as its tag « [Image #n] » says. */
 export interface ChoiceImage {
@@ -503,6 +616,10 @@ export function readFrameMessage(
       return { kind: "restore" };
     case "report":
       return { kind: "report", report: v };
+    case "zoom": {
+      const zoom = zoomImages(v);
+      return zoom ? { kind: "zoom", ...zoom } : null;
+    }
     case "wheel": {
       const w =
         v && typeof v === "object" ? (v as Record<string, unknown>) : {};

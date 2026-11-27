@@ -11,8 +11,10 @@ import { ChatVisualFrame } from "@/components/chat/chat-visual-frame";
 import { ChatVisualZoom } from "@/components/chat/chat-visual-zoom";
 import { openUrl } from "@/lib/bridge";
 import type { ToolItem } from "@/lib/chat/chatGroups";
+import { useChatLightbox } from "@/lib/chat/chatLightbox";
 import {
   visualDocument,
+  visualGallery,
   visualHtml,
   visualInput,
   visualPhase,
@@ -20,6 +22,7 @@ import {
   visualVerified,
   type ChoiceImage,
   type VisualEntry,
+  type VisualImage,
 } from "@/lib/chat/chatVisual";
 
 interface ChatVisualCardProps {
@@ -64,6 +67,22 @@ export function ChatVisualCard({
   const [near, setNear] = useState(false);
   const [fold, setFold] = useState(() => folded.has(tool.id));
   const cardRef = useRef<HTMLDivElement>(null);
+  // An image clicked in the page: big over the Lab, ←/→ through the page's
+  // others (the user's ask of 27/11/2026). None outside a chat column.
+  const lightbox = useChatLightbox();
+  const zoomImage = lightbox
+    ? (images: VisualImage[], index: number) => {
+        const gallery = visualGallery(tool.id, images);
+        const shown = gallery[index];
+        if (shown?.url)
+          lightbox({
+            kind: "image",
+            url: shown.url,
+            path: shown.path,
+            gallery,
+          });
+      }
+    : undefined;
   /** Folded from its foot, the card keeps its band in view. */
   const toggleFold = (fromFoot: boolean) => {
     const next = !fold;
@@ -172,6 +191,7 @@ export function ChatVisualCard({
           verified={visualVerified(tool)}
           onChoose={onChoose}
           onLink={link}
+          onZoom={zoomImage}
           stateKey={tool.id}
         />
       ) : (
@@ -192,6 +212,7 @@ export function ChatVisualCard({
           onClose={() => setZoom(null)}
           onChoose={onChoose}
           onLink={link}
+          onZoom={zoomImage}
           stateKey={tool.id}
           onOpenInBrowser={onOpenInBrowser ? open : undefined}
         />

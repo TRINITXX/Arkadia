@@ -4,7 +4,15 @@
 // moving; then the page renders it offscreen and reports what breaks, which
 // becomes the tool's result (`visualResult`), before the user sees it.
 
-import { mkdir, open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
@@ -59,7 +67,7 @@ export const VISUAL_TOOL_DESCRIPTION = [
   "html: a complete document (<!doctype html>…), inline <style> and <script>. Scripts may load only from https://cdn.jsdelivr.net, https://cdnjs.cloudflare.com or https://unpkg.com (Chart.js, d3, mermaid…). No fetch, XHR, WebSocket, iframe, worker or Trusted Types policy of its own (a library that makes one, like lit, fails): everything the page shows is in it. Remote images other than those CDNs are blocked; local images by absolute path (C:\\…\\shot.png in src, srcset or CSS url()) are inlined for you: name each once.",
   "Theme: use these CSS variables, never fixed colours: --bg (page background), --text, --muted, --faint, --card and --card-2 (a box), --border, --border-strong, --accent (#e2865f, the one accent) with --accent-text (text on it) and --accent-soft, --ok, --warn, --bad, --info, --chart-1 … --chart-6 (series, in order), --radius and --radius-sm, --font-sans, --font-serif, --font-mono. They are set on :root before your styles, with a base sheet (background, text colour, font, 16px gutter).",
   "Layout: leave html and body with no background, outer card, border, banner title or side padding: Arkadia frames the page in a card with your title. A box of its own gets var(--card), var(--radius) and 12-16px padding. Let the content set the height: no vh units, no height:100% on html or body. Give charts a fixed pixel height. Use fluid widths (the frame is about 740px wide, or the pane's full width with wide).",
-  `Height: the whole visual should fit the chat pane without scrolling, about ${VISUAL_FIT_HEIGHT}px. Prefer compact layouts (side by side rather than stacked, short captions). Images and videos you leave unsized get max-height: var(--ark-fit-media) (the room left for one, a caption under it), except in a choice's options; one with a width, height or style attribute is left as you sized it, so size it to the space too. A taller page keeps its full size and width: the conversation scrolls past it.`,
+  `Height: the whole visual should fit the chat pane without scrolling, about ${VISUAL_FIT_HEIGHT}px. Prefer compact layouts (side by side rather than stacked, short captions). Images and videos you leave unsized get max-height: var(--ark-fit-media) (the room left for one, a caption under it), except in a choice's options; one with a width, height or style attribute is left as you sized it, so size it to the space too. A taller page keeps its full size and width: the conversation scrolls past it. A click on an image (one outside links and your own buttons, a choice's option included) opens it full screen, ←/→ through the page's other images: give each a short alt, its caption there (else its figcaption or the heading above it). Write no zoom of your own.`,
   "wide: true when the content needs the pane's full width (mockups side by side, a table of many columns, a dense chart); otherwise leave it out.",
   'Choices: whenever the user picks among options (texts, subjects, plans, designs, settings), write this markup and Arkadia\'s kit draws it the house way (cards, the chosen one framed in orange, a « Conseillé » badge, tabs, keyboard, « Valider mes choix » at the bottom right), so every choice looks the same: add no CSS or script of your own for it. The kit sizes the choice to what it holds: set wide: true only when it needs the width (four short options or three long ones side by side), never for a few short ones. <div class="ark-choice" data-intro="Mes choix pour les mails"> holds questions, <div class="ark-question" data-title="Objet" data-sub="one short line"> (data-multi to allow several), each holding options: <div class="ark-option" data-reco>short label</div>, or a long one, <div class="ark-option" data-title="Name" data-sub="one line"><p>…</p></div> (any HTML but links and buttons). A picture in an option (a mockup) takes its card\'s width, up to its own size, never fitted to the pane\'s height: give it no size of your own, and crop a screenshot to what differs between the options rather than repeat what they share. Put data-reco on your recommended option in every question: it starts chosen. A group\'s first question is numbered 01, 02…, its second lettered A, B… (data-mark="num" or "letter" to force): keep one or two questions per group. Several sets (one per audience, list or step): wrap each in <section class="ark-group" data-title="Loueurs" data-sub="30 adresses" data-for="one line: who or what it is for">, shown as tabs; then every question sits in a group. Beside the questions, in a group or around the groups: <div class="ark-note" data-title="…" data-sub="…">a remark</div>, and <div class="ark-preview" data-title="Aperçu" data-sub="…">…</div> whose elements with data-from="<a question\'s data-title>" show that question\'s choice (its own group first; the option\'s data-preview, else its text); <div class="ark-mail"><b>Sender</b><span><b data-from="Objet"></b> · <span data-from="Texte"></span></span></div> draws an inbox row. Under each question the kit adds a field for the user\'s remark on it: never add one of your own. « Valider mes choix » puts one line per group (per question without groups) into the user\'s message box, each remark in its question\'s line. Write the markup in the page\'s HTML, never from a script.',
   "A single action that is not a choice among options: a button calling window.arkadia.choose(text) puts that text into the user's message box (not sent), so they can add a comment. Links open in the user's browser.",
@@ -74,7 +82,11 @@ export const VISUAL_RULE = [
 ].join("\n");
 
 /** Where a page's inlined copy is kept: a resumed chat shows it again. */
-const STORE_DIR = join(process.env.LOCALAPPDATA ?? process.env.TEMP ?? ".", "Arkadia", "chat-visuals");
+const STORE_DIR = join(
+  process.env.LOCALAPPDATA ?? process.env.TEMP ?? ".",
+  "Arkadia",
+  "chat-visuals",
+);
 
 /** The tool call's id, as Claude Code passes it to an MCP server (`_meta`). */
 export function toolUseIdOf(extra: unknown): string | null {
@@ -98,7 +110,8 @@ async function pruneStore(): Promise<void> {
       return { name, mtimeMs: info.mtimeMs, size: info.size };
     }),
   );
-  for (const name of staleVisualFiles(files, Date.now())) await unlink(join(STORE_DIR, name)).catch(() => {});
+  for (const name of staleVisualFiles(files, Date.now()))
+    await unlink(join(STORE_DIR, name)).catch(() => {});
 }
 
 /** The inlined copy of a past visual, or null (none had local images). */
@@ -134,14 +147,22 @@ export async function inlineImages(
     try {
       const info = await stat(ref.path);
       if (!info.isFile()) throw new Error("not a file");
-      const verdict = imageVerdict(info.size, total, await headOf(ref.path), ref.mentions);
+      const verdict = imageVerdict(
+        info.size,
+        total,
+        await headOf(ref.path),
+        ref.mentions,
+      );
       if ("reason" in verdict) {
         skipped.push({ path: ref.path, reason: verdict.reason });
         continue;
       }
       const bytes = await readFile(ref.path);
       total += bytes.length * ref.mentions;
-      urls.set(ref.raw, `data:${verdict.mime};base64,${bytes.toString("base64")}`);
+      urls.set(
+        ref.raw,
+        `data:${verdict.mime};base64,${bytes.toString("base64")}`,
+      );
     } catch {
       skipped.push({ path: ref.path, reason: "not found" });
     }
@@ -153,7 +174,9 @@ export async function inlineImages(
  * The chat's MCP server: `check` hands the page to Arkadia and resolves with
  * its report, or null when none came in time.
  */
-export function visualServer(check: (visual: PreparedVisual) => Promise<VisualReport | null>) {
+export function visualServer(
+  check: (visual: PreparedVisual) => Promise<VisualReport | null>,
+) {
   return createSdkMcpServer({
     name: VISUAL_SERVER,
     version: "1.0.0",
@@ -164,21 +187,38 @@ export function visualServer(check: (visual: PreparedVisual) => Promise<VisualRe
         VISUAL_TOOL,
         VISUAL_TOOL_DESCRIPTION,
         {
-          html: z.string().min(1).max(VISUAL_HTML_MAX).describe("A complete, self-contained HTML document."),
-          title: z.string().min(1).max(VISUAL_TITLE_MAX).describe("A short title, shown in the card's band."),
-          wide: z.boolean().optional().describe("The pane's full width instead of the messages column."),
+          html: z
+            .string()
+            .min(1)
+            .max(VISUAL_HTML_MAX)
+            .describe("A complete, self-contained HTML document."),
+          title: z
+            .string()
+            .min(1)
+            .max(VISUAL_TITLE_MAX)
+            .describe("A short title, shown in the card's band."),
+          wide: z
+            .boolean()
+            .optional()
+            .describe("The pane's full width instead of the messages column."),
         },
         async ({ html, title, wide }, extra) => {
           const toolUseId = toolUseIdOf(extra);
           const prepared = await inlineImages(html);
           // Too heavy to travel to the page: refused before anything is sent.
           const tooLarge = pageSizeError(prepared.html);
-          if (tooLarge) return { content: [{ type: "text" as const, text: tooLarge }], isError: true };
+          if (tooLarge)
+            return {
+              content: [{ type: "text" as const, text: tooLarge }],
+              isError: true,
+            };
           // Kept for a resumed chat: the call's input has the paths, not the images.
           let stored = false;
           if (toolUseId && prepared.inlined > 0) {
             stored = await mkdir(STORE_DIR, { recursive: true })
-              .then(() => writeFile(storePath(toolUseId), prepared.html, "utf8"))
+              .then(() =>
+                writeFile(storePath(toolUseId), prepared.html, "utf8"),
+              )
               .then(
                 () => true,
                 () => false,
@@ -196,7 +236,13 @@ export function visualServer(check: (visual: PreparedVisual) => Promise<VisualRe
           return { content: [{ type: "text" as const, text }], isError };
         },
         // Shows a page in the chat, touches nothing: never a permission prompt.
-        { annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } },
+        {
+          annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            openWorldHint: false,
+          },
+        },
       ),
     ],
   });
