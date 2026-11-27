@@ -48,6 +48,7 @@ import {
   usePushToTalk,
 } from "@/lib/chat/useFieldDictation";
 import { useScrollFold } from "@/lib/chat/scrollFold";
+import { useFoldMotion } from "@/lib/chat/useFoldMotion";
 import { useSendAfterDictation } from "@/lib/chat/useSendAfterDictation";
 import type { DictationEnd } from "@/lib/useHiddenVoice";
 
@@ -321,6 +322,8 @@ export function ChatQuestionPanel({
   // by its button it stays as the user left it. Never while its « Autre
   // réponse » takes a dictation: folding would cut it.
   const [scrollFolded, setScrollFolded] = useState(false);
+  // It folds and unfolds in motion, the column following (`useFoldMotion`).
+  const shown = useFoldMotion(folded, rootRef);
   const foldByHand = useScrollFold(
     { open: !field.mine, folded, auto: scrollFolded },
     (on, auto) => {
@@ -394,7 +397,7 @@ export function ChatQuestionPanel({
           <X />
         </button>
       </div>
-      {!folded && q && (
+      {shown && q && (
         <div className="qs" role="tabpanel">
           {/* No key per question: the field stays the same one, and keeps
               the focus from a question to the next (Enter, the arrow),

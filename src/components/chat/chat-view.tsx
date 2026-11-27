@@ -47,7 +47,12 @@ import { followsAfterScroll } from "@/lib/followBottom";
 
 import {
   createScrollFold,
+  FOLD_CLOSE_MS,
+  FOLD_OPEN_MS,
   foldRoomLeft,
+  followsInRoom,
+  openingRoom,
+  roomToKeep,
   ScrollFoldContext,
   scrollFoldEvent,
   wheelAtEnd,
@@ -103,8 +108,8 @@ import type { ChatImage } from "@/lib/chat/useChatSession";
 import type { SlashActions } from "@/lib/chat/useSlashActions";
 import { withChoiceImages, type ChoiceImage } from "@/lib/chat/chatVisual";
 
-/** A fold's room waits this long at most for its resize (`roomPendingRef`). */
-const ROOM_PENDING_MS = 250;
+/** A sheet's render and last frame may lag behind its fold or unfold this long. */
+const MOTION_SLACK_MS = 150;
 
 /** After a chat shows, the dictation's Claude Code starts (`warmHiddenVoice`). */
 const VOICE_WARM_MS = 5_000;
@@ -318,13 +323,13 @@ function ChatViewBody({
   const [scrollFold] = useState(createScrollFold);
   const foldRoomRef = useRef(0);
   /**
-   * Room put for a fold not laid out yet (the panel's fold is a state, its
-   * render a task away): a scroll meanwhile must not trim it against the
-   * old height, or the fold would clamp the column after all.
+   * Until when the room holds as it is: a sheet in motion (its render a
+   * task away, then its height moving) frees the pane's height frame by
+   * frame, and a trim against a height not yet freed would let the fold
+   * clamp the column after all. It settles once the sheet stands.
    */
-  const roomPendingRef = useRef(false);
+  const roomHeldUntilRef = useRef(0);
   const setFoldRoom = useCallback((px: number) => {
-    if (px === 0) roomPendingRef.current = false;
     if (px === foldRoomRef.current) return;
     foldRoomRef.current = px;
     innerRef.current?.style.setProperty("--chat-fold-room", `${px}px`);
@@ -359,6 +364,47 @@ function ChatViewBody({
       measuredRef.current = true;
     }
   }, []);
+  // A sheet starts opening, before its render: room under the column for
+  // all it may take back (its questions, the height it rises by), so the
+  // layout never clamps the column; the resizes trim it. What is left once
+  // it stands goes, the end gliding down to it.
+  const settleRoom = useCallback(() => {
+    const el = scrollRef.current;
+    if (performance.now() < roomHeldUntilRef.current) return;
+    if (!el || foldRoomRef.current === 0) return;
+    if (!stuckRef.current) {
+      trimFoldRoom(el);
+      return;
+    }
+    // Following the end, what is left goes at once: the opening gave it
+    // back frame by frame already (`openingRoom`), a pixel or two at most.
+    setFoldRoom(0);
+    toBottom();
+  }, [setFoldRoom, trimFoldRoom, toBottom]);
+  /** The room held while a sheet moves (`roomHeldUntilRef`), settled after. */
+  const holdRoom = useCallback(
+    (ms: number) => {
+      const until = performance.now() + ms + MOTION_SLACK_MS;
+      roomHeldUntilRef.current = Math.max(roomHeldUntilRef.current, until);
+      window.setTimeout(settleRoom, ms + MOTION_SLACK_MS + 16);
+    },
+    [settleRoom],
+  );
+  /**
+   * A sheet opening: the column's height then, and the room that kept the
+   * text's place as it starts (its first resize), for `openingRoom`.
+   */
+  const openingRef = useRef<{ client: number; start: number | null } | null>(
+    null,
+  );
+  useEffect(() => {
+    scrollFold.setOnOpening(() => {
+      const el = scrollRef.current;
+      openingRef.current = el ? { client: el.clientHeight, start: null } : null;
+      holdRoom(FOLD_OPEN_MS);
+    });
+    return () => scrollFold.setOnOpening(null);
+  }, [scrollFold, holdRoom]);
   // Back on screen where the reader was: before the effect that keeps the end.
   useColumnMemory(memoryKey, scrollRef, innerRef, stuckRef, leaveBottom);
   // Read at its end (or new): the column draws its last rows first.
@@ -517,8 +563,35 @@ function ChatViewBody({
         return;
       }
       if (stuckRef.current) {
-        // At the end, the room a fold kept goes: the end shows above the sheet.
-        setFoldRoom(0);
+        // A sheet opening at the end (the user's ask of 27/11/2026): the
+        // text's end glides with it in one motion, from where it was to its
+        // place above it. First the room that keeps the place it had (the
+        // questions the sheet takes back from its message made the layout
+        // clamp the column), then less as the dock grows (`openingRoom`),
+        // each frame before it paints. Else the room goes: the end shows.
+        const o = openingRef.current;
+        if (o && scrollFold.isOpening()) {
+          if (o.start === null)
+            o.start = Math.max(
+              0,
+              roomToKeep(
+                foldRoomRef.current,
+                lastTopRef.current,
+                o.client,
+                scroller.scrollHeight,
+              ),
+            );
+          setFoldRoom(
+            openingRoom(
+              o.start,
+              o.client - scroller.clientHeight,
+              scrollFold.openingGrowth(),
+            ),
+          );
+        } else {
+          openingRef.current = null;
+          setFoldRoom(0);
+        }
         toBottom();
       }
       // Back from a hidden tab: the reader's place, not the top.
@@ -529,8 +602,8 @@ function ChatViewBody({
       // A sheet folded: the room it needs, the rest out of view dropped.
       // A move the layout made (anchoring) is no reader's: absorbed.
       else if (foldRoomRef.current > 0) {
-        roomPendingRef.current = false;
-        trimFoldRoom(scroller);
+        if (performance.now() >= roomHeldUntilRef.current)
+          trimFoldRoom(scroller);
         lastTopRef.current = scroller.scrollTop;
       }
       wasHidden = false;
@@ -538,7 +611,21 @@ function ChatViewBody({
     ro.observe(inner);
     ro.observe(scroller);
     return () => ro.disconnect();
-  }, [toBottom, setFoldRoom, trimFoldRoom]);
+  }, [toBottom, setFoldRoom, trimFoldRoom, scrollFold]);
+  // The dock's height as laid out, for a sheet's motion to start from
+  // (`useFoldMotion`): it reads the height before its own change, which the
+  // observer hears only after.
+  const dockRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const dock = dockRef.current;
+    if (!dock) return;
+    scrollFold.setDockHeight(dock.offsetHeight);
+    const ro = new ResizeObserver(() =>
+      scrollFold.setDockHeight(dock.offsetHeight),
+    );
+    ro.observe(dock);
+    return () => ro.disconnect();
+  }, [scrollFold]);
   // A hidden tab keeps its panes mounted but sized to nothing.
   const onHiddenRef = useRef(onHidden);
   useLayoutEffect(() => {
@@ -565,15 +652,35 @@ function ChatViewBody({
     // Sized to nothing (its tab hidden): the scroll falling to 0 is no reader.
     if (!el || el.clientHeight === 0) return;
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const fold = scrollFoldEvent(el.scrollTop, lastTopRef.current, gap);
-    // In the room a fold kept, the column always sits near its scroll end:
-    // only coming down onto it follows again, never a step up reading a
-    // gap of a pixel. Else a search's smooth scroll to a match near the end
-    // doesn't follow again; the very end still does (no resume zone, as in
-    // the reading view).
+    // A sheet rising at the end took its questions back from its message:
+    // the layout clamped the column, upwards onto its end. No reader did:
+    // the resize puts the place back (it comes after this event).
+    if (
+      scrollFold.isOpening() &&
+      stuckRef.current &&
+      el.scrollTop < lastTopRef.current &&
+      gap <= 2
+    )
+      return;
+    // The conversation's end is its last message, never the room under it:
+    // coming down into that blank is reaching the end.
+    const fold = scrollFoldEvent(
+      el.scrollTop,
+      lastTopRef.current,
+      gap - foldRoomRef.current,
+    );
+    // In the room a fold kept, only coming down onto the end follows
+    // again (`followsInRoom`). Else a search's smooth scroll to a match near
+    // the end doesn't follow again; the very end still does (no resume
+    // zone, as in the reading view).
     const follows =
       foldRoomRef.current > 0
-        ? fold === "end"
+        ? followsInRoom(
+            stuckRef.current,
+            el.scrollTop,
+            lastTopRef.current,
+            fold,
+          )
         : followsAfterScroll(
             stuckRef.current,
             el.scrollTop,
@@ -581,17 +688,13 @@ function ChatViewBody({
             gap,
             searching ? 0 : undefined,
           );
-    if (!roomPendingRef.current) trimFoldRoom(el);
+    if (performance.now() >= roomHeldUntilRef.current) trimFoldRoom(el);
     // Room for the whole dock before the sheet folds (the next render): the
     // scroll never clamps; the resize trims it to what the fold freed.
     if (fold === "up" && scrollFold.emit("up")) {
       const dock = rootRef.current?.querySelector<HTMLElement>(".chat-bottom");
       setFoldRoom(Math.max(foldRoomRef.current, dock?.offsetHeight ?? 0));
-      // A fold that changes no height never hears its resize: let go soon.
-      roomPendingRef.current = true;
-      window.setTimeout(() => {
-        roomPendingRef.current = false;
-      }, ROOM_PENDING_MS);
+      holdRoom(FOLD_CLOSE_MS);
     }
     lastTopRef.current = el.scrollTop;
     savedTopRef.current = el.scrollTop;
@@ -926,6 +1029,7 @@ function ChatViewBody({
       <div
         // Claude's question panel, in the sheet's frame, shrinks as the sheet
         // does when what stacks above it fills the pane.
+        ref={dockRef}
         className={`chat-bottom${sheetOpen || (!state.closed && request?.toolName === "AskUserQuestion") ? " sheet-open" : ""}`}
         // The scrollbar's width on the right: the same column as above.
         style={gutter > 0 ? { paddingRight: gutter } : undefined}

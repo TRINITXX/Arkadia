@@ -42,6 +42,7 @@ import type { ChatItem } from "@/lib/chat/chatState";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 import type { ChatImage } from "@/lib/chat/useChatSession";
 import { useScrollFold } from "@/lib/chat/scrollFold";
+import { useFoldMotion } from "@/lib/chat/useFoldMotion";
 import { useSendAfterDictation } from "@/lib/chat/useSendAfterDictation";
 import {
   pastedImageFiles,
@@ -147,6 +148,9 @@ export function ChatQuestionSheet({
         scrollFolded: auto,
       })),
   );
+  // It folds and unfolds in motion, the column following (`useFoldMotion`).
+  const cardRef = useRef<HTMLDivElement>(null);
+  const shown = useFoldMotion(folded, cardRef);
   // Esc folds it (its answers stay), never Claude's turn (`chatLayers`).
   useChatLayer(open && !folded, () => foldByHand(true));
   const liveRef = useRef({ open, replyId });
@@ -339,7 +343,7 @@ export function ChatQuestionSheet({
   const ownReco = !named && q.recommendation ? q.recommendation : null;
 
   return (
-    <div className={`chat-sheet-q${folded ? " folded" : ""}`}>
+    <div ref={cardRef} className={`chat-sheet-q${folded ? " folded" : ""}`}>
       <div className="hd">
         <button
           type="button"
@@ -404,7 +408,7 @@ export function ChatQuestionSheet({
           <X />
         </button>
       </div>
-      {!folded && (
+      {shown && (
         <div className="qs" role="tabpanel">
           <div className="q">
             <div className="qt">{q.title}</div>

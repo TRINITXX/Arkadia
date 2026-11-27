@@ -39,6 +39,22 @@ export function scrollFoldEvent(
   return top < lastTop ? "up" : null;
 }
 
+/**
+ * Whether the column follows its end after a scroll while room a fold kept
+ * sits under it (the column is then always near its scroll end): only
+ * coming down onto the end follows again, never a step up reading a gap of
+ * a pixel; a scroll that moved nothing (the column's own pinning, a rising
+ * sheet growing the gap under it) leaves it as it was.
+ */
+export function followsInRoom(
+  following: boolean,
+  top: number,
+  lastTop: number,
+  fold: ScrollFoldEvent | null,
+): boolean {
+  return top === lastTop ? following : fold === "end";
+}
+
 /** A wheel down with the column already at its end: no scroll comes, the end is asked all the same. */
 export function wheelAtEnd(deltaY: number, gap: number): boolean {
   return deltaY > 0 && gap <= AT_END_PX;
@@ -56,8 +72,41 @@ export function foldRoomLeft(
   client: number,
   scrollHeight: number,
 ): number {
-  const content = scrollHeight - room;
-  return Math.max(0, Math.min(room, Math.ceil(top + client - content)));
+  return Math.max(
+    0,
+    Math.min(room, roomToKeep(room, top, client, scrollHeight)),
+  );
+}
+
+/**
+ * The room under a column that follows its end while a sheet opens: all of
+ * it (`start`, what kept the text where it was) as the sheet starts, none
+ * once the dock grew by `growth`, in between as far as it grew. The text's
+ * end glides with the sheet in one motion to its place above it, whether
+ * the sheet rises into blank room or takes back more than it adds.
+ */
+export function openingRoom(
+  start: number,
+  grown: number,
+  growth: number,
+): number {
+  if (growth <= 0 || start <= 0) return 0;
+  return Math.max(0, Math.round(start * (1 - Math.min(1, grown / growth))));
+}
+
+/**
+ * The room that keeps `top` where it is, more than there is if need be: a
+ * sheet rising at the column's end (`isOpening`) takes back the questions
+ * its message showed, and the text keeps still while the sheet fills the
+ * blank under it. Zero or less: none needed, the column follows its end.
+ */
+export function roomToKeep(
+  room: number,
+  top: number,
+  client: number,
+  scrollHeight: number,
+): number {
+  return Math.ceil(top + client - (scrollHeight - room));
 }
 
 /** A sheet's fold, and whether the scroll made it. */
@@ -84,6 +133,12 @@ export function scrollFoldStep(
   return null;
 }
 
+/** A sheet opening, then folding (`useFoldMotion`): folding is the faster. */
+export const FOLD_OPEN_MS = 260;
+export const FOLD_CLOSE_MS = 220;
+/** What a sheet's render may lag behind its `opening()`. */
+const OPENING_SLACK_MS = 120;
+
 type Listener = (e: ScrollFoldEvent) => boolean;
 
 /** The pane's sheets listening to its column's scroll. */
@@ -91,11 +146,63 @@ export interface ScrollFold {
   subscribe(listener: Listener): () => void;
   /** Tells the sheets; true when one of them folds or unfolds on it. */
   emit(e: ScrollFoldEvent): boolean;
+  /**
+   * A sheet starts opening, before its render: the pane puts room under the
+   * column (`setOnOpening`) so nothing clamps it, and keeps its text still
+   * while the sheet rises (`isOpening`).
+   */
+  opening(): void;
+  isOpening(): boolean;
+  setOnOpening(fn: (() => void) | null): void;
+  /** The height the opening sheet adds to the dock (`useFoldMotion`), 0 unknown. */
+  setOpeningGrowth(px: number): void;
+  openingGrowth(): number;
+  /**
+   * The dock's height as last laid out (the pane observes it, always there):
+   * a sheet's motion starts from it, even one shown after the pane's mount.
+   */
+  setDockHeight(px: number): void;
+  dockHeight(): number | null;
 }
 
-export function createScrollFold(): ScrollFold {
+export function createScrollFold(
+  now: () => number = () => performance.now(),
+): ScrollFold {
   const listeners = new Set<Listener>();
+  let openingUntil = -Infinity;
+  let onOpening: (() => void) | null = null;
+  let growth = 0;
+  let dock: number | null = null;
   return {
+    setDockHeight(px) {
+      dock = px;
+    },
+    dockHeight() {
+      return dock;
+    },
+    // Said as the motion starts: the window runs to its real end from here.
+    setOpeningGrowth(px) {
+      growth = Math.max(0, px);
+      openingUntil = Math.max(
+        openingUntil,
+        now() + FOLD_OPEN_MS + OPENING_SLACK_MS,
+      );
+    },
+    openingGrowth() {
+      return growth;
+    },
+    opening() {
+      growth = 0;
+      // Its render comes a moment after: the motion's frames all fall inside.
+      openingUntil = now() + FOLD_OPEN_MS + OPENING_SLACK_MS;
+      onOpening?.();
+    },
+    isOpening() {
+      return now() < openingUntil;
+    },
+    setOnOpening(fn) {
+      onOpening = fn;
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => {
@@ -138,11 +245,13 @@ export function useScrollFold(
       if (!next) return false;
       // Said at once: a second event before the render sees it done.
       live.current = { ...s, ...next };
+      if (s.folded && !next.folded) column.opening();
       s.set(next.folded, next.auto);
       return e !== "keep";
     });
   }, [column]);
   return (on) => {
+    if (live.current.folded && !on) column?.opening();
     live.current = { ...live.current, folded: on, auto: false };
     live.current.set(on, false);
   };

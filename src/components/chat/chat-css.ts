@@ -19,6 +19,8 @@ export const CHAT_CSS = `
 .chat-col { width: min(760px, 100% - 48px); margin: 0 auto; }
 
 .chat-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: #31353b transparent; scrollbar-gutter: stable; isolation: isolate; }
+/* The room a question sheet's fold keeps under the conversation (\`ChatView\`), written each frame of its motion: not inherited, so no message restyles with it. */
+@property --chat-fold-room { syntax: "<length>"; inherits: false; initial-value: 0px; }
 .chat-scroll-inner { display: flex; flex-direction: column; gap: 14px; padding: 28px 0 calc(42px + var(--chat-fold-room, 0px)); }
 .chat-unit { content-visibility: auto; contain-intrinsic-size: auto 60px; }
 

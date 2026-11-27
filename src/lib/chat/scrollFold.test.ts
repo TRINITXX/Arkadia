@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   createScrollFold,
   foldRoomLeft,
+  followsInRoom,
+  openingRoom,
   scrollFoldEvent,
   scrollFoldStep,
   wheelAtEnd,
@@ -76,5 +78,60 @@ describe("foldRoomLeft", () => {
   it("never grows: the reader coming back down meets the room's end", () => {
     expect(foldRoomLeft(100, 450, 700, 1100)).toBe(100);
     expect(foldRoomLeft(0, 300, 700, 1000)).toBe(0);
+  });
+});
+
+describe("followsInRoom", () => {
+  it("follows again only coming down onto the end, a still scroll changing nothing", () => {
+    expect(followsInRoom(false, 600, 590, "end")).toBe(true);
+    // One pixel up, the gap a pixel: no end.
+    expect(followsInRoom(false, 549, 550, null)).toBe(false);
+    expect(followsInRoom(true, 549, 550, null)).toBe(false);
+    // The column's own pinning, the gap grown under a rising sheet.
+    expect(followsInRoom(true, 1375, 1375, null)).toBe(true);
+    expect(followsInRoom(false, 1375, 1375, null)).toBe(false);
+  });
+});
+
+describe("openingRoom", () => {
+  it("gives the room back as the dock grows, none once it stands", () => {
+    // The sheet rises into 168 px of blank by 208 px: the text rides with it.
+    expect(openingRoom(168, 0, 208)).toBe(168);
+    expect(openingRoom(168, 104, 208)).toBe(84);
+    expect(openingRoom(168, 208, 208)).toBe(0);
+    // It took back 277 px of questions and adds 197: the text glides down.
+    expect(openingRoom(277, 98, 197)).toBe(139);
+    expect(openingRoom(277, 230, 197)).toBe(0);
+    // Its growth unknown (no motion): no room, the end shows at once.
+    expect(openingRoom(277, 0, 0)).toBe(0);
+  });
+});
+
+describe("the opening window", () => {
+  it("lasts the sheet's motion, a new one starting afresh", () => {
+    let t = 1000;
+    const column = createScrollFold(() => t);
+    let heard = 0;
+    column.setOnOpening(() => heard++);
+    expect(column.isOpening()).toBe(false);
+    column.setOpeningGrowth(200);
+    column.opening();
+    expect(heard).toBe(1);
+    expect(column.isOpening()).toBe(true);
+    // Its growth is the next sheet's to say.
+    expect(column.openingGrowth()).toBe(0);
+    t += 1000;
+    expect(column.isOpening()).toBe(false);
+    // Said as the sheet's motion starts, the window runs from there.
+    column.setOpeningGrowth(150);
+    expect(column.isOpening()).toBe(true);
+    expect(column.openingGrowth()).toBe(150);
+  });
+
+  it("keeps the dock's last height for a sheet shown after the pane", () => {
+    const column = createScrollFold();
+    expect(column.dockHeight()).toBeNull();
+    column.setDockHeight(183);
+    expect(column.dockHeight()).toBe(183);
   });
 });
