@@ -6,11 +6,14 @@ import {
   closePanel,
   dropTab,
   shownArtifact,
+  hasPages,
   hasPanel,
+  opencliText,
   openArtifact,
   selectArtifact,
   setArtifactTitle,
   showChrome,
+  showOpenCli,
   updateChrome,
   type ArtifactsByTab,
 } from "@/lib/artifactTabs";
@@ -416,6 +419,50 @@ describe("artifact tabs", () => {
       );
       expect(beside.state.t1.items.map((i) => i.key)).toEqual(["k1"]);
       expect(beside.state.t1.activeKey).toBe("k1");
+    });
+  });
+
+  describe("a pane's « X / Reddit » tab", () => {
+    const url = "https://claude.ai/artifact/a";
+    const withPage = () => openArtifact({}, "t1", url, "main", keys(), "click");
+
+    it("comes forward, once, beside Claude in Chrome's tab", () => {
+      const a = showOpenCli(showChrome({}, "t1", "p1", "main"), "t1", "p1");
+      const b = showOpenCli(selectArtifact(a, "t1", "chrome:p1"), "t1", "p1");
+      expect(b.t1.items.map((i) => i.key)).toEqual(["chrome:p1", "opencli:p1"]);
+      expect(b.t1.activeKey).toBe("opencli:p1");
+      expect(b.t1.items[1]).toMatchObject({
+        kind: "opencli",
+        title: "X / Reddit",
+      });
+      // No page to look at: no ring in the sidebar.
+      expect(hasPages(b.t1)).toBe(false);
+    });
+
+    it("never closes OpenCLI's window: closing it only parks it", () => {
+      const shown = showOpenCli(withPage().state, "t1", "p1");
+      const tabClosed = closeArtifact(shown, "t1", "opencli:p1");
+      expect(tabClosed.closed).toEqual([]);
+      expect(tabClosed.state.t1.parked).toBeUndefined();
+      expect(closePanel(shown, "t1").closed).toEqual(["k1"]);
+      expect(dropTab(shown, "t1").closed).toEqual(["k1"]);
+      // Its session ended: the tab leaves, no window to close.
+      const gone = closeArtifactByKey(shown, "opencli:p1");
+      expect(gone.closed).toEqual([]);
+      expect(gone.state.t1.items.map((i) => i.key)).toEqual(["k1"]);
+    });
+
+    it("says the window is another session's in every other tab", () => {
+      expect(opencliText("opencli:p1", "opencli:p2")).toBe(
+        "Fenêtre utilisée par une autre session",
+      );
+      // A session Arkadia does not run has it: parked, nobody shows it.
+      expect(opencliText("opencli:p1", null)).toBe(
+        "Fenêtre utilisée par une autre session",
+      );
+      expect(opencliText("opencli:p1", "opencli:p1")).not.toBe(
+        "Fenêtre utilisée par une autre session",
+      );
     });
   });
 });

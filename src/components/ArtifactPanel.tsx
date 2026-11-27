@@ -9,7 +9,12 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { isChrome, type ArtifactItem } from "@/lib/artifactTabs";
+import {
+  isChrome,
+  isOpenCli,
+  opencliText,
+  type ArtifactItem,
+} from "@/lib/artifactTabs";
 import { useAnyOverlayOpen } from "@/lib/overlays";
 import { useArtifactSnip } from "@/lib/useArtifactSnip";
 
@@ -73,6 +78,8 @@ interface ArtifactPanelProps {
   onSnipFailed: (message: string) => void;
   /** A pane's Chrome window came on the body (its profile, its steering). */
   onChromeShown: (key: string, shown: ChromeShown) => void;
+  /** The « X / Reddit » tab OpenCLI's window shows in (`useOpenCliPanel`). */
+  opencliOwner: string | null;
 }
 
 /**
@@ -91,6 +98,7 @@ export function ArtifactPanel({
   onSnipped,
   onSnipFailed,
   onChromeShown,
+  opencliOwner,
 }: ArtifactPanelProps) {
   const [width, setWidth] = useState(() => clampWidth(undefined));
   const [settledWidth, setSettledWidth] = useState(width);
@@ -151,6 +159,20 @@ export function ArtifactPanel({
     const el = bodyRef.current;
     if (!el || !active) return;
     setError(null);
+    if (isOpenCli(active)) {
+      // OpenCLI's window, laid by Rust only in its owner's tab: no launch.
+      void invoke("artifact_view_hide_all").catch(() => {});
+      void invoke("opencli_view_show", {
+        key: active.key,
+        bounds: bodyBounds(el),
+        hidden,
+      })
+        .then(() => {
+          if (el.isConnected) placeWebview(el);
+        })
+        .catch(() => {});
+      return;
+    }
     if (isChrome(active)) {
       // A pane's real Chrome window instead of a page (launched on the
       // first show). The artifact windows step aside.
@@ -336,7 +358,9 @@ export function ArtifactPanel({
                       }`}
                       title={
                         isChrome(item)
-                          ? "Retirer du panneau (la fenêtre reste ouverte pour Claude)"
+                          ? isOpenCli(item)
+                            ? "Retirer du panneau (la fenêtre reste ouverte pour OpenCLI)"
+                            : "Retirer du panneau (la fenêtre reste ouverte pour Claude)"
                           : "Fermer cet artefact"
                       }
                       aria-label={`Fermer ${label}`}
@@ -424,13 +448,15 @@ export function ArtifactPanel({
           ref={bodyRef}
           className="relative flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-zinc-500"
         >
-          {isChrome(active)
-            ? error
-              ? `Impossible d'ouvrir Chrome : ${error}`
-              : "Ouverture de Chrome…"
-            : error
-              ? `Impossible d'afficher l'artefact : ${error}`
-              : "Chargement de l'artefact…"}
+          {isOpenCli(active)
+            ? opencliText(active?.key ?? "", opencliOwner)
+            : isChrome(active)
+              ? error
+                ? `Impossible d'ouvrir Chrome : ${error}`
+                : "Ouverture de Chrome…"
+              : error
+                ? `Impossible d'afficher l'artefact : ${error}`
+                : "Chargement de l'artefact…"}
           {/* The artifact, frozen while a region is traced over it. */}
           {snipSrc && (
             <div

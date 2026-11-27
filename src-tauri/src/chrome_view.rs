@@ -15,6 +15,11 @@
 //!   only while an Arkadia window has the foreground, never over another app.
 //! - The window is laid wider than the panel by its caption buttons, which
 //!   a window region clips: Chrome draws its own minimize/maximize/close.
+//! - OpenCLI (`opencli`, X and Reddit) has an « X / Reddit » tab of its own
+//!   (`opencli:<paneId>`). Its extension opens and reuses its own windows,
+//!   in a profile of its own: Arkadia adopts them (`watch_opencli`) and lays
+//!   the one OpenCLI used last in the tab of the session that ran an opencli
+//!   command last (`OpenCli::owner`). They are never closed, only parked.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -174,7 +179,10 @@ fn log(msg: &str) {
 
 /// The start of an id or a pane key, enough to follow it in the log.
 fn short(id: &str) -> &str {
-    let id = id.strip_prefix("chrome:").unwrap_or(id);
+    let id = id
+        .strip_prefix("chrome:")
+        .or_else(|| id.strip_prefix(OPENCLI_PREFIX))
+        .unwrap_or(id);
     id.get(..8).unwrap_or(id)
 }
 
@@ -259,6 +267,135 @@ fn launch_tab_state(tab_names: &[String], page_title: &str) -> Option<LaunchTabS
     )
 }
 
+/// The key of an « X / Reddit » tab: `opencli:<paneId>`.
+const OPENCLI_PREFIX: &str = "opencli:";
+
+/// How long OpenCLI's windows are looked for after a command asked
+/// (`watch_opencli`): its window comes with the command, seconds later.
+const OPENCLI_WATCH: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The longest a watch lasts, skipped looks included: a launch that waits
+/// its longest, then its window caught late.
+const OPENCLI_WATCH_MAX: std::time::Duration = std::time::Duration::from_secs(60 + 40 + 60);
+
+/// How often its windows' titles are read meanwhile: a window OpenCLI opens
+/// shows on Alexis's screen until it is adopted.
+const OPENCLI_POLL: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// OpenCLI's windows. Its extension opens them itself (`chrome.windows.create`,
+/// 1280 x 900 dip: the whole screen at 300 %) and reuses them for good, one
+/// per role: site commands (`opencli twitter search`) in one that goes back
+/// to about:blank after each command, `opencli browser` in one that goes back
+/// to its « OpenCLI Browser » page (both measured 27/11/2026, extension
+/// 1.0.27). Arkadia cannot make it use a window of its own: it adopts them.
+#[derive(Default)]
+struct OpenCli {
+    /// Adopted, laid or parked like the panes' windows.
+    windows: Vec<Win>,
+    /// The tab they show in (`opencli:<paneId>`): the session that ran an
+    /// opencli command last. None: a session Arkadia does not run, or none.
+    owner: Option<String>,
+    /// The one on screen: the one OpenCLI took to a page last.
+    shown: Option<isize>,
+    /// Until when they are looked for, and whether a thread does. Skipped
+    /// looks push the end, never past the cap (`OPENCLI_WATCH_MAX`).
+    watch_until: Option<std::time::Instant>,
+    watch_cap: Option<std::time::Instant>,
+    watching: bool,
+}
+
+impl OpenCli {
+    /// A session ran an opencli command (`key` its tab, None: a session
+    /// Arkadia does not run): OpenCLI's one window is its now, whichever
+    /// session had it (Alexis, 27/11/2026). Whether the owner changed.
+    fn claim(&mut self, key: Option<String>) -> bool {
+        if self.owner == key {
+            return false;
+        }
+        self.owner = key;
+        true
+    }
+
+    /// Pane `key` closed: its tab leaves. The windows stay open, parked:
+    /// OpenCLI reuses them, another session may need them. Whether the
+    /// owner changed.
+    fn release(&mut self, key: &str) -> bool {
+        if self.owner.as_deref() != Some(key) {
+            return false;
+        }
+        self.owner = None;
+        true
+    }
+
+    /// The window laid on the panel while it shows tab `active`: only the
+    /// owner's tab shows one, another session's says it is used elsewhere.
+    fn on_screen(&self, active: &str) -> Option<isize> {
+        if !active.starts_with(OPENCLI_PREFIX) || self.owner.as_deref() != Some(active) {
+            return None;
+        }
+        self.shown
+    }
+
+    fn adopted(&self, hwnd: isize) -> bool {
+        self.windows.iter().any(|w| w.hwnd == hwnd)
+    }
+
+    fn add(&mut self, win: Win, show: bool) {
+        if show || self.shown.is_none() {
+            self.shown = Some(win.hwnd);
+        }
+        if !self.adopted(win.hwnd) {
+            self.windows.push(win);
+        }
+    }
+
+    /// A window gone (Chrome closed it): whether it was one of them.
+    fn remove(&mut self, hwnd: isize) -> bool {
+        let before = self.windows.len();
+        self.windows.retain(|w| w.hwnd != hwnd);
+        if self.shown == Some(hwnd) {
+            self.shown = self.windows.last().map(|w| w.hwnd);
+        }
+        self.windows.len() != before
+    }
+}
+
+/// Whether a window title is an OpenCLI window waiting for its next command
+/// (its page about:blank or « OpenCLI Browser »): nothing to watch there.
+fn opencli_idle(window_title: &str) -> bool {
+    let page = window_title.split(" - Google Chrome").next().unwrap_or("");
+    matches!(page.trim(), "" | "about:blank" | "OpenCLI Browser")
+}
+
+/// What a window of OpenCLI's profile seen while its commands run becomes.
+#[derive(Debug, PartialEq, Eq)]
+enum Sighting {
+    Nothing,
+    /// OpenCLI's: adopted, on screen in its tab when `show`.
+    Adopt {
+        show: bool,
+    },
+    /// Adopted already, taken to a page: on screen in its tab.
+    Show,
+}
+
+/// `adopted`: Arkadia has the window already. `before`: its title at the
+/// last look, None when it was not there yet (OpenCLI just opened it). A
+/// window there before the command is OpenCLI's only once the command takes
+/// it from its idle page to another (OpenCLI's windows wait on one between
+/// commands): Alexis's own windows of the profile (the Web Store page he
+/// installed the extension from, an x.com tab whose count changes) stay his.
+fn sighting(adopted: bool, before: Option<&str>, title: &str) -> Sighting {
+    let changed = before.is_some_and(|b| b != title);
+    let busy = !opencli_idle(title);
+    match (adopted, before) {
+        (false, None) => Sighting::Adopt { show: busy },
+        (false, Some(b)) if changed && opencli_idle(b) => Sighting::Adopt { show: busy },
+        (true, Some(_)) if changed && busy => Sighting::Show,
+        _ => Sighting::Nothing,
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     windows: HashMap<String, Win>,
@@ -290,6 +427,14 @@ struct Inner {
     /// The panel's place, last time a window was laid there: a window of
     /// Alexis's opened at it (`copies_laid`) is moved and maximized.
     last_laid: Option<Layout>,
+    opencli: OpenCli,
+}
+
+impl Inner {
+    /// Every window Arkadia lays or parks: the panes', OpenCLI's.
+    fn laid_windows(&self) -> impl Iterator<Item = &Win> {
+        self.windows.values().chain(self.opencli.windows.iter())
+    }
 }
 
 #[derive(Default)]
@@ -340,7 +485,31 @@ struct RequestFile {
     /// exists (`note_ran`). Nothing to answer.
     #[serde(default)]
     ran: bool,
+    /// An opencli command is about to run (`~/.claude/hooks/opencli-panel.mjs`):
+    /// OpenCLI's windows go to this pane's « X / Reddit » tab, or off-screen
+    /// for a session Arkadia does not run (no pane).
+    #[serde(default)]
+    opencli: bool,
 }
+
+/// What an opencli request's hook is told: it waits a moment more when the
+/// profile was not running (its extension only starting).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct OpenCliPrepared {
+    profile_started: bool,
+}
+
+/// `opencli-owner`: the tab OpenCLI's window now shows in, None for none.
+#[derive(Serialize, Clone)]
+struct OpenCliOwner {
+    key: Option<String>,
+}
+
+/// In the inbox, the pid of an Arkadia that takes opencli requests: an older
+/// one would take them for Claude in Chrome's and open a Chrome window for
+/// the pane. The hook asks nothing without it.
+const OPENCLI_MARKER: &str = "opencli";
 
 fn inbox_dir() -> PathBuf {
     dirs::data_local_dir()
@@ -354,7 +523,7 @@ fn inbox_dir() -> PathBuf {
 }
 
 /// Answers the hook waiting on request `id`.
-fn write_ack(id: &str, prepared: Option<&Prepared>) {
+fn write_ack<T: Serialize>(id: &str, prepared: Option<&T>) {
     if !valid_id(id) {
         return;
     }
@@ -441,6 +610,24 @@ fn arrange(app: &AppHandle, state: &ChromeView) {
                 (Some((active, bounds, origin)), Some(owner)) if *active == key => {
                     let dpi = win::dpi(win.hwnd);
                     let at = layout(*origin, *bounds, dpi);
+                    win::lay(win.hwnd, owner, at);
+                    win.at = Some(at);
+                    laid = Some(at);
+                }
+                _ => {
+                    win::park(win.hwnd);
+                    win.at = None;
+                }
+            }
+        }
+        // OpenCLI's window on screen in its owner's tab only.
+        let opencli_shown = show
+            .as_ref()
+            .and_then(|(active, _, _)| inner.opencli.on_screen(active));
+        for win in inner.opencli.windows.iter_mut() {
+            match (&show, owner) {
+                (Some((_, bounds, origin)), Some(owner)) if opencli_shown == Some(win.hwnd) => {
+                    let at = layout(*origin, *bounds, win::dpi(win.hwnd));
                     win::lay(win.hwnd, owner, at);
                     win.at = Some(at);
                     laid = Some(at);
@@ -614,6 +801,54 @@ fn sort_left_behind(left: &[LeftWindow], paired: &[String]) -> (Vec<(String, isi
     (anchors, extra)
 }
 
+/// OpenCLI's windows among those an ended run left (`profile`: OpenCLI's
+/// profile folder, None when no profile has its extension any more): of its
+/// profile, off their launch page. They stay OpenCLI's, never closed: it
+/// would open new ones, on Alexis's screen. The one on its launch page stays
+/// in `left`: the profile's anchor. Its profile unknown (Chrome's `Local
+/// State` unread, Err): every window off its launch page of a profile not
+/// in the pairing table (`paired`, None when unread) may be one, it is left
+/// as it is, neither kept nor closed.
+fn split_opencli(
+    left: Vec<LeftWindow>,
+    profile: &Result<Option<String>, String>,
+    paired: Option<&[String]>,
+) -> (Vec<LeftWindow>, Vec<isize>) {
+    let app_id = match profile {
+        Ok(Some(dir)) => app_id_of(dir),
+        Ok(None) => return (left, Vec::new()),
+        Err(_) => {
+            let maybe_opencli = |w: &LeftWindow| {
+                let dir = w.app_id.as_deref().and_then(profile_dir_of_app_id);
+                !w.launch_page && paired.is_none_or(|p| dir.is_none_or(|d| !p.contains(&d)))
+            };
+            return (
+                left.into_iter().filter(|w| !maybe_opencli(w)).collect(),
+                Vec::new(),
+            );
+        }
+    };
+    let (opencli, rest): (Vec<LeftWindow>, Vec<LeftWindow>) = left
+        .into_iter()
+        .partition(|w| w.app_id.as_deref() == Some(app_id.as_str()) && !w.launch_page);
+    (rest, opencli.into_iter().map(|w| w.hwnd).collect())
+}
+
+/// A window Arkadia takes as it is, with no launch tab: an anchor kept, or
+/// an OpenCLI window.
+fn adopted_win(hwnd: isize, dir: &str) -> Win {
+    Win {
+        hwnd,
+        profile_dir: dir.to_string(),
+        at: None,
+        launch: None,
+        launch_busy: false,
+        proven: false,
+        steered: false,
+        elsewhere: false,
+    }
+}
+
 /// At startup: the anchors the last run left stay their profile's anchor.
 /// Closing them unloaded the profile, and the next session that needed it
 /// started it cold: Chrome then froze Alexis's own window 10 to 20 s (every
@@ -633,12 +868,20 @@ fn keep_left_behind(app: &AppHandle) {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     let left = win::left_behind();
+    let profile = crate::chrome_profile::opencli_profile();
+    let table = crate::chrome_profile::paired_profile_dirs();
+    let (left, opencli_left) = split_opencli(left, &profile, table.as_deref());
+    let opencli = profile.ok().flatten();
     // The table unreadable: every profile a window was left for counts.
-    let paired = crate::chrome_profile::paired_profile_dirs().unwrap_or_else(|| {
+    let mut paired = table.unwrap_or_else(|| {
         left.iter()
             .filter_map(|w| w.app_id.as_deref().and_then(profile_dir_of_app_id))
             .collect()
     });
+    // OpenCLI's profile keeps its anchor too.
+    if let Some(dir) = opencli.as_ref().filter(|d| !paired.contains(d)) {
+        paired.push(dir.clone());
+    }
     let (anchors, mut extra) = sort_left_behind(&left, &paired);
     let anchors: Vec<(String, isize)> = anchors
         .into_iter()
@@ -677,15 +920,34 @@ fn keep_left_behind(app: &AppHandle) {
         }
         log(&format!("anchor of {dir} kept from the last run"));
     }
+    if let Some(dir) = opencli {
+        for raw in opencli_left {
+            // The other Arkadia's watcher may have taken it since.
+            if !win::adopt_opencli(raw) {
+                continue;
+            }
+            win::park(raw);
+            win::watch_process(raw);
+            if let Ok(mut inner) = state.inner.lock() {
+                inner.opencli.add(adopted_win(raw, &dir), false);
+            }
+            log("OpenCLI window kept from the last run");
+        }
+    }
 }
 
-/// At startup: the profiles paired with a Claude account that have no
-/// anchor start now, parked, rather than cold when a session first needs
+/// At startup: the profiles paired with a Claude account, and OpenCLI's,
+/// that have no anchor start now, parked, rather than cold when a session first needs
 /// one, maybe while Alexis browses (see `keep_left_behind`). After a reboot
 /// Arkadia starts before he opens his Chrome.
 fn prestart(app: &AppHandle) {
     let state = app.state::<ChromeView>();
-    for dir in crate::chrome_profile::paired_profile_dirs().unwrap_or_default() {
+    let mut dirs = crate::chrome_profile::paired_profile_dirs().unwrap_or_default();
+    // OpenCLI's too: its extension only runs while a window of it is open.
+    if let Some(dir) = crate::chrome_profile::opencli_profile_dir().filter(|d| !dirs.contains(d)) {
+        dirs.push(dir);
+    }
+    for dir in dirs {
         let Ok(_launch) = state.launching.lock() else {
             return;
         };
@@ -747,8 +1009,7 @@ fn launch(state: &ChromeView, dir: &str, pane: Option<&str>) -> Result<(Win, boo
         .lock()
         .map(|inner| {
             inner
-                .windows
-                .values()
+                .laid_windows()
                 .filter(|w| w.profile_dir == dir && w.at.is_some())
                 .map(|w| w.hwnd)
                 .collect()
@@ -884,6 +1145,42 @@ fn launch(state: &ChromeView, dir: &str, pane: Option<&str>) -> Result<(Win, boo
     Ok((win, profile_started))
 }
 
+/// Profile folders with a window `catch_late` still waits for: its frame
+/// has no mark nor launch page yet, the OpenCLI watcher must not take it.
+static LATE_PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+struct LatePending(String);
+
+impl LatePending {
+    fn new(dir: &str) -> Self {
+        LATE_PENDING
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(dir.to_string());
+        // The other Arkadia's watcher too (`win::other_late`).
+        win::late_started();
+        LatePending(dir.to_string())
+    }
+}
+
+impl Drop for LatePending {
+    fn drop(&mut self) {
+        let mut pending = LATE_PENDING.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = pending.iter().position(|d| *d == self.0) {
+            pending.remove(i);
+        }
+        win::late_ended();
+    }
+}
+
+fn late_pending(dir: &str) -> bool {
+    LATE_PENDING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|d| d == dir)
+}
+
 /// What a window that came after its launch gave up becomes.
 #[derive(Debug, PartialEq, Eq)]
 enum LateFate {
@@ -920,7 +1217,9 @@ fn late_fate(
 fn catch_late(dir: String, title: String, pane: Option<String>, before: Option<isize>) {
     let app_id = app_id_of(&dir);
     win::expect_late(&app_id);
+    let pending = LatePending::new(&dir);
     std::thread::spawn(move || {
+        let _pending = pending;
         let started = std::time::Instant::now();
         let hwnd = loop {
             let found = win::browser_windows()
@@ -1410,6 +1709,302 @@ pub async fn chrome_view_keys(app: AppHandle) -> Vec<String> {
         .unwrap_or_default()
 }
 
+// ---- OpenCLI's « X / Reddit » tab -----------------------------------------
+
+fn emit_opencli_owner(app: &AppHandle, key: Option<String>) {
+    let _ = app.emit_to("main", "opencli-owner", OpenCliOwner { key });
+}
+
+/// Before an opencli command (inbox request `id`) of the session whose tab
+/// is `owner` (None: a session Arkadia does not run, the window stays
+/// parked): OpenCLI's windows are that session's now, its profile runs (its
+/// extension only does while a window of it is open: the anchor, which
+/// `opencli-ready.sh` opened on the desktop before), and the windows its
+/// command opens or uses are looked for.
+fn prepare_opencli(
+    app: &AppHandle,
+    state: &ChromeView,
+    id: &str,
+    owner: Option<String>,
+) -> Result<OpenCliPrepared, String> {
+    let dir = crate::chrome_profile::opencli_profile_dir()
+        .ok_or_else(|| "no Chrome profile has OpenCLI's extension".to_string())?;
+    if state
+        .inner
+        .lock()
+        .is_ok_and(|mut inner| inner.opencli.claim(owner.clone()))
+    {
+        emit_opencli_owner(app, owner);
+    }
+    // Before any wait on the launch lock: the hook may give up meanwhile and
+    // the command run, its window then counts as born during the watch.
+    watch_opencli(app, state, &dir);
+    let has_anchor = state
+        .inner
+        .lock()
+        .is_ok_and(|inner| inner.spares.get(&dir).is_some_and(|a| win::alive(a.hwnd)));
+    let profile_started = if has_anchor {
+        Ok(false)
+    } else {
+        write_wait(id);
+        match state.launching.lock() {
+            Ok(_launch) => anchor_of(state, &dir).map(|(_, _, started)| started),
+            Err(e) => Err(e.to_string()),
+        }
+    };
+    // Even without its anchor: OpenCLI's windows may keep the profile up.
+    arrange(app, state);
+    Ok(OpenCliPrepared {
+        profile_started: profile_started?,
+    })
+}
+
+/// The windows of OpenCLI's profile (`app_id`) with their titles: those
+/// Arkadia adopted, and those no other running Arkadia has. Never its anchor,
+/// a pane's window, or a window still on its launch page (being launched).
+fn opencli_titles(state: &ChromeView, app_id: &str) -> HashMap<isize, String> {
+    let (adopted, others): (Vec<isize>, Vec<isize>) = state
+        .inner
+        .lock()
+        .map(|inner| {
+            (
+                inner.opencli.windows.iter().map(|w| w.hwnd).collect(),
+                inner
+                    .spares
+                    .values()
+                    .chain(inner.windows.values())
+                    .map(|w| w.hwnd)
+                    .collect(),
+            )
+        })
+        .unwrap_or_default();
+    win::browser_windows()
+        .into_iter()
+        .filter(|(h, id, title)| {
+            id.as_deref() == Some(app_id)
+                && !others.contains(h)
+                && !on_launch_page(title)
+                && (adopted.contains(h) || win::adoptable(*h))
+        })
+        .map(|(h, _, title)| (h, title))
+        .collect()
+}
+
+/// OpenCLI's windows while its commands run: one it opens, or one it takes
+/// to another page, becomes the panel's (laid in its owner's tab, else
+/// parked), and the one it took to a page last is the one shown. Until
+/// `OPENCLI_WATCH` after the last command, on a thread of its own: reading a
+/// title sends Chrome nothing. Known limit: a window Alexis opens in that
+/// profile during that minute is taken as OpenCLI's.
+fn watch_opencli(app: &AppHandle, state: &ChromeView, dir: &str) {
+    let start = state.inner.lock().is_ok_and(|mut inner| {
+        let now = std::time::Instant::now();
+        inner.opencli.watch_until = Some(now + OPENCLI_WATCH);
+        inner.opencli.watch_cap = Some(now + OPENCLI_WATCH_MAX);
+        !std::mem::replace(&mut inner.opencli.watching, true)
+    });
+    if !start {
+        return;
+    }
+    let app_id = app_id_of(dir);
+    // Before the command runs: a window of before is known by its next page.
+    let mut seen = opencli_titles(state, &app_id);
+    // A window born meanwhile is OpenCLI's to be: the foreground never goes
+    // back to it, nor is it rescued full screen (`win::late_launch`).
+    win::expect_late(&app_id);
+    let before = win::foreground();
+    let app = app.clone();
+    let dir = dir.to_string();
+    std::thread::spawn(move || {
+        let state = app.state::<ChromeView>();
+        loop {
+            std::thread::sleep(OPENCLI_POLL);
+            let done = state.inner.lock().map_or(true, |mut inner| {
+                let done = inner
+                    .opencli
+                    .watch_until
+                    .is_none_or(|t| std::time::Instant::now() >= t);
+                if done {
+                    inner.opencli.watching = false;
+                }
+                done
+            });
+            if done {
+                break;
+            }
+            // A launch finds its window by what it adds, and that window is
+            // not on its launch page at once: nothing is taken meanwhile,
+            // this Arkadia's or the other's, a late window included. The
+            // watch's end moves as much: OpenCLI's window may come then.
+            let launch = if win::other_launching() || win::other_late() || late_pending(&dir) {
+                None
+            } else {
+                match state.launching.try_lock() {
+                    Ok(guard) => Some(guard),
+                    Err(std::sync::TryLockError::WouldBlock) => None,
+                    // A launch panicked: as everywhere else, nothing more.
+                    Err(std::sync::TryLockError::Poisoned(_)) => {
+                        if let Ok(mut inner) = state.inner.lock() {
+                            inner.opencli.watching = false;
+                        }
+                        break;
+                    }
+                }
+            };
+            let Some(_launch) = launch else {
+                if let Ok(mut inner) = state.inner.lock() {
+                    let cap = inner.opencli.watch_cap;
+                    if let (Some(until), Some(cap)) = (inner.opencli.watch_until.as_mut(), cap) {
+                        *until = (*until + OPENCLI_POLL).min(cap);
+                    }
+                }
+                continue;
+            };
+            let mut now = opencli_titles(&state, &app_id);
+            let mut adopted = Vec::new();
+            let mut refused = Vec::new();
+            let mut changed = false;
+            let mut browsed = false;
+            for (hwnd, title) in &now {
+                let known = state
+                    .inner
+                    .lock()
+                    .is_ok_and(|inner| inner.opencli.adopted(*hwnd));
+                match sighting(known, seen.get(hwnd).map(String::as_str), title) {
+                    Sighting::Adopt { show } => {
+                        if !win::adopt_opencli(*hwnd) {
+                            refused.push(*hwnd);
+                            continue;
+                        }
+                        win::watch_process(*hwnd);
+                        if let Ok(mut inner) = state.inner.lock() {
+                            inner.opencli.add(adopted_win(*hwnd, &dir), show);
+                        }
+                        log(&format!("OpenCLI window adopted, shown {show}"));
+                        adopted.push(*hwnd);
+                        changed = true;
+                        browsed |= show;
+                    }
+                    Sighting::Show => {
+                        changed |= state.inner.lock().is_ok_and(|mut inner| {
+                            inner.opencli.shown.replace(*hwnd) != Some(*hwnd)
+                        });
+                        browsed = true;
+                    }
+                    Sighting::Nothing => {}
+                }
+            }
+            // Refused (the other Arkadia's, or its lock not had): its title
+            // of before stays, the next look tries again if it is still free.
+            for hwnd in refused {
+                now.remove(&hwnd);
+            }
+            // A window missing from one look (its profile unread) keeps its
+            // title: back, it is not taken for one OpenCLI just opened.
+            seen.retain(|h, _| win::alive(*h));
+            seen.extend(now);
+            if changed {
+                arrange(&app, &state);
+            }
+            // OpenCLI browses: its owner's tab may come forward (once).
+            if browsed {
+                let owner = state
+                    .inner
+                    .lock()
+                    .ok()
+                    .and_then(|inner| inner.opencli.owner.clone());
+                if let Some(key) = owner {
+                    let _ = app.emit_to("main", "opencli-ready", ChromeKey { key });
+                }
+            }
+            // OpenCLI opens `opencli browser`'s window in front: the
+            // foreground goes back to the window Alexis used. Only from it:
+            // Alexis may be typing in Claude in Chrome's window meanwhile.
+            for hwnd in adopted {
+                if win::foreground() == Some(hwnd) {
+                    win::hand_back(hwnd, before);
+                }
+            }
+        }
+        win::late_done(&app_id);
+    });
+}
+
+/// Before an opencli command in pane `key`'s session (inbox request `id`):
+/// OpenCLI's windows are this session's now; the waiting hook is answered.
+#[tauri::command]
+pub async fn opencli_view_prepare(app: AppHandle, id: String, key: String) -> Result<(), String> {
+    let worker = app.clone();
+    let wait_id = id.clone();
+    let pane = key.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        prepare_opencli(&worker, &worker.state::<ChromeView>(), &wait_id, Some(key))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    // This instance owns the pane: the request is answered and taken.
+    if valid_id(&id) {
+        let _ = std::fs::remove_file(inbox_dir().join(format!("{id}.json")));
+    }
+    write_ack(&id, result.as_ref().ok());
+    match &result {
+        Ok(p) => log(&format!(
+            "OpenCLI request {} of pane {}: profile started {}",
+            short(&id),
+            short(&pane),
+            p.profile_started
+        )),
+        Err(e) => log(&format!(
+            "OpenCLI request {} of pane {} failed: {e}",
+            short(&id),
+            short(&pane)
+        )),
+    }
+    result.map(|_| ())
+}
+
+/// The panel shows pane `key`'s « X / Reddit » tab: OpenCLI's window when
+/// the pane's session ran an opencli command last, else nothing (the tab
+/// says another session uses it).
+#[tauri::command]
+pub async fn opencli_view_show(app: AppHandle, key: String, bounds: Bounds, hidden: bool) {
+    rearrange(&app, move |inner| {
+        inner.active = Some(key);
+        inner.bounds = Some(bounds);
+        inner.hidden = hidden;
+    });
+}
+
+/// Pane `key` closed, its session with it: its tab leaves, OpenCLI's windows
+/// stay open, parked (Alexis, 27/11/2026).
+#[tauri::command]
+pub async fn opencli_view_close(app: AppHandle, key: String) {
+    let released = app
+        .state::<ChromeView>()
+        .inner
+        .lock()
+        .is_ok_and(|mut inner| {
+            if inner.active.as_deref() == Some(key.as_str()) {
+                inner.active = None;
+            }
+            inner.opencli.release(&key)
+        });
+    if released {
+        emit_opencli_owner(&app, None);
+    }
+    spawn_arrange(&app);
+}
+
+/// The tab OpenCLI's window shows in: a reloaded page learns it again.
+#[tauri::command]
+pub async fn opencli_view_owner(app: AppHandle) -> Option<String> {
+    app.state::<ChromeView>()
+        .inner
+        .lock()
+        .ok()
+        .and_then(|inner| inner.opencli.owner.clone())
+}
+
 /// Every session's window closes (Arkadia exit, `on_exit`; the page no
 /// longer calls it). The daily's anchors stay, parked: its next run takes
 /// them back (`keep_left_behind`). The Lab's close: started for tests only,
@@ -1421,21 +2016,32 @@ pub async fn chrome_view_close_all(app: AppHandle) {
 
 fn close_all(state: &ChromeView) {
     let keep_anchors = !crate::lab::LAB;
-    let (wins, anchors): (Vec<Win>, Vec<isize>) = state
+    let (wins, anchors, opencli): (Vec<Win>, Vec<isize>, Vec<isize>) = state
         .inner
         .lock()
         .map(|mut inner| {
             inner.active = None;
+            inner.opencli.owner = None;
             let anchors = if keep_anchors {
                 inner.spares.values().map(|w| w.hwnd).collect()
             } else {
                 inner.spares.drain().map(|(_, w)| w.hwnd).collect()
             };
-            (inner.windows.drain().map(|(_, w)| w).collect(), anchors)
+            let opencli = inner.opencli.windows.iter().map(|w| w.hwnd).collect();
+            (
+                inner.windows.drain().map(|(_, w)| w).collect(),
+                anchors,
+                opencli,
+            )
         })
         .unwrap_or_default();
     for win in wins {
         win::close(win.hwnd);
+    }
+    // OpenCLI's stay open, the Lab's too: OpenCLI reuses them, and a closed
+    // one comes back on Alexis's screen (`split_opencli`).
+    for raw in opencli {
+        win::park(raw);
     }
     for raw in anchors {
         if keep_anchors {
@@ -1474,8 +2080,7 @@ pub fn shown_has_foreground(app: &AppHandle) -> bool {
         .lock()
         .map(|inner| {
             inner
-                .windows
-                .values()
+                .laid_windows()
                 .filter(|w| w.at.is_some())
                 .map(|w| w.hwnd)
                 .collect()
@@ -1494,12 +2099,14 @@ pub fn on_exit(app: &AppHandle) {
     if let Some(state) = app.try_state::<ChromeView>() {
         close_all(&state);
     }
-    // Another Arkadia sharing the folder may have written it since.
-    let ready = inbox_dir().join("ready");
-    let ours = std::fs::read_to_string(&ready)
-        .is_ok_and(|pid| pid.trim() == std::process::id().to_string());
-    if ours {
-        let _ = std::fs::remove_file(ready);
+    // Another Arkadia sharing the folder may have written them since.
+    for name in ["ready", OPENCLI_MARKER] {
+        let file = inbox_dir().join(name);
+        let ours = std::fs::read_to_string(&file)
+            .is_ok_and(|pid| pid.trim() == std::process::id().to_string());
+        if ours {
+            let _ = std::fs::remove_file(file);
+        }
     }
 }
 
@@ -1517,14 +2124,14 @@ fn on_foreground(app: &AppHandle, hwnd: isize, app_id: Option<String>) -> bool {
         return false;
     };
     // An anchor too: the extension focuses the window that holds the tabs
-    // of a session Arkadia does not run, and the foreground goes back.
-    if let Some(dir) = inner
-        .windows
-        .values()
+    // of a session Arkadia does not run, and the foreground goes back. And
+    // OpenCLI's, which `opencli browser` focuses.
+    let found = inner
+        .laid_windows()
         .chain(inner.spares.values())
         .find(|w| w.hwnd == hwnd)
-        .map(|w| w.profile_dir.clone())
-    {
+        .map(|w| w.profile_dir.clone());
+    if let Some(dir) = found {
         inner.dirty.remove(&dir);
         inner.steered.insert(dir, hwnd);
         return true;
@@ -1561,7 +2168,7 @@ fn on_moved(app: &AppHandle, hwnd: isize, rect: (i32, i32, i32, i32)) {
     };
     let Some((owner, at)) = state.inner.lock().ok().and_then(|inner| {
         // An anchor is never laid: the extension moving it parks it again.
-        let at = match inner.windows.values().find(|w| w.hwnd == hwnd) {
+        let at = match inner.laid_windows().find(|w| w.hwnd == hwnd) {
             Some(win) => win.at,
             None => {
                 inner.spares.values().find(|w| w.hwnd == hwnd)?;
@@ -1591,6 +2198,16 @@ fn on_destroyed(app: &AppHandle, hwnd: isize) {
     let Some(state) = app.try_state::<ChromeView>() else {
         return;
     };
+    // OpenCLI's: its tab stays, OpenCLI opens a new one at its next command.
+    if state
+        .inner
+        .lock()
+        .is_ok_and(|mut inner| inner.opencli.remove(hwnd))
+    {
+        log("OpenCLI window closed in Chrome");
+        spawn_arrange(app);
+        return;
+    }
     let key = state.inner.lock().ok().and_then(|mut inner| {
         inner.spares.retain(|_, w| w.hwnd != hwnd);
         let key = inner
@@ -1669,13 +2286,15 @@ fn run_inbox(app: AppHandle) -> Result<(), String> {
                 .ok()
                 .and_then(|t| t.elapsed().ok())
                 .is_none_or(|age| age > std::time::Duration::from_secs(60));
-            if stale && entry.file_name() != "ready" {
+            if stale && entry.file_name() != "ready" && entry.file_name() != OPENCLI_MARKER {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
     }
     let ready = dir.join("ready");
     std::fs::write(&ready, std::process::id().to_string()).map_err(|e| e.to_string())?;
+    let opencli_marker = dir.join(OPENCLI_MARKER);
+    let _ = std::fs::write(&opencli_marker, std::process::id().to_string());
 
     let (tx, rx) = std::sync::mpsc::channel();
     let mut watcher = notify::recommended_watcher(tx).map_err(|e| e.to_string())?;
@@ -1688,8 +2307,10 @@ fn run_inbox(app: AppHandle) -> Result<(), String> {
             Ok(event) => event,
             // Another Arkadia sharing the folder removed it when it quit.
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if !ready.exists() {
-                    let _ = std::fs::write(&ready, std::process::id().to_string());
+                for file in [&ready, &opencli_marker] {
+                    if !file.exists() {
+                        let _ = std::fs::write(file, std::process::id().to_string());
+                    }
                 }
                 continue;
             }
@@ -1713,6 +2334,51 @@ fn run_inbox(app: AppHandle) -> Result<(), String> {
                 continue;
             };
             if !valid_id(&request.id) || !seen.insert(request.id.clone()) {
+                continue;
+            }
+            if request.opencli {
+                if request.pane_id.is_empty() {
+                    // A session Arkadia does not run: taken by the Arkadia the
+                    // hook asked only (its pid in the marker).
+                    let ours = std::fs::read_to_string(&opencli_marker)
+                        .is_ok_and(|pid| pid.trim() == std::process::id().to_string());
+                    if ours {
+                        let _ = std::fs::remove_file(&path);
+                        let app = app.clone();
+                        let id = request.id;
+                        // Off the watcher: a launch takes seconds.
+                        std::thread::spawn(move || {
+                            let prepared =
+                                prepare_opencli(&app, &app.state::<ChromeView>(), &id, None);
+                            match &prepared {
+                                Ok(_) => log(&format!(
+                                    "OpenCLI request {} outside Arkadia: parked",
+                                    short(&id)
+                                )),
+                                Err(e) => log(&format!(
+                                    "OpenCLI request {} outside Arkadia failed: {e}",
+                                    short(&id)
+                                )),
+                            }
+                            write_ack(&id, prepared.as_ref().ok());
+                        });
+                    }
+                } else {
+                    log(&format!(
+                        "OpenCLI request {} of pane {}",
+                        short(&request.id),
+                        short(&request.pane_id)
+                    ));
+                    // Left in place: the instance owning the pane takes it.
+                    let _ = app.emit_to(
+                        "main",
+                        "opencli-request",
+                        ChromeRequest {
+                            id: request.id,
+                            pane_id: request.pane_id,
+                        },
+                    );
+                }
                 continue;
             }
             if let Some(email) = request.email.filter(|_| request.pane_id.is_empty()) {
@@ -1792,10 +2458,12 @@ mod win {
         MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
     };
     use windows::Win32::Foundation::WAIT_OBJECT_0;
+    use windows::Win32::Foundation::WAIT_ABANDONED_0;
     use windows::Win32::System::Threading::{
         CreateEventW, OpenEventW, ResetEvent, SetEvent, WaitForSingleObject,
         SYNCHRONIZATION_SYNCHRONIZE,
     };
+    use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex};
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
     use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
     use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
@@ -1836,7 +2504,7 @@ mod win {
         WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetAncestor, GetCursorPos, WindowFromPoint, GA_ROOT, WM_APPCOMMAND,
+        GetAncestor, GetCursorPos, RemovePropW, WindowFromPoint, GA_ROOT, WM_APPCOMMAND,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetLayeredWindowAttributes, LAYERED_WINDOW_ATTRIBUTES_FLAGS,
@@ -2262,7 +2930,74 @@ mod win {
         }
     }
 
-    fn other_launching() -> bool {
+    /// A window `catch_late` still waits for, seen by the other Arkadia:
+    /// its launch's event is reset by then, its frame still unmarked.
+    fn late_event(lab: bool) -> PCWSTR {
+        if lab {
+            w!("Local\\ArkadiaLabChromeLate")
+        } else {
+            w!("Local\\ArkadiaChromeLate")
+        }
+    }
+
+    /// Late windows waited for; changed with the event, under its lock.
+    static LATE_WAITING: Mutex<u32> = Mutex::new(0);
+
+    fn set_late(on: bool) {
+        static OWN: OnceLock<isize> = OnceLock::new();
+        let raw = *OWN.get_or_init(|| {
+            // SAFETY: a named event, kept for the process's life.
+            unsafe { CreateEventW(None, true, false, late_event(crate::lab::LAB)) }
+                .map(|h| h.0 as isize)
+                .unwrap_or(0)
+        });
+        if raw == 0 {
+            return;
+        }
+        // SAFETY: the event created above, never closed.
+        unsafe {
+            let event = HANDLE(raw as *mut _);
+            let _ = if on {
+                SetEvent(event)
+            } else {
+                ResetEvent(event)
+            };
+        }
+    }
+
+    pub(super) fn late_started() {
+        let mut waiting = LATE_WAITING.lock().unwrap_or_else(|e| e.into_inner());
+        *waiting += 1;
+        if *waiting == 1 {
+            set_late(true);
+        }
+    }
+
+    pub(super) fn late_ended() {
+        let mut waiting = LATE_WAITING.lock().unwrap_or_else(|e| e.into_inner());
+        *waiting = waiting.saturating_sub(1);
+        if *waiting == 0 {
+            set_late(false);
+        }
+    }
+
+    pub(super) fn other_late() -> bool {
+        // SAFETY: a handle opened, waited on without blocking, and closed.
+        unsafe {
+            let Ok(event) = OpenEventW(
+                SYNCHRONIZATION_SYNCHRONIZE,
+                false,
+                late_event(!crate::lab::LAB),
+            ) else {
+                return false;
+            };
+            let set = WaitForSingleObject(event, 0) == WAIT_OBJECT_0;
+            let _ = CloseHandle(event);
+            set
+        }
+    }
+
+    pub(super) fn other_launching() -> bool {
         // SAFETY: a handle opened, waited on without blocking, and closed.
         unsafe {
             let Ok(event) = OpenEventW(
@@ -2757,6 +3492,82 @@ mod win {
     /// other's, of any run): a launch's new window never does yet.
     pub(super) fn marked(raw: isize) -> bool {
         is_panel_window(hwnd(raw))
+    }
+
+    /// The pid in mark `name` of a window, 0 for none.
+    fn mark_pid(h: HWND, name: PCWSTR) -> u32 {
+        // SAFETY: plain read of a window property.
+        unsafe { GetPropW(h, name) }.0 as usize as u32
+    }
+
+    /// The other Arkadia's mark (daily, Lab).
+    fn other_mark_name() -> PCWSTR {
+        if crate::lab::LAB {
+            w!("ArkadiaChromePanel")
+        } else {
+            w!("ArkadiaLabChromePanel")
+        }
+    }
+
+    /// Whether this Arkadia may take a window as OpenCLI's: no other
+    /// running Arkadia has it. One left by a run that ended may be taken.
+    pub(super) fn adoptable(raw: isize) -> bool {
+        let h = hwnd(raw);
+        [mark_name(), other_mark_name()].into_iter().all(|name| {
+            let pid = mark_pid(h, name);
+            pid == 0 || pid == std::process::id() || !running(pid)
+        })
+    }
+
+    /// Taking an OpenCLI window, one Arkadia at a time (daily, Lab): both
+    /// may watch its profile, and a window both found free in the same poll
+    /// would be laid by one and parked by the other forever (`on_moved`).
+    fn adopt_lock() -> Option<HANDLE> {
+        static LOCK: OnceLock<isize> = OnceLock::new();
+        let raw = *LOCK.get_or_init(|| {
+            // SAFETY: a named mutex, kept for the process's life.
+            unsafe { CreateMutexW(None, false, w!("Local\\ArkadiaOpenCliAdopt")) }
+                .map(|h| h.0 as isize)
+                .unwrap_or(0)
+        });
+        (raw != 0).then(|| HANDLE(raw as *mut _))
+    }
+
+    /// An OpenCLI window becomes this Arkadia's (`adopt`), if still free
+    /// once the other Arkadia cannot take it meanwhile. The mark the other
+    /// left on it, its run ended, goes: its next run would take it back.
+    /// Whether it is this Arkadia's.
+    pub(super) fn adopt_opencli(raw: isize) -> bool {
+        let h = hwnd(raw);
+        let Some(lock) = adopt_lock() else {
+            return false;
+        };
+        // SAFETY: the mutex above, released on this same thread; the marks
+        // are properties of a window that exists.
+        let free = unsafe {
+            let waited = WaitForSingleObject(lock, 2_000);
+            if waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED_0 {
+                return false;
+            }
+            let free = adoptable(raw);
+            if free {
+                if mark_pid(h, other_mark_name()) != 0 {
+                    let _ = RemovePropW(h, other_mark_name());
+                }
+                let _ = SetPropW(
+                    h,
+                    mark_name(),
+                    Some(HANDLE(std::process::id() as usize as *mut _)),
+                );
+            }
+            let _ = ReleaseMutex(lock);
+            free
+        };
+        // Out of the lock: its styles wait on Chrome's thread.
+        if free {
+            adopt(raw);
+        }
+        free
     }
 
     /// The hook thread runs: a window can be watched.
@@ -3390,6 +4201,20 @@ mod win {
     pub(super) fn marked(_: isize) -> bool {
         false
     }
+    pub(super) fn adoptable(_: isize) -> bool {
+        false
+    }
+    pub(super) fn adopt_opencli(_: isize) -> bool {
+        false
+    }
+    pub(super) fn other_launching() -> bool {
+        false
+    }
+    pub(super) fn other_late() -> bool {
+        false
+    }
+    pub(super) fn late_started() {}
+    pub(super) fn late_ended() {}
     pub(super) fn hooks_ready() -> bool {
         true
     }
@@ -3632,6 +4457,163 @@ mod tests {
         // after 10 s and stayed on Alexis's screen (13/11/2026).
         assert!(launch_deadline(true) >= std::time::Duration::from_secs(25));
         assert_eq!(launch_deadline(false), std::time::Duration::from_secs(10));
+    }
+
+    fn opencli_with(hwnds: &[isize]) -> OpenCli {
+        let mut opencli = OpenCli::default();
+        for &h in hwnds {
+            opencli.add(adopted_win(h, "Profile 10"), false);
+        }
+        opencli
+    }
+
+    #[test]
+    fn knows_opencli_s_windows_by_what_its_command_does() {
+        // Opened while its command runs: OpenCLI's, shown once on a page.
+        assert_eq!(
+            sighting(false, None, "about:blank - Google Chrome"),
+            Sighting::Adopt { show: false }
+        );
+        assert_eq!(
+            sighting(false, None, "x.com - Google Chrome"),
+            Sighting::Adopt { show: true }
+        );
+        // There before: OpenCLI's once the command takes it to a page
+        // (measured 27/11/2026: about:blank, then x.com).
+        assert_eq!(
+            sighting(
+                false,
+                Some("about:blank - Google Chrome"),
+                "x.com - Google Chrome"
+            ),
+            Sighting::Adopt { show: true }
+        );
+        // Alexis's own windows of the profile, left as they are, even when
+        // their page changes: OpenCLI's leave an idle page.
+        let store = "OpenCLI - Chrome Web Store - Google Chrome";
+        assert_eq!(sighting(false, Some(store), store), Sighting::Nothing);
+        assert_eq!(
+            sighting(false, Some("(1) Accueil / X - Google Chrome"), store),
+            Sighting::Nothing
+        );
+        // Adopted: comes on screen on a page, never for its idle page.
+        assert_eq!(
+            sighting(
+                true,
+                Some("OpenCLI Browser - Google Chrome"),
+                "ClaudeAI - Google Chrome"
+            ),
+            Sighting::Show
+        );
+        assert_eq!(
+            sighting(
+                true,
+                Some("x.com - Google Chrome"),
+                "about:blank - Google Chrome"
+            ),
+            Sighting::Nothing
+        );
+        assert_eq!(
+            sighting(
+                true,
+                Some("ClaudeAI - Google Chrome"),
+                "OpenCLI Browser - Google Chrome"
+            ),
+            Sighting::Nothing
+        );
+        assert!(opencli_idle("about:blank - Google Chrome"));
+        assert!(!opencli_idle(
+            "Reddit - The heart of the internet - Google Chrome"
+        ));
+    }
+
+    #[test]
+    fn opencli_s_window_goes_to_the_last_session_that_ran_a_command() {
+        let mut opencli = opencli_with(&[7]);
+        assert!(opencli.claim(Some("opencli:a".into())));
+        assert_eq!(opencli.on_screen("opencli:a"), Some(7));
+        // Told again: nothing changes, no event.
+        assert!(!opencli.claim(Some("opencli:a".into())));
+        assert!(opencli.claim(Some("opencli:b".into())));
+        assert_eq!(opencli.on_screen("opencli:b"), Some(7));
+        // A session Arkadia does not run: nobody's tab shows it, it is parked.
+        assert!(opencli.claim(None));
+        assert_eq!(opencli.on_screen("opencli:b"), None);
+    }
+
+    #[test]
+    fn another_session_s_tab_shows_no_window() {
+        let mut opencli = opencli_with(&[7, 8]);
+        opencli.claim(Some("opencli:b".into()));
+        // Its tab says the window is used elsewhere: nothing laid.
+        assert_eq!(opencli.on_screen("opencli:a"), None);
+        // Claude in Chrome's tab of the owner's pane is not OpenCLI's.
+        assert_eq!(opencli.on_screen("chrome:b"), None);
+        // The window OpenCLI took to a page last is the one shown.
+        opencli.add(adopted_win(9, "Profile 10"), true);
+        assert_eq!(opencli.on_screen("opencli:b"), Some(9));
+        opencli.add(adopted_win(9, "Profile 10"), true);
+        assert_eq!(opencli.windows.len(), 3);
+    }
+
+    #[test]
+    fn a_session_that_ends_leaves_opencli_s_windows_open() {
+        let mut opencli = opencli_with(&[7, 8]);
+        opencli.claim(Some("opencli:a".into()));
+        // Another pane closing changes nothing.
+        assert!(!opencli.release("opencli:b"));
+        assert_eq!(opencli.owner.as_deref(), Some("opencli:a"));
+        // Its owner closing: no owner, every window kept (parked).
+        assert!(opencli.release("opencli:a"));
+        assert_eq!(opencli.owner, None);
+        assert_eq!(
+            opencli.windows.iter().map(|w| w.hwnd).collect::<Vec<_>>(),
+            vec![7, 8]
+        );
+        // Only Chrome closing one takes it away; another one is shown then.
+        assert!(opencli.remove(7));
+        assert_eq!(opencli.shown, Some(8));
+        assert!(!opencli.remove(7));
+    }
+
+    #[test]
+    fn keeps_opencli_s_windows_left_by_the_last_run() {
+        let w = |hwnd, profile: &str, launch_page| LeftWindow {
+            hwnd,
+            app_id: Some(format!("Chrome.UserData.{profile}")),
+            parked: true,
+            launch_page,
+        };
+        let left = vec![
+            w(1, "Profile10", true),
+            w(2, "Profile10", false),
+            w(3, "Profile3", false),
+        ];
+        let hwnds = |w: &[LeftWindow]| w.iter().map(|w| w.hwnd).collect::<Vec<_>>();
+        let paired = vec!["Profile 3".to_string()];
+        let known = Ok(Some("Profile 10".to_string()));
+        let (rest, opencli) = split_opencli(left.clone(), &known, Some(&paired));
+        // Its anchor stays with the others, to be kept as the profile's.
+        assert_eq!(hwnds(&rest), vec![1, 3]);
+        assert_eq!(opencli, vec![2]);
+        // Its extension gone: nothing reopens them, they are sorted as ever.
+        let (rest, opencli) = split_opencli(left.clone(), &Ok(None), Some(&paired));
+        assert_eq!((hwnds(&rest), opencli), (vec![1, 2, 3], vec![]));
+        // Its profile unread: a window that may be OpenCLI's is never
+        // closed, left as it is; a paired profile's window is sorted as ever.
+        let unread = Err("Local State".to_string());
+        let (rest, opencli) = split_opencli(left.clone(), &unread, Some(&paired));
+        assert_eq!((hwnds(&rest), opencli), (vec![1, 3], vec![]));
+        // The pairing table unread too: only launch pages are sorted.
+        assert_eq!(hwnds(&split_opencli(left, &unread, None).0), vec![1]);
+    }
+
+    #[test]
+    fn reads_an_opencli_request() {
+        let r: RequestFile =
+            serde_json::from_str("{\"id\":\"r3\",\"paneId\":\"p1\",\"opencli\":true}").unwrap();
+        assert!(r.opencli && !r.ran);
+        assert_eq!(short("opencli:631e166b-34b4"), "631e166b");
     }
 
     #[test]

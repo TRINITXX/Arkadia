@@ -135,6 +135,7 @@ import {
 import { resolveProjectTarget, type ClaudeSession } from "@/lib/sessionsIndex";
 import { subscribeStable } from "@/lib/tauriEvents";
 import { setChromePane, setChromeToggler } from "@/lib/chromePanes";
+import { useOpenCliPanel } from "@/lib/useOpenCliPanel";
 import {
   dropFrame,
   getFrame,
@@ -988,6 +989,18 @@ export function App() {
     setChromeToggler(toggleChromeOfPane);
     return () => setChromeToggler(null);
   }, [toggleChromeOfPane]);
+  // OpenCLI's window (X and Reddit) in an « X / Reddit » tab of the panel.
+  const onOpenCliError = useCallback(
+    (message: string) => pushToastRef.current("error", message),
+    [],
+  );
+  const opencliOwner = useOpenCliPanel(
+    tabs,
+    loaded,
+    artifactTabsRef,
+    changeArtifacts,
+    onOpenCliError,
+  );
   useEffect(() => {
     setArtifactOpener(openArtifactFor);
     return () => setArtifactOpener(null);
@@ -4032,6 +4045,7 @@ export function App() {
               onSnipped={pasteSnipInClaude}
               onSnipFailed={onSnipFailed}
               onChromeShown={onChromeShown}
+              opencliOwner={opencliOwner}
             />
           )}
         </div>
