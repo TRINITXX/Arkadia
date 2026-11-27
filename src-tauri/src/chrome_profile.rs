@@ -206,6 +206,45 @@ pub(crate) fn paired_profile_dirs() -> Option<Vec<String>> {
     Some(dirs)
 }
 
+/// OpenCLI's Browser Bridge extension (`@jackwener/opencli`), as Chrome
+/// names its folder under a profile's `Extensions`.
+const OPENCLI_EXTENSION: &str = "ildkmabpimmkaediidaifkhjpohdnifk";
+
+/// The profile folder OpenCLI drives X and Reddit in: the one its extension
+/// is installed in ("Profile 10", signed in to X and Reddit only, 27/11/2026).
+/// None when no profile has it.
+pub(crate) fn opencli_profile_dir() -> Option<String> {
+    opencli_profile().ok().flatten()
+}
+
+/// `opencli_profile_dir`, Err when Chrome's `Local State` cannot be read:
+/// unknown, not absent.
+pub(crate) fn opencli_profile() -> Result<Option<String>, String> {
+    let file = local_state_file().ok_or("no Chrome folder")?;
+    let state = read_json(file.clone()).ok_or("Local State unread")?;
+    let root = file.parent().ok_or("no Chrome folder")?.to_path_buf();
+    let dirs = state
+        .get("profile")
+        .and_then(|p| p.get("info_cache"))
+        .and_then(Value::as_object)
+        .ok_or("Local State without profiles")?
+        .keys()
+        .cloned()
+        .collect();
+    Ok(profile_with_extension(&root, dirs, OPENCLI_EXTENSION))
+}
+
+/// The first profile folder of `dirs` (sorted) with extension `id` installed.
+fn profile_with_extension(
+    root: &std::path::Path,
+    mut dirs: Vec<String>,
+    id: &str,
+) -> Option<String> {
+    dirs.sort();
+    dirs.into_iter()
+        .find(|dir| root.join(dir).join("Extensions").join(id).is_dir())
+}
+
 /// Opens a new window in profile folder `dir` (the Chrome panel), on a blank
 /// page titled `title`: the window is found by it.
 pub(crate) fn launch_window(dir: &str, title: &str) -> bool {
@@ -346,6 +385,28 @@ mod tests {
         assert_eq!(args[0], "--profile-directory=Profile 3");
         // The link comes last, after every flag.
         assert_eq!(args.last().map(String::as_str), Some("https://claude.ai/artifact/x"));
+    }
+
+    #[test]
+    fn finds_the_profile_opencli_drives_by_its_extension() {
+        let root = std::env::temp_dir().join(format!("arkadia-opencli-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("Profile 10").join("Extensions").join("other")).unwrap();
+        std::fs::create_dir_all(root.join("Profile 3")).unwrap();
+        let dirs = || {
+            vec![
+                "Default".to_string(),
+                "Profile 10".into(),
+                "Profile 3".into(),
+            ]
+        };
+        assert_eq!(profile_with_extension(&root, dirs(), "opencli"), None);
+        std::fs::create_dir_all(root.join("Profile 10").join("Extensions").join("opencli"))
+            .unwrap();
+        assert_eq!(
+            profile_with_extension(&root, dirs(), "opencli").as_deref(),
+            Some("Profile 10")
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

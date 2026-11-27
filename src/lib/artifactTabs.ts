@@ -6,7 +6,9 @@
  * A pane's Chrome window (`chrome_view.rs`) is a tab of the same panel, a
  * `kind: "chrome"` item. It belongs to its pane, not to the panel: closing
  * its tab or the panel only parks it, it is never parked here nor reported
- * as closed, and it does not count among the artifacts of a tab.
+ * as closed, and it does not count among the artifacts of a tab. OpenCLI's
+ * window (X and Reddit) is one too, a `kind: "opencli"` item: one window for
+ * every session, shown in the tab of the session that ran it last.
  */
 
 /** Oldest artifact of a tab closes beyond this: each one is a live page. */
@@ -22,8 +24,9 @@ export interface ArtifactItem {
   title: string | null;
   /** Bumped when Claude publishes the link again: the page reloads. */
   nonce: number;
-  /** A pane's Chrome window rather than a claude.ai page (no url). */
-  kind?: "chrome";
+  /** A pane's Chrome window rather than a claude.ai page (no url): Claude
+   *  in Chrome's, or OpenCLI's. */
+  kind?: "chrome" | "opencli";
   /** The pane whose Chrome window this is. */
   paneId?: string;
   /** Said above the window: Claude may browse in another window. */
@@ -33,8 +36,27 @@ export interface ArtifactItem {
   fromPaneId?: string;
 }
 
+/** A Chrome window, not a page: Claude in Chrome's or OpenCLI's. */
 export function isChrome(item: ArtifactItem | undefined): boolean {
-  return item?.kind === "chrome";
+  return item?.kind === "chrome" || item?.kind === "opencli";
+}
+
+/** OpenCLI's window, in an « X / Reddit » tab. */
+export function isOpenCli(item: ArtifactItem | undefined): boolean {
+  return item?.kind === "opencli";
+}
+
+/** The key of pane `paneId`'s « X / Reddit » item. */
+export function opencliKey(paneId: string): string {
+  return `opencli:${paneId}`;
+}
+
+/** Said in an « X / Reddit » tab: the window shows over it in the tab of
+ *  the session that ran OpenCLI last (`owner`, its key), never in another. */
+export function opencliText(key: string, owner: string | null): string {
+  return key === owner
+    ? "La fenêtre d'OpenCLI s'affiche ici pendant ses recherches."
+    : "Fenêtre utilisée par une autre session";
 }
 
 /** Whether the panel holds a claude.ai page, not only a pane's Chrome. */
@@ -262,6 +284,25 @@ export function setArtifactTitle(
   return state;
 }
 
+/** Item `added` comes forward in tab `tabId`'s panel, added as its last tab
+ *  when the panel did not show it. */
+function showWindow(
+  state: ArtifactsByTab,
+  tabId: string,
+  added: ArtifactItem,
+): ArtifactsByTab {
+  const current = state[tabId];
+  const key = added.key;
+  const items = current?.items ?? [];
+  if (items.some((i) => i.key === key)) {
+    return { ...state, [tabId]: { ...current!, activeKey: key } };
+  }
+  return {
+    ...state,
+    [tabId]: { ...current, items: [...items, added], activeKey: key },
+  };
+}
+
 /** Pane `paneId`'s Chrome comes forward in tab `tabId`'s panel, added as
  *  its last tab when the panel did not show it. */
 export function showChrome(
@@ -270,14 +311,8 @@ export function showChrome(
   paneId: string,
   accountId: string,
 ): ArtifactsByTab {
-  const current = state[tabId];
-  const key = chromeKey(paneId);
-  const items = current?.items ?? [];
-  if (items.some((i) => i.key === key)) {
-    return { ...state, [tabId]: { ...current!, activeKey: key } };
-  }
-  const added: ArtifactItem = {
-    key,
+  return showWindow(state, tabId, {
+    key: chromeKey(paneId),
     url: "",
     accountId,
     title: null,
@@ -285,11 +320,27 @@ export function showChrome(
     kind: "chrome",
     paneId,
     note: null,
-  };
-  return {
-    ...state,
-    [tabId]: { ...current, items: [...items, added], activeKey: key },
-  };
+  });
+}
+
+/** Pane `paneId`'s « X / Reddit » tab comes forward in tab `tabId`'s panel,
+ *  added as its last tab when the panel did not show it. */
+export function showOpenCli(
+  state: ArtifactsByTab,
+  tabId: string,
+  paneId: string,
+): ArtifactsByTab {
+  return showWindow(state, tabId, {
+    key: opencliKey(paneId),
+    url: "",
+    // OpenCLI's profile is signed in to no Claude account.
+    accountId: "",
+    title: "X / Reddit",
+    nonce: 1,
+    kind: "opencli",
+    paneId,
+    note: null,
+  });
 }
 
 /** What Arkadia learnt of a Chrome item (profile name, note). */

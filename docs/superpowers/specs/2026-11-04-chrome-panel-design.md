@@ -95,6 +95,29 @@ instead of popping up in front. Alexis sees Claude browse and can take over (cli
 - Layout A chosen: Arkadia's title row (tabs, window buttons) runs the whole width; the panel opens below
   it. The tab strip shows no scrollbar (wheel scrolls); the globe and the settings never shrink.
 
+## « X / Reddit » tab: OpenCLI (27/11/2026)
+
+Decided by Alexis: a separate tab next to « Chrome » for OpenCLI (`opencli`, X and Reddit), one window
+for every session and account, shown in the tab of the session that ran an opencli command last; any
+other « X / Reddit » tab says « Fenêtre utilisée par une autre session ». Same rules as the Chrome tab
+(opens by itself once, never in front of another app, parked off-screen for a session Arkadia does not
+run, pages at 50 %). At the session's end its tab leaves and the window is parked, never closed.
+
+- OpenCLI's extension (Browser Bridge, installed only in the profile it drives, `Profile 10`) opens its
+  own windows (`chrome.windows.create`, 1280 x 900 dip) and reuses them by id, one per role: site
+  commands in one that goes back to about:blank after each command, `opencli browser` in one that goes
+  back to its « OpenCLI Browser » page (measured 27/11, extension 1.0.27). Arkadia adopts them.
+- Request: the PreToolUse hook `~/.claude/hooks/opencli-panel.mjs` (`"if": "Bash(*opencli*)"`), for
+  terminal and chat panes alike (a chat loads the user's settings and has `ARKADIA_PANE_ID`), drops
+  `{ id, paneId, opencli: true }` (no pane: a session Arkadia does not run, to the daily Arkadia) into the
+  Chrome inbox, only when the inbox's `opencli` file names a live Arkadia (an older one would take it for
+  a Claude in Chrome request). `opencli-ready.sh --start` asks the same instead of opening the profile on
+  the desktop.
+- Prepare: the session becomes the owner (`opencli-owner` to the page), the profile's anchor is ensured,
+  and for a minute its windows' titles are read every 150 ms: a window born then, or one a command takes
+  off its idle page, is OpenCLI's (adopted, laid or parked); the one it took to a page last is shown, and
+  the owner's tab comes forward the first time (`opencli-ready`), not on a command that opens no page.
+
 ## Out of scope (v1)
 
 Spare pre-steered windows, tab-group window detection through UI Automation, iPhone.
