@@ -28,7 +28,7 @@ let launching: ReadonlySet<string> = new Set();
 let view: ReminderView = { due: [], now: Date.now(), launching };
 const listeners = new Set<() => void>();
 /**
- * Bumped by « Lancer » and « Demain », before and after they write: a read
+ * Bumped by « Lancer », « Demain » and « × », before and after they write: a read
  * of the folder started before the latest bump may predate them, so it is
  * dropped, never shown over them.
  */
@@ -152,6 +152,28 @@ export async function launchReminders(
     }
   } finally {
     launchingAll = false;
+  }
+}
+
+/**
+ * « × »: out of the list for good, no chat opened. Its file moves to `done\`
+ * as « Lancer » claims it; a refused claim (another took it) reads the
+ * folder again.
+ */
+export async function dismissReminder(reminder: Reminder): Promise<void> {
+  const { id } = reminder;
+  if (launching.has(id)) return;
+  generation++;
+  publishReminders(all.filter((r) => r.id !== id));
+  try {
+    await invoke("reminder_claim", { id });
+    generation++;
+    // A read started during the claim may have listed it again.
+    publishReminders(all.filter((r) => r.id !== id));
+  } catch (e) {
+    console.error("[reminders] dismiss", e);
+    generation++;
+    await refreshReminders();
   }
 }
 

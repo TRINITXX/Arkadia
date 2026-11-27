@@ -4,6 +4,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import { invoke } from "@tauri-apps/api/core";
 import {
+  dismissReminder,
   launchReminder,
   launchReminders,
   postponeReminder,
@@ -46,6 +47,28 @@ describe("reminderStore", () => {
     await postponeReminder(due);
     answerList([due]);
     await read;
+    expect(ids()).toEqual([]);
+  });
+
+  it("« × » takes the reminder out of the list without a chat, even past a read started before", async () => {
+    const read = refreshReminders();
+    await dismissReminder(due);
+    answerList([due]);
+    await read;
+    expect(calls).toEqual(["reminders_list", "reminder_claim"]);
+    expect(ids()).toEqual([]);
+  });
+
+  it("« × » keeps the reminder out when a read starts during its claim", async () => {
+    let finishClaim = () => {};
+    replies.reminder_claim = () =>
+      new Promise<void>((resolve) => (finishClaim = resolve));
+    const dismiss = dismissReminder(due);
+    const read = refreshReminders();
+    answerList([due]);
+    await read;
+    finishClaim();
+    await dismiss;
     expect(ids()).toEqual([]);
   });
 

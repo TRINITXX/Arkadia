@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Bell } from "lucide-react";
+import { Bell, X } from "lucide-react";
 import {
   reminderProject,
   remindersHeader,
@@ -9,6 +9,7 @@ import {
   type Reminder,
 } from "@/lib/reminders";
 import {
+  dismissReminder,
   launchReminder,
   launchReminders,
   postponeReminder,
@@ -34,7 +35,8 @@ interface Place {
  * The sidebar's « Rappels », above « Sessions récentes », while a reminder
  * is due (`reminderStore`). Its list opens beside the sidebar: « Lancer »
  * opens a new chat in the reminder's project with its prompt, « Demain »
- * puts it off to tomorrow at 9:00. Escape or a click outside closes it.
+ * puts it off to tomorrow at 9:00, « × » drops it without a chat. Escape or
+ * a click outside closes it.
  */
 export function RemindersButton({ projects, onLaunch }: RemindersButtonProps) {
   const { due, now, launching } = useReminders();
@@ -137,7 +139,7 @@ export function RemindersButton({ projects, onLaunch }: RemindersButtonProps) {
         createPortal(
           <div
             ref={listRef}
-            className="fixed z-40 w-[300px] overflow-y-auto rounded-md border border-zinc-800 bg-zinc-900 p-2 text-xs shadow-2xl"
+            className="fixed z-40 w-[320px] overflow-y-auto rounded-md border border-zinc-800 bg-zinc-900 p-2 text-xs shadow-2xl"
             style={{
               left: place.left,
               bottom: place.bottom,
@@ -228,6 +230,16 @@ function ReminderRow({
         className="rounded px-1.5 py-1 text-[11px] text-zinc-400 hover:bg-zinc-700 hover:text-zinc-100 disabled:opacity-40"
       >
         Demain
+      </button>
+      <button
+        type="button"
+        disabled={launching}
+        onClick={() => void dismissReminder(reminder)}
+        title="Supprimer ce rappel sans le lancer"
+        aria-label="Supprimer ce rappel"
+        className="-ml-1 rounded p-1 text-zinc-500 hover:bg-zinc-700 hover:text-zinc-100 disabled:opacity-40"
+      >
+        <X size={13} />
       </button>
     </div>
   );

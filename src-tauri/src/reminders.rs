@@ -5,8 +5,9 @@
 //! then every minute, and lists those that fell due beside the sidebar.
 //! « Lancer » first claims a reminder (its file moves to `reminders\done\`,
 //! a claim that fails once the file is gone), then opens its chat, and gives
-//! it back if the chat could not open. « Demain » writes a new `at` (temp
-//! file then rename, as the script writes it).
+//! it back if the chat could not open. « × » claims it the same way, with no
+//! chat. « Demain » writes a new `at` (temp file then rename, as the script
+//! writes it).
 //!
 //! Arkadia Lab and a debug build (`tauri dev`) leave the folder to the daily
 //! instance: they list nothing, so one reminder is never launched twice.
