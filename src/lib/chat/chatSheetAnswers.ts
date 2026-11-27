@@ -22,6 +22,8 @@ export interface SheetAnswers {
   closed: boolean;
   /** Folded to its head (Esc): Claude's message shows its questions again. */
   folded?: boolean;
+  /** Folded by the reader's scroll up (`useScrollFold`): the column's end unfolds it. */
+  scrollFolded?: boolean;
 }
 
 const sheets = new Map<string, SheetAnswers>();
@@ -164,6 +166,11 @@ export function openRoundSheet(
   updateSheet(paneId, round.id, (s) =>
     s.closed ? s : { ...s, folded: false },
   );
+}
+
+/** The pane's sheet is folded by the reader's scroll (`useScrollFold`), not by hand. */
+export function sheetScrollFolded(paneId: string): boolean {
+  return sheets.get(paneId)?.scrollFolded === true;
 }
 
 /** A pane that closes takes its sheet along. */

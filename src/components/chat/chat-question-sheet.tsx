@@ -41,6 +41,7 @@ import {
 import type { ChatItem } from "@/lib/chat/chatState";
 import { useChatLayer } from "@/lib/chat/useChatLayers";
 import type { ChatImage } from "@/lib/chat/useChatSession";
+import { useScrollFold } from "@/lib/chat/scrollFold";
 import { useSendAfterDictation } from "@/lib/chat/useSendAfterDictation";
 import {
   pastedImageFiles,
@@ -130,10 +131,24 @@ export function ChatQuestionSheet({
   useEffect(() => {
     onDictatingRef.current?.(dictating !== null && open);
   }, [dictating, open]);
-  const setFolded = (on: boolean) =>
-    updateSheet(paneKey, replyId, (s) => ({ ...s, folded: on }));
+  // Folded as the reader scrolls up, back at the end (`useScrollFold`);
+  // by hand (its button, Esc) it stays as the user left it. Never while
+  // its field takes a dictation: folding would cut it.
+  const foldByHand = useScrollFold(
+    {
+      open: open && dictating === null,
+      folded,
+      auto: !!sheet.scrollFolded,
+    },
+    (on, auto) =>
+      updateSheet(paneKey, replyId, (s) => ({
+        ...s,
+        folded: on,
+        scrollFolded: auto,
+      })),
+  );
   // Esc folds it (its answers stay), never Claude's turn (`chatLayers`).
-  useChatLayer(open && !folded, () => setFolded(true));
+  useChatLayer(open && !folded, () => foldByHand(true));
   const liveRef = useRef({ open, replyId });
   /** The target this sheet set: the only one it may take back. */
   const targetRef = useRef<((text: string) => void) | null>(null);
@@ -330,7 +345,7 @@ export function ChatQuestionSheet({
           type="button"
           className="fold"
           title={folded ? "Déplier" : "Replier (Échap)"}
-          onClick={() => setFolded(!folded)}
+          onClick={() => foldByHand(!folded)}
         >
           <CircleHelp />
           <b>Questions de Claude</b>
@@ -376,7 +391,7 @@ export function ChatQuestionSheet({
           type="button"
           className="x"
           title={folded ? "Déplier" : "Replier (Échap)"}
-          onClick={() => setFolded(!folded)}
+          onClick={() => foldByHand(!folded)}
         >
           <ChevronDown className="chev" />
         </button>

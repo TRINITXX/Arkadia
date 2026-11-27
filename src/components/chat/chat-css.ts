@@ -19,7 +19,7 @@ export const CHAT_CSS = `
 .chat-col { width: min(760px, 100% - 48px); margin: 0 auto; }
 
 .chat-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: #31353b transparent; scrollbar-gutter: stable; isolation: isolate; }
-.chat-scroll-inner { display: flex; flex-direction: column; gap: 14px; padding: 28px 0 42px; }
+.chat-scroll-inner { display: flex; flex-direction: column; gap: 14px; padding: 28px 0 calc(42px + var(--chat-fold-room, 0px)); }
 .chat-unit { content-visibility: auto; contain-intrinsic-size: auto 60px; }
 
 .chat-title { font-family: "Instrument Serif", Georgia, serif; font-size: 34px; line-height: 1.1; color: #f4f4f5; letter-spacing: -0.005em; overflow-wrap: anywhere; }

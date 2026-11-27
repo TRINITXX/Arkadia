@@ -47,6 +47,7 @@ import {
   useFieldDictation,
   usePushToTalk,
 } from "@/lib/chat/useFieldDictation";
+import { useScrollFold } from "@/lib/chat/scrollFold";
 import { useSendAfterDictation } from "@/lib/chat/useSendAfterDictation";
 import type { DictationEnd } from "@/lib/useHiddenVoice";
 
@@ -316,6 +317,17 @@ export function ChatQuestionPanel({
     }
     setFolded(on);
   };
+  // Folded as the reader scrolls up, back at the end (`useScrollFold`);
+  // by its button it stays as the user left it. Never while its « Autre
+  // réponse » takes a dictation: folding would cut it.
+  const [scrollFolded, setScrollFolded] = useState(false);
+  const foldByHand = useScrollFold(
+    { open: !field.mine, folded, auto: scrollFolded },
+    (on, auto) => {
+      setScrollFolded(auto);
+      if (on !== folded) fold(on);
+    },
+  );
 
   // No question to read (an input the tool should never send): the header
   // alone, its × still dismisses it, else Claude would wait for good.
@@ -334,7 +346,7 @@ export function ChatQuestionPanel({
           type="button"
           className="fold"
           title={folded ? "Déplier" : "Replier"}
-          onClick={() => fold(!folded)}
+          onClick={() => foldByHand(!folded)}
         >
           <CircleHelp />
           <b>Questions de Claude</b>
@@ -369,7 +381,7 @@ export function ChatQuestionPanel({
           type="button"
           className="x"
           title={folded ? "Déplier" : "Replier"}
-          onClick={() => fold(!folded)}
+          onClick={() => foldByHand(!folded)}
         >
           <ChevronDown className="chev" />
         </button>
