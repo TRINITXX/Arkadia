@@ -22,6 +22,7 @@ export const ACCOUNT_COLORS = [
   "#22d3ee",
   "#818cf8",
   "#d4d4d8",
+  "#e879f9",
 ] as const;
 
 export interface UsageWindow {
@@ -51,6 +52,11 @@ export interface Account {
   label: string;
   customLabel: boolean;
   color: string;
+  /**
+   * Whether the limit switch may move a chat or a terminal onto it (the
+   * user's toggle of 28/11/2026). Off, it is only left, never picked.
+   */
+  rotation: boolean;
   email: string | null;
   plan: string | null;
   loggedIn: boolean;
@@ -184,6 +190,15 @@ export function accountBlocks(blocked: BlockedUntil): BlockedUntil {
   return out;
 }
 
+/**
+ * Whether the limit switch may pick an account (its « Rotation automatique »
+ * toggle). Only `false` keeps it out: a state without the field, from an
+ * older backend, leaves every account in.
+ */
+export function inRotation(account: Account): boolean {
+  return account.rotation !== false;
+}
+
 export type AutoSwitchPlan =
   | { kind: "switch"; accountId: string }
   /** Every account is blocked: resume on `accountId` at `at` (Unix ms). */
@@ -195,12 +210,14 @@ export type AutoSwitchPlan =
  * the most 5-hour headroom (the weekly window does not rank). An account is
  * out while a limit hit blocks it, or while either usage figure reads 100 %
  * before its reset. A missing figure ranks last, not out. With every account
- * out, wait for the earliest one to reset.
+ * out, wait for the earliest one to reset. An account out of the rotation
+ * (`inRotation`) is never picked, but its own Claude may resume on it.
  */
 export function planAutoSwitch(
   accounts: Account[],
   blocked: BlockedUntil,
   now: number,
+  from: string,
 ): AutoSwitchPlan {
   const fullUntil = (w: UsageWindow | null | undefined): number =>
     w && w.pct >= 100 && w.resetsAt ? w.resetsAt * 1000 : 0;
@@ -210,7 +227,9 @@ export function planAutoSwitch(
       fullUntil(a.usage?.fiveHour),
       fullUntil(a.usage?.sevenDay),
     );
-  const signedIn = accounts.filter((a) => a.loggedIn);
+  const signedIn = accounts.filter(
+    (a) => a.loggedIn && (inRotation(a) || a.id === from),
+  );
   const free = signedIn.filter((a) => freeAt(a) <= now);
   if (free.length > 0) {
     const pct = (a: Account) => a.usage?.fiveHour?.pct ?? Infinity;
@@ -313,6 +332,7 @@ export function accountTooltip(
   const lines: string[] = [account.label];
   if (account.email) lines.push(account.email);
   if (!account.loggedIn) lines.push("Non connecté : clic droit → Se connecter");
+  if (!inRotation(account)) lines.push("Hors rotation automatique");
   const u = account.usage;
   if (u) {
     const five = formatReset(u.fiveHour?.resetsAt, now);

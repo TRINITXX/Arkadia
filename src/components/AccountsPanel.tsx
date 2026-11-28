@@ -8,6 +8,7 @@ import {
   accountTooltip,
   formatIn,
   formatReset,
+  inRotation,
   type Account,
   type AccountsState,
 } from "@/lib/accounts";
@@ -22,6 +23,8 @@ interface AccountsPanelProps {
   onLogin: (id: string) => void;
   onRename: (id: string, label: string) => void;
   onRecolor: (id: string, color: string) => void;
+  /** Its « Rotation automatique » toggle (`inRotation`). */
+  onRotation: (id: string, rotation: boolean) => void;
   onRemove: (id: string) => void;
   /** Open panes per account id: an account in use cannot be removed. */
   openPanesByAccount: Record<string, number>;
@@ -31,7 +34,7 @@ interface AccountsPanelProps {
  * "Comptes" button of the sidepanel. Clicking it opens a popover with one card
  * per Claude account: its 5-hour, weekly and Fable usage, each with its return. Clicking a line makes it
  * the account new tabs open on; right-click for login / rename / colour /
- * remove. Below them, the API credits (`CreditsCard`), read again from the
+ * rotation / remove. Below them, the API credits (`CreditsCard`), read again from the
  * Console each time the menu opens.
  */
 export function AccountsPanel({
@@ -41,6 +44,7 @@ export function AccountsPanel({
   onLogin,
   onRename,
   onRecolor,
+  onRotation,
   onRemove,
   openPanesByAccount,
 }: AccountsPanelProps) {
@@ -175,6 +179,7 @@ export function AccountsPanel({
           onLogin={() => onLogin(menu.account.id)}
           onRename={() => setRenamingId(menu.account.id)}
           onRecolor={(color) => onRecolor(menu.account.id, color)}
+          onRotation={(on) => onRotation(menu.account.id, on)}
           onRemove={() => onRemove(menu.account.id)}
           openPanes={openPanesByAccount[menu.account.id] ?? 0}
         />
@@ -373,6 +378,7 @@ interface AccountMenuProps {
   onLogin: () => void;
   onRename: () => void;
   onRecolor: (color: string) => void;
+  onRotation: (on: boolean) => void;
   onRemove: () => void;
   openPanes: number;
 }
@@ -385,11 +391,14 @@ function AccountMenu({
   onLogin,
   onRename,
   onRecolor,
+  onRotation,
   onRemove,
   openPanes,
 }: AccountMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  // Local: `account` is the snapshot taken when the menu opened.
+  const [rotation, setRotation] = useState(inRotation(account));
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -428,7 +437,7 @@ function AccountMenu({
       ref={ref}
       className="fixed z-50 min-w-[180px] rounded border border-zinc-800 bg-zinc-950 py-1 shadow-xl"
       style={{
-        top: Math.min(y, window.innerHeight - 190),
+        top: Math.min(y, window.innerHeight - 230),
         left: Math.min(x, window.innerWidth - 200),
       }}
     >
@@ -454,6 +463,31 @@ function AccountMenu({
           />
         ))}
       </div>
+      {/* Stays open on a click: the switch shows the new state. */}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={rotation}
+        onClick={() => {
+          setRotation(!rotation);
+          onRotation(!rotation);
+        }}
+        title="Allumé : un chat ou un terminal dont le compte atteint sa limite peut basculer sur celui-ci. Éteint : jamais choisi par la bascule automatique."
+        className="flex w-full items-center gap-3 px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-zinc-800"
+      >
+        <span className="flex-1">Rotation automatique</span>
+        <span
+          className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${
+            rotation ? "bg-emerald-500" : "bg-zinc-700"
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 size-3 rounded-full bg-white transition-[left] ${
+              rotation ? "left-[14px]" : "left-0.5"
+            }`}
+          />
+        </span>
+      </button>
       {account.id !== MAIN_ACCOUNT_ID && (
         <>
           <div className="my-1 border-t border-zinc-800" />

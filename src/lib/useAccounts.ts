@@ -50,7 +50,10 @@ export function useAccounts() {
   );
 
   const update = useCallback(
-    async (id: string, patch: { label?: string; color?: string }) => {
+    async (
+      id: string,
+      patch: { label?: string; color?: string; rotation?: boolean },
+    ) => {
       await invoke("account_update", { id, ...patch }).catch(() => {});
       await refresh();
     },

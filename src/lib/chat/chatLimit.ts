@@ -1,5 +1,6 @@
 import {
   blockedFor,
+  inRotation,
   modelFamily,
   modelUsage,
   type Account,
@@ -172,7 +173,8 @@ function freeAt(
  * No account free now: when the first other signed-in one is (ms), for its
  * model or the one it falls back on, for the chat to move then rather than
  * stay stopped (the user's report of 01/11/2026: the first account came
- * back at 07:20, the chat never moved). Null: none to wait for.
+ * back at 07:20, the chat never moved). Null: none to wait for. An account
+ * out of the rotation (`inRotation`) is not waited for.
  */
 export function nextFreeAccountAt(
   accounts: readonly Account[],
@@ -183,7 +185,7 @@ export function nextFreeAccountAt(
 ): number | null {
   const fallback = fallbackModel(family);
   const times = accounts
-    .filter((a) => a.loggedIn && a.id !== from)
+    .filter((a) => a.loggedIn && a.id !== from && inRotation(a))
     .map((a) =>
       Math.min(
         freeAt(a, blocked, family),
@@ -192,6 +194,20 @@ export function nextFreeAccountAt(
     )
     .filter((t) => t > now);
   return times.length > 0 ? Math.min(...times) : null;
+}
+
+/**
+ * The accounts as a chat on the credits sees them: the one it left for the
+ * credits (`home`) counts in the rotation, for the chat to come back there
+ * as before it left (`inRotation`).
+ */
+export function withHomeInRotation(
+  accounts: readonly Account[],
+  home: string | undefined,
+): readonly Account[] {
+  return home
+    ? accounts.map((a) => (a.id === home ? { ...a, rotation: true } : a))
+    : accounts;
 }
 
 /**
@@ -232,8 +248,10 @@ function planKept(
  * back anyway); an account with no reset known (window not started) comes
  * last, then the least used. Its model out everywhere (Fable's limit), an
  * account free for the next model (`fallbackModel`), its own first: Opus
- * there rather than a wait (the user's pick of 12/11/2026). `keep`: the
- * chat's kept account, the only one it may go to (`planKept`).
+ * there rather than a wait (the user's pick of 12/11/2026). An account out
+ * of the rotation (`inRotation`) is never picked, its own chats aside (the
+ * next model there). `keep`: the chat's kept account, the only one it may go
+ * to (`planKept`), in the rotation or not.
  */
 export function planChatLimitSwitch(
   accounts: readonly Account[],
@@ -245,7 +263,9 @@ export function planChatLimitSwitch(
 ): ChatLimitPlan {
   const kept = keptAccount(accounts, keep);
   if (kept) return planKept(kept, blocked, from, now, family);
-  const signedIn = accounts.filter((a) => a.loggedIn);
+  const signedIn = accounts.filter(
+    (a) => a.loggedIn && (inRotation(a) || a.id === from),
+  );
   const reset = (a: Account) => {
     const at = a.usage?.fiveHour?.resetsAt;
     return at && at * 1000 > now ? at : Infinity;

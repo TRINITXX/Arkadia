@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   blockedFor,
+  inRotation,
   modelBlockKey,
   modelFamily,
   paneAccountId,
@@ -23,6 +24,7 @@ import {
   modelLimitUntil,
   modelName,
   planChatLimitSwitch,
+  withHomeInRotation,
   type ChatLimitHit,
 } from "@/lib/chat/chatLimit";
 import { setLimitNotice } from "@/lib/chat/chatLimitNotice";
@@ -252,6 +254,12 @@ export function useChatLimitSwitch({
      * takes the account's default.
      */
     const modelBefore = new Map<string, string | null>();
+    /**
+     * The account a conversation left for the credits (session → id): back
+     * there even out of the rotation (`withHomeInRotation`). Lost on a
+     * restart, as `modelBefore`.
+     */
+    const accountBefore = new Map<string, string>();
 
     /**
      * Waits until `at` (« time »); « gone » as soon as its pane no longer
@@ -450,7 +458,10 @@ export function useChatLimitSwitch({
           logSwitch(`${chatId} on ${from}: pane gone, no move`);
           return save(null);
         }
-        const accounts = accountsRef.current?.accounts ?? [];
+        const live = accountsRef.current?.accounts ?? [];
+        const accounts = onCredits
+          ? withHomeInRotation(live, accountBefore.get(key))
+          : live;
         const blocked = deps.current.blocked();
         // Its model now: Opus after a move off Fable, unknown (the safe
         // side) for a chat not started again since a restart. On the
@@ -505,7 +516,7 @@ export function useChatLimitSwitch({
         const state = `model ${family ?? "?"}, blocked ${JSON.stringify(blocked)}, ${accounts
           .map(
             (a) =>
-              `${a.id}${a.loggedIn ? "" : " logged out"} 5h ${a.usage?.fiveHour?.pct ?? "?"}% reset ${a.usage?.fiveHour?.resetsAt ?? "?"}`,
+              `${a.id}${a.loggedIn ? "" : " logged out"}${inRotation(a) ? "" : " out of rotation"} 5h ${a.usage?.fiveHour?.pct ?? "?"}% reset ${a.usage?.fiveHour?.resetsAt ?? "?"}`,
           )
           .join(", ")}`;
         if (step.kind === "stuck") {
@@ -702,6 +713,7 @@ export function useChatLimitSwitch({
       const going = (async () => {
         // Read now, the relaunch drops this chat.
         modelBefore.set(key, liveChatState(chatId).model ?? null);
+        accountBefore.set(key, from);
         // Forced: its turn and what runs behind stop.
         logSwitch(
           `${chatId} on ${from}: to the API credits (banner, ${activityLine(chatId)})`,
@@ -715,8 +727,10 @@ export function useChatLimitSwitch({
           [],
           { model: CREDITS_MODEL, counted: false },
         );
-        if (!moved) modelBefore.delete(key);
-        else wake(chatId);
+        if (!moved) {
+          modelBefore.delete(key);
+          accountBefore.delete(key);
+        } else wake(chatId);
         return moved;
       })().finally(() => leaving.delete(chatId));
       leaving.set(chatId, going);
@@ -773,7 +787,10 @@ export function useChatLimitSwitch({
       const key = found.chat.resume ?? chatId;
       const before = modelBefore.get(key) ?? null;
       const plan = planChatLimitSwitch(
-        accountsRef.current?.accounts ?? [],
+        withHomeInRotation(
+          accountsRef.current?.accounts ?? [],
+          accountBefore.get(key),
+        ),
         deps.current.blocked(),
         CREDITS_ACCOUNT_ID,
         Date.now(),
@@ -795,7 +812,10 @@ export function useChatLimitSwitch({
           [],
           { model: plan.model ?? before, goOn: false, counted: false },
         );
-        if (moved) modelBefore.delete(key);
+        if (moved) {
+          modelBefore.delete(key);
+          accountBefore.delete(key);
+        }
       } finally {
         returning.delete(chatId);
       }

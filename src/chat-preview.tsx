@@ -787,6 +787,7 @@ const previewAccount = (
   label,
   customLabel: true,
   color,
+  rotation: true,
   email: null,
   plan: null,
   loggedIn: true,
@@ -921,6 +922,7 @@ function Preview() {
             onLogin={() => {}}
             onRename={() => {}}
             onRecolor={() => {}}
+            onRotation={() => {}}
             onRemove={() => {}}
             openPanesByAccount={{}}
           />

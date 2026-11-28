@@ -29,10 +29,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub const MAIN_ID: &str = "main";
-const MAX_ACCOUNTS: usize = 5;
-/// Account colours. Green and amber already mean "idle" / "working" on the
-/// agent badges, red is the close button: none of them here.
-const PALETTE: [&str; 5] = ["#a78bfa", "#f472b6", "#22d3ee", "#818cf8", "#d4d4d8"];
+const MAX_ACCOUNTS: usize = 6;
+/// Account colours, one per account slot (sized by MAX_ACCOUNTS, so raising
+/// the cap without a new colour does not compile). Green and amber already
+/// mean "idle" / "working" on the agent badges, red is the close button:
+/// none of them here.
+const PALETTE: [&str; MAX_ACCOUNTS] = [
+    "#a78bfa", "#f472b6", "#22d3ee", "#818cf8", "#d4d4d8", "#e879f9",
+];
 /// Top-level entries of `~/.claude` that belong to one account or one process.
 const NOT_SHARED: &[&str] = &[
     ".credentials.json",
@@ -101,6 +105,15 @@ struct Account {
     #[serde(default)]
     label: String,
     color: String,
+    /// Whether the limit switch may move a chat or a terminal onto this
+    /// account (the user's toggle of 28/11/2026). Off, it is only left, never
+    /// picked: a chat kept on it (its input's lock) still stays.
+    #[serde(default = "default_rotation")]
+    rotation: bool,
+}
+
+fn default_rotation() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize)]
@@ -154,6 +167,7 @@ pub struct AccountView {
     label: String,
     custom_label: bool,
     color: String,
+    rotation: bool,
     email: Option<String>,
     plan: Option<String>,
     logged_in: bool,
@@ -272,6 +286,7 @@ fn load_registry() -> Registry {
                 id: MAIN_ID.into(),
                 label: String::new(),
                 color: PALETTE[0].into(),
+                rotation: true,
             },
         );
     }
@@ -1169,6 +1184,7 @@ pub fn accounts_state() -> AccountsState {
                 },
                 custom_label: !a.label.is_empty(),
                 color: a.color.clone(),
+                rotation: a.rotation,
                 email: ident.as_ref().and_then(|i| i.email.clone()),
                 plan: ident.as_ref().and_then(|i| i.plan.clone()),
                 logged_in: logged_in(&a.id),
@@ -1243,6 +1259,7 @@ pub async fn account_add() -> Result<String, String> {
         id: id.clone(),
         label: String::new(),
         color,
+        rotation: true,
     });
     sync_account(&id);
     save_registry(&reg)?;
@@ -1279,6 +1296,7 @@ pub fn account_update(
     id: String,
     label: Option<String>,
     color: Option<String>,
+    rotation: Option<bool>,
 ) -> Result<(), String> {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut reg = load_registry();
@@ -1294,6 +1312,9 @@ pub fn account_update(
         if PALETTE.contains(&color.as_str()) {
             acc.color = color;
         }
+    }
+    if let Some(rotation) = rotation {
+        acc.rotation = rotation;
     }
     save_registry(&reg)
 }
@@ -1316,6 +1337,20 @@ mod tests {
 
     fn m(v: Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn an_account_saved_before_the_rotation_toggle_stays_in_rotation() {
+        let reg: Registry = serde_json::from_value(json!({
+            "current": "main",
+            "accounts": [
+                { "id": "main", "color": "#a78bfa" },
+                { "id": "b", "color": "#f472b6", "rotation": false },
+            ],
+        }))
+        .unwrap();
+        assert!(reg.accounts[0].rotation);
+        assert!(!reg.accounts[1].rotation);
     }
 
     #[test]

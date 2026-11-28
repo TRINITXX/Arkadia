@@ -8,6 +8,7 @@ import {
   modelLimitUntil,
   nextFreeAccountAt,
   planChatLimitSwitch,
+  withHomeInRotation,
 } from "@/lib/chat/chatLimit";
 
 const NOW = 1_800_000_000_000;
@@ -22,6 +23,7 @@ const account = (
   label: id,
   customLabel: false,
   color: "#fff",
+  rotation: true,
   email: null,
   plan: null,
   loggedIn,
@@ -322,6 +324,45 @@ describe("a chat kept on its account (its input's lock)", () => {
     expect(
       planChatLimitSwitch(out, blocked, "main", NOW, null, "main"),
     ).toEqual({ kind: "switch", accountId: "b" });
+  });
+});
+
+describe("an account out of the rotation", () => {
+  // Free, and its window resets soonest: the usual rule would pick it.
+  const six: Account = { ...account("six", 0, 5), rotation: false };
+  const accounts = [account("main", 100, 30), account("b", 20, 240), six];
+
+  it("is never picked, nor waited for", () => {
+    expect(planChatLimitSwitch(accounts, {}, "main", NOW)).toEqual({
+      kind: "switch",
+      accountId: "b",
+    });
+    const blocked = { b: NOW + 60 * 60_000, six: NOW + 10 * 60_000 };
+    expect(planChatLimitSwitch(accounts, blocked, "main", NOW)).toEqual({
+      kind: "none",
+    });
+    expect(nextFreeAccountAt(accounts, blocked, "main", NOW)).toBe(
+      NOW + 60 * 60_000,
+    );
+  });
+
+  it("takes back a chat that left it for the credits", () => {
+    const fromCredits = withHomeInRotation(accounts, "six");
+    expect(planChatLimitSwitch(fromCredits, {}, "api", NOW)).toEqual({
+      kind: "switch",
+      accountId: "six",
+    });
+    expect(planChatLimitSwitch(accounts, {}, "api", NOW)).toEqual({
+      kind: "switch",
+      accountId: "b",
+    });
+  });
+
+  it("still takes back a chat kept on it", () => {
+    expect(planChatLimitSwitch(accounts, {}, "api", NOW, null, "six")).toEqual({
+      kind: "switch",
+      accountId: "six",
+    });
   });
 });
 

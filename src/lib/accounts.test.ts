@@ -21,6 +21,7 @@ function account(id: string, color: string, label: string): Account {
     label,
     customLabel: false,
     color,
+    rotation: true,
     email: null,
     plan: null,
     loggedIn: true,
@@ -126,13 +127,13 @@ describe("planAutoSwitch", () => {
 
   it("picks the most 5-hour headroom among unblocked accounts", () => {
     expect(
-      planAutoSwitch([perso, team, third], { b2: NOW + 1000 }, NOW),
+      planAutoSwitch([perso, team, third], { b2: NOW + 1000 }, NOW, "b2"),
     ).toEqual({ kind: "switch", accountId: "main" });
   });
 
   it("skips an account whose usage reads full before its reset", () => {
     const full = withFive(team, 100, NOW / 1000 + 60);
-    expect(planAutoSwitch([full, third], {}, NOW)).toEqual({
+    expect(planAutoSwitch([full, third], {}, NOW, "b2")).toEqual({
       kind: "switch",
       accountId: "b3",
     });
@@ -148,7 +149,7 @@ describe("planAutoSwitch", () => {
         source: "poll",
       },
     };
-    expect(planAutoSwitch([weekFull, third], {}, NOW)).toEqual({
+    expect(planAutoSwitch([weekFull, third], {}, NOW, "b2")).toEqual({
       kind: "switch",
       accountId: "b3",
     });
@@ -156,8 +157,28 @@ describe("planAutoSwitch", () => {
 
   it("waits for the earliest reset when every account is blocked", () => {
     expect(
-      planAutoSwitch([perso, team], { main: NOW + 5000, b2: NOW + 2000 }, NOW),
+      planAutoSwitch(
+        [perso, team],
+        { main: NOW + 5000, b2: NOW + 2000 },
+        NOW,
+        "main",
+      ),
     ).toEqual({ kind: "wait", accountId: "b2", at: NOW + 2000 });
+  });
+
+  it("never picks an account out of the rotation, but resumes its own Claude", () => {
+    const out: Account = { ...team, rotation: false };
+    expect(planAutoSwitch([perso, out, third], {}, NOW, "b3")).toEqual({
+      kind: "switch",
+      accountId: "main",
+    });
+    expect(
+      planAutoSwitch([perso, out], { main: NOW + 5000 }, NOW, "main"),
+    ).toEqual({ kind: "wait", accountId: "main", at: NOW + 5000 });
+    expect(planAutoSwitch([perso, out], {}, NOW, "b2")).toEqual({
+      kind: "switch",
+      accountId: "b2",
+    });
   });
 });
 

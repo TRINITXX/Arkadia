@@ -2416,6 +2416,7 @@ export function App() {
         state.accounts,
         accountBlocks(limitState.current.blocked),
         now,
+        from,
       );
       if (plan.kind === "none") return;
       if (plan.kind === "wait") {
@@ -3824,6 +3825,9 @@ export function App() {
                 onLogin={(id) => void loginAccount(id)}
                 onRename={(id, label) => void accounts.update(id, { label })}
                 onRecolor={(id, color) => void accounts.update(id, { color })}
+                onRotation={(id, rotation) =>
+                  void accounts.update(id, { rotation })
+                }
                 onRemove={(id) => void accounts.remove(id)}
                 openPanesByAccount={openPanesByAccount}
               />
